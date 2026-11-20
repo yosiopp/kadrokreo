@@ -10,13 +10,15 @@ import {
 import { MAX_DEPTH } from '../document/kdr.ts'
 import { lineEndpoints, pathPoints } from '../document/path.ts'
 import type { NodeId, Scene } from '../document/types.ts'
+import { isInstance } from './components.ts'
 
 /**
  * point（ページ座標）の位置で最も手前にあるノード。非表示・ロック中のノードとその子は対象外。
  * tolerance は小さな図形をつかみやすくするための遊び（ページ座標）。
+ * インスタンスは全体でひとつのものとして扱う。deep なら、その中身も対象にする。
  */
-export function hitTest(scene: Scene, point: Point, tolerance = 0): NodeId | null {
-  return hitSiblings(scene, scene.rootIds, point, tolerance)
+export function hitTest(scene: Scene, point: Point, tolerance = 0, deep = false): NodeId | null {
+  return hitSiblings(scene, scene.rootIds, point, tolerance, deep)
 }
 
 function hitSiblings(
@@ -24,6 +26,7 @@ function hitSiblings(
   ids: readonly NodeId[],
   point: Point,
   tolerance: number,
+  deep: boolean,
 ): NodeId | null {
   for (let i = ids.length - 1; i >= 0; i--) {
     const node = scene.nodes[ids[i]]
@@ -37,8 +40,8 @@ function hitSiblings(
       local.y <= node.height + tolerance
 
     if (node.type === 'frame') {
-      if (inside || !node.clipContent) {
-        const child = hitSiblings(scene, node.children, local, tolerance)
+      if ((deep || !isInstance(node)) && (inside || !node.clipContent)) {
+        const child = hitSiblings(scene, node.children, local, tolerance, deep)
         if (child) return child
       }
       if (inside) return node.id
@@ -131,6 +134,8 @@ export function findFrameAt(
     for (let i = ids.length - 1; i >= 0; i--) {
       const node = scene.nodes[ids[i]]
       if (node.type !== 'frame' || !node.visible || node.locked || exclude.has(node.id)) continue
+      // インスタンスの中へは入れられない
+      if (isInstance(node)) continue
       const local = toNodeSpace(node, p)
       const inside =
         local.x >= 0 && local.x <= node.width && local.y >= 0 && local.y <= node.height
@@ -159,10 +164,10 @@ export function nodesInMarquee(scene: Scene, marquee: Bounds): NodeId[] {
       if (!node.visible || node.locked) continue
       const bounds = getAbsoluteBounds(scene, id)
       if (!intersects(bounds, marquee)) {
-        if (node.type === 'frame' && !node.clipContent) visit(node.children)
+        if (node.type === 'frame' && !isInstance(node) && !node.clipContent) visit(node.children)
         continue
       }
-      if (node.type === 'frame' && !contains(marquee, bounds)) visit(node.children)
+      if (node.type === 'frame' && !isInstance(node) && !contains(marquee, bounds)) visit(node.children)
       else result.push(id)
     }
   }

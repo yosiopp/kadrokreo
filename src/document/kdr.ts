@@ -5,6 +5,7 @@ import type {
   DesignDocument,
   Gradient,
   NodeId,
+  Override,
   Page,
   Scene,
   SceneNode,
@@ -12,7 +13,7 @@ import type {
 } from './types.ts'
 
 // kdr ファイルの実体は gzip 圧縮した 1 つの JSON:
-//   { format: 'kadrokreo', version: 8, document: DesignDocument }
+//   { format: 'kadrokreo', version: 10, document: DesignDocument }
 // 古い version も読み込める。それぞれで増えたもの:
 //   2: 画像（assets）、テキストの折り返し（autoWidth）
 //   3: 直線、影、フレームと画像の角丸、テキストの太さ・行揃え・行の高さ
@@ -21,8 +22,10 @@ import type {
 //   6: パス、線の端の形（矢印）、直線の始点と終点の区別
 //   7: グラデーション、画像の収め方
 //   8: オートレイアウト
+//   9: コンポーネント
+//   10: インスタンスごとの上書き
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 8
+export const KDR_VERSION = 10
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -164,7 +167,7 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
+type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
 
 const CAPS = ['none', 'arrow'] as const
 const MAX_PATH_POINTS = 10_000
@@ -277,10 +280,41 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
         layout: added(8, null, () =>
           raw.layout === null ? null : parseLayout(raw.layout, at('layout')),
         ),
+        component: added(9, null, () => {
+          if (raw.component === null) return null
+          const link = record(raw.component, at('component'))
+          const id = nodeId(link.id, at('component.id'))
+          const role = oneOf(link.role, ['main', 'instance'] as const, at('component.role'))
+          if (role === 'main') return { id, role }
+          const overrides = added(10, {}, () => parseOverrides(link.overrides, at('component.overrides')))
+          return { id, role, overrides }
+        }),
       }
     default:
       throw new KdrError(`${at('type')}: 未対応のノード種別です`)
   }
+}
+
+/** インスタンスごとの上書き。どのノードに当たるかはここでは分からないので、値の形だけを確かめる */
+function parseOverrides(value: unknown, path: string): Record<NodeId, Override> {
+  const overrides: Record<NodeId, Override> = {}
+  for (const [id, rawOverride] of Object.entries(record(value, path))) {
+    const at = (key: string) => `${path}.${id}.${key}`
+    const raw = record(rawOverride, `${path}.${id}`)
+    const override: Override = {}
+    if (Object.hasOwn(raw, 'text')) override.text = string(raw.text, at('text'))
+    if (Object.hasOwn(raw, 'fill')) override.fill = raw.fill === null ? null : color(raw.fill, at('fill'))
+    if (Object.hasOwn(raw, 'fillGradient')) {
+      override.fillGradient =
+        raw.fillGradient === null ? null : parseGradient(raw.fillGradient, at('fillGradient'))
+    }
+    if (Object.hasOwn(raw, 'stroke')) {
+      override.stroke = raw.stroke === null ? null : color(raw.stroke, at('stroke'))
+    }
+    if (Object.hasOwn(raw, 'visible')) override.visible = boolean(raw.visible, at('visible'))
+    overrides[nodeId(id, `${path}.${id}`)] = override
+  }
+  return overrides
 }
 
 function parseLayout(value: unknown, path: string): AutoLayout {

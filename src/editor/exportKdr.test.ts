@@ -38,7 +38,7 @@ const PNG = {
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 }
 
-function kdrJson(document: unknown, version = 8) {
+function kdrJson(document: unknown, version = 10) {
   return { format: 'kadrokreo', version, document }
 }
 
@@ -105,7 +105,7 @@ describe('parseKdr', () => {
   it('別形式や未対応バージョンを拒否する', () => {
     const doc = documentOf(valid())
     expect(() => parseKdr({ format: 'other', version: 1, document: doc })).toThrow(KdrError)
-    expect(() => parseKdr(kdrJson(doc, 9))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 11))).toThrow('新しいバージョン')
     expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)
@@ -213,6 +213,62 @@ describe('parseKdr', () => {
     const v7 = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf(v7Frame) }], assets: {} }
     expect(parseKdr(kdrJson(v7, 7)).pages[0].nodes[frame.id]).toEqual(frame)
     expect(() => parseKdr(kdrJson(v7, 8))).toThrow(KdrError)
+  })
+
+  it('version 8 のファイルも読める（コンポーネントなし）', () => {
+    const frame = createFrame({ x: 0, y: 0, width: 10, height: 10 })
+    const { component: _component, ...v8Frame } = frame
+    const v8 = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf(v8Frame) }], assets: {} }
+    expect(parseKdr(kdrJson(v8, 8)).pages[0].nodes[frame.id]).toEqual(frame)
+    expect(() => parseKdr(kdrJson(v8, 9))).toThrow(KdrError)
+  })
+
+  it('version 9 のファイルも読める（インスタンスごとの上書きなし）', () => {
+    const frame = createFrame({ x: 0, y: 0, width: 10, height: 10 })
+    const v9Frame = { ...frame, component: { id: 'c1', role: 'instance' } }
+    const v9 = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf(v9Frame) }], assets: {} }
+    expect(parseKdr(kdrJson(v9, 9)).pages[0].nodes[frame.id]).toEqual({
+      ...frame,
+      component: { id: 'c1', role: 'instance', overrides: {} },
+    })
+    expect(() => parseKdr(kdrJson(v9, 10))).toThrow(KdrError)
+  })
+
+  it('インスタンスごとの上書きを検証する', () => {
+    const frame = createFrame({ x: 0, y: 0, width: 10, height: 10 })
+    const withOverrides = (overrides: unknown) =>
+      kdrOf(sceneOf({ ...frame, component: { id: 'c1', role: 'instance', overrides } }))
+    const overrides = {
+      n1: { text: '送信', fill: '#ff0000', visible: false },
+      n2: { fill: null, stroke: null, fillGradient: null },
+      n3: { fillGradient: { angle: 90, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }] } },
+    }
+    expect(parseKdr(withOverrides(overrides)).pages[0].nodes[frame.id]).toMatchObject({
+      component: { id: 'c1', role: 'instance', overrides },
+    })
+    // 知らない項目は捨てる。元（main）は上書きを持たない
+    const loaded = parseKdr(withOverrides({ n1: { text: 'a', width: 999 } })).pages[0].nodes[frame.id]
+    expect(loaded).toMatchObject({ component: { overrides: { n1: { text: 'a' } } } })
+    expect(loaded).not.toHaveProperty('component.overrides.n1.width')
+    const main = { ...frame, component: { id: 'c1', role: 'main', overrides } }
+    expect(parseKdr(kdrOf(sceneOf(main))).pages[0].nodes[frame.id]).toMatchObject({
+      component: { id: 'c1', role: 'main' },
+    })
+    expect(parseKdr(kdrOf(sceneOf(main))).pages[0].nodes[frame.id]).not.toHaveProperty('component.overrides')
+
+    expect(() => parseKdr(withOverrides({ n1: { fill: 'red' } }))).toThrow('overrides.n1.fill')
+    expect(() => parseKdr(withOverrides({ n1: { text: 1 } }))).toThrow('overrides.n1.text')
+    expect(() => parseKdr(withOverrides({ n1: { visible: 'no' } }))).toThrow('overrides.n1.visible')
+    expect(() => parseKdr(withOverrides({ '../x': {} }))).toThrow('不正な id')
+    expect(() => parseKdr(withOverrides([]))).toThrow('component.overrides')
+    expect(() => parseKdr(withOverrides(undefined))).toThrow('component.overrides')
+  })
+
+  it('コンポーネントとのつながりを検証する', () => {
+    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'main' } }
+    expect(parseKdr(kdrOf(sceneOf(frame))).pages[0].nodes[frame.id]).toEqual(frame)
+    expect(() => parseKdr(kdrOf(sceneOf({ ...frame, component: { id: 'c1', role: 'copy' } })))).toThrow('component.role')
+    expect(() => parseKdr(kdrOf(sceneOf({ ...frame, component: { id: '../x', role: 'main' } })))).toThrow('component.id')
   })
 
   it('オートレイアウトの設定を検証する', () => {

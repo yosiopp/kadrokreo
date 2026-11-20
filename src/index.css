@@ -334,6 +334,11 @@ input.document-name:focus {
   border-top: 1px solid var(--border);
 }
 
+.section-note {
+  margin: 0;
+  color: var(--text-muted);
+}
+
 .section-title {
   margin: 0;
   color: var(--text-muted);
@@ -510,6 +515,11 @@ input.document-name:focus {
 .layer-row[data-hidden='true'] .layer-name,
 .layer-row[data-hidden='true'] .layer-icon {
   opacity: 0.45;
+}
+
+/* インスタンスの中身（元の写し） */
+.layer-row[data-copy='true'] .layer-name {
+  color: var(--text-muted);
 }
 
 .layer-row[data-drop='inside'] {

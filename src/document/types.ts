@@ -128,6 +128,36 @@ export type AutoLayout = {
   heightMode: 'hug' | 'fixed'
 }
 
+/**
+ * コンポーネントとのつながり。main は部品の元になるフレームで、instance はそれを配置したもの。
+ * instance の中身（子孫と見た目）は main の写しで、main を変えると作り直される。
+ * 写しは普通のノードとしてページに入っているので、表示するだけなら、このつながりを読まなくてよい。
+ */
+export type ComponentLink =
+  /** id はドキュメントの中で一意。main と、その instance が同じ値を持つ */
+  | { id: string; role: 'main' }
+  | {
+      id: string
+      role: 'instance'
+      /**
+       * このインスタンスだけの上書き。キーは main の側のノードの id（main 自身の id なら、インスタンスの根への上書き）。
+       * 上書きした結果も写しに入っているので、表示するだけなら読まなくてよい。
+       */
+      overrides: Record<NodeId, Override>
+    }
+
+/**
+ * main の値の代わりに使う値。指定した項目だけが変わる。
+ * そのノードが持たない項目や、持てない値（テキストの fill に null など）は無視する。
+ */
+export type Override = {
+  text?: string
+  fill?: string | null
+  fillGradient?: Gradient | null
+  stroke?: string | null
+  visible?: boolean
+}
+
 export type FrameNode = BaseNode &
   Paint & {
     type: 'frame'
@@ -136,6 +166,7 @@ export type FrameNode = BaseNode &
     clipContent: boolean
     cornerRadius: number
     layout: AutoLayout | null
+    component: ComponentLink | null
   }
 
 export type SceneNode =

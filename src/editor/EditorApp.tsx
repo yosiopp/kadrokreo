@@ -17,6 +17,7 @@ import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
 import { RedoIcon, TypeIcon, UndoIcon } from './icons.tsx'
 import { placeImage, readImageFile } from './importImage.ts'
+import { fitTextNodes } from './measure.ts'
 import {
   createDocument,
   renameDocument,
@@ -35,7 +36,7 @@ export default function EditorApp() {
   useEffect(() => {
     let cancelled = false
     loadSavedDocument().then((doc) => {
-      if (!cancelled) setStore(createEditorStore(doc ?? createDocument()))
+      if (!cancelled) setStore(createEditorStore(doc ?? createDocument(), fitTextNodes))
     })
     return () => {
       cancelled = true

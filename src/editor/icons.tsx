@@ -72,7 +72,22 @@ const TYPE_SHAPES: Record<SceneNode['type'], ReactNode> = {
   ),
 }
 
-export function TypeIcon({ type }: { type: SceneNode['type'] }) {
+/** role を渡すと、コンポーネントの元（ひし形 4 つ）かインスタンス（ひし形 1 つ）の印にする */
+export function TypeIcon({ type, role }: { type: SceneNode['type']; role?: 'main' | 'instance' }) {
+  if (role === 'main') {
+    return (
+      <Icon>
+        <path d="M8 1.5l2 2-2 2-2-2zM8 10.5l2 2-2 2-2-2zM3.5 6l2 2-2 2-2-2zM12.5 6l2 2-2 2-2-2z" />
+      </Icon>
+    )
+  }
+  if (role === 'instance') {
+    return (
+      <Icon>
+        <path d="M8 2l6 6-6 6-6-6z" />
+      </Icon>
+    )
+  }
   return <Icon>{TYPE_SHAPES[type]}</Icon>
 }
 

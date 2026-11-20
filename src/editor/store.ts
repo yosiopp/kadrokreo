@@ -1,5 +1,6 @@
 import type { DesignDocument, NodeId, Page, PageId } from '../document/types.ts'
 import { createHistory, pushHistory, redoHistory, undoHistory } from './history.ts'
+import { type FitText, captureOverrides, syncComponents } from './components.ts'
 import { relayout } from './layout.ts'
 import { updatePage } from './operations.ts'
 
@@ -18,7 +19,8 @@ type PageRecipe = (page: Page) => Page
 
 export type EditorStore = ReturnType<typeof createEditorStore>
 
-export function createEditorStore(initial: DesignDocument) {
+/** fitText は、文言を上書きしたインスタンスのテキストの大きさを測り直すのに使う（ブラウザでだけ渡せる） */
+export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   let history = createHistory(initial)
   // ドラッグ中などの未確定の変更。履歴には commitPreview で 1 件としてまとめて積む
   let preview: DesignDocument | null = null
@@ -65,19 +67,29 @@ export function createEditorStore(initial: DesignDocument) {
   }
 
   /**
-   * 変更のあったページで、自動で並べるフレームを並べ直す。
-   * どの操作も、レイアウトのことは気にせずノードを動かしてよい。
+   * 変更のあとの後始末。インスタンスの中身への変更を上書きとして覚え、自動で並べるフレームを並べ直し、
+   * コンポーネントのインスタンスを元に合わせる。
+   * どの操作も、レイアウトやインスタンスのことは気にせずノードを動かしてよい。
    */
   function settle(before: DesignDocument, after: DesignDocument): DesignDocument {
     if (after === before) return after
-    let changed = false
-    const pages = after.pages.map((page) => {
-      if (before.pages.includes(page)) return page
-      const next = relayout(page)
-      if (next !== page) changed = true
-      return next
-    })
-    return changed ? { ...after, pages } : after
+    let current = captureOverrides(before, after)
+    let base = before
+    // インスタンスを直すと大きさが変わって並べ直しが要る、ということがあるので、落ち着くまで繰り返す
+    for (let pass = 0; pass < 4; pass++) {
+      const previous = base
+      const arranged = mapPages(current, (page) => (previous.pages.includes(page) ? page : relayout(page)))
+      const synced = syncComponents(arranged, fitText)
+      if (synced === current) break
+      base = current
+      current = synced
+    }
+    return current
+  }
+
+  function mapPages(doc: DesignDocument, change: (page: Page) => Page): DesignDocument {
+    const pages = doc.pages.map(change)
+    return pages.every((page, i) => page === doc.pages[i]) ? doc : { ...doc, pages }
   }
 
   function applyDocument(recipe: DocumentRecipe) {

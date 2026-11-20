@@ -12,6 +12,7 @@
     "lint": "oxlint",
     "test": "vitest run",
     "e2e": "node e2e/run.mjs",
+    "capture": "node e2e/run.mjs capture",
     "preview": "vite preview --outDir dist/viewer",
     "preview:editor": "vite preview --outDir dist/editor"
   },

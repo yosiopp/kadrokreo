@@ -24,6 +24,7 @@ import { lineBetween, lineEndpoints, pathFromPoints, pathPoints } from '../docum
 import type { LineNode, NodeId, PathNode, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { TextEditor } from './TextEditor.tsx'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
+import { isInstance, makeComponent, owningInstance } from './components.ts'
 import { placeInLayout, wrapInAutoLayout } from './layout.ts'
 import { fitTextNodes, measureFrameLabel, measureTextNode } from './measure.ts'
 import {
@@ -223,10 +224,19 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     setEditing(next)
   }
 
+  /**
+   * 選択中のうち、インスタンスの中身（写し）でないもの。
+   * 写しは色や文言を上書きできるだけで、動かす・消す・複製するといった操作の対象にはしない。
+   */
+  function ownIds(): NodeId[] {
+    const { page, selection } = store.getState()
+    return selection.filter((id) => !owningInstance(page, id))
+  }
+
   /** 選択中のうち動かせるもの */
   function movableIds(): NodeId[] {
-    const { page, selection } = store.getState()
-    return selection.filter((id) => !page.nodes[id].locked)
+    const { page } = store.getState()
+    return ownIds().filter((id) => !page.nodes[id].locked)
   }
 
   /** 直線を 1 本だけ選んでいるとき。枠のハンドルの代わりに、両端をつかんで動かせる */
@@ -234,7 +244,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (tool !== 'select' || editingRef.current) return null
     const { page, selection } = store.getState()
     const node = selection.length === 1 ? page.nodes[selection[0]] : null
-    return node?.type === 'line' && !node.locked ? node : null
+    return node?.type === 'line' && !node.locked && !owningInstance(page, node.id) ? node : null
   }
 
   /** 頂点を編集中のパス。そのパスだけを選んでいる間だけ有効 */
@@ -434,9 +444,10 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (node?.type === 'text' && node.text.trim() !== '') {
       store.commitPreview()
     } else {
-      // 空のテキストは残さない
+      // 空のテキストは残さない。インスタンスの中身は消せないので、元の文言に戻すだけ
       store.cancelPreview()
-      if (!current.draft) store.apply((page) => removeNodes(page, [current.id]))
+      const removable = !current.draft && !owningInstance(store.getState().page, current.id)
+      if (removable) store.apply((page) => removeNodes(page, [current.id]))
     }
     onToolChange('select')
   }
@@ -782,11 +793,17 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (tool === 'pen') return finishPen(false)
     if (tool !== 'select' || editingRef.current) return
     const page = store.getState().page
-    const hit = hitTest(page, pointer.world, 3 / camera.getViewport().zoom)
-    if (!hit) return
+    const tolerance = 3 / camera.getViewport().zoom
+    const top = hitTest(page, pointer.world, tolerance)
+    if (!top) return
+    // インスタンスは、ダブルクリックで中身を選べる（文言や色を、そのインスタンスだけ変えられる）
+    const inner = isInstance(page.nodes[top])
+    const hit = inner ? (hitTest(page, pointer.world, tolerance, true) ?? top) : top
     if (page.nodes[hit].type === 'text') {
       store.select([hit])
       changeEditing({ id: hit, draft: null })
+    } else if (inner) {
+      store.select([hit])
     } else if (page.nodes[hit].type === 'path') {
       // パスは頂点の編集に入る。別のものを選ぶか Esc で抜ける
       store.select([hit])
@@ -809,8 +826,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
   /** 選択中のノードを、使っている画像ごと切り出す */
   function copySelection(): Fragment {
-    const { document, page, selection } = store.getState()
-    return copyFragment(page, document.assets, selection)
+    const { document, page } = store.getState()
+    return copyFragment(page, document.assets, ownIds())
   }
 
   function onKeyDown(event: KeyboardEvent) {
@@ -832,10 +849,16 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (gestureRef.current) return
 
     const reorder = (direction: ReorderDirection) =>
-      store.apply((base) => reorderNodes(base, selection, direction))
+      store.apply((base) => reorderNodes(base, ownIds(), direction))
     const remove = () => store.apply((base) => removeNodes(base, movableIds()))
     const zoom = camera.getViewport().zoom
 
+    if ((event.metaKey || event.ctrlKey) && event.altKey && event.code === 'KeyK') {
+      // 選んでいるフレームをコンポーネントにする（Alt を押すと key が記号になるので code で見る）
+      store.apply((base) => ownIds().reduce((next, id) => makeComponent(next, id), base))
+      event.preventDefault()
+      return
+    }
     if (event.metaKey || event.ctrlKey) {
       switch (key) {
         case 'z':
@@ -849,7 +872,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
           store.select(page.rootIds.filter((id) => page.nodes[id].visible && !page.nodes[id].locked))
           break
         case 'd':
-          if (selection.length > 0) paste(copySelection(), 10)
+          if (ownIds().length > 0) paste(copySelection(), 10)
           break
         case ']':
           reorder('forward')
@@ -918,8 +941,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   // OS のクリップボードにある画像を貼り付けられない
   function onCopy(event: ClipboardEvent) {
     if (isTextInput(event.target) || gestureRef.current) return
-    const { page, selection } = store.getState()
-    if (selection.length === 0) return
+    const { page } = store.getState()
+    if (ownIds().length === 0) return
     clipboardRef.current = { fragment: copySelection(), pastes: 0 }
     // OS のクリップボードも置き換える（中身はレイヤー名）。古い画像が残っていると、
     // 貼り付けでそちらが優先されてしまう

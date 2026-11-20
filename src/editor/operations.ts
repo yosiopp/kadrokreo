@@ -555,7 +555,13 @@ export function pasteFragment<T extends Scene>(
     if (clone.parentId !== null && newIds.has(clone.parentId)) {
       clone.parentId = newIds.get(clone.parentId)!
     }
-    if (clone.type === 'frame') clone.children = clone.children.map((child) => newIds.get(child)!)
+    if (clone.type === 'frame') {
+      clone.children = clone.children.map((child) => newIds.get(child)!)
+      // コンポーネントの元は 1 つだけ。元を複製したものは、そのインスタンスになる
+      if (clone.component?.role === 'main') {
+        clone.component = { id: clone.component.id, role: 'instance', overrides: {} }
+      }
+    }
     clones[clone.id] = clone
   }
 

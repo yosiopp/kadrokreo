@@ -1,5 +1,6 @@
 import { type DragEvent, type MouseEvent, useState } from 'react'
 import type { NodeId, Scene, SceneNode } from '../document/types.ts'
+import { isInstance, owningInstance } from './components.ts'
 import { EyeIcon, LockIcon, TypeIcon } from './icons.tsx'
 import { type Placement, placeNodes, updateNode } from './operations.ts'
 import type { EditorState, EditorStore } from './store.ts'
@@ -9,24 +10,35 @@ type Props = {
   state: EditorState
 }
 
-type Row = { node: SceneNode; depth: number }
+/** copy は、インスタンスの中身（元の写し）。表示の切り替えのほかは、一覧からは触れない */
+type Row = { node: SceneNode; depth: number; copy: boolean }
+
+/**
+ * フレームの中身を一覧に出すか。ふつうのフレームは開いた状態、インスタンスは閉じた状態から始まり、
+ * toggled に入っているものは、その逆になる。中身を選んでいるインスタンス（held）は、選んでいる間は開く。
+ */
+type Folding = { toggled: ReadonlySet<NodeId>; held: ReadonlySet<NodeId> }
+
+function isOpen(node: SceneNode, { toggled, held }: Folding): boolean {
+  return held.has(node.id) || isInstance(node) === toggled.has(node.id)
+}
 
 /**
  * 手前にあるものほど上に並べる。
  * 自動で並べるフレームの中だけは、キャンバスでの並び順（先頭が上）のまま出す。
  */
-function buildRows(scene: Scene, collapsed: ReadonlySet<NodeId>): Row[] {
+function buildRows(scene: Scene, folding: Folding): Row[] {
   const rows: Row[] = []
-  function visit(ids: readonly NodeId[], depth: number, inLayout: boolean) {
+  function visit(ids: readonly NodeId[], depth: number, inLayout: boolean, copy: boolean) {
     for (const id of inLayout ? ids : ids.toReversed()) {
       const node = scene.nodes[id]
-      rows.push({ node, depth })
-      if (node.type === 'frame' && !collapsed.has(id)) {
-        visit(node.children, depth + 1, node.layout !== null)
+      rows.push({ node, depth, copy })
+      if (node.type === 'frame' && isOpen(node, folding)) {
+        visit(node.children, depth + 1, node.layout !== null, copy || isInstance(node))
       }
     }
   }
-  visit(scene.rootIds, 0, false)
+  visit(scene.rootIds, 0, false, false)
   return rows
 }
 
@@ -39,7 +51,7 @@ function isInLayout(scene: Scene, id: NodeId): boolean {
 
 export function LayersPanel({ store, state }: Props) {
   const { page, selection } = state
-  const [collapsed, setCollapsed] = useState<ReadonlySet<NodeId>>(new Set())
+  const [toggled, setToggled] = useState<ReadonlySet<NodeId>>(new Set())
   const [renaming, setRenaming] = useState<NodeId | null>(null)
   const [drop, setDrop] = useState<{ id: NodeId; placement: Placement } | null>(null)
 
@@ -51,10 +63,10 @@ export function LayersPanel({ store, state }: Props) {
     }
   }
 
-  function toggleCollapsed(id: NodeId) {
-    const next = new Set(collapsed)
+  function toggleOpen(id: NodeId) {
+    const next = new Set(toggled)
     if (!next.delete(id)) next.add(id)
-    setCollapsed(next)
+    setToggled(next)
   }
 
   function commitRename(id: NodeId, name: string) {
@@ -68,14 +80,14 @@ export function LayersPanel({ store, state }: Props) {
     event.dataTransfer.setData('text/plain', id)
   }
 
-  function onDragOver(event: DragEvent, node: SceneNode) {
-    // ファイルなど、レイヤー以外のドラッグは受けない
-    if (!event.dataTransfer.types.includes('text/plain')) return
+  function onDragOver(event: DragEvent, { node, copy }: Row) {
+    // ファイルなど、レイヤー以外のドラッグは受けない。インスタンスの中へも入れられない
+    if (!event.dataTransfer.types.includes('text/plain') || copy) return
     event.preventDefault()
     const rect = event.currentTarget.getBoundingClientRect()
     const ratio = (event.clientY - rect.top) / rect.height
     // フレームは中央に落とすと中へ入る
-    const edge = node.type === 'frame' ? 0.25 : 0.5
+    const edge = node.type === 'frame' && !isInstance(node) ? 0.25 : 0.5
     const placement = ratio < edge ? 'above' : ratio >= 1 - edge ? 'below' : 'inside'
     if (drop?.id !== node.id || drop.placement !== placement) setDrop({ id: node.id, placement })
   }
@@ -90,30 +102,37 @@ export function LayersPanel({ store, state }: Props) {
       // drop.placement は一覧での見た目の位置。自動で並べるフレームの中では、一覧で上にあるほど先頭（奥）になる
       const flipped = target.placement !== 'inside' && isInLayout(base, target.id)
       const placement = !flipped ? target.placement : target.placement === 'above' ? 'below' : 'above'
-      return placeNodes(base, ids, target.id, placement)
+      // インスタンスの中身は、外へ出せない
+      const movable = ids.filter((id) => !owningInstance(base, id))
+      return placeNodes(base, movable, target.id, placement)
     })
-    if (target.placement === 'inside' && collapsed.has(target.id)) toggleCollapsed(target.id)
+    const frame = store.getState().page.nodes[target.id]
+    if (target.placement === 'inside' && frame && !isOpen(frame, folding)) toggleOpen(target.id)
   }
 
-  const rows = buildRows(page, collapsed)
+  // キャンバスでインスタンスの中身を選んだとき、何を選んでいるのかが一覧でも分かるようにする
+  const held = new Set(selection.flatMap((id) => owningInstance(page, id)?.id ?? []))
+  const folding = { toggled, held }
+  const rows = buildRows(page, folding)
 
   return (
     <section className="layers" aria-label="レイヤー">
       <h2 className="panel-title">レイヤー</h2>
       {rows.length === 0 && <p className="panel-hint">ツールを選んでキャンバスに図形を描くと、ここに並びます。</p>}
       <ul className="layer-list" onDragLeave={() => setDrop(null)}>
-        {rows.map(({ node, depth }) => (
+        {rows.map(({ node, depth, copy }) => (
           <li
             key={node.id}
             className="layer-row"
             data-selected={selection.includes(node.id)}
             data-hidden={!node.visible}
+            data-copy={copy}
             data-drop={drop?.id === node.id ? drop.placement : undefined}
             style={{ paddingLeft: 8 + depth * 16 }}
-            draggable={renaming !== node.id}
+            draggable={!copy && renaming !== node.id}
             onClick={(event) => onRowClick(event, node.id)}
             onDragStart={(event) => onDragStart(event, node.id)}
-            onDragOver={(event) => onDragOver(event, node)}
+            onDragOver={(event) => onDragOver(event, { node, depth, copy })}
             onDrop={onDrop}
             onDragEnd={() => setDrop(null)}
           >
@@ -121,19 +140,19 @@ export function LayersPanel({ store, state }: Props) {
               <button
                 type="button"
                 className="layer-caret"
-                aria-label={collapsed.has(node.id) ? '開く' : '閉じる'}
+                aria-label={isOpen(node, folding) ? '閉じる' : '開く'}
                 onClick={(event) => {
                   event.stopPropagation()
-                  toggleCollapsed(node.id)
+                  toggleOpen(node.id)
                 }}
               >
-                {collapsed.has(node.id) ? '▸' : '▾'}
+                {isOpen(node, folding) ? '▾' : '▸'}
               </button>
             ) : (
               <span className="layer-caret" />
             )}
             <span className="layer-icon">
-              <TypeIcon type={node.type} />
+              <TypeIcon type={node.type} role={node.type === 'frame' ? node.component?.role : undefined} />
             </span>
             {renaming === node.id ? (
               <input
@@ -154,23 +173,26 @@ export function LayersPanel({ store, state }: Props) {
                 }}
               />
             ) : (
-              <span className="layer-name" onDoubleClick={() => setRenaming(node.id)}>
+              // 写しの名前は元と同じ。変えられない
+              <span className="layer-name" onDoubleClick={() => !copy && setRenaming(node.id)}>
                 {node.name}
               </span>
             )}
-            <button
-              type="button"
-              className="layer-toggle"
-              data-active={node.locked}
-              title={node.locked ? 'ロックを解除' : 'ロック'}
-              aria-label={node.locked ? 'ロックを解除' : 'ロック'}
-              onClick={(event) => {
-                event.stopPropagation()
-                store.apply((base) => updateNode(base, node.id, { locked: !node.locked }))
-              }}
-            >
-              <LockIcon open={!node.locked} />
-            </button>
+            {!copy && (
+              <button
+                type="button"
+                className="layer-toggle"
+                data-active={node.locked}
+                title={node.locked ? 'ロックを解除' : 'ロック'}
+                aria-label={node.locked ? 'ロックを解除' : 'ロック'}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  store.apply((base) => updateNode(base, node.id, { locked: !node.locked }))
+                }}
+              >
+                <LockIcon open={!node.locked} />
+              </button>
+            )}
             <button
               type="button"
               className="layer-toggle"

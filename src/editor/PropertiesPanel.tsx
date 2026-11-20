@@ -11,6 +11,16 @@ import type {
   TextNode,
 } from '../document/types.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
+import {
+  createInstance,
+  detachComponent,
+  findMain,
+  hasOverrides,
+  isInstance,
+  makeComponent,
+  owningInstance,
+  resetOverrides,
+} from './components.ts'
 import { enableAutoLayout } from './layout.ts'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
@@ -114,6 +124,13 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const resize = (size: { width?: number; height?: number }) =>
     store.apply((base) => fitTextNodes(setSize(base, selection, size), selection))
 
+  // インスタンスとその中身（写し）の見た目は元に合わせて作り直されるので、変えられるのは上書きできる項目
+  // （塗り・線の色。文言はキャンバスで、表示はレイヤー一覧で変える）だけ。
+  // インスタンス自身は、それに加えて位置・回転・不透明度を持つ
+  const hasInstance = nodes.some(isInstance)
+  const inner = nodes.some((node) => owningInstance(page, node.id) !== null)
+  const limited = hasInstance || inner
+  const plain = inner ? [] : nodes.filter((node) => !isInstance(node))
   // 塗りと線を持つ図形
   const shapes = nodes.filter(
     (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path',
@@ -124,8 +141,8 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   // 端の形を付けられるもの。閉じたパスには端がない
   const capped = [...lines, ...paths.filter((node) => !node.closed)]
   const closed = common(paths.map((node) => node.closed))
-  const frames = nodes.filter((node) => node.type === 'frame')
-  const rounded = nodes.filter((node) => node.type === 'rect' || node.type === 'frame' || node.type === 'image')
+  const frames = plain.filter((node) => node.type === 'frame')
+  const rounded = plain.filter((node) => node.type === 'rect' || node.type === 'frame' || node.type === 'image')
   const filled = [...shapes, ...texts]
   const stroked = [...shapes, ...lines]
   const onlyShapes = shapes.length === nodes.length
@@ -189,6 +206,28 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
       return updateNode(next, id, { fillGradient: { angle: 90, stops } })
     }, base)
 
+  const single = nodes.length === 1 ? nodes[0] : null
+  const overridden = selection.some((id) => hasOverrides(state.document, page, id))
+  /** 選んでいるインスタンスや、その中身の上書きを捨てる */
+  const reset = () => store.applyDocument((doc) => resetOverrides(doc, page.id, selection))
+  /** 元のすぐそばにインスタンスを置いて、それを選ぶ */
+  const addInstance = (componentId: string) => {
+    let id: string | null = null
+    store.applyDocument((doc) => {
+      const result = createInstance(doc, page.id, componentId)
+      id = result.id
+      return result.document
+    })
+    if (id) store.select([id])
+  }
+  /** 元のあるページへ移って、元を選ぶ */
+  const selectMain = (componentId: string) => {
+    const main = findMain(state.document, componentId)
+    if (!main) return
+    store.setPage(main.page.id)
+    store.select([main.node.id])
+  }
+
   const shadows = shapes.flatMap((node) => (node.shadow ? [node.shadow] : []))
   const shadowEnabled = common(shapes.map((node) => node.shadow !== null))
   /** 影のある図形だけ、影の一部を書き換える */
@@ -207,76 +246,136 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         {nodes.length === 1 ? TYPE_LABELS[nodes[0].type] : `${nodes.length} 個を選択中`}
       </h2>
 
-      <Section title="整列">
-        <div className="button-row">
-          {ALIGNMENTS.map(({ alignment, label }) => (
-            <button
-              key={alignment}
-              type="button"
-              className="icon-button"
-              title={label}
-              aria-label={label}
-              disabled={!canAlign}
-              onClick={() => store.apply((base) => alignNodes(base, selection, alignment))}
-            >
-              <AlignIcon kind={alignment} />
+      {inner && (
+        <Section title="インスタンスの中身">
+          <p className="section-note">
+            文言・塗り・線の色・表示だけを、このインスタンスに限って変えられます。文言はダブルクリックで編集します。
+          </p>
+          {overridden && (
+            <button type="button" onClick={reset}>
+              元と同じに戻す
             </button>
-          ))}
-          {(['x', 'y'] as const).map((axis) => {
-            const label = axis === 'x' ? '左右に等間隔' : '上下に等間隔'
-            return (
-              <button
-                key={axis}
-                type="button"
-                className="icon-button"
-                title={label}
-                aria-label={label}
-                disabled={nodes.length < 3}
-                onClick={() => store.apply((base) => distributeNodes(base, selection, axis))}
-              >
-                <AlignIcon kind={axis === 'x' ? 'distribute-x' : 'distribute-y'} />
+          )}
+        </Section>
+      )}
+
+      {!inner && (
+        <>
+          <Section title="整列">
+            <div className="button-row">
+              {ALIGNMENTS.map(({ alignment, label }) => (
+                <button
+                  key={alignment}
+                  type="button"
+                  className="icon-button"
+                  title={label}
+                  aria-label={label}
+                  disabled={!canAlign}
+                  onClick={() => store.apply((base) => alignNodes(base, selection, alignment))}
+                >
+                  <AlignIcon kind={alignment} />
+                </button>
+              ))}
+              {(['x', 'y'] as const).map((axis) => {
+                const label = axis === 'x' ? '左右に等間隔' : '上下に等間隔'
+                return (
+                  <button
+                    key={axis}
+                    type="button"
+                    className="icon-button"
+                    title={label}
+                    aria-label={label}
+                    disabled={nodes.length < 3}
+                    onClick={() => store.apply((base) => distributeNodes(base, selection, axis))}
+                  >
+                    <AlignIcon kind={axis === 'x' ? 'distribute-x' : 'distribute-y'} />
+                  </button>
+                )
+              })}
+            </div>
+          </Section>
+
+          <Section title="位置とサイズ">
+            <div className="field-grid">
+              <NumberField label="X" value={common(nodes.map((n) => n.x))} onCommit={(x) => apply({ x })} />
+              <NumberField label="Y" value={common(nodes.map((n) => n.y))} onCommit={(y) => apply({ y })} />
+              <NumberField
+                label="W"
+                value={common(nodes.map((n) => n.width))}
+                min={minSize}
+                // インスタンスの大きさは元と同じ
+                disabled={hasInstance}
+                // テキストは幅を決めると、その幅で折り返すようになる
+                onCommit={(width) => resize({ width })}
+              />
+              <NumberField
+                label="H"
+                value={common(nodes.map((n) => n.height))}
+                min={minSize}
+                // テキストの高さは中身で決まる
+                disabled={hasText || hasInstance}
+                onCommit={(height) => resize({ height })}
+              />
+              <NumberField
+                label="回転"
+                value={common(nodes.map((n) => n.rotation))}
+                onCommit={(rotation) => apply({ rotation: normalizeAngle(rotation) })}
+              />
+            </div>
+          </Section>
+
+          <Section title="不透明度">
+            <NumberField
+              label="%"
+              value={mapValue(common(nodes.map((n) => n.opacity)), (opacity) => Math.round(opacity * 100))}
+              min={0}
+              max={100}
+              onCommit={(percent) => apply({ opacity: percent / 100 })}
+            />
+          </Section>
+        </>
+      )}
+
+      {!inner && single?.type === 'frame' && (
+        <Section title="コンポーネント">
+          {single.component === null && (
+            <button type="button" onClick={() => store.apply((base) => makeComponent(base, single.id))}>
+              コンポーネントにする
+            </button>
+          )}
+          {single.component?.role === 'main' && (
+            <>
+              <p className="section-note">
+                このフレームが元です。変更すると、すべてのインスタンスに反映されます。
+              </p>
+              <button type="button" onClick={() => addInstance(single.component!.id)}>
+                インスタンスを作る
               </button>
-            )
-          })}
-        </div>
-      </Section>
-
-      <Section title="位置とサイズ">
-        <div className="field-grid">
-          <NumberField label="X" value={common(nodes.map((n) => n.x))} onCommit={(x) => apply({ x })} />
-          <NumberField label="Y" value={common(nodes.map((n) => n.y))} onCommit={(y) => apply({ y })} />
-          <NumberField
-            label="W"
-            value={common(nodes.map((n) => n.width))}
-            min={minSize}
-            // テキストは幅を決めると、その幅で折り返すようになる
-            onCommit={(width) => resize({ width })}
-          />
-          <NumberField
-            label="H"
-            value={common(nodes.map((n) => n.height))}
-            min={minSize}
-            // テキストの高さは中身で決まる
-            disabled={hasText}
-            onCommit={(height) => resize({ height })}
-          />
-          <NumberField
-            label="回転"
-            value={common(nodes.map((n) => n.rotation))}
-            onCommit={(rotation) => apply({ rotation: normalizeAngle(rotation) })}
-          />
-        </div>
-      </Section>
-
-      <Section title="不透明度">
-        <NumberField
-          label="%"
-          value={mapValue(common(nodes.map((n) => n.opacity)), (opacity) => Math.round(opacity * 100))}
-          min={0}
-          max={100}
-          onCommit={(percent) => apply({ opacity: percent / 100 })}
-        />
-      </Section>
+              <button type="button" onClick={() => store.apply((base) => detachComponent(base, single.id))}>
+                コンポーネントをやめる
+              </button>
+            </>
+          )}
+          {single.component?.role === 'instance' && (
+            <>
+              <p className="section-note">
+                インスタンスです。中身は元に合わせて変わります。ダブルクリックで中身を選ぶと、文言や色をこのインスタンスだけ変えられます。
+              </p>
+              <button type="button" onClick={() => selectMain(single.component!.id)}>
+                元を表示
+              </button>
+              {overridden && (
+                <button type="button" onClick={reset}>
+                  上書きをすべて戻す
+                </button>
+              )}
+              <button type="button" onClick={() => store.apply((base) => detachComponent(base, single.id))}>
+                切り離して編集できるようにする
+              </button>
+            </>
+          )}
+        </Section>
+      )}
 
       {filled.length === nodes.length && (
         <Section title="塗り">
@@ -329,7 +428,7 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         </Section>
       )}
 
-      {images.length === nodes.length && (
+      {!inner && images.length === nodes.length && (
         <Section title="画像">
           <label className="field">
             <span className="field-label">収め方</span>
@@ -361,16 +460,18 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
             onCommit={store.commitPreview}
             onSet={(stroke) => apply({ stroke })}
           />
-          <NumberField
-            label="太さ"
-            value={common(stroked.map((n) => n.strokeWidth))}
-            min={0}
-            onCommit={(strokeWidth) => apply({ strokeWidth })}
-          />
+          {!limited && (
+            <NumberField
+              label="太さ"
+              value={common(stroked.map((n) => n.strokeWidth))}
+              min={0}
+              onCommit={(strokeWidth) => apply({ strokeWidth })}
+            />
+          )}
         </Section>
       )}
 
-      {capped.length > 0 && capped.length === nodes.length && (
+      {!inner && capped.length > 0 && capped.length === nodes.length && (
         <Section title="端の形">
           <CapField
             label="始点"
@@ -385,7 +486,7 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         </Section>
       )}
 
-      {paths.length === nodes.length && (
+      {!inner && paths.length === nodes.length && (
         <Section title="パス">
           <label className="check-field">
             <input
@@ -412,7 +513,7 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         </Section>
       )}
 
-      {onlyShapes && (
+      {onlyShapes && !limited && (
         <Section title="影">
           <label className="check-field">
             <input
@@ -571,7 +672,7 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         </Section>
       )}
 
-      {texts.length === nodes.length && (
+      {!inner && texts.length === nodes.length && (
         <Section title="テキスト">
           <NumberField
             label="サイズ"

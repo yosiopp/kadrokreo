@@ -1,6 +1,7 @@
 // ブラウザでの動作確認をまとめて実行する。
 //   npm run e2e                 開発サーバーを立てて全スクリプトを実行
 //   npm run e2e -- 05-style     名前に一致するスクリプトだけ実行
+//   npm run capture             サンプルのデザインを組み立てて、画面のキャプチャを撮る
 //   EDITOR_URL=... VIEWER_URL=... npm run e2e   起動済みのサーバー（Docker など）に対して実行
 // Google Chrome がインストールされている必要がある。スクリーンショットなどは e2e/out に出る。
 import { spawn } from 'node:child_process'
@@ -11,10 +12,14 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 const filter = process.argv[2] ?? ''
-// 02 は 01 が書き出した kdr を使うので、番号順に実行する
-const scripts = readdirSync(here)
-  .filter((name) => /^\d+-.*\.cjs$/.test(name) && name.includes(filter))
-  .sort()
+// 02 は 01 が書き出した kdr を使うので、番号順に実行する。
+// 「capture」を指定したときは、確認ではなく画面のキャプチャを撮る（e2e/out/captures に出る）
+const scripts =
+  filter === 'capture'
+    ? ['capture.cjs']
+    : readdirSync(here)
+        .filter((name) => /^\d+-.*\.cjs$/.test(name) && name.includes(filter))
+        .sort()
 
 const servers = []
 const env = { ...process.env }
