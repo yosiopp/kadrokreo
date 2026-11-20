@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "oxc"],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+  },
+  "overrides": [
+    {
+      "files": ["src/viewer/**", "src/document/**", "src/canvas/**", "src/ui/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/editor/**"],
+                "message": "viewer ビルドに編集機能を含めないため、src/editor は editor 側からしか import できません"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

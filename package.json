@@ -1,0 +1,31 @@
+{
+  "name": "kadrokreo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:editor": "vite --mode editor",
+    "build": "tsc -b && npm run build:viewer && npm run build:editor",
+    "build:viewer": "vite build --outDir dist/viewer",
+    "build:editor": "vite build --mode editor --outDir dist/editor",
+    "lint": "oxlint",
+    "test": "vitest run",
+    "preview": "vite preview --outDir dist/viewer",
+    "preview:editor": "vite preview --outDir dist/editor"
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "oxlint": "^1.90.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.1"
+  }
+}

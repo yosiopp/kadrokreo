@@ -1,0 +1,510 @@
+:root {
+  --text: #1f2328;
+  --text-muted: #6b7280;
+  --bg: #ffffff;
+  --bg-hover: #f1f2f4;
+  --bg-selected: #dcebff;
+  /* キャンバスはテーマによらず同じ色にする。デザインの見え方が OS の設定で変わらないように */
+  --canvas-bg: #e9eaed;
+  --canvas-label: #6b7280;
+  --border: #e2e4e9;
+  --accent: #0d99ff;
+  --accent-text: #ffffff;
+  --danger-bg: #fdecec;
+  --danger-text: #a4262c;
+
+  font: 12px/1.4 system-ui, 'Segoe UI', Roboto, 'Hiragino Sans', sans-serif;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e6e8eb;
+    --text-muted: #9ca3af;
+    --bg: #2a2b30;
+    --bg-hover: #36373d;
+    --bg-selected: #1d4a73;
+    --border: #3d3f47;
+    --danger-bg: #4a2326;
+    --danger-text: #ffb3b3;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 全体のレイアウト */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.app-mode {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.app-header-spacer {
+  flex: 1;
+}
+
+.document-name {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+input.document-name {
+  width: 160px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+}
+
+input.document-name:hover,
+input.document-name:focus {
+  border-color: var(--border);
+}
+
+.app-message {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.app-message button {
+  border: 0;
+  background: transparent;
+}
+
+.app-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--canvas-bg);
+}
+
+.editor-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 240px minmax(0, 1fr) 248px;
+  min-height: 0;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  color: var(--canvas-label);
+  font-size: 13px;
+  text-align: center;
+}
+
+.empty-state p {
+  margin: 2px 0;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 14px;
+  pointer-events: none;
+  color: #1f2328;
+}
+
+/* キャンバス */
+
+.canvas-view {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.canvas-view canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.text-editor {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+}
+
+/* ツールバー */
+
+.toolbar,
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar {
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.icon-button[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.zoom-controls button {
+  padding: 0 7px;
+  border-color: transparent;
+}
+
+.zoom-controls .zoom-value {
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* パネル */
+
+.panel {
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.layers-panel {
+  border-right: 1px solid var(--border);
+}
+
+.properties-panel {
+  border-left: 1px solid var(--border);
+}
+
+.panel-title {
+  margin: 0;
+  padding: 10px 12px 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.panel-hint {
+  margin: 0;
+  padding: 2px 12px 12px;
+  color: var(--text-muted);
+}
+
+.panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.section-title {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.shortcut-list {
+  margin: 0;
+  padding: 0 12px 12px;
+}
+
+.shortcut-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.shortcut-list dt {
+  white-space: nowrap;
+}
+
+.shortcut-list dd {
+  margin: 0;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* レイヤー */
+
+.layer-list {
+  margin: 0;
+  padding: 0 0 12px;
+  list-style: none;
+}
+
+.layer-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding-right: 6px;
+  cursor: default;
+  user-select: none;
+}
+
+.layer-row:hover {
+  background: var(--bg-hover);
+}
+
+.layer-row[data-selected='true'] {
+  background: var(--bg-selected);
+}
+
+.layer-row[data-hidden='true'] .layer-name,
+.layer-row[data-hidden='true'] .layer-icon {
+  opacity: 0.45;
+}
+
+.layer-row[data-drop='inside'] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.layer-row[data-drop='above']::before,
+.layer-row[data-drop='below']::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.layer-row[data-drop='above']::before {
+  top: -1px;
+}
+
+.layer-row[data-drop='below']::before {
+  bottom: -1px;
+}
+
+.layer-caret {
+  flex: none;
+  width: 14px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.layer-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-muted);
+}
+
+.layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--bg);
+}
+
+.layer-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0;
+}
+
+.layer-row:hover .layer-toggle,
+.layer-toggle:focus-visible,
+.layer-toggle[data-active='true'] {
+  opacity: 1;
+}
+
+/* プロパティ */
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-label {
+  flex: none;
+  min-width: 14px;
+  color: var(--text-muted);
+}
+
+.field input,
+.field select {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.field input:disabled {
+  opacity: 0.5;
+}
+
+.check-field,
+.color-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-field input[type='color'] {
+  width: 32px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+}
+
+.color-field input[type='color']:disabled {
+  opacity: 0.35;
+}
+
+.color-value {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
