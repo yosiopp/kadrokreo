@@ -133,7 +133,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const types = Object.values(json.document.pages[0].nodes).map((n) => n.type).sort().join()
-  check('kdr にパスと矢印が入る', json.version === 7 && types === 'line,path,path', types)
+  check('kdr にパスと矢印が入る', json.version === 8 && types === 'line,path,path', types)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

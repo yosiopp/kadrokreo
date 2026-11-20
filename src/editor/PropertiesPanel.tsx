@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { normalizeAngle } from '../document/geometry.ts'
 import type {
+  AutoLayout,
   Cap,
   Gradient,
   ImageNode,
@@ -10,6 +11,7 @@ import type {
   TextNode,
 } from '../document/types.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
+import { enableAutoLayout } from './layout.ts'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
 import {
@@ -17,6 +19,7 @@ import {
   type NodePatch,
   alignNodes,
   distributeNodes,
+  setSize,
   updateNode,
   updateNodes,
 } from './operations.ts'
@@ -107,6 +110,9 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const apply = (patch: NodePatch) =>
     store.apply((base) => fitTextNodes(updateNodes(base, selection, patch), selection))
   const preview = (patch: NodePatch) => store.preview((base) => updateNodes(base, selection, patch))
+  // 大きさを数値で決める。テキストは折り返しに、自動で並べるフレームはその向きが固定になる
+  const resize = (size: { width?: number; height?: number }) =>
+    store.apply((base) => fitTextNodes(setSize(base, selection, size), selection))
 
   // 塗りと線を持つ図形
   const shapes = nodes.filter(
@@ -131,6 +137,23 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const fontWeight = common(texts.map((node) => node.fontWeight))
   const textAlign = common(texts.map((node) => node.textAlign))
   const clipContent = common(frames.map((node) => node.clipContent))
+
+  const layouts = frames.flatMap((node) => (node.layout ? [node.layout] : []))
+  const layoutEnabled = common(frames.map((node) => node.layout !== null))
+  /** 自動で並べているフレームだけ、設定の一部を書き換える */
+  const patchLayouts = (patch: Partial<AutoLayout>) => (base: Page) =>
+    selection.reduce((next, id) => {
+      const node = next.nodes[id]
+      if (node.type !== 'frame' || !node.layout) return next
+      return updateNode(next, id, { layout: { ...node.layout, ...patch } })
+    }, base)
+  const toggleLayout = (enabled: boolean) => (base: Page) =>
+    selection.reduce(
+      (next, id) => (enabled ? enableAutoLayout(next, id) : updateNode(next, id, { layout: null })),
+      base,
+    )
+  /** 設定項目 1 つの、選択中のフレームに共通の値 */
+  const layoutValue = <K extends keyof AutoLayout>(key: K) => common(layouts.map((layout) => layout[key]))
 
   const images = nodes.filter((node) => node.type === 'image')
   const gradients = shapes.flatMap((node) => (node.fillGradient ? [node.fillGradient] : []))
@@ -227,7 +250,7 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
             value={common(nodes.map((n) => n.width))}
             min={minSize}
             // テキストは幅を決めると、その幅で折り返すようになる
-            onCommit={(width) => apply(hasText ? { width, autoWidth: false } : { width })}
+            onCommit={(width) => resize({ width })}
           />
           <NumberField
             label="H"
@@ -235,7 +258,7 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
             min={minSize}
             // テキストの高さは中身で決まる
             disabled={hasText}
-            onCommit={(height) => apply({ height })}
+            onCommit={(height) => resize({ height })}
           />
           <NumberField
             label="回転"
@@ -461,6 +484,93 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         </Section>
       )}
 
+      {frames.length === nodes.length && (
+        <Section title="オートレイアウト">
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={layoutEnabled === true}
+              ref={(input) => {
+                if (input) input.indeterminate = layoutEnabled === MIXED
+              }}
+              onChange={(event) => store.apply(toggleLayout(event.target.checked))}
+            />
+            中身を自動で並べる
+          </label>
+          {layouts.length > 0 && (
+            <>
+              <SelectField
+                label="向き"
+                value={layoutValue('direction')}
+                options={[
+                  ['horizontal', '横に並べる'],
+                  ['vertical', '縦に並べる'],
+                ]}
+                onChange={(direction) => store.apply(patchLayouts({ direction }))}
+              />
+              <NumberField
+                label="間隔"
+                value={layoutValue('gap')}
+                onCommit={(gap) => store.apply(patchLayouts({ gap }))}
+              />
+              <div className="field-grid">
+                <NumberField
+                  label="左右"
+                  value={layoutValue('paddingX')}
+                  min={0}
+                  onCommit={(paddingX) => store.apply(patchLayouts({ paddingX }))}
+                />
+                <NumberField
+                  label="上下"
+                  value={layoutValue('paddingY')}
+                  min={0}
+                  onCommit={(paddingY) => store.apply(patchLayouts({ paddingY }))}
+                />
+              </div>
+              <SelectField
+                label="揃え"
+                value={layoutValue('align')}
+                options={[
+                  ['start', layoutValue('direction') === 'vertical' ? '左' : '上'],
+                  ['center', '中央'],
+                  ['end', layoutValue('direction') === 'vertical' ? '右' : '下'],
+                ]}
+                onChange={(align) => store.apply(patchLayouts({ align }))}
+              />
+              <SelectField
+                label="寄せ"
+                value={layoutValue('justify')}
+                options={[
+                  ['start', '先頭に寄せる'],
+                  ['center', '中央に寄せる'],
+                  ['end', '末尾に寄せる'],
+                  ['space-between', '均等に配る'],
+                ]}
+                onChange={(justify) => store.apply(patchLayouts({ justify }))}
+              />
+              <SelectField
+                label="幅"
+                value={layoutValue('widthMode')}
+                options={[
+                  ['hug', '中身に合わせる'],
+                  ['fixed', '固定'],
+                ]}
+                onChange={(widthMode) => store.apply(patchLayouts({ widthMode }))}
+              />
+              <SelectField
+                label="高さ"
+                value={layoutValue('heightMode')}
+                options={[
+                  ['hug', '中身に合わせる'],
+                  ['fixed', '固定'],
+                ]}
+                onChange={(heightMode) => store.apply(patchLayouts({ heightMode }))}
+              />
+            </>
+          )}
+        </Section>
+      )}
+
       {texts.length === nodes.length && (
         <Section title="テキスト">
           <NumberField
@@ -559,6 +669,37 @@ function ExportSection({ label, onExport }: { label: string; onExport: (scale: n
         {label}
       </ExportControls>
     </Section>
+  )
+}
+
+type SelectFieldProps<T extends string> = {
+  label: string
+  value: T | Mixed
+  /** [値, 表示名] の並び */
+  options: readonly (readonly [T, string])[]
+  onChange: (value: T) => void
+}
+
+function SelectField<T extends string>({ label, value, options, onChange }: SelectFieldProps<T>) {
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      <select
+        value={value === MIXED ? '' : value}
+        onChange={(event) => {
+          onChange(event.target.value as T)
+          // フォーカスを残すとキーボードショートカットが効かなくなる
+          event.target.blur()
+        }}
+      >
+        {value === MIXED && <option value="">混在</option>}
+        {options.map(([option, name]) => (
+          <option key={option} value={option}>
+            {name}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }
 

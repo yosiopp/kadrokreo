@@ -1,5 +1,6 @@
 import type { DesignDocument, NodeId, Page, PageId } from '../document/types.ts'
 import { createHistory, pushHistory, redoHistory, undoHistory } from './history.ts'
+import { relayout } from './layout.ts'
 import { updatePage } from './operations.ts'
 
 export type EditorState = {
@@ -63,15 +64,31 @@ export function createEditorStore(initial: DesignDocument) {
     emit()
   }
 
+  /**
+   * 変更のあったページで、自動で並べるフレームを並べ直す。
+   * どの操作も、レイアウトのことは気にせずノードを動かしてよい。
+   */
+  function settle(before: DesignDocument, after: DesignDocument): DesignDocument {
+    if (after === before) return after
+    let changed = false
+    const pages = after.pages.map((page) => {
+      if (before.pages.includes(page)) return page
+      const next = relayout(page)
+      if (next !== page) changed = true
+      return next
+    })
+    return changed ? { ...after, pages } : after
+  }
+
   function applyDocument(recipe: DocumentRecipe) {
     commitPreview()
     const before = history
-    history = pushHistory(history, recipe(history.present))
+    history = pushHistory(history, settle(history.present, recipe(history.present)))
     if (history !== before) emit()
   }
 
   function previewDocument(recipe: DocumentRecipe) {
-    const next = recipe(history.present)
+    const next = settle(history.present, recipe(history.present))
     if (next === (preview ?? history.present)) return
     preview = next
     emit()

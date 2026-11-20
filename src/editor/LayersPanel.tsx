@@ -11,18 +11,30 @@ type Props = {
 
 type Row = { node: SceneNode; depth: number }
 
-/** 手前にあるものほど上に並べる */
+/**
+ * 手前にあるものほど上に並べる。
+ * 自動で並べるフレームの中だけは、キャンバスでの並び順（先頭が上）のまま出す。
+ */
 function buildRows(scene: Scene, collapsed: ReadonlySet<NodeId>): Row[] {
   const rows: Row[] = []
-  function visit(ids: readonly NodeId[], depth: number) {
-    for (const id of ids.toReversed()) {
+  function visit(ids: readonly NodeId[], depth: number, inLayout: boolean) {
+    for (const id of inLayout ? ids : ids.toReversed()) {
       const node = scene.nodes[id]
       rows.push({ node, depth })
-      if (node.type === 'frame' && !collapsed.has(id)) visit(node.children, depth + 1)
+      if (node.type === 'frame' && !collapsed.has(id)) {
+        visit(node.children, depth + 1, node.layout !== null)
+      }
     }
   }
-  visit(scene.rootIds, 0)
+  visit(scene.rootIds, 0, false)
   return rows
+}
+
+/** 自動で並べるフレームの子か。一覧での上下が、重なり順と逆になる */
+function isInLayout(scene: Scene, id: NodeId): boolean {
+  const parentId = scene.nodes[id]?.parentId
+  const parent = parentId == null ? null : scene.nodes[parentId]
+  return parent?.type === 'frame' && parent.layout !== null
 }
 
 export function LayersPanel({ store, state }: Props) {
@@ -74,7 +86,12 @@ export function LayersPanel({ store, state }: Props) {
     setDrop(null)
     if (!target) return
     const ids = store.getState().selection
-    store.apply((base) => placeNodes(base, ids, target.id, target.placement))
+    store.apply((base) => {
+      // drop.placement は一覧での見た目の位置。自動で並べるフレームの中では、一覧で上にあるほど先頭（奥）になる
+      const flipped = target.placement !== 'inside' && isInLayout(base, target.id)
+      const placement = !flipped ? target.placement : target.placement === 'above' ? 'below' : 'above'
+      return placeNodes(base, ids, target.id, placement)
+    })
     if (target.placement === 'inside' && collapsed.has(target.id)) toggleCollapsed(target.id)
   }
 

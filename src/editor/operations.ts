@@ -285,11 +285,38 @@ export function reshapeNode<T extends Scene>(scene: T, id: NodeId, box: Bounds):
   })
   const size = { width: box.width, height: node.type === 'text' ? node.height : box.height }
   const pose = poseInParent(scene, node.parentId, center, getWorldRotation(scene, id), size)
-  const patch = { x: pose.x, y: pose.y, ...size }
-  if (node.type === 'text' && box.width !== node.width) {
-    return updateNode(scene, id, { ...patch, autoWidth: false })
+  return updateNode(scene, id, { x: pose.x, y: pose.y, ...sizePatch(node, size.width, size.height) })
+}
+
+/**
+ * 大きさを変えるパッチ。大きさが中身で決まるものは、変えた向きの決まり方も一緒に切り替える:
+ * テキストは幅を変えると折り返しになり、自動で並べるフレームは変えた向きが「固定」になる
+ * （そうしないと、すぐ中身に合わせた大きさへ戻ってしまう）。
+ */
+function sizePatch(node: SceneNode, width: number, height: number): NodePatch {
+  if (node.type === 'text') {
+    return width === node.width ? {} : { width, autoWidth: false }
   }
-  return updateNode(scene, id, patch)
+  if (node.type !== 'frame' || !node.layout) return { width, height }
+  const widthMode = width === node.width ? node.layout.widthMode : 'fixed'
+  const heightMode = height === node.height ? node.layout.heightMode : 'fixed'
+  if (widthMode === node.layout.widthMode && heightMode === node.layout.heightMode) {
+    return { width, height }
+  }
+  return { width, height, layout: { ...node.layout, widthMode, heightMode } }
+}
+
+/** 幅や高さを数値で指定する。指定しなかった向きは変えない */
+export function setSize<T extends Scene>(
+  scene: T,
+  ids: readonly NodeId[],
+  size: { width?: number; height?: number },
+): T {
+  return ids.reduce((next, id) => {
+    const node = next.nodes[id]
+    if (!node) return next
+    return updateNode(next, id, sizePatch(node, size.width ?? node.width, size.height ?? node.height))
+  }, scene)
 }
 
 /**
@@ -330,11 +357,7 @@ export function resizeNodes<T extends Scene>(
         height: node.type === 'text' ? node.height : Math.max(minSize, Math.round(node.height * scaleH)),
       }
       const pose = poseInParent(scene, node.parentId, moved, getWorldRotation(scene, id), size)
-      const patch = { x: pose.x, y: pose.y, ...size }
-      if (node.type === 'text' && size.width !== node.width) {
-        return updateNode(next, id, { ...patch, autoWidth: false })
-      }
-      return updateNode(next, id, patch)
+      return updateNode(next, id, { x: pose.x, y: pose.y, ...sizePatch(node, size.width, size.height) })
     }
 
     const abs = getAbsoluteBounds(scene, id)
@@ -343,16 +366,11 @@ export function resizeNodes<T extends Scene>(
     const position = { x: node.x + left - abs.x, y: node.y + top - abs.y }
     const right = Math.round(to.x + (abs.x + abs.width - from.x) * scaleX)
     const bottom = Math.round(to.y + (abs.y + abs.height - from.y) * scaleY)
-    const width = Math.max(1, right - left)
-    if (node.type === 'text') {
-      if (width === node.width) return updateNode(next, id, position)
-      return updateNode(next, id, { ...position, width, autoWidth: false })
-    }
     // 直線は水平・垂直にできるよう、幅や高さが 0 になってよい
-    if (node.type === 'line') {
-      return updateNode(next, id, { ...position, width: right - left, height: bottom - top })
-    }
-    return updateNode(next, id, { ...position, width, height: Math.max(1, bottom - top) })
+    const minSize = node.type === 'line' ? 0 : 1
+    const width = Math.max(minSize, right - left)
+    const height = Math.max(minSize, bottom - top)
+    return updateNode(next, id, { ...position, ...sizePatch(node, width, height) })
   }, scene)
 }
 

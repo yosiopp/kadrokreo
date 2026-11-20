@@ -1,6 +1,7 @@
 import type {
   Asset,
   AssetId,
+  AutoLayout,
   DesignDocument,
   Gradient,
   NodeId,
@@ -11,7 +12,7 @@ import type {
 } from './types.ts'
 
 // kdr ファイルの実体は gzip 圧縮した 1 つの JSON:
-//   { format: 'kadrokreo', version: 7, document: DesignDocument }
+//   { format: 'kadrokreo', version: 8, document: DesignDocument }
 // 古い version も読み込める。それぞれで増えたもの:
 //   2: 画像（assets）、テキストの折り返し（autoWidth）
 //   3: 直線、影、フレームと画像の角丸、テキストの太さ・行揃え・行の高さ
@@ -19,8 +20,9 @@ import type {
 //   5: 回転
 //   6: パス、線の端の形（矢印）、直線の始点と終点の区別
 //   7: グラデーション、画像の収め方
+//   8: オートレイアウト
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 7
+export const KDR_VERSION = 8
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -162,7 +164,7 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7
+type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
 
 const CAPS = ['none', 'arrow'] as const
 const MAX_PATH_POINTS = 10_000
@@ -272,9 +274,31 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
         children: idArray(raw.children, at('children')),
         clipContent: boolean(raw.clipContent, at('clipContent')),
         cornerRadius: added(3, 0, cornerRadius),
+        layout: added(8, null, () =>
+          raw.layout === null ? null : parseLayout(raw.layout, at('layout')),
+        ),
       }
     default:
       throw new KdrError(`${at('type')}: 未対応のノード種別です`)
+  }
+}
+
+function parseLayout(value: unknown, path: string): AutoLayout {
+  const raw = record(value, path)
+  const modes = ['hug', 'fixed'] as const
+  return {
+    direction: oneOf(raw.direction, ['horizontal', 'vertical'] as const, `${path}.direction`),
+    gap: number(raw.gap, `${path}.gap`),
+    paddingX: size(raw.paddingX, `${path}.paddingX`),
+    paddingY: size(raw.paddingY, `${path}.paddingY`),
+    align: oneOf(raw.align, ['start', 'center', 'end'] as const, `${path}.align`),
+    justify: oneOf(
+      raw.justify,
+      ['start', 'center', 'end', 'space-between'] as const,
+      `${path}.justify`,
+    ),
+    widthMode: oneOf(raw.widthMode, modes, `${path}.widthMode`),
+    heightMode: oneOf(raw.heightMode, modes, `${path}.heightMode`),
   }
 }
 

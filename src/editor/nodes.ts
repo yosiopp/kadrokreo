@@ -119,5 +119,6 @@ export function createFrame(bounds: Bounds): FrameNode {
     children: [],
     clipContent: true,
     cornerRadius: 0,
+    layout: null,
   }
 }

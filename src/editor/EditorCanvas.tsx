@@ -24,6 +24,7 @@ import { lineBetween, lineEndpoints, pathFromPoints, pathPoints } from '../docum
 import type { LineNode, NodeId, PathNode, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { TextEditor } from './TextEditor.tsx'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
+import { placeInLayout, wrapInAutoLayout } from './layout.ts'
 import { fitTextNodes, measureFrameLabel, measureTextNode } from './measure.ts'
 import {
   createEllipse,
@@ -648,6 +649,14 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       // ポインタの下にあるフレームの中へ入れる（フレームの外へ出せばページ直下に戻る）
       const parentId = findFrameAt(store.getState().page, pointer.world, exclude)
 
+      // 自動で並べるフレームの中では、位置はフレームが決める。ポインタの位置に応じて順番だけ入れ替える
+      const parent = parentId === null ? null : store.getState().page.nodes[parentId]
+      if (parent?.type === 'frame' && parent.layout) {
+        gesture.guides = []
+        store.preview((base) => placeInLayout(base, ids, parent.id, pointer.world))
+        return
+      }
+
       // 近くの図形や親フレームの端・中央に吸着する。Cmd / Ctrl を押している間は吸着しない
       const targets = pointer.modKey ? [] : snapTargets(parentId, exclude)
       const snap = snapMove(
@@ -880,7 +889,16 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       t: 'text',
     }
 
-    if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
+    if (event.shiftKey && key === 'a') {
+      // 選んだものを、自動で並べるフレームにまとめる
+      let frameId: NodeId | null = null
+      store.apply((base) => {
+        const result = wrapInAutoLayout(base, movableIds(), nextName(base, 'frame'))
+        frameId = result.id
+        return result.scene
+      })
+      if (frameId) store.select([frameId])
+    } else if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)
     else if (Object.hasOwn(tools, key)) onToolChange(tools[key])
     else if (key === 'delete' || key === 'backspace') remove()

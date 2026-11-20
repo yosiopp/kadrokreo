@@ -38,7 +38,7 @@ const PNG = {
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 }
 
-function kdrJson(document: unknown, version = 7) {
+function kdrJson(document: unknown, version = 8) {
   return { format: 'kadrokreo', version, document }
 }
 
@@ -105,7 +105,7 @@ describe('parseKdr', () => {
   it('別形式や未対応バージョンを拒否する', () => {
     const doc = documentOf(valid())
     expect(() => parseKdr({ format: 'other', version: 1, document: doc })).toThrow(KdrError)
-    expect(() => parseKdr(kdrJson(doc, 8))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 9))).toThrow('新しいバージョン')
     expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)
@@ -205,6 +205,35 @@ describe('parseKdr', () => {
     // 新しく作る画像は切り抜き（cover）だが、古いファイルの画像は当時のまま引き伸ばす
     expect(loaded[image.id]).toEqual({ ...image, fit: 'stretch' })
     expect(() => parseKdr(kdrJson(v6, 7))).toThrow(KdrError)
+  })
+
+  it('version 7 のファイルも読める（オートレイアウトなし）', () => {
+    const frame = createFrame({ x: 0, y: 0, width: 10, height: 10 })
+    const { layout: _layout, ...v7Frame } = frame
+    const v7 = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf(v7Frame) }], assets: {} }
+    expect(parseKdr(kdrJson(v7, 7)).pages[0].nodes[frame.id]).toEqual(frame)
+    expect(() => parseKdr(kdrJson(v7, 8))).toThrow(KdrError)
+  })
+
+  it('オートレイアウトの設定を検証する', () => {
+    const layout = {
+      direction: 'vertical',
+      gap: 8,
+      paddingX: 16,
+      paddingY: 12,
+      align: 'center',
+      justify: 'space-between',
+      widthMode: 'hug',
+      heightMode: 'fixed',
+    }
+    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), layout }
+    expect(parseKdr(kdrOf(sceneOf(frame))).pages[0].nodes[frame.id]).toEqual(frame)
+
+    const withLayout = (patch: object) => kdrOf(sceneOf({ ...frame, layout: { ...layout, ...patch } }))
+    expect(() => parseKdr(withLayout({ direction: 'diagonal' }))).toThrow('layout.direction')
+    expect(() => parseKdr(withLayout({ paddingX: -1 }))).toThrow('layout.paddingX')
+    expect(() => parseKdr(withLayout({ widthMode: 'fill' }))).toThrow('layout.widthMode')
+    expect(() => parseKdr(withLayout({ gap: '8' }))).toThrow('layout.gap')
   })
 
   it('グラデーションを検証する', () => {

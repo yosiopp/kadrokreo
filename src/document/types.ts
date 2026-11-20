@@ -107,13 +107,35 @@ export type ImageNode = BaseNode & {
   fit: 'stretch' | 'cover' | 'contain'
 }
 
+/**
+ * フレームの中身を自動で並べる設定。子は children の順に、direction の向きへ並ぶ。
+ * 並べた結果の位置と大きさは各ノードの x / y / width / height にも入っているので、
+ * 表示するだけなら、この設定を読まなくてよい。
+ */
+export type AutoLayout = {
+  direction: 'horizontal' | 'vertical'
+  /** 子と子の間隔 */
+  gap: number
+  /** 左右・上下の余白 */
+  paddingX: number
+  paddingY: number
+  /** 並べる向きと直交する向きの揃え方 */
+  align: 'start' | 'center' | 'end'
+  /** 並べる向きの寄せ方。大きさが固定のときだけ意味がある */
+  justify: 'start' | 'center' | 'end' | 'space-between'
+  /** hug は中身に合わせる、fixed は width / height のまま */
+  widthMode: 'hug' | 'fixed'
+  heightMode: 'hug' | 'fixed'
+}
+
 export type FrameNode = BaseNode &
   Paint & {
     type: 'frame'
-    /** 先頭が最背面 */
+    /** 先頭が最背面。自動で並べるときは、先頭から順に並ぶ */
     children: NodeId[]
     clipContent: boolean
     cornerRadius: number
+    layout: AutoLayout | null
   }
 
 export type SceneNode =
