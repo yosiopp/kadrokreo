@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { KdrError, decodeKdr, parseKdr } from '../document/kdr.ts'
 import type { DesignDocument, Page, Scene, TextNode } from '../document/types.ts'
 import { encodeKdr } from './exportKdr.ts'
-import { createEllipse, createFrame, createImage, createLine, createRect, createText } from './nodes.ts'
+import { pathFromPoints } from '../document/path.ts'
+import {
+  createEllipse,
+  createFrame,
+  createImage,
+  createLine,
+  createPath,
+  createRect,
+  createText,
+} from './nodes.ts'
 import { addAsset, createPage, insertNode, removeNodes } from './operations.ts'
 
 function samplePage(): Page {
@@ -29,7 +38,7 @@ const PNG = {
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 }
 
-function kdrJson(document: unknown, version = 5) {
+function kdrJson(document: unknown, version = 6) {
   return { format: 'kadrokreo', version, document }
 }
 
@@ -96,7 +105,7 @@ describe('parseKdr', () => {
   it('別形式や未対応バージョンを拒否する', () => {
     const doc = documentOf(valid())
     expect(() => parseKdr({ format: 'other', version: 1, document: doc })).toThrow(KdrError)
-    expect(() => parseKdr(kdrJson(doc, 6))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 7))).toThrow('新しいバージョン')
     expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)
@@ -168,6 +177,27 @@ describe('parseKdr', () => {
     expect(parseKdr(kdrJson(v4, 4)).pages[0]).toEqual(page)
     // version 5 では省略できない
     expect(() => parseKdr(kdrJson(v4, 5))).toThrow('rotation')
+  })
+
+  it('version 5 のファイルも読める（直線は左の端が始点、端の形なし）', () => {
+    const line = createLine({ x: 0, y: 0, width: 10, height: 5 }, 'up')
+    const { flipped: _f, startCap: _s, endCap: _e, ...v5Line } = line
+    const v5 = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf(v5Line) }], assets: {} }
+
+    expect(parseKdr(kdrJson(v5, 5)).pages[0].nodes[line.id]).toEqual(line)
+    // version 6 では省略できない
+    expect(() => parseKdr(kdrJson(v5, 6))).toThrow(KdrError)
+  })
+
+  it('パスを検証する', () => {
+    const shape = pathFromPoints([{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 20, y: 30 }])
+    const path = { ...createPath(shape, true), endCap: 'arrow' as const }
+    expect(parseKdr(kdrOf(sceneOf(path))).pages[0].nodes[path.id]).toEqual(path)
+
+    expect(() => parseKdr(kdrOf(sceneOf({ ...path, points: [{ x: 0, y: 0 }] })))).toThrow('頂点')
+    expect(() => parseKdr(kdrOf(sceneOf({ ...path, points: [{ x: 0, y: 0 }, { x: '1', y: 0 }] })))).toThrow('points[1].x')
+    expect(() => parseKdr(kdrOf(sceneOf({ ...path, points: 'M0 0L1 1' })))).toThrow('points')
+    expect(() => parseKdr(kdrOf(sceneOf({ ...path, endCap: 'circle' })))).toThrow('endCap')
   })
 
   it('直線と影を検証する', () => {

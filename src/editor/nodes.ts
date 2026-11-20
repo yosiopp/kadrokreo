@@ -6,6 +6,7 @@ import type {
   ImageNode,
   LineNode,
   NodeId,
+  PathNode,
   RectNode,
   TextNode,
 } from '../document/types.ts'
@@ -56,7 +57,32 @@ export function createEllipse(bounds: Bounds): EllipseNode {
 }
 
 export function createLine(bounds: Bounds, direction: LineNode['direction'] = 'down'): LineNode {
-  return { ...base('Line', bounds), type: 'line', stroke: '#000000', strokeWidth: 1, direction }
+  return {
+    ...base('Line', bounds),
+    type: 'line',
+    stroke: '#000000',
+    strokeWidth: 1,
+    direction,
+    flipped: false,
+    startCap: 'none',
+    endCap: 'none',
+  }
+}
+
+/** shape は pathFromPoints で作った枠と頂点。閉じた形には塗りを付ける */
+export function createPath(shape: Bounds & Pick<PathNode, 'points'>, closed: boolean): PathNode {
+  return {
+    ...base('Path', shape),
+    type: 'path',
+    points: shape.points,
+    closed,
+    fill: closed ? '#d9d9d9' : null,
+    stroke: '#000000',
+    strokeWidth: 1,
+    shadow: null,
+    startCap: 'none',
+    endCap: 'none',
+  }
 }
 
 export function createText(bounds: Bounds, text = ''): TextNode {

@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { normalizeAngle } from '../document/geometry.ts'
-import type { Page, SceneNode, Shadow, TextNode } from '../document/types.ts'
+import type { Cap, Page, SceneNode, Shadow, TextNode } from '../document/types.ts'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
 import {
@@ -31,6 +31,7 @@ const TYPE_LABELS: Record<SceneNode['type'], string> = {
   rect: '長方形',
   ellipse: '楕円',
   line: '直線',
+  path: 'パス',
   text: 'テキスト',
   image: '画像',
 }
@@ -59,7 +60,7 @@ const TEXT_ALIGNMENTS: { value: TextNode['textAlign']; label: string }[] = [
 const DEFAULT_SHADOW: Shadow = { x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
 
 const SHORTCUTS = [
-  ['V / F / R / O / L / T', 'ツールの切り替え'],
+  ['V / F / R / O / L / P / T', 'ツールの切り替え'],
   ['Space + ドラッグ', '画面の移動'],
   ['⌘/Ctrl + ホイール', 'ズーム'],
   ['Shift + 1', '全体を表示'],
@@ -96,9 +97,15 @@ export function PropertiesPanel({ store, state }: Props) {
   const preview = (patch: NodePatch) => store.preview((base) => updateNodes(base, selection, patch))
 
   // 塗りと線を持つ図形
-  const shapes = nodes.filter((node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame')
+  const shapes = nodes.filter(
+    (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path',
+  )
   const texts = nodes.filter((node) => node.type === 'text')
   const lines = nodes.filter((node) => node.type === 'line')
+  const paths = nodes.filter((node) => node.type === 'path')
+  // 端の形を付けられるもの。閉じたパスには端がない
+  const capped = [...lines, ...paths.filter((node) => !node.closed)]
+  const closed = common(paths.map((node) => node.closed))
   const frames = nodes.filter((node) => node.type === 'frame')
   const rounded = nodes.filter((node) => node.type === 'rect' || node.type === 'frame' || node.type === 'image')
   const filled = [...shapes, ...texts]
@@ -235,6 +242,37 @@ export function PropertiesPanel({ store, state }: Props) {
             min={0}
             onCommit={(strokeWidth) => apply({ strokeWidth })}
           />
+        </Section>
+      )}
+
+      {capped.length > 0 && capped.length === nodes.length && (
+        <Section title="端の形">
+          <CapField
+            label="始点"
+            value={common(capped.map((n) => n.startCap))}
+            onChange={(startCap) => apply({ startCap })}
+          />
+          <CapField
+            label="終点"
+            value={common(capped.map((n) => n.endCap))}
+            onChange={(endCap) => apply({ endCap })}
+          />
+        </Section>
+      )}
+
+      {paths.length === nodes.length && (
+        <Section title="パス">
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={closed === true}
+              ref={(input) => {
+                if (input) input.indeterminate = closed === MIXED
+              }}
+              onChange={(event) => apply({ closed: event.target.checked })}
+            />
+            最後の頂点を最初の頂点につなぐ
+          </label>
         </Section>
       )}
 
@@ -401,6 +439,27 @@ export function PropertiesPanel({ store, state }: Props) {
         </Section>
       )}
     </aside>
+  )
+}
+
+function CapField(props: { label: string; value: Cap | Mixed; onChange: (cap: Cap) => void }) {
+  const { label, value, onChange } = props
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      <select
+        value={value === MIXED ? '' : value}
+        onChange={(event) => {
+          onChange(event.target.value as Cap)
+          // フォーカスを残すとキーボードショートカットが効かなくなる
+          event.target.blur()
+        }}
+      >
+        {value === MIXED && <option value="">混在</option>}
+        <option value="none">なし</option>
+        <option value="arrow">矢印</option>
+      </select>
+    </label>
   )
 }
 

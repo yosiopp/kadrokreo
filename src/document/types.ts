@@ -39,16 +39,37 @@ export type RectNode = BaseNode & Paint & { type: 'rect'; cornerRadius: number }
 
 export type EllipseNode = BaseNode & Paint & { type: 'ellipse' }
 
+/** 線の端の形 */
+export type Cap = 'none' | 'arrow'
+
+type Caps = { startCap: Cap; endCap: Cap }
+
 /**
- * 枠の対角線として描く直線。down は左上から右下、up は左下から右上。
+ * 枠の対角線として描く直線。down は左上と右下、up は左下と右上を結ぶ。
+ * 始点は左側の端。flipped なら右側の端が始点になる。
  * 水平・垂直の線は高さ・幅が 0 になる。
  */
-export type LineNode = BaseNode & {
-  type: 'line'
-  stroke: string
-  strokeWidth: number
-  direction: 'down' | 'up'
-}
+export type LineNode = BaseNode &
+  Caps & {
+    type: 'line'
+    stroke: string
+    strokeWidth: number
+    direction: 'down' | 'up'
+    flipped: boolean
+  }
+
+/**
+ * 頂点を直線でつないだ折れ線や多角形。
+ * 頂点は枠に対する割合（0〜1）で持つので、枠の大きさを変えれば形も一緒に伸縮する。
+ */
+export type PathNode = BaseNode &
+  Paint &
+  Caps & {
+    type: 'path'
+    points: { x: number; y: number }[]
+    /** 最後の頂点と最初の頂点をつなぐ */
+    closed: boolean
+  }
 
 export type TextNode = BaseNode & {
   type: 'text'
@@ -76,7 +97,14 @@ export type FrameNode = BaseNode &
     cornerRadius: number
   }
 
-export type SceneNode = RectNode | EllipseNode | LineNode | TextNode | FrameNode | ImageNode
+export type SceneNode =
+  | RectNode
+  | EllipseNode
+  | LineNode
+  | PathNode
+  | TextNode
+  | FrameNode
+  | ImageNode
 
 /** 埋め込みファイル。kdr は 1 つの JSON なので、中身は base64 で持つ */
 export type Asset = { mime: string; data: string }

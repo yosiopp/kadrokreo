@@ -20,11 +20,19 @@ import {
   rotateVector,
   toLocal,
 } from '../document/geometry.ts'
-import type { LineNode, NodeId, Scene, SceneNode, TextNode } from '../document/types.ts'
+import { lineBetween, lineEndpoints, pathFromPoints, pathPoints } from '../document/path.ts'
+import type { LineNode, NodeId, PathNode, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { TextEditor } from './TextEditor.tsx'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
 import { fitTextNodes, measureFrameLabel, measureTextNode } from './measure.ts'
-import { createEllipse, createFrame, createLine, createRect, createText } from './nodes.ts'
+import {
+  createEllipse,
+  createFrame,
+  createLine,
+  createPath,
+  createRect,
+  createText,
+} from './nodes.ts'
 import {
   type Fragment,
   type ReorderDirection,
@@ -44,7 +52,7 @@ import { HANDLES, type Handle, handleCursor, handlePoint, resizeBounds } from '.
 import { type Guide, findGuides, snapMove, snapResize } from './snap.ts'
 import type { EditorState, EditorStore } from './store.ts'
 
-export type Tool = 'select' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text'
+export type Tool = 'select' | 'frame' | 'rect' | 'ellipse' | 'line' | 'pen' | 'text'
 
 type Props = {
   store: EditorStore
@@ -75,8 +83,8 @@ type Gesture =
       dragged: boolean
     }
   | { kind: 'text'; screen: Point; world: Point }
-  // 直線の端をつかんでいる。fixed は動かさない側の端（ページ座標）
-  | { kind: 'endpoint'; id: NodeId; fixed: Point }
+  // 直線の端（0 が始点、1 が終点）やパスの頂点をつかんでいる
+  | { kind: 'point'; id: NodeId; index: number }
 
 /** draft は新規作成中のテキスト。確定するまでドキュメントには入れない */
 type Editing = { id: NodeId; draft: { node: TextNode; parentId: NodeId | null } | null }
@@ -110,6 +118,7 @@ const NAMES = {
   rect: 'Rectangle',
   ellipse: 'Ellipse',
   line: 'Line',
+  path: 'Path',
   text: 'Text',
   image: 'Image',
 } as const
@@ -139,14 +148,16 @@ function distance(a: Point, b: Point): number {
 }
 
 /** 直線の両端（ページ座標） */
-function lineEnds(page: Scene, line: LineNode): [Point, Point] {
-  const { width, height } = line
+function lineEnds(page: Scene, line: LineNode): Point[] {
   const matrix = getWorldMatrix(page, line.id)
-  const [from, to] =
-    line.direction === 'down'
-      ? [{ x: 0, y: 0 }, { x: width, y: height }]
-      : [{ x: 0, y: height }, { x: width, y: 0 }]
-  return [applyMatrix(matrix, from), applyMatrix(matrix, to)]
+  return lineEndpoints(line).map((end) => applyMatrix(matrix, end))
+}
+
+/** 直線の両端（始点・終点の順）またはパスの頂点（ページ座標） */
+function editablePoints(page: Scene, node: LineNode | PathNode): Point[] {
+  if (node.type === 'line') return lineEnds(page, node)
+  const matrix = getWorldMatrix(page, node.id)
+  return pathPoints(node).map((point) => applyMatrix(matrix, point))
 }
 
 /** ハンドルを引いた後の枠の大きさを整数にする。つかんでいない側の辺は動かさない */
@@ -159,12 +170,6 @@ function roundBox(box: Bounds, handle: Handle): Bounds {
     width,
     height,
   }
-}
-
-/** from から to へ引く直線の枠と向き */
-function lineBetween(from: Point, to: Point): Bounds & Pick<LineNode, 'direction'> {
-  const sameSign = (to.x - from.x) * (to.y - from.y) >= 0
-  return { ...boundsFromPoints(from, to), direction: sameSign ? 'down' : 'up' }
 }
 
 /** from から見た to の向きを 45° 刻みに揃える */
@@ -189,10 +194,28 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   const gestureRef = useRef<Gesture | null>(null)
   const editingRef = useRef<Editing | null>(null)
   const clipboardRef = useRef<{ fragment: Fragment; pastes: number } | null>(null)
+  // ペンツールで描いている途中の頂点（ページ座標）。cursor はポインタの位置
+  const penRef = useRef<{ points: Point[]; cursor: Point | null } | null>(null)
+  // 頂点を編集中のパス。ダブルクリックで入る
+  const vertexEditRef = useRef<NodeId | null>(null)
   const [editing, setEditing] = useState<Editing | null>(null)
   const [hover, setHover] = useState<NodeId | null>(null)
   const [cursor, setCursor] = useState('default')
   const [, redraw] = useReducer((n: number) => n + 1, 0)
+
+  // ツールを切り替えたら、描きかけのパスや頂点の編集は終える
+  useEffect(() => {
+    if (tool !== 'pen') penRef.current = null
+    if (tool !== 'select') vertexEditRef.current = null
+  }, [tool])
+
+  // 別のものを選んだら、頂点の編集は終える
+  useEffect(() => {
+    const editing = vertexEditRef.current
+    if (editing && (state.selection.length !== 1 || state.selection[0] !== editing)) {
+      vertexEditRef.current = null
+    }
+  }, [state.selection])
 
   function changeEditing(next: Editing | null) {
     editingRef.current = next
@@ -213,22 +236,51 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     return node?.type === 'line' && !node.locked ? node : null
   }
 
-  /** screen にある直線の端。あれば、動かさない側の端を返す */
-  function endpointAt(screen: Point): { id: NodeId; fixed: Point } | null {
-    const line = selectedLine()
-    if (!line) return null
-    const ends = lineEnds(store.getState().page, line)
-    for (const [index, end] of ends.entries()) {
-      if (distance(worldToScreen(camera.getViewport(), end), screen) <= HANDLE_SIZE) {
-        return { id: line.id, fixed: ends[1 - index] }
+  /** 頂点を編集中のパス。そのパスだけを選んでいる間だけ有効 */
+  function editedPath(): PathNode | null {
+    if (tool !== 'select' || editingRef.current) return null
+    const { page, selection } = store.getState()
+    const node = selection.length === 1 ? page.nodes[selection[0]] : null
+    return node?.type === 'path' && node.id === vertexEditRef.current && !node.locked ? node : null
+  }
+
+  /** 点をつかんで形を変えられるノード。直線は選ぶだけで、パスは頂点の編集に入ると対象になる */
+  function pointTarget(): LineNode | PathNode | null {
+    return selectedLine() ?? editedPath()
+  }
+
+  /** screen にある、つかめる点 */
+  function pointAt(screen: Point): { id: NodeId; index: number } | null {
+    const node = pointTarget()
+    if (!node) return null
+    const points = editablePoints(store.getState().page, node)
+    for (const [index, point] of points.entries()) {
+      if (distance(worldToScreen(camera.getViewport(), point), screen) <= HANDLE_SIZE) {
+        return { id: node.id, index }
       }
     }
     return null
   }
 
+  /** ペンツールで描いた頂点をパスとして確定する */
+  function finishPen(closed: boolean) {
+    const draft = penRef.current
+    penRef.current = null
+    redraw()
+    if (!draft || draft.points.length < 2) return
+
+    const page = store.getState().page
+    const parentId = findFrameAt(page, draft.points[0])
+    const shape = pathFromPoints(draft.points.map((point) => toLocal(page, parentId, point)))
+    const node = { ...createPath(shape, closed), name: nextName(page, 'path') }
+    store.apply((base) => insertNode(base, node, parentId))
+    store.select([node.id])
+    onToolChange('select')
+  }
+
   /** リサイズと回転のハンドルを出す枠 */
   function selectionBox(): SelectionBox | null {
-    if (tool !== 'select' || editingRef.current || selectedLine()) return null
+    if (tool !== 'select' || editingRef.current || pointTarget()) return null
     const page = store.getState().page
     const ids = movableIds()
     const bounds = getNodesBounds(page, ids)
@@ -402,6 +454,21 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       gestureRef.current = { kind: 'text', screen: pointer.screen, world: pointer.world }
       return
     }
+    if (tool === 'pen') {
+      const draft = (penRef.current ??= { points: [], cursor: null })
+      const last = draft.points.at(-1)
+      // 最初の頂点をクリックすると、閉じた形になる
+      if (draft.points.length >= 2) {
+        const first = worldToScreen(camera.getViewport(), draft.points[0])
+        if (distance(first, pointer.screen) <= HANDLE_SIZE) return finishPen(true)
+      }
+      const point =
+        pointer.shiftKey && last ? constrainAngle(last, pointer.world) : roundPoint(pointer.world)
+      // ダブルクリックの 2 回目など、同じ場所には重ねて打たない
+      if (!last || last.x !== point.x || last.y !== point.y) draft.points.push(point)
+      redraw()
+      return
+    }
     if (tool !== 'select') {
       const world = roundPoint(pointer.world)
       const create = {
@@ -421,9 +488,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       return
     }
 
-    const endpoint = endpointAt(pointer.screen)
-    if (endpoint) {
-      gestureRef.current = { kind: 'endpoint', ...endpoint }
+    const grabbed = pointAt(pointer.screen)
+    if (grabbed) {
+      gestureRef.current = { kind: 'point', ...grabbed }
       return
     }
 
@@ -495,9 +562,14 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   function onPointerMove(pointer: CanvasPointer) {
     let gesture = gestureRef.current
     if (!gesture) {
+      if (tool === 'pen' && penRef.current) {
+        penRef.current.cursor = pointer.world
+        redraw()
+        return
+      }
       if (tool !== 'select' || editingRef.current) return
       const handle = handleAt(pointer.screen)
-      const endpoint = endpointAt(pointer.screen)
+      const endpoint = pointAt(pointer.screen)
       const rotating = rotateHandleAt(pointer.screen)
       const rotation = selectionBox()?.rotation ?? 0
       setCursor(
@@ -535,15 +607,20 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       return
     }
 
-    if (gesture.kind === 'endpoint') {
-      const { id, fixed } = gesture
+    if (gesture.kind === 'point') {
+      const { id, index } = gesture
       store.preview((base) => {
-        // 親の座標系で引き直す。線自体が回っていた場合、その向きは両端の位置に織り込まれる
-        const parentId = base.nodes[id].parentId
-        const from = toLocal(base, parentId, fixed)
-        const to = toLocal(base, parentId, pointer.world)
-        const end = pointer.shiftKey ? constrainAngle(from, to) : roundPoint(to)
-        return updateNode(base, id, { ...lineBetween(from, end), rotation: 0 })
+        const node = base.nodes[id]
+        if (node?.type !== 'line' && node?.type !== 'path') return base
+        // 親の座標系で形を作り直す。ノード自体が回っていた場合、その向きは点の位置に織り込まれる
+        const points = editablePoints(base, node).map((point) => toLocal(base, node.parentId, point))
+        const target = toLocal(base, node.parentId, pointer.world)
+        // Shift で、隣の点から見て水平・垂直・45° に揃える
+        const neighbor = points[index === 0 ? 1 : index - 1]
+        points[index] = pointer.shiftKey ? constrainAngle(neighbor, target) : roundPoint(target)
+        const shape =
+          node.type === 'line' ? lineBetween(points[0], points[1]) : pathFromPoints(points)
+        return updateNode(base, id, { ...shape, rotation: 0 })
       })
       return
     }
@@ -653,7 +730,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       case 'resize':
       case 'reshape':
       case 'rotate':
-      case 'endpoint':
+      case 'point':
         store.commitPreview()
         redraw()
         break
@@ -693,12 +770,19 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   }
 
   function onDoubleClick(pointer: CanvasPointer) {
+    if (tool === 'pen') return finishPen(false)
     if (tool !== 'select' || editingRef.current) return
     const page = store.getState().page
     const hit = hitTest(page, pointer.world, 3 / camera.getViewport().zoom)
-    if (hit && page.nodes[hit].type === 'text') {
+    if (!hit) return
+    if (page.nodes[hit].type === 'text') {
       store.select([hit])
       changeEditing({ id: hit, draft: null })
+    } else if (page.nodes[hit].type === 'path') {
+      // パスは頂点の編集に入る。別のものを選ぶか Esc で抜ける
+      store.select([hit])
+      vertexEditRef.current = hit
+      redraw()
     }
   }
 
@@ -725,10 +809,14 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const { page, selection } = store.getState()
     const key = event.key.toLowerCase()
 
-    if (key === 'escape') {
+    if (key === 'escape' || (key === 'enter' && penRef.current)) {
       if (gestureRef.current) cancelGesture()
+      else if (penRef.current) finishPen(false)
       else if (tool !== 'select') onToolChange('select')
-      else store.select([])
+      else if (editedPath()) {
+        vertexEditRef.current = null
+        redraw()
+      } else store.select([])
       return
     }
     // ドラッグ中に削除などが割り込むと、プレビュー中の変更と食い違う
@@ -788,6 +876,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       r: 'rect',
       o: 'ellipse',
       l: 'line',
+      p: 'pen',
       t: 'text',
     }
 
@@ -888,14 +977,26 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       outlineNode(hover)
       ctx.lineWidth = 1
     }
-    for (const id of selection) outlineNode(id)
+    // 頂点を編集中のパスは、枠ではなく形そのものを後でなぞる
+    const editedId = editedPath()?.id
+    for (const id of selection) if (id !== editedId) outlineNode(id)
 
-    const line = selectedLine()
-    if (line && page.nodes[line.id]?.type === 'line') {
+    const pointed = pointTarget()
+    const current = pointed && page.nodes[pointed.id]
+    if (current?.type === 'line' || current?.type === 'path') {
+      const points = editablePoints(page, current)
+      // 頂点を編集中のパスは、形そのものをなぞって見せる
+      if (current.type === 'path') polyline(points, current.closed)
       ctx.fillStyle = '#ffffff'
-      for (const end of lineEnds(page, page.nodes[line.id] as LineNode)) {
-        drawHandle(worldToScreen(viewport, end))
-      }
+      for (const point of points) drawHandle(worldToScreen(viewport, point))
+    }
+
+    // ペンツールで描いている途中の線。最後の頂点からポインタまでも結ぶ
+    const draft = penRef.current
+    if (draft && draft.points.length > 0) {
+      polyline(draft.cursor ? [...draft.points, draft.cursor] : draft.points, false)
+      ctx.fillStyle = '#ffffff'
+      for (const point of draft.points) drawHandle(worldToScreen(viewport, point))
     }
 
     const box = selectionBox()

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
-import { createEllipse, createFrame, createLine, createRect } from './nodes.ts'
+import { pathFromPoints } from '../document/path.ts'
+import { createEllipse, createFrame, createLine, createPath, createRect } from './nodes.ts'
 import { createPage, insertNode, updateNode } from './operations.ts'
 
 function fixture() {
@@ -59,6 +60,26 @@ describe('hitTest', () => {
     expect(hitTest(doc, { x: 50, y: 202 }, 3)).toBe(flat.id)
     expect(hitTest(doc, { x: 50, y: 206 }, 3)).toBeNull()
     expect(hitTest(doc, { x: 104, y: 200 }, 3)).toBeNull()
+  })
+
+  it('塗った多角形は内側で当たり、へこんだ部分では当たらない', () => {
+    // 左上・右上・右下・左下を結ぶ四角形から、上辺の中央を下へ凹ませた形
+    const points = [{ x: 0, y: 0 }, { x: 50, y: 60 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]
+    const path = createPath(pathFromPoints(points), true)
+    const doc = insertNode(createPage(), path)
+    expect(hitTest(doc, { x: 50, y: 80 })).toBe(path.id)
+    expect(hitTest(doc, { x: 10, y: 50 })).toBe(path.id)
+    expect(hitTest(doc, { x: 50, y: 20 })).toBeNull()
+  })
+
+  it('折れ線は線の近くだけで当たる', () => {
+    const path = createPath(pathFromPoints([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }]), false)
+    const doc = insertNode(createPage(), path)
+    expect(hitTest(doc, { x: 50, y: 2 }, 3)).toBe(path.id)
+    expect(hitTest(doc, { x: 98, y: 50 }, 3)).toBe(path.id)
+    // 枠の中でも、線から離れた所や、閉じていない辺では当たらない
+    expect(hitTest(doc, { x: 30, y: 60 }, 3)).toBeNull()
+    expect(hitTest(doc, { x: 50, y: 50 }, 3)).toBeNull()
   })
 
   it('回したノードは、回した後の形で当たる', () => {

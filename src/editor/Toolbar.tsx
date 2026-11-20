@@ -17,6 +17,7 @@ const TOOLS: { tool: Tool; label: string; shortcut: string; icon: ReactNode }[] 
   { tool: 'rect', label: '長方形', shortcut: 'R', icon: <rect x="2.5" y="3.5" width="11" height="9" /> },
   { tool: 'ellipse', label: '楕円', shortcut: 'O', icon: <ellipse cx="8" cy="8" rx="5.5" ry="5.5" /> },
   { tool: 'line', label: '直線', shortcut: 'L', icon: <path d="M3 13L13 3" /> },
+  { tool: 'pen', label: 'ペン', shortcut: 'P', icon: <path d="M2.5 12.5L6 4l4.5 6 3-5.5" /> },
   { tool: 'text', label: 'テキスト', shortcut: 'T', icon: <path d="M3 4V2.5h10V4M8 2.5v11M6 13.5h4" /> },
 ]
 

@@ -10,14 +10,15 @@ import type {
 } from './types.ts'
 
 // kdr ファイルの実体は gzip 圧縮した 1 つの JSON:
-//   { format: 'kadrokreo', version: 5, document: DesignDocument }
+//   { format: 'kadrokreo', version: 6, document: DesignDocument }
 // 古い version も読み込める。それぞれで増えたもの:
 //   2: 画像（assets）、テキストの折り返し（autoWidth）
 //   3: 直線、影、フレームと画像の角丸、テキストの太さ・行揃え・行の高さ
 //   4: 複数ページ（それまでは document が直接 nodes と rootIds を持っていた）
 //   5: 回転
+//   6: パス、線の端の形（矢印）、直線の始点と終点の区別
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 5
+export const KDR_VERSION = 6
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -159,7 +160,10 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3 | 4 | 5
+type Version = 1 | 2 | 3 | 4 | 5 | 6
+
+const CAPS = ['none', 'arrow'] as const
+const MAX_PATH_POINTS = 10_000
 
 function parseNode(value: unknown, path: string, version: Version): SceneNode {
   const raw = record(value, path)
@@ -189,6 +193,10 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
     shadow: added(3, null, () => (raw.shadow === null ? null : parseShadow(raw.shadow, at('shadow')))),
   })
   const cornerRadius = () => size(raw.cornerRadius, at('cornerRadius'))
+  const caps = () => ({
+    startCap: added(6, 'none', () => oneOf(raw.startCap, CAPS, at('startCap'))),
+    endCap: added(6, 'none', () => oneOf(raw.endCap, CAPS, at('endCap'))),
+  })
 
   switch (raw.type) {
     case 'rect':
@@ -202,7 +210,29 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
         stroke: color(raw.stroke, at('stroke')),
         strokeWidth: size(raw.strokeWidth, at('strokeWidth')),
         direction: oneOf(raw.direction, ['down', 'up'] as const, at('direction')),
+        flipped: added(6, false, () => boolean(raw.flipped, at('flipped'))),
+        ...caps(),
       }
+    case 'path': {
+      const points = array(raw.points, at('points')).map((point, i) => {
+        const rawPoint = record(point, at(`points[${i}]`))
+        return {
+          x: number(rawPoint.x, at(`points[${i}].x`)),
+          y: number(rawPoint.y, at(`points[${i}].y`)),
+        }
+      })
+      if (points.length < 2 || points.length > MAX_PATH_POINTS) {
+        throw new KdrError(`${at('points')}: 頂点の数が不正です`)
+      }
+      return {
+        ...base,
+        ...paint(),
+        ...caps(),
+        type: 'path',
+        points,
+        closed: boolean(raw.closed, at('closed')),
+      }
+    }
     case 'text':
       return {
         ...base,

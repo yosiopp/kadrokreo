@@ -8,6 +8,7 @@ import {
   toNodeSpace,
 } from '../document/geometry.ts'
 import { MAX_DEPTH } from '../document/kdr.ts'
+import { lineEndpoints, pathPoints } from '../document/path.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 
 /**
@@ -50,15 +51,35 @@ function hitSiblings(
     } else if (node.type === 'line') {
       // 細い線でもつかめるよう、太さによらず最低限の当たり幅を持たせる
       const reach = Math.max(node.strokeWidth / 2, tolerance)
-      const down = node.direction === 'down'
-      const from = { x: 0, y: down ? 0 : node.height }
-      const to = { x: node.width, y: down ? node.height : 0 }
+      const [from, to] = lineEndpoints(node)
       if (distanceToSegment(local, from, to) <= reach) return node.id
+    } else if (node.type === 'path') {
+      const points = pathPoints(node)
+      // 塗ってある閉じた形は内側でも当たる。それ以外は線の近くだけ
+      if (node.closed && node.fill && insidePolygon(local, points)) return node.id
+      const reach = Math.max(node.strokeWidth / 2, tolerance)
+      const last = node.closed ? points.length : points.length - 1
+      for (let j = 0; j < last; j++) {
+        if (distanceToSegment(local, points[j], points[(j + 1) % points.length]) <= reach) return node.id
+      }
     } else if (inside) {
       return node.id
     }
   }
   return null
+}
+
+/** 点から右へ伸ばした半直線が辺を横切る回数が奇数なら内側 */
+function insidePolygon(p: Point, points: readonly Point[]): boolean {
+  let inside = false
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i]
+    const b = points[j]
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside
+    }
+  }
+  return inside
 }
 
 function distanceToSegment(p: Point, a: Point, b: Point): number {

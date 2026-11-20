@@ -2,13 +2,15 @@ import {
   type Bounds,
   IDENTITY,
   type Matrix,
+  type Point,
   type Size,
   intersects,
   multiply,
   nodeMatrix,
   transformRect,
 } from '../document/geometry.ts'
-import type { Asset, AssetId, NodeId, Scene, SceneNode, Shadow } from '../document/types.ts'
+import { lineEndpoints, pathPoints } from '../document/path.ts'
+import type { Asset, AssetId, Cap, NodeId, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { getImage } from './images.ts'
 import { applyFont, layoutText } from './text.ts'
 import type { Viewport } from './viewport.ts'
@@ -146,16 +148,29 @@ function drawContent(
       paint(ctx, pass, node)
       break
     case 'line':
-      if (node.strokeWidth > 0) {
-        const down = node.direction === 'down'
-        ctx.beginPath()
-        ctx.moveTo(0, down ? 0 : height)
-        ctx.lineTo(width, down ? height : 0)
-        ctx.strokeStyle = node.stroke
-        ctx.lineWidth = node.strokeWidth
-        ctx.stroke()
-      }
+      strokeWithCaps(ctx, lineEndpoints(node), node)
       break
+    case 'path': {
+      const points = pathPoints(node)
+      const outline = () => {
+        ctx.beginPath()
+        points.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
+        if (node.closed) ctx.closePath()
+      }
+      const capped = !node.closed && (node.startCap !== 'none' || node.endCap !== 'none')
+      if (!capped) {
+        outline()
+        paint(ctx, pass, node)
+        break
+      }
+      // 端に矢印を付ける折れ線は、線を矢印の分だけ短くするので、塗りと線を別々に描く
+      if (node.fill) {
+        outline()
+        fillWithShadow(ctx, pass, node.fill, node.shadow)
+      }
+      if (node.stroke) strokeWithCaps(ctx, points, { ...node, stroke: node.stroke })
+      break
+    }
     case 'text':
       if (node.id !== pass.options.hiddenId) {
         applyFont(ctx, node)
@@ -255,6 +270,56 @@ function applyShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow |
   ctx.shadowOffsetY = shadow.y * pass.scale
 }
 
+/** 矢印の長さ。線が細くても見える大きさにする */
+export function arrowSize(strokeWidth: number): number {
+  return Math.max(strokeWidth * 4, 10)
+}
+
+/** points を順につないだ線を引き、両端に端の形を描く */
+function strokeWithCaps(
+  ctx: CanvasRenderingContext2D,
+  points: readonly Point[],
+  style: { stroke: string; strokeWidth: number; startCap: Cap; endCap: Cap },
+): void {
+  if (style.strokeWidth <= 0 || points.length < 2) return
+  const size = arrowSize(style.strokeWidth)
+  const trimmed = [...points]
+  const heads: { tip: Point; direction: Point }[] = []
+
+  // 矢印の先が端の位置にちょうど来るよう、線は矢印の根元の手前で止める
+  const addHead = (tipIndex: number, neighborIndex: number) => {
+    const tip = points[tipIndex]
+    const neighbor = points[neighborIndex]
+    const length = Math.hypot(tip.x - neighbor.x, tip.y - neighbor.y)
+    if (length === 0) return
+    const direction = { x: (tip.x - neighbor.x) / length, y: (tip.y - neighbor.y) / length }
+    const inset = Math.min(size * 0.8, length)
+    trimmed[tipIndex] = { x: tip.x - direction.x * inset, y: tip.y - direction.y * inset }
+    heads.push({ tip, direction })
+  }
+  if (style.startCap === 'arrow') addHead(0, 1)
+  if (style.endCap === 'arrow') addHead(points.length - 1, points.length - 2)
+
+  ctx.beginPath()
+  trimmed.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
+  ctx.strokeStyle = style.stroke
+  ctx.lineWidth = style.strokeWidth
+  ctx.stroke()
+
+  ctx.fillStyle = style.stroke
+  for (const { tip, direction } of heads) {
+    const baseX = tip.x - direction.x * size
+    const baseY = tip.y - direction.y * size
+    const half = size * 0.4
+    ctx.beginPath()
+    ctx.moveTo(tip.x, tip.y)
+    ctx.lineTo(baseX - direction.y * half, baseY + direction.x * half)
+    ctx.lineTo(baseX + direction.y * half, baseY - direction.x * half)
+    ctx.closePath()
+    ctx.fill()
+  }
+}
+
 function clampRadius(radius: number, size: Size): number {
   return Math.max(0, Math.min(radius, size.width / 2, size.height / 2))
 }
@@ -265,7 +330,12 @@ function paintedRect(node: SceneNode): Bounds {
   const shadow = 'shadow' in node ? node.shadow : null
   // ぼかしは指定した長さより少し外まで広がる。影のずれは回転に従わないので、どの向きにも余裕を取る
   const spread = shadow ? shadow.blur * 2 + Math.max(Math.abs(shadow.x), Math.abs(shadow.y)) : 0
-  const outset = stroke + spread
+  // 矢印は線より外へ張り出す
+  const arrow =
+    'startCap' in node && (node.startCap !== 'none' || node.endCap !== 'none')
+      ? arrowSize(node.strokeWidth)
+      : 0
+  const outset = Math.max(stroke, arrow) + spread
   return {
     x: -outset,
     y: -outset,

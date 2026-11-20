@@ -61,6 +61,7 @@ const TYPE_SHAPES: Record<SceneNode['type'], ReactNode> = {
   rect: <rect x="2.5" y="3.5" width="11" height="9" />,
   ellipse: <circle cx="8" cy="8" r="5.5" />,
   line: <path d="M3 13L13 3" />,
+  path: <path d="M2.5 12.5L6 4l4.5 6 3-5.5" />,
   text: <path d="M3.5 4.5v-2h9v2M8 2.5v11M6 13.5h4" />,
   image: (
     <>
