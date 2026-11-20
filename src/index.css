@@ -457,6 +457,25 @@ input.document-name:focus {
   text-overflow: ellipsis;
 }
 
+.frame-item {
+  display: flex;
+  align-items: center;
+}
+
+.frame-item .list-button {
+  flex: 1;
+  min-width: 0;
+}
+
+.frame-export {
+  flex: none;
+  height: 22px;
+  margin-right: 6px;
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 .list-button[aria-current='page'] {
   background: var(--bg-selected);
 }
@@ -573,6 +592,22 @@ input.document-name:focus {
 }
 
 /* プロパティ */
+
+.export-row {
+  display: flex;
+  gap: 6px;
+}
+
+.export-row select {
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.export-row button {
+  flex: 1;
+}
 
 .button-row {
   display: flex;

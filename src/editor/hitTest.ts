@@ -56,7 +56,8 @@ function hitSiblings(
     } else if (node.type === 'path') {
       const points = pathPoints(node)
       // 塗ってある閉じた形は内側でも当たる。それ以外は線の近くだけ
-      if (node.closed && node.fill && insidePolygon(local, points)) return node.id
+      const filled = node.fill !== null || node.fillGradient !== null
+      if (node.closed && filled && insidePolygon(local, points)) return node.id
       const reach = Math.max(node.strokeWidth / 2, tolerance)
       const last = node.closed ? points.length : points.length - 1
       for (let j = 0; j < last; j++) {

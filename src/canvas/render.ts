@@ -10,7 +10,17 @@ import {
   transformRect,
 } from '../document/geometry.ts'
 import { lineEndpoints, pathPoints } from '../document/path.ts'
-import type { Asset, AssetId, Cap, NodeId, Scene, SceneNode, Shadow } from '../document/types.ts'
+import type {
+  Asset,
+  AssetId,
+  Cap,
+  Gradient,
+  ImageNode,
+  NodeId,
+  Scene,
+  SceneNode,
+  Shadow,
+} from '../document/types.ts'
 import { getImage } from './images.ts'
 import { applyFont, layoutText } from './text.ts'
 import type { Viewport } from './viewport.ts'
@@ -23,6 +33,13 @@ export type RenderOptions = {
   labelColor: string
   /** キャンバス上で編集中のテキスト。入力欄と二重に見えないよう描画しない */
   hiddenId?: NodeId | null
+  /** フレーム名のラベルを出すか。省略すると出す */
+  labels?: boolean
+  /**
+   * ページ全体ではなく、指定したノードだけを描く（画像として書き出すとき）。
+   * parent は、そのノードの親の座標系からページ座標系への変換。
+   */
+  roots?: readonly { id: NodeId; parent: Matrix }[]
 }
 
 /** 1 回の描画で変わらないもの */
@@ -68,10 +85,16 @@ export function renderScene(
   ctx.save()
   ctx.scale(viewport.zoom, viewport.zoom)
   ctx.translate(-viewport.x, -viewport.y)
-  for (const id of scene.rootIds) drawNode(ctx, pass, id, IDENTITY)
+  const roots = options.roots ?? scene.rootIds.map((id) => ({ id, parent: IDENTITY }))
+  for (const root of roots) {
+    ctx.save()
+    ctx.transform(...root.parent)
+    drawNode(ctx, pass, root.id, root.parent)
+    ctx.restore()
+  }
   ctx.restore()
 
-  drawFrameLabels(ctx, scene, viewport, options)
+  if (options.labels !== false) drawFrameLabels(ctx, scene, viewport, options)
 }
 
 /** parent は、親の座標系からページ座標系への変換。ctx はすでに親の座標系になっている */
@@ -164,9 +187,10 @@ function drawContent(
         break
       }
       // 端に矢印を付ける折れ線は、線を矢印の分だけ短くするので、塗りと線を別々に描く
-      if (node.fill) {
+      const fill = fillStyle(ctx, node)
+      if (fill) {
         outline()
-        fillWithShadow(ctx, pass, node.fill, node.shadow)
+        fillWithShadow(ctx, pass, fill, node.shadow)
       }
       if (node.stroke) strokeWithCaps(ctx, points, { ...node, stroke: node.stroke })
       break
@@ -198,7 +222,7 @@ function drawContent(
       }
       if (bitmap) {
         ctx.imageSmoothingQuality = 'high'
-        ctx.drawImage(bitmap, 0, 0, width, height)
+        drawFitted(ctx, bitmap, node)
       } else {
         // デコードが済むまでの仮の表示
         ctx.fillStyle = '#d9d9d9'
@@ -213,7 +237,8 @@ function drawContent(
         ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
       }
       outline()
-      if (node.fill) fillWithShadow(ctx, pass, node.fill, node.shadow)
+      const fill = fillStyle(ctx, node)
+      if (fill) fillWithShadow(ctx, pass, fill, node.shadow)
       ctx.save()
       if (node.clipContent) ctx.clip()
       for (const childId of node.children) drawNode(ctx, pass, childId, world)
@@ -234,12 +259,19 @@ function drawContent(
 function paint(
   ctx: CanvasRenderingContext2D,
   pass: Pass,
-  node: { fill: string | null; stroke: string | null; strokeWidth: number; shadow: Shadow | null },
+  node: Size & {
+    fill: string | null
+    fillGradient: Gradient | null
+    stroke: string | null
+    strokeWidth: number
+    shadow: Shadow | null
+  },
 ): void {
-  if (node.fill) fillWithShadow(ctx, pass, node.fill, node.shadow)
+  const fill = fillStyle(ctx, node)
+  if (fill) fillWithShadow(ctx, pass, fill, node.shadow)
   if (node.stroke && node.strokeWidth > 0) {
     ctx.save()
-    if (!node.fill) applyShadow(ctx, pass, node.shadow)
+    if (!fill) applyShadow(ctx, pass, node.shadow)
     ctx.strokeStyle = node.stroke
     ctx.lineWidth = node.strokeWidth
     ctx.stroke()
@@ -247,10 +279,64 @@ function paint(
   }
 }
 
+/** 塗りに使う色かグラデーション。塗らないなら null */
+function fillStyle(
+  ctx: CanvasRenderingContext2D,
+  node: Size & { fill: string | null; fillGradient: Gradient | null },
+): string | CanvasGradient | null {
+  if (!node.fillGradient) return node.fill
+  // 枠の中心を通る、angle の向きの線に沿って色を変える。線の長さは、枠の角がちょうど両端の色になる長さ
+  const { angle, stops } = node.fillGradient
+  const radians = (angle * Math.PI) / 180
+  const dx = Math.cos(radians)
+  const dy = Math.sin(radians)
+  const half = (Math.abs(node.width * dx) + Math.abs(node.height * dy)) / 2
+  const cx = node.width / 2
+  const cy = node.height / 2
+  const gradient = ctx.createLinearGradient(
+    cx - dx * half,
+    cy - dy * half,
+    cx + dx * half,
+    cy + dy * half,
+  )
+  for (const stop of stops) gradient.addColorStop(stop.offset, stop.color)
+  return gradient
+}
+
+/** 画像を、枠への収め方（fit）に従って描く */
+function drawFitted(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, node: ImageNode): void {
+  const { width, height, fit } = node
+  if (fit === 'stretch' || bitmap.width === 0 || bitmap.height === 0) {
+    ctx.drawImage(bitmap, 0, 0, width, height)
+  } else if (fit === 'cover') {
+    // 枠を埋める倍率で、画像の中央を切り出す
+    const scale = Math.max(width / bitmap.width, height / bitmap.height)
+    const sourceWidth = width / scale
+    const sourceHeight = height / scale
+    ctx.drawImage(
+      bitmap,
+      (bitmap.width - sourceWidth) / 2,
+      (bitmap.height - sourceHeight) / 2,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      width,
+      height,
+    )
+  } else {
+    // 全体が入る倍率で、枠の中央に置く
+    const scale = Math.min(width / bitmap.width, height / bitmap.height)
+    const drawnWidth = bitmap.width * scale
+    const drawnHeight = bitmap.height * scale
+    ctx.drawImage(bitmap, (width - drawnWidth) / 2, (height - drawnHeight) / 2, drawnWidth, drawnHeight)
+  }
+}
+
 function fillWithShadow(
   ctx: CanvasRenderingContext2D,
   pass: Pass,
-  fill: string,
+  fill: string | CanvasGradient,
   shadow: Shadow | null,
 ): void {
   ctx.save()

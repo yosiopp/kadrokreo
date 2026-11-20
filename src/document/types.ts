@@ -28,8 +28,19 @@ export type Shadow = {
   opacity: number
 }
 
+/**
+ * 直線状のグラデーション。angle は色が変わっていく向き（度）で、0 が左から右、90 が上から下。
+ * stops は offset（0〜1）の小さい順に並べる。
+ */
+export type Gradient = {
+  angle: number
+  stops: { offset: number; color: string }[]
+}
+
 type Paint = {
   fill: string | null
+  /** 指定があれば、fill の代わりにこのグラデーションで塗る */
+  fillGradient: Gradient | null
   stroke: string | null
   strokeWidth: number
   shadow: Shadow | null
@@ -85,8 +96,16 @@ export type TextNode = BaseNode & {
   lineHeight: number
 }
 
-/** 画像は枠いっぱいに引き伸ばして描く */
-export type ImageNode = BaseNode & { type: 'image'; assetId: AssetId; cornerRadius: number }
+/**
+ * fit は、枠と画像の縦横比が違うときの収め方。
+ * cover は枠を埋めてはみ出した分を切り落とし、contain は全体が入るよう余白を空け、stretch は引き伸ばす。
+ */
+export type ImageNode = BaseNode & {
+  type: 'image'
+  assetId: AssetId
+  cornerRadius: number
+  fit: 'stretch' | 'cover' | 'contain'
+}
 
 export type FrameNode = BaseNode &
   Paint & {

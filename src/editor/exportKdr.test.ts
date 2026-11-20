@@ -38,7 +38,7 @@ const PNG = {
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 }
 
-function kdrJson(document: unknown, version = 6) {
+function kdrJson(document: unknown, version = 7) {
   return { format: 'kadrokreo', version, document }
 }
 
@@ -105,7 +105,7 @@ describe('parseKdr', () => {
   it('別形式や未対応バージョンを拒否する', () => {
     const doc = documentOf(valid())
     expect(() => parseKdr({ format: 'other', version: 1, document: doc })).toThrow(KdrError)
-    expect(() => parseKdr(kdrJson(doc, 7))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 8))).toThrow('新しいバージョン')
     expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)
@@ -187,6 +187,46 @@ describe('parseKdr', () => {
     expect(parseKdr(kdrJson(v5, 5)).pages[0].nodes[line.id]).toEqual(line)
     // version 6 では省略できない
     expect(() => parseKdr(kdrJson(v5, 6))).toThrow(KdrError)
+  })
+
+  it('version 6 のファイルも読める（グラデーションなし、画像は引き伸ばす）', () => {
+    const rect = createRect({ x: 0, y: 0, width: 10, height: 10 })
+    const image = createImage({ x: 0, y: 0, width: 10, height: 10 }, 'a1')
+    const { fillGradient: _g, ...v6Rect } = rect
+    const { fit: _fit, ...v6Image } = image
+    const v6 = {
+      name: 'x',
+      pages: [{ id: 'p1', name: 'Page 1', ...sceneOf(v6Rect, v6Image) }],
+      assets: { a1: PNG },
+    }
+
+    const loaded = parseKdr(kdrJson(v6, 6)).pages[0].nodes
+    expect(loaded[rect.id]).toEqual(rect)
+    // 新しく作る画像は切り抜き（cover）だが、古いファイルの画像は当時のまま引き伸ばす
+    expect(loaded[image.id]).toEqual({ ...image, fit: 'stretch' })
+    expect(() => parseKdr(kdrJson(v6, 7))).toThrow(KdrError)
+  })
+
+  it('グラデーションを検証する', () => {
+    const gradient = {
+      angle: 90,
+      stops: [
+        { offset: 0, color: '#ff0000' },
+        { offset: 1, color: '#0000ff' },
+      ],
+    }
+    const rect = { ...createRect({ x: 0, y: 0, width: 10, height: 10 }), fillGradient: gradient }
+    expect(parseKdr(kdrOf(sceneOf(rect))).pages[0].nodes[rect.id]).toEqual(rect)
+
+    const withGradient = (fillGradient: unknown) => kdrOf(sceneOf({ ...rect, fillGradient }))
+    expect(() => parseKdr(withGradient({ ...gradient, stops: [gradient.stops[0]] }))).toThrow('色の数')
+    expect(() => parseKdr(withGradient({ ...gradient, stops: gradient.stops.toReversed() }))).toThrow('小さい順')
+    expect(() =>
+      parseKdr(withGradient({ ...gradient, stops: [gradient.stops[0], { offset: 1, color: 'url(x)' }] })),
+    ).toThrow('色')
+    expect(() =>
+      parseKdr(withGradient({ ...gradient, stops: [gradient.stops[0], { offset: 2, color: '#000000' }] })),
+    ).toThrow('offset')
   })
 
   it('パスを検証する', () => {

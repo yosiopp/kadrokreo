@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createCamera } from '../canvas/camera.ts'
+import { pngFileName, renderPng } from '../canvas/exportPng.ts'
 import type { Viewport } from '../canvas/viewport.ts'
 import { getContentBounds } from '../document/geometry.ts'
 import { IMAGE_MIME_TYPES, decodeKdr } from '../document/kdr.ts'
 import type { DesignDocument, PageId } from '../document/types.ts'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
+import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
 import { useFileDrop } from '../ui/useFileDrop.ts'
 import { EditorCanvas, type Tool } from './EditorCanvas.tsx'
@@ -15,7 +17,12 @@ import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
 import { RedoIcon, TypeIcon, UndoIcon } from './icons.tsx'
 import { placeImage, readImageFile } from './importImage.ts'
-import { createDocument, renameDocument } from './operations.ts'
+import {
+  createDocument,
+  renameDocument,
+  sortByDocumentOrder,
+  topLevelIds,
+} from './operations.ts'
 import { loadSavedDocument, saveDocument } from './persistence.ts'
 import { type EditorStore, createEditorStore } from './store.ts'
 
@@ -155,6 +162,23 @@ function Editor({ store }: { store: EditorStore }) {
     }
   }
 
+  /** 選択中のもの（何も選んでいなければ表示中のページ全体）を PNG に書き出す */
+  async function exportPng(scale: number) {
+    const { document, page, selection } = store.getState()
+    // 親子を一緒に選んでいたら親だけにして、重なり順に並べる
+    const targets =
+      selection.length > 0 ? sortByDocumentOrder(page, topLevelIds(page, selection)) : page.rootIds
+    // 1 つだけ選んでいればその名前、そうでなければ「ドキュメント名 - ページ名」をファイル名にする
+    const name =
+      selection.length === 1 ? page.nodes[selection[0]].name : `${document.name} - ${page.name}`
+    try {
+      const png = await renderPng(page, document.assets, targets, scale)
+      downloadBlob(png, pngFileName(safeFileName(name), scale))
+    } catch (error) {
+      showError(error, 'PNG の書き出しに失敗しました')
+    }
+  }
+
   const dragging = useFileDrop(openFiles)
 
   return (
@@ -233,7 +257,7 @@ function Editor({ store }: { store: EditorStore }) {
           />
           {dragging && <div className="drop-overlay">画像または kdr ファイルをドロップ</div>}
         </main>
-        <PropertiesPanel store={store} state={state} />
+        <PropertiesPanel store={store} state={state} onExportPng={exportPng} />
       </div>
     </div>
   )

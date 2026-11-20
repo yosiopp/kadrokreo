@@ -6,6 +6,7 @@ import {
   KdrError,
 } from '../document/kdr.ts'
 import type { DesignDocument } from '../document/types.ts'
+import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { pruneAssets } from './operations.ts'
 
 /** kdr ファイルの中身（圧縮前の JSON）。削除済みの画像のデータは含めない */
@@ -23,16 +24,9 @@ export async function encodeKdr(doc: DesignDocument): Promise<Blob> {
 }
 
 export function kdrFileName(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  const safe = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
-  return (safe || 'Untitled') + KDR_EXTENSION
+  return safeFileName(name) + KDR_EXTENSION
 }
 
 export async function downloadKdr(doc: DesignDocument): Promise<void> {
-  const url = URL.createObjectURL(await encodeKdr(doc))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = kdrFileName(doc.name)
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  downloadBlob(await encodeKdr(doc), kdrFileName(doc.name))
 }

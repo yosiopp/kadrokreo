@@ -2,6 +2,7 @@ import type {
   Asset,
   AssetId,
   DesignDocument,
+  Gradient,
   NodeId,
   Page,
   Scene,
@@ -10,15 +11,16 @@ import type {
 } from './types.ts'
 
 // kdr ファイルの実体は gzip 圧縮した 1 つの JSON:
-//   { format: 'kadrokreo', version: 6, document: DesignDocument }
+//   { format: 'kadrokreo', version: 7, document: DesignDocument }
 // 古い version も読み込める。それぞれで増えたもの:
 //   2: 画像（assets）、テキストの折り返し（autoWidth）
 //   3: 直線、影、フレームと画像の角丸、テキストの太さ・行揃え・行の高さ
 //   4: 複数ページ（それまでは document が直接 nodes と rootIds を持っていた）
 //   5: 回転
 //   6: パス、線の端の形（矢印）、直線の始点と終点の区別
+//   7: グラデーション、画像の収め方
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 6
+export const KDR_VERSION = 7
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -160,7 +162,7 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3 | 4 | 5 | 6
+type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7
 
 const CAPS = ['none', 'arrow'] as const
 const MAX_PATH_POINTS = 10_000
@@ -188,6 +190,9 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
 
   const paint = () => ({
     fill: raw.fill === null ? null : color(raw.fill, at('fill')),
+    fillGradient: added(7, null, () =>
+      raw.fillGradient === null ? null : parseGradient(raw.fillGradient, at('fillGradient')),
+    ),
     stroke: raw.stroke === null ? null : color(raw.stroke, at('stroke')),
     strokeWidth: size(raw.strokeWidth, at('strokeWidth')),
     shadow: added(3, null, () => (raw.shadow === null ? null : parseShadow(raw.shadow, at('shadow')))),
@@ -254,6 +259,10 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
         type: 'image',
         assetId: nodeId(raw.assetId, at('assetId')),
         cornerRadius: added(3, 0, cornerRadius),
+        // それまでの画像は引き伸ばして描いていた
+        fit: added(7, 'stretch', () =>
+          oneOf(raw.fit, ['stretch', 'cover', 'contain'] as const, at('fit')),
+        ),
       }
     case 'frame':
       return {
@@ -267,6 +276,22 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
     default:
       throw new KdrError(`${at('type')}: 未対応のノード種別です`)
   }
+}
+
+function parseGradient(value: unknown, path: string): Gradient {
+  const raw = record(value, path)
+  const stops = array(raw.stops, `${path}.stops`).map((stop, i) => {
+    const rawStop = record(stop, `${path}.stops[${i}]`)
+    return {
+      offset: ratio(rawStop.offset, `${path}.stops[${i}].offset`),
+      color: color(rawStop.color, `${path}.stops[${i}].color`),
+    }
+  })
+  if (stops.length < 2 || stops.length > 16) throw new KdrError(`${path}.stops: 色の数が不正です`)
+  if (stops.some((stop, i) => i > 0 && stop.offset < stops[i - 1].offset)) {
+    throw new KdrError(`${path}.stops: offset が小さい順に並んでいません`)
+  }
+  return { angle: number(raw.angle, `${path}.angle`), stops }
 }
 
 function parseShadow(value: unknown, path: string): Shadow {

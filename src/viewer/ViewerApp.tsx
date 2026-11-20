@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { CanvasView } from '../canvas/CanvasView.tsx'
 import { createCamera } from '../canvas/camera.ts'
+import { pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { getAbsoluteBounds, getContentBounds } from '../document/geometry.ts'
 import { decodeKdr } from '../document/kdr.ts'
-import type { DesignDocument, PageId } from '../document/types.ts'
+import type { DesignDocument, NodeId, PageId } from '../document/types.ts'
+import { ExportControls } from '../ui/ExportControls.tsx'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
+import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { useFileDrop } from '../ui/useFileDrop.ts'
 
 export default function ViewerApp() {
@@ -13,6 +16,7 @@ export default function ViewerApp() {
   const [doc, setDoc] = useState<DesignDocument | null>(null)
   const [pageId, setPageId] = useState<PageId | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [scale, setScale] = useState(1)
 
   const page = doc ? (doc.pages.find((candidate) => candidate.id === pageId) ?? doc.pages[0]) : null
   // ページ直下のフレームを「画面」として一覧に出す
@@ -27,6 +31,20 @@ export default function ViewerApp() {
       setMessage(null)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'ファイルを開けませんでした')
+    }
+  }
+
+  /** フレーム 1 つ、または表示中のページ全体を PNG として保存する。ドキュメントは変更しない */
+  async function exportPng(frameId?: NodeId) {
+    if (!doc || !page) return
+    const targets = frameId ? [frameId] : page.rootIds
+    const name = frameId ? page.nodes[frameId].name : `${doc.name} - ${page.name}`
+    try {
+      const png = await renderPng(page, doc.assets, targets, scale)
+      downloadBlob(png, pngFileName(safeFileName(name), scale))
+      setMessage(null)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'PNG の書き出しに失敗しました')
     }
   }
 
@@ -80,7 +98,7 @@ export default function ViewerApp() {
                 <h2 className="panel-title">フレーム</h2>
                 <ul className="page-list">
                   {frames.map((frame) => (
-                    <li key={frame.id}>
+                    <li key={frame.id} className="frame-item">
                       <button
                         type="button"
                         className="list-button"
@@ -89,11 +107,26 @@ export default function ViewerApp() {
                       >
                         {frame.name}
                       </button>
+                      <button
+                        type="button"
+                        className="frame-export"
+                        title="このフレームを PNG に書き出し"
+                        aria-label={`${frame.name} を PNG に書き出し`}
+                        onClick={() => exportPng(frame.id)}
+                      >
+                        PNG
+                      </button>
                     </li>
                   ))}
                 </ul>
               </section>
             )}
+            <section className="panel-section" aria-label="書き出し">
+              <h3 className="section-title">書き出し</h3>
+              <ExportControls scale={scale} onScaleChange={setScale} onExport={() => exportPng()}>
+                ページを PNG に
+              </ExportControls>
+            </section>
           </aside>
         )}
         <main className="app-main">

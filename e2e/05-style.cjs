@@ -132,7 +132,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const kdrPath = path.join(OUT, 'style.kdr')
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
-  check('kdr は version 6', json.version === 6)
+  check('kdr は version 7', json.version === 7)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

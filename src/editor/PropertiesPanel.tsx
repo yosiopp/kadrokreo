@@ -1,6 +1,15 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { normalizeAngle } from '../document/geometry.ts'
-import type { Cap, Page, SceneNode, Shadow, TextNode } from '../document/types.ts'
+import type {
+  Cap,
+  Gradient,
+  ImageNode,
+  Page,
+  SceneNode,
+  Shadow,
+  TextNode,
+} from '../document/types.ts'
+import { ExportControls } from '../ui/ExportControls.tsx'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
 import {
@@ -16,6 +25,8 @@ import type { EditorState, EditorStore } from './store.ts'
 type Props = {
   store: EditorStore
   state: EditorState
+  /** 選択中のもの（何も選んでいなければページ全体）を PNG に書き出す */
+  onExportPng: (scale: number) => void
 }
 
 /** 複数選択で値が揃っていないことを表す */
@@ -69,7 +80,7 @@ const SHORTCUTS = [
   ['] / [', '最前面 / 最背面へ'],
 ]
 
-export function PropertiesPanel({ store, state }: Props) {
+export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const { page, selection } = state
   const nodes = selection.map((id) => page.nodes[id])
 
@@ -87,6 +98,7 @@ export function PropertiesPanel({ store, state }: Props) {
             </div>
           ))}
         </dl>
+        <ExportSection label="このページを PNG に書き出し" onExport={onExportPng} />
       </aside>
     )
   }
@@ -119,6 +131,40 @@ export function PropertiesPanel({ store, state }: Props) {
   const fontWeight = common(texts.map((node) => node.fontWeight))
   const textAlign = common(texts.map((node) => node.textAlign))
   const clipContent = common(frames.map((node) => node.clipContent))
+
+  const images = nodes.filter((node) => node.type === 'image')
+  const gradients = shapes.flatMap((node) => (node.fillGradient ? [node.fillGradient] : []))
+  const gradientEnabled = common(shapes.map((node) => node.fillGradient !== null))
+  /** 塗りの色を変える。グラデーションにしている図形は、始まりの色も一緒に変える */
+  const fillRecipe = (fill: string | null) => (base: Page) =>
+    selection.reduce((next, id) => {
+      const node = next.nodes[id]
+      if (!('fill' in node)) return next
+      if (node.type === 'text') return fill === null ? next : updateNode(next, id, { fill })
+      const fillGradient =
+        fill !== null && node.fillGradient ? withStopColor(node.fillGradient, 0, fill) : null
+      return updateNode(next, id, { fill, fillGradient })
+    }, base)
+  /** グラデーションにしている図形だけ、グラデーションを書き換える */
+  const patchGradients = (change: (gradient: Gradient) => Gradient) => (base: Page) =>
+    selection.reduce((next, id) => {
+      const node = next.nodes[id]
+      if (!('fillGradient' in node) || !node.fillGradient) return next
+      return updateNode(next, id, { fillGradient: change(node.fillGradient) })
+    }, base)
+  const toggleGradient = (enabled: boolean) => (base: Page) =>
+    selection.reduce((next, id) => {
+      const node = next.nodes[id]
+      if (!('fillGradient' in node) || node.fill === null) return next
+      if (!enabled) return updateNode(next, id, { fillGradient: null })
+      if (node.fillGradient) return next
+      // 上から下へ、いまの色から白へ
+      const stops = [
+        { offset: 0, color: node.fill },
+        { offset: 1, color: '#ffffff' },
+      ]
+      return updateNode(next, id, { fillGradient: { angle: 90, stops } })
+    }, base)
 
   const shadows = shapes.flatMap((node) => (node.shadow ? [node.shadow] : []))
   const shadowEnabled = common(shapes.map((node) => node.shadow !== null))
@@ -217,10 +263,66 @@ export function PropertiesPanel({ store, state }: Props) {
             // テキストは塗りを消せない
             nullable={onlyShapes}
             fallback="#d9d9d9"
-            onPreview={(fill) => preview({ fill })}
+            onPreview={(fill) => store.preview(fillRecipe(fill))}
             onCommit={store.commitPreview}
-            onSet={(fill) => apply({ fill })}
+            onSet={(fill) => store.apply(fillRecipe(fill))}
           />
+          {onlyShapes && shapes.every((node) => node.fill !== null) && (
+            <label className="check-field">
+              <input
+                type="checkbox"
+                checked={gradientEnabled === true}
+                ref={(input) => {
+                  if (input) input.indeterminate = gradientEnabled === MIXED
+                }}
+                onChange={(event) => store.apply(toggleGradient(event.target.checked))}
+              />
+              グラデーション
+            </label>
+          )}
+          {gradients.length > 0 && (
+            <>
+              <span className="section-title">終わりの色</span>
+              <ColorField
+                label="グラデーションの終わり"
+                value={common(gradients.map((gradient) => gradient.stops.at(-1)!.color))}
+                nullable={false}
+                fallback="#ffffff"
+                onPreview={(color) => store.preview(patchGradients((g) => withStopColor(g, -1, color)))}
+                onCommit={store.commitPreview}
+                onSet={(color) =>
+                  store.apply(patchGradients((g) => withStopColor(g, -1, color ?? '#ffffff')))
+                }
+              />
+              <NumberField
+                label="角度"
+                value={common(gradients.map((gradient) => gradient.angle))}
+                onCommit={(angle) =>
+                  store.apply(patchGradients((g) => ({ ...g, angle: normalizeAngle(angle) })))
+                }
+              />
+            </>
+          )}
+        </Section>
+      )}
+
+      {images.length === nodes.length && (
+        <Section title="画像">
+          <label className="field">
+            <span className="field-label">収め方</span>
+            <select
+              value={images.every((n) => n.fit === images[0].fit) ? images[0].fit : ''}
+              onChange={(event) => {
+                apply({ fit: event.target.value as ImageNode['fit'] })
+                event.target.blur()
+              }}
+            >
+              {images.some((n) => n.fit !== images[0].fit) && <option value="">混在</option>}
+              <option value="cover">枠を埋めて切り抜く</option>
+              <option value="contain">全体を収める</option>
+              <option value="stretch">引き伸ばす</option>
+            </select>
+          </label>
         </Section>
       )}
 
@@ -438,7 +540,25 @@ export function PropertiesPanel({ store, state }: Props) {
           </label>
         </Section>
       )}
+      <ExportSection label="PNG に書き出し" onExport={onExportPng} />
     </aside>
+  )
+}
+
+/** index 番目（負なら後ろから）の色を変えたグラデーション */
+function withStopColor(gradient: Gradient, index: number, color: string): Gradient {
+  const at = index < 0 ? gradient.stops.length + index : index
+  return { ...gradient, stops: gradient.stops.with(at, { ...gradient.stops[at], color }) }
+}
+
+function ExportSection({ label, onExport }: { label: string; onExport: (scale: number) => void }) {
+  const [scale, setScale] = useState(1)
+  return (
+    <Section title="書き出し">
+      <ExportControls scale={scale} onScaleChange={setScale} onExport={() => onExport(scale)}>
+        {label}
+      </ExportControls>
+    </Section>
   )
 }
 

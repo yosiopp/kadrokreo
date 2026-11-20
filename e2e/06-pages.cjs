@@ -114,7 +114,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const kdrPath = path.join(OUT, 'pages.kdr')
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
-  check('kdr に全ページが入る', json.version === 6 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
+  check('kdr に全ページが入る', json.version === 7 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -149,6 +149,14 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   })
   check('フレーム名を押すとそのフレームが中央に来る', frameBox[3] === 255, frameBox.join())
   check('viewer に編集 UI がない', (await viewer.locator('.toolbar, .layers-panel, .properties-panel, .page-row').count()) === 0)
+
+  // フレーム 1 つを PNG として保存できる
+  const [framePng] = await Promise.all([viewer.waitForEvent('download'), viewer.locator('[aria-label="Frame 1 を PNG に書き出し"]').click()])
+  const framePath = path.join(OUT, 'export-frame.png')
+  await framePng.saveAs(framePath)
+  const png = fs.readFileSync(framePath)
+  check('viewer でフレームを PNG に書き出せる', framePng.suggestedFilename() === 'Frame 1.png' && png.readUInt32BE(16) === 300 && png.readUInt32BE(20) === 200, `${framePng.suggestedFilename()} ${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`)
+  await viewer.screenshot({ path: path.join(OUT, '32-viewer-export.png') })
 
   // 古い形式（1 ページ）のファイル
   await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v3.kdr'))

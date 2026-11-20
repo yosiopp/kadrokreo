@@ -38,6 +38,7 @@ export function createRect(bounds: Bounds): RectNode {
     ...base('Rectangle', bounds),
     type: 'rect',
     fill: '#d9d9d9',
+    fillGradient: null,
     stroke: null,
     strokeWidth: 1,
     shadow: null,
@@ -50,6 +51,7 @@ export function createEllipse(bounds: Bounds): EllipseNode {
     ...base('Ellipse', bounds),
     type: 'ellipse',
     fill: '#d9d9d9',
+    fillGradient: null,
     stroke: null,
     strokeWidth: 1,
     shadow: null,
@@ -77,6 +79,7 @@ export function createPath(shape: Bounds & Pick<PathNode, 'points'>, closed: boo
     points: shape.points,
     closed,
     fill: closed ? '#d9d9d9' : null,
+    fillGradient: null,
     stroke: '#000000',
     strokeWidth: 1,
     shadow: null,
@@ -101,7 +104,7 @@ export function createText(bounds: Bounds, text = ''): TextNode {
 }
 
 export function createImage(bounds: Bounds, assetId: AssetId): ImageNode {
-  return { ...base('Image', bounds), type: 'image', assetId, cornerRadius: 0 }
+  return { ...base('Image', bounds), type: 'image', assetId, cornerRadius: 0, fit: 'cover' }
 }
 
 export function createFrame(bounds: Bounds): FrameNode {
@@ -109,6 +112,7 @@ export function createFrame(bounds: Bounds): FrameNode {
     ...base('Frame', bounds),
     type: 'frame',
     fill: '#ffffff',
+    fillGradient: null,
     stroke: null,
     strokeWidth: 1,
     shadow: null,
