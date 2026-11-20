@@ -1,13 +1,33 @@
-import { type Bounds, getAbsoluteBounds, getAbsolutePosition } from '../document/geometry.ts'
+import {
+  type Bounds,
+  getAbsoluteBounds,
+  getAbsolutePosition,
+  unionBounds,
+} from '../document/geometry.ts'
 import { MAX_DEPTH } from '../document/kdr.ts'
-import type { DesignDocument, NodeId, SceneNode } from '../document/types.ts'
+import type { Asset, AssetId, DesignDocument, NodeId, SceneNode } from '../document/types.ts'
 import { createId } from './nodes.ts'
 
 // ドキュメントは不変として扱い、どの操作も新しいドキュメントを返す。
 // 変化がなければ同じ参照を返すので、履歴側は参照比較で「何も起きなかった」を判定できる。
 
 export function createDocument(name = 'Untitled'): DesignDocument {
-  return { name, nodes: {}, rootIds: [] }
+  return { name, nodes: {}, rootIds: [], assets: {} }
+}
+
+export function addAsset(doc: DesignDocument, id: AssetId, asset: Asset): DesignDocument {
+  return { ...doc, assets: { ...doc.assets, [id]: asset } }
+}
+
+/** どのノードからも使われていないアセットを除く。保存や書き出しの前に呼ぶ */
+export function pruneAssets(doc: DesignDocument): DesignDocument {
+  const used = new Set<AssetId>()
+  for (const node of Object.values(doc.nodes)) {
+    if (node.type === 'image') used.add(node.assetId)
+  }
+  const ids = Object.keys(doc.assets)
+  if (ids.every((id) => used.has(id))) return doc
+  return { ...doc, assets: Object.fromEntries(ids.filter((id) => used.has(id)).map((id) => [id, doc.assets[id]])) }
 }
 
 export function renameDocument(doc: DesignDocument, name: string): DesignDocument {
@@ -139,7 +159,8 @@ export function translateNodes(
 
 /**
  * ページ座標の矩形 from に収まっていたノード群を、to に収まるよう拡大縮小する。
- * 子の位置と大きさは変えない。テキストは中身で大きさが決まるので位置だけ動かす。
+ * 子の位置と大きさは変えない。
+ * テキストは幅を変えると折り返しに切り替わる。高さは中身で決まるので、呼び出し側で合わせ直すこと。
  */
 export function resizeNodes(
   doc: DesignDocument,
@@ -155,15 +176,18 @@ export function resizeNodes(
     const left = Math.round(to.x + (abs.x - from.x) * scaleX)
     const top = Math.round(to.y + (abs.y - from.y) * scaleY)
     const position = { x: node.x + left - abs.x, y: node.y + top - abs.y }
-    if (node.type === 'text') return updateNode(next, id, position)
-
     const right = Math.round(to.x + (abs.x + abs.width - from.x) * scaleX)
     const bottom = Math.round(to.y + (abs.y + abs.height - from.y) * scaleY)
-    return updateNode(next, id, {
-      ...position,
-      width: Math.max(1, right - left),
-      height: Math.max(1, bottom - top),
-    })
+    const width = Math.max(1, right - left)
+    if (node.type === 'text') {
+      if (width === node.width) return updateNode(next, id, position)
+      return updateNode(next, id, { ...position, width, autoWidth: false })
+    }
+    // 直線は水平・垂直にできるよう、幅や高さが 0 になってよい
+    if (node.type === 'line') {
+      return updateNode(next, id, { ...position, width: right - left, height: bottom - top })
+    }
+    return updateNode(next, id, { ...position, width, height: Math.max(1, bottom - top) })
   }, doc)
 }
 
@@ -176,6 +200,64 @@ export function reparentNodes(
   return sortByDocumentOrder(doc, topLevelIds(doc, ids)).reduce((next, id) => {
     if (next.nodes[id].parentId === parentId || isSelfOrAncestor(next, id, parentId)) return next
     return moveNode(next, id, parentId)
+  }, doc)
+}
+
+export type Alignment = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+
+/** 複数なら選択範囲に、1 つなら親フレームに揃える */
+export function alignNodes(
+  doc: DesignDocument,
+  ids: readonly NodeId[],
+  alignment: Alignment,
+): DesignDocument {
+  const targets = topLevelIds(doc, ids)
+  const single = targets.length === 1 ? doc.nodes[targets[0]] : null
+  const reference = single
+    ? single.parentId === null
+      ? null
+      : getAbsoluteBounds(doc, single.parentId)
+    : unionBounds(targets.map((id) => getAbsoluteBounds(doc, id)))
+  if (!reference) return doc
+
+  return targets.reduce((next, id) => {
+    const node = doc.nodes[id]
+    const abs = getAbsoluteBounds(doc, id)
+    const offsets: Record<Alignment, [number, number]> = {
+      left: [reference.x - abs.x, 0],
+      center: [reference.x + (reference.width - abs.width) / 2 - abs.x, 0],
+      right: [reference.x + reference.width - abs.width - abs.x, 0],
+      top: [0, reference.y - abs.y],
+      middle: [0, reference.y + (reference.height - abs.height) / 2 - abs.y],
+      bottom: [0, reference.y + reference.height - abs.height - abs.y],
+    }
+    const [dx, dy] = offsets[alignment]
+    return updateNode(next, id, { x: Math.round(node.x + dx), y: Math.round(node.y + dy) })
+  }, doc)
+}
+
+/** 両端の位置は変えずに、間隔が等しくなるよう並べ直す。3 つ以上で意味がある */
+export function distributeNodes(
+  doc: DesignDocument,
+  ids: readonly NodeId[],
+  axis: 'x' | 'y',
+): DesignDocument {
+  const size = axis === 'x' ? 'width' : 'height'
+  const items = topLevelIds(doc, ids)
+    .map((id) => ({ id, bounds: getAbsoluteBounds(doc, id) }))
+    .sort((a, b) => a.bounds[axis] - b.bounds[axis])
+  if (items.length < 3) return doc
+
+  const first = items[0].bounds
+  const last = items[items.length - 1].bounds
+  const occupied = items.reduce((sum, item) => sum + item.bounds[size], 0)
+  const gap = (last[axis] + last[size] - first[axis] - occupied) / (items.length - 1)
+
+  let position = first[axis]
+  return items.reduce((next, { id, bounds }) => {
+    const delta = Math.round(position - bounds[axis])
+    position += bounds[size] + gap
+    return updateNode(next, id, { [axis]: doc.nodes[id][axis] + delta })
   }, doc)
 }
 
@@ -236,15 +318,27 @@ export function reorderNodes(
   }, doc)
 }
 
-/** コピーしたノード群。rootIds のノードの x, y はページ座標、parentId はコピー元の親 */
-export type Fragment = { nodes: Record<NodeId, SceneNode>; rootIds: NodeId[] }
+/**
+ * コピーしたノード群。rootIds のノードの x, y はページ座標、parentId はコピー元の親。
+ * 別のドキュメントへ貼り付けても画像が欠けないよう、使っているアセットも持つ。
+ */
+export type Fragment = {
+  nodes: Record<NodeId, SceneNode>
+  rootIds: NodeId[]
+  assets: Record<AssetId, Asset>
+}
 
 export function copyFragment(doc: DesignDocument, ids: readonly NodeId[]): Fragment {
   const rootIds = sortByDocumentOrder(doc, topLevelIds(doc, ids))
   const nodes: Record<NodeId, SceneNode> = {}
   for (const id of collectSubtrees(doc, rootIds)) nodes[id] = doc.nodes[id]
   for (const id of rootIds) nodes[id] = { ...nodes[id], ...getAbsolutePosition(doc, id) }
-  return { nodes, rootIds }
+
+  const assets: Record<AssetId, Asset> = {}
+  for (const node of Object.values(nodes)) {
+    if (node.type === 'image') assets[node.assetId] = doc.assets[node.assetId]
+  }
+  return { nodes, rootIds, assets }
 }
 
 /** id を振り直して貼り付ける。コピー元の親が残っていればその中へ、なければページ直下へ置く */
@@ -265,7 +359,9 @@ export function pasteFragment(
   }
 
   const ids = fragment.rootIds.map((id) => newIds.get(id)!)
-  let next = doc
+  // 同じ id のアセットは中身も同じなので、すでにあるものはそのまま使う
+  const missing = Object.keys(fragment.assets).some((id) => !Object.hasOwn(doc.assets, id))
+  let next = missing ? { ...doc, assets: { ...fragment.assets, ...doc.assets } } : doc
   for (const id of ids) {
     const { [id]: root, ...rest } = clones
     const parent = root.parentId === null ? undefined : doc.nodes[root.parentId]

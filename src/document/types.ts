@@ -1,4 +1,5 @@
 export type NodeId = string
+export type AssetId = string
 
 type BaseNode = {
   id: NodeId
@@ -15,15 +16,36 @@ type BaseNode = {
   opacity: number
 }
 
+/** 落ち影。color は #rrggbb、濃さは opacity（0〜1）で持つ */
+export type Shadow = {
+  x: number
+  y: number
+  blur: number
+  color: string
+  opacity: number
+}
+
 type Paint = {
   fill: string | null
   stroke: string | null
   strokeWidth: number
+  shadow: Shadow | null
 }
 
 export type RectNode = BaseNode & Paint & { type: 'rect'; cornerRadius: number }
 
 export type EllipseNode = BaseNode & Paint & { type: 'ellipse' }
+
+/**
+ * 枠の対角線として描く直線。down は左上から右下、up は左下から右上。
+ * 水平・垂直の線は高さ・幅が 0 になる。
+ */
+export type LineNode = BaseNode & {
+  type: 'line'
+  stroke: string
+  strokeWidth: number
+  direction: 'down' | 'up'
+}
 
 export type TextNode = BaseNode & {
   type: 'text'
@@ -31,7 +53,16 @@ export type TextNode = BaseNode & {
   fontSize: number
   fontFamily: string
   fill: string
+  /** true なら折り返さず、幅は中身に合わせる。false なら width で折り返す。高さはどちらも中身で決まる */
+  autoWidth: boolean
+  fontWeight: 400 | 700
+  textAlign: 'left' | 'center' | 'right'
+  /** 行の高さ。fontSize に対する倍率 */
+  lineHeight: number
 }
+
+/** 画像は枠いっぱいに引き伸ばして描く */
+export type ImageNode = BaseNode & { type: 'image'; assetId: AssetId; cornerRadius: number }
 
 export type FrameNode = BaseNode &
   Paint & {
@@ -39,13 +70,18 @@ export type FrameNode = BaseNode &
     /** 先頭が最背面 */
     children: NodeId[]
     clipContent: boolean
+    cornerRadius: number
   }
 
-export type SceneNode = RectNode | EllipseNode | TextNode | FrameNode
+export type SceneNode = RectNode | EllipseNode | LineNode | TextNode | FrameNode | ImageNode
+
+/** 埋め込みファイル。kdr は 1 つの JSON なので、中身は base64 で持つ */
+export type Asset = { mime: string; data: string }
 
 export type DesignDocument = {
   name: string
   nodes: Record<NodeId, SceneNode>
   /** ページ直下のノード。先頭が最背面 */
   rootIds: NodeId[]
+  assets: Record<AssetId, Asset>
 }

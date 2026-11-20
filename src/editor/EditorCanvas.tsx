@@ -2,7 +2,6 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import { type CanvasPointer, CanvasView } from '../canvas/CanvasView.tsx'
 import type { Camera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
-import { LINE_HEIGHT } from '../canvas/text.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import {
   type Bounds,
@@ -13,11 +12,11 @@ import {
   getContentBounds,
   getNodesBounds,
 } from '../document/geometry.ts'
-import type { DesignDocument, NodeId, SceneNode, TextNode } from '../document/types.ts'
+import type { DesignDocument, LineNode, NodeId, SceneNode, TextNode } from '../document/types.ts'
 import { TextEditor } from './TextEditor.tsx'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
-import { measureFrameLabel, measureTextNode } from './measure.ts'
-import { createEllipse, createFrame, createRect, createText } from './nodes.ts'
+import { fitTextNodes, measureFrameLabel, measureTextNode } from './measure.ts'
+import { createEllipse, createFrame, createLine, createRect, createText } from './nodes.ts'
 import {
   type Fragment,
   type ReorderDirection,
@@ -32,9 +31,10 @@ import {
   updateNode,
 } from './operations.ts'
 import { HANDLES, type Handle, handleCursor, handlePoint, resizeBounds } from './resize.ts'
+import { type Guide, findGuides, snapMove, snapResize } from './snap.ts'
 import type { EditorState, EditorStore } from './store.ts'
 
-export type Tool = 'select' | 'frame' | 'rect' | 'ellipse' | 'text'
+export type Tool = 'select' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text'
 
 type Props = {
   store: EditorStore
@@ -42,13 +42,15 @@ type Props = {
   state: EditorState
   tool: Tool
   onToolChange: (tool: Tool) => void
+  /** クリップボードから画像が貼り付けられた */
+  onPasteImages: (files: File[]) => void
 }
 
 type Gesture =
   // ノードの上で押しただけの状態。少し動かすと move になる
   | { kind: 'press'; screen: Point; world: Point; collapseTo: NodeId | null }
-  | { kind: 'move'; world: Point; ids: NodeId[] }
-  | { kind: 'resize'; world: Point; handle: Handle; from: Bounds; ids: NodeId[] }
+  | { kind: 'move'; world: Point; ids: NodeId[]; from: Bounds; guides: Guide[] }
+  | { kind: 'resize'; world: Point; handle: Handle; from: Bounds; ids: NodeId[]; guides: Guide[] }
   | { kind: 'marquee'; world: Point; current: Point; base: NodeId[] }
   | {
       kind: 'create'
@@ -58,15 +60,26 @@ type Gesture =
       parentId: NodeId | null
       dragged: boolean
     }
-  | { kind: 'text'; world: Point }
+  | { kind: 'text'; screen: Point; world: Point }
+  // 直線の端をつかんでいる。fixed は動かさない側の端（ページ座標）
+  | { kind: 'endpoint'; id: NodeId; fixed: Point }
 
 /** draft は新規作成中のテキスト。確定するまでドキュメントには入れない */
 type Editing = { id: NodeId; draft: { node: TextNode; parentId: NodeId | null } | null }
 
 const ACCENT = '#0d99ff'
+const GUIDE = '#f24822'
+const SNAP_DISTANCE = 6
 const DRAG_THRESHOLD = 4
 const HANDLE_SIZE = 8
-const NAMES = { frame: 'Frame', rect: 'Rectangle', ellipse: 'Ellipse', text: 'Text' } as const
+const NAMES = {
+  frame: 'Frame',
+  rect: 'Rectangle',
+  ellipse: 'Ellipse',
+  line: 'Line',
+  text: 'Text',
+  image: 'Image',
+} as const
 
 function toScreenBounds(viewport: Viewport, bounds: Bounds): Bounds {
   return {
@@ -92,12 +105,34 @@ function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
+/** 直線の両端（ページ座標） */
+function lineEnds(doc: DesignDocument, line: LineNode): [Point, Point] {
+  const { x, y, width, height } = getAbsoluteBounds(doc, line.id)
+  return line.direction === 'down'
+    ? [{ x, y }, { x: x + width, y: y + height }]
+    : [{ x, y: y + height }, { x: x + width, y }]
+}
+
+/** from から to へ引く直線の枠と向き */
+function lineBetween(from: Point, to: Point): Bounds & Pick<LineNode, 'direction'> {
+  const sameSign = (to.x - from.x) * (to.y - from.y) >= 0
+  return { ...boundsFromPoints(from, to), direction: sameSign ? 'down' : 'up' }
+}
+
+/** from から見た to の向きを 45° 刻みに揃える */
+function constrainAngle(from: Point, to: Point): Point {
+  const step = Math.PI / 4
+  const angle = Math.round(Math.atan2(to.y - from.y, to.x - from.x) / step) * step
+  const length = distance(from, to)
+  return roundPoint({ x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length })
+}
+
 function nextName(doc: DesignDocument, type: SceneNode['type']): string {
   const count = Object.values(doc.nodes).filter((node) => node.type === type).length
   return `${NAMES[type]} ${count + 1}`
 }
 
-export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props) {
+export function EditorCanvas({ store, camera, state, tool, onToolChange, onPasteImages }: Props) {
   const gestureRef = useRef<Gesture | null>(null)
   const editingRef = useRef<Editing | null>(null)
   const clipboardRef = useRef<{ fragment: Fragment; pastes: number } | null>(null)
@@ -117,13 +152,48 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     return selection.filter((id) => !doc.nodes[id].locked)
   }
 
-  /** リサイズハンドルを出す対象。テキストは中身で大きさが決まるのでハンドルを出さない */
-  function resizeTarget(): { ids: NodeId[]; bounds: Bounds } | null {
+  /** 直線を 1 本だけ選んでいるとき。枠のハンドルの代わりに、両端をつかんで動かせる */
+  function selectedLine(): LineNode | null {
     if (tool !== 'select' || editingRef.current) return null
-    const doc = store.getState().document
+    const { document: doc, selection } = store.getState()
+    const node = selection.length === 1 ? doc.nodes[selection[0]] : null
+    return node?.type === 'line' && !node.locked ? node : null
+  }
+
+  /** screen にある直線の端。あれば、動かさない側の端を返す */
+  function endpointAt(screen: Point): { id: NodeId; fixed: Point } | null {
+    const line = selectedLine()
+    if (!line) return null
+    const ends = lineEnds(store.getState().document, line)
+    for (const [index, end] of ends.entries()) {
+      if (distance(worldToScreen(camera.getViewport(), end), screen) <= HANDLE_SIZE) {
+        return { id: line.id, fixed: ends[1 - index] }
+      }
+    }
+    return null
+  }
+
+  /** リサイズハンドルを出す対象 */
+  function resizeTarget(): { ids: NodeId[]; bounds: Bounds } | null {
+    if (tool !== 'select' || editingRef.current || selectedLine()) return null
     const ids = movableIds()
-    if (ids.every((id) => doc.nodes[id].type === 'text')) return null
-    return { ids, bounds: getNodesBounds(doc, ids)! }
+    const bounds = getNodesBounds(store.getState().document, ids)
+    return bounds && { ids, bounds }
+  }
+
+  /**
+   * 吸着先になる矩形（ページ座標）。parentId の子と、parentId のフレーム自身。
+   * 動かしている最中のノードは除く。
+   */
+  function snapTargets(parentId: NodeId | null, exclude: ReadonlySet<NodeId>): Bounds[] {
+    const doc = store.getState().document
+    const parent = parentId === null ? null : doc.nodes[parentId]
+    const siblings = parent?.type === 'frame' ? parent.children : doc.rootIds
+    const targets = siblings
+      .filter((id) => !exclude.has(id) && doc.nodes[id].visible)
+      .map((id) => getAbsoluteBounds(doc, id))
+    if (parent) targets.push(getAbsoluteBounds(doc, parent.id))
+    return targets
   }
 
   function handleAt(screen: Point): Handle | null {
@@ -150,22 +220,30 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     )
   }
 
-  function previewCreate(gesture: Extract<Gesture, { kind: 'create' }>, bounds: Bounds) {
+  /** shape はページ座標の枠。直線なら向きも含む */
+  function previewCreate(
+    gesture: Extract<Gesture, { kind: 'create' }>,
+    shape: Bounds & Partial<Pick<LineNode, 'direction'>>,
+  ) {
+    // 直線は水平・垂直に引けるよう、幅や高さが 0 でもよい
+    const minSize = gesture.node.type === 'line' ? 0 : 1
     store.preview((base) => {
       const origin =
         gesture.parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(base, gesture.parentId)
       const node = {
         ...gesture.node,
-        x: bounds.x - origin.x,
-        y: bounds.y - origin.y,
-        width: Math.max(1, bounds.width),
-        height: Math.max(1, bounds.height),
+        ...shape,
+        x: shape.x - origin.x,
+        y: shape.y - origin.y,
+        width: Math.max(minSize, shape.width),
+        height: Math.max(minSize, shape.height),
       }
       return insertNode(base, node, gesture.parentId)
     })
   }
 
-  function startNewText(world: Point) {
+  /** width を渡すと、その幅で折り返すテキストになる */
+  function startNewText(world: Point, width?: number) {
     const doc = store.getState().document
     // 既存のテキストの上をクリックしたら、新しく作らずそれを編集する
     const hit = hitTest(doc, world)
@@ -174,16 +252,21 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
       changeEditing({ id: hit, draft: null })
       return
     }
-    const template = { ...createText({ x: 0, y: 0, width: 0, height: 0 }), name: nextName(doc, 'text') }
+    const template: TextNode = {
+      ...createText({ x: 0, y: 0, width: width ?? 0, height: 0 }),
+      name: nextName(doc, 'text'),
+      autoWidth: width === undefined,
+    }
     const size = measureTextNode(template)
     const parentId = findFrameAt(doc, world)
     const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(doc, parentId)
-    // クリックした位置が 1 行目の中央に来るように置く
+    // クリックで作ったときは、その位置が 1 行目の中央に来るように置く
+    const lift = width === undefined ? (template.fontSize * template.lineHeight) / 2 : 0
     const node: TextNode = {
       ...template,
       ...size,
       x: Math.round(world.x - origin.x),
-      y: Math.round(world.y - origin.y - (template.fontSize * LINE_HEIGHT) / 2),
+      y: Math.round(world.y - origin.y - lift),
     }
     store.preview((base) => insertNode(base, node, parentId))
     store.select([node.id])
@@ -232,12 +315,17 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     const { document: doc, selection } = store.getState()
 
     if (tool === 'text') {
-      gestureRef.current = { kind: 'text', world: pointer.world }
+      gestureRef.current = { kind: 'text', screen: pointer.screen, world: pointer.world }
       return
     }
     if (tool !== 'select') {
       const world = roundPoint(pointer.world)
-      const create = { frame: createFrame, rect: createRect, ellipse: createEllipse }[tool]
+      const create = {
+        frame: createFrame,
+        rect: createRect,
+        ellipse: createEllipse,
+        line: createLine,
+      }[tool]
       gestureRef.current = {
         kind: 'create',
         screen: pointer.screen,
@@ -246,6 +334,12 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
         parentId: findFrameAt(doc, world),
         dragged: false,
       }
+      return
+    }
+
+    const endpoint = endpointAt(pointer.screen)
+    if (endpoint) {
+      gestureRef.current = { kind: 'endpoint', ...endpoint }
       return
     }
 
@@ -258,6 +352,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
         handle,
         from: target.bounds,
         ids: target.ids,
+        guides: [],
       }
       return
     }
@@ -293,19 +388,37 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     if (!gesture) {
       if (tool !== 'select' || editingRef.current) return
       const handle = handleAt(pointer.screen)
-      setCursor(handle ? handleCursor(handle) : 'default')
-      setHover(handle ? null : pick(pointer))
+      const endpoint = endpointAt(pointer.screen)
+      setCursor(handle ? handleCursor(handle) : endpoint ? 'crosshair' : 'default')
+      setHover(handle || endpoint ? null : pick(pointer))
+      return
+    }
+
+    if (gesture.kind === 'endpoint') {
+      const { id, fixed } = gesture
+      const end = pointer.shiftKey ? constrainAngle(fixed, pointer.world) : roundPoint(pointer.world)
+      const shape = lineBetween(fixed, end)
+      store.preview((base) => {
+        const node = base.nodes[id]
+        const abs = getAbsolutePosition(base, id)
+        return updateNode(base, id, {
+          ...shape,
+          x: node.x + shape.x - abs.x,
+          y: node.y + shape.y - abs.y,
+        })
+      })
       return
     }
 
     if (gesture.kind === 'press') {
       if (distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return
       const ids = movableIds()
-      if (ids.length === 0) {
+      const from = getNodesBounds(store.getState().document, ids)
+      if (!from) {
         gestureRef.current = null
         return
       }
-      gesture = gestureRef.current = { kind: 'move', world: gesture.world, ids }
+      gesture = gestureRef.current = { kind: 'move', world: gesture.world, ids, from, guides: [] }
     }
 
     if (gesture.kind === 'move') {
@@ -317,21 +430,45 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
         else dx = 0
       }
       const exclude = new Set(ids)
-      store.preview((base) => {
-        const moved = translateNodes(base, ids, dx, dy)
-        // ポインタの下にあるフレームの中へ入れる（フレームの外へ出せばページ直下に戻る）
-        return reparentNodes(moved, ids, findFrameAt(moved, pointer.world, exclude))
-      })
+      // ポインタの下にあるフレームの中へ入れる（フレームの外へ出せばページ直下に戻る）
+      const parentId = findFrameAt(store.getState().document, pointer.world, exclude)
+
+      // 近くの図形や親フレームの端・中央に吸着する。Cmd / Ctrl を押している間は吸着しない
+      const targets = pointer.modKey ? [] : snapTargets(parentId, exclude)
+      const snap = snapMove(
+        { ...gesture.from, x: gesture.from.x + dx, y: gesture.from.y + dy },
+        targets,
+        SNAP_DISTANCE / camera.getViewport().zoom,
+      )
+      // Shift で向きを固定しているときは、固定した向きには吸着させない
+      if (!pointer.shiftKey || dx !== 0) dx = Math.round(dx + snap.dx)
+      if (!pointer.shiftKey || dy !== 0) dy = Math.round(dy + snap.dy)
+      gesture.guides = findGuides(
+        { ...gesture.from, x: gesture.from.x + dx, y: gesture.from.y + dy },
+        targets,
+      )
+
+      store.preview((base) => reparentNodes(translateNodes(base, ids, dx, dy), ids, parentId))
     } else if (gesture.kind === 'resize') {
-      const { ids, from } = gesture
-      const to = resizeBounds(
+      const { ids, from, handle } = gesture
+      const doc = store.getState().document
+      // 画像は歪まないよう、Shift を押さない限り縦横比を保つ
+      const onlyImages = ids.every((id) => doc.nodes[id].type === 'image')
+      const keepAspect = pointer.shiftKey !== onlyImages
+      let to = resizeBounds(
         from,
-        gesture.handle,
+        handle,
         pointer.world.x - gesture.world.x,
         pointer.world.y - gesture.world.y,
-        pointer.shiftKey,
+        keepAspect,
       )
-      store.preview((base) => resizeNodes(base, ids, from, to))
+      const exclude = new Set(ids)
+      const targets = pointer.modKey ? [] : snapTargets(doc.nodes[ids[0]].parentId, exclude)
+      if (!keepAspect) to = snapResize(to, handle, targets, SNAP_DISTANCE / camera.getViewport().zoom)
+      const target = to
+      store.preview((base) => fitTextNodes(resizeNodes(base, ids, from, target), ids))
+      const resized = getNodesBounds(store.getState().document, ids)
+      gesture.guides = resized ? findGuides(resized, targets, handle) : []
     } else if (gesture.kind === 'marquee') {
       gesture.current = pointer.world
       const hits = nodesInMarquee(
@@ -342,6 +479,14 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     } else if (gesture.kind === 'create') {
       if (!gesture.dragged && distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return
       gesture.dragged = true
+      if (gesture.node.type === 'line') {
+        // Shift で水平・垂直・45° に揃える
+        const to = pointer.shiftKey
+          ? constrainAngle(gesture.world, pointer.world)
+          : roundPoint(pointer.world)
+        previewCreate(gesture, lineBetween(gesture.world, to))
+        return
+      }
       let end = roundPoint(pointer.world)
       if (pointer.shiftKey) {
         const dx = end.x - gesture.world.x
@@ -356,7 +501,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     }
   }
 
-  function onPointerUp() {
+  function onPointerUp(pointer: CanvasPointer) {
     const gesture = gestureRef.current
     gestureRef.current = null
     if (!gesture) return
@@ -367,6 +512,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
         break
       case 'move':
       case 'resize':
+      case 'endpoint':
         store.commitPreview()
         break
       case 'marquee':
@@ -374,14 +520,27 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
         break
       case 'create':
         // ドラッグせずクリックしただけなら既定の大きさで置く
-        if (!gesture.dragged) previewCreate(gesture, { ...gesture.world, width: 100, height: 100 })
+        if (!gesture.dragged) {
+          const height = gesture.node.type === 'line' ? 0 : 100
+          previewCreate(gesture, { ...gesture.world, width: 100, height })
+        }
         store.commitPreview()
         store.select([gesture.node.id])
         onToolChange('select')
         break
-      case 'text':
-        startNewText(gesture.world)
+      case 'text': {
+        // ドラッグして作ると、その幅で折り返すテキストになる
+        const end = pointer.world
+        const dragged = distance(pointer.screen, gesture.screen) >= DRAG_THRESHOLD
+        const width = Math.round(Math.abs(end.x - gesture.world.x))
+        if (dragged && width >= 1) {
+          const origin = { x: Math.min(gesture.world.x, end.x), y: Math.min(gesture.world.y, end.y) }
+          startNewText(origin, width)
+        } else {
+          startNewText(gesture.world)
+        }
         break
+      }
     }
   }
 
@@ -428,11 +587,6 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     const reorder = (direction: ReorderDirection) =>
       store.apply((base) => reorderNodes(base, selection, direction))
     const remove = () => store.apply((base) => removeNodes(base, movableIds()))
-    const copy = () => {
-      if (selection.length > 0) {
-        clipboardRef.current = { fragment: copyFragment(doc, selection), pastes: 0 }
-      }
-    }
     const zoom = camera.getViewport().zoom
 
     if (event.metaKey || event.ctrlKey) {
@@ -449,20 +603,6 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
           break
         case 'd':
           if (selection.length > 0) paste(copyFragment(doc, selection), 10)
-          break
-        case 'c':
-          copy()
-          break
-        case 'x':
-          copy()
-          remove()
-          break
-        case 'v':
-          if (clipboardRef.current) {
-            const clipboard = clipboardRef.current
-            clipboard.pastes += 1
-            paste(clipboard.fragment, clipboard.pastes * 10)
-          }
           break
         case ']':
           reorder('forward')
@@ -492,7 +632,14 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     const step = event.shiftKey ? 10 : 1
     const nudge = (dx: number, dy: number) =>
       store.apply((base) => translateNodes(base, movableIds(), dx, dy))
-    const tools: Record<string, Tool> = { v: 'select', f: 'frame', r: 'rect', o: 'ellipse', t: 'text' }
+    const tools: Record<string, Tool> = {
+      v: 'select',
+      f: 'frame',
+      r: 'rect',
+      o: 'ellipse',
+      l: 'line',
+      t: 'text',
+    }
 
     if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(doc))
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)
@@ -510,9 +657,45 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
     event.preventDefault()
   }
 
+  // コピーと貼り付けはブラウザの clipboard イベントで受ける。キー入力で受けると、
+  // OS のクリップボードにある画像を貼り付けられない
+  function onCopy(event: ClipboardEvent) {
+    if (isTextInput(event.target) || gestureRef.current) return
+    const { document: doc, selection } = store.getState()
+    if (selection.length === 0) return
+    clipboardRef.current = { fragment: copyFragment(doc, selection), pastes: 0 }
+    // OS のクリップボードも置き換える（中身はレイヤー名）。古い画像が残っていると、
+    // 貼り付けでそちらが優先されてしまう
+    const names = clipboardRef.current.fragment.rootIds.map((id) => doc.nodes[id].name)
+    event.clipboardData?.setData('text/plain', names.join('\n'))
+    event.preventDefault()
+    if (event.type === 'cut') store.apply((base) => removeNodes(base, movableIds()))
+  }
+
+  function onPaste(event: ClipboardEvent) {
+    if (isTextInput(event.target) || gestureRef.current) return
+    const images = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'))
+    event.preventDefault()
+    if (images.length > 0) {
+      onPasteImages(images)
+    } else if (clipboardRef.current) {
+      const clipboard = clipboardRef.current
+      clipboard.pastes += 1
+      paste(clipboard.fragment, clipboard.pastes * 10)
+    }
+  }
+
   useEffect(() => {
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('copy', onCopy)
+    window.addEventListener('cut', onCopy)
+    window.addEventListener('paste', onPaste)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('copy', onCopy)
+      window.removeEventListener('cut', onCopy)
+      window.removeEventListener('paste', onPaste)
+    }
   })
 
   function drawOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport) {
@@ -531,12 +714,35 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
       )
     }
 
+    // 直線は枠ではなく線そのものをなぞる
+    const outlineNode = (id: NodeId) => {
+      const node = doc.nodes[id]
+      if (node.type !== 'line') return outline(getAbsoluteBounds(doc, id))
+      const [from, to] = lineEnds(doc, node).map((end) => worldToScreen(viewport, end))
+      ctx.beginPath()
+      ctx.moveTo(from.x, from.y)
+      ctx.lineTo(to.x, to.y)
+      ctx.stroke()
+    }
+
     if (hover && !gesture && doc.nodes[hover] && !selection.includes(hover)) {
       ctx.lineWidth = 2
-      outline(getAbsoluteBounds(doc, hover))
+      outlineNode(hover)
       ctx.lineWidth = 1
     }
-    for (const id of selection) outline(getAbsoluteBounds(doc, id))
+    for (const id of selection) outlineNode(id)
+
+    const line = selectedLine()
+    if (line && doc.nodes[line.id]?.type === 'line') {
+      ctx.fillStyle = '#ffffff'
+      for (const end of lineEnds(doc, doc.nodes[line.id] as LineNode)) {
+        const p = worldToScreen(viewport, end)
+        const x = Math.round(p.x - HANDLE_SIZE / 2) + 0.5
+        const y = Math.round(p.y - HANDLE_SIZE / 2) + 0.5
+        ctx.fillRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
+        ctx.strokeRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
+      }
+    }
 
     const target = resizeTarget()
     if (target && gesture?.kind !== 'move') {
@@ -565,6 +771,20 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange }: Props
       ctx.fill()
       ctx.fillStyle = '#ffffff'
       ctx.fillText(label, centerX, top + 9.5)
+    }
+
+    if (gesture?.kind === 'move' || gesture?.kind === 'resize') {
+      ctx.strokeStyle = GUIDE
+      ctx.beginPath()
+      for (const guide of gesture.guides) {
+        const along = guide.axis === 'x' ? 'y' : 'x'
+        const from = worldToScreen(viewport, { x: 0, y: 0, [guide.axis]: guide.position, [along]: guide.from })
+        const to = worldToScreen(viewport, { x: 0, y: 0, [guide.axis]: guide.position, [along]: guide.to })
+        ctx.moveTo(Math.round(from.x) + 0.5, Math.round(from.y) + 0.5)
+        ctx.lineTo(Math.round(to.x) + 0.5, Math.round(to.y) + 0.5)
+      }
+      ctx.stroke()
+      ctx.strokeStyle = ACCENT
     }
 
     if (gesture?.kind === 'marquee') {

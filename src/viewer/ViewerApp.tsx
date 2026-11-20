@@ -24,7 +24,7 @@ export default function ViewerApp() {
     }
   }
 
-  const dragging = useFileDrop(openFile)
+  const dragging = useFileDrop((files) => openFile(files[0]))
 
   return (
     <div className="app" data-mode="viewer">
@@ -34,7 +34,7 @@ export default function ViewerApp() {
         {doc && <span className="document-name">{doc.name}</span>}
         <div className="app-header-spacer" />
         {doc && <ZoomControls camera={camera} getContentBounds={() => getContentBounds(doc)} />}
-        <OpenFileButton onFile={openFile} className={doc ? undefined : 'primary'}>
+        <OpenFileButton onFiles={(files) => openFile(files[0])} className={doc ? undefined : 'primary'}>
           kdr を開く
         </OpenFileButton>
       </header>

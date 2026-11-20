@@ -1,7 +1,15 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import type { SceneNode } from '../document/types.ts'
+import type { DesignDocument, SceneNode, Shadow, TextNode } from '../document/types.ts'
 import { fitTextNodes } from './measure.ts'
-import { type NodePatch, updateNodes } from './operations.ts'
+import { AlignIcon, TextAlignIcon } from './icons.tsx'
+import {
+  type Alignment,
+  type NodePatch,
+  alignNodes,
+  distributeNodes,
+  updateNode,
+  updateNodes,
+} from './operations.ts'
 import type { EditorState, EditorStore } from './store.ts'
 
 type Props = {
@@ -21,7 +29,9 @@ const TYPE_LABELS: Record<SceneNode['type'], string> = {
   frame: 'フレーム',
   rect: '長方形',
   ellipse: '楕円',
+  line: '直線',
   text: 'テキスト',
+  image: '画像',
 }
 
 const FONT_FAMILIES = [
@@ -30,8 +40,25 @@ const FONT_FAMILIES = [
   { value: 'monospace', label: '等幅' },
 ]
 
+const ALIGNMENTS: { alignment: Alignment; label: string }[] = [
+  { alignment: 'left', label: '左揃え' },
+  { alignment: 'center', label: '左右中央揃え' },
+  { alignment: 'right', label: '右揃え' },
+  { alignment: 'top', label: '上揃え' },
+  { alignment: 'middle', label: '上下中央揃え' },
+  { alignment: 'bottom', label: '下揃え' },
+]
+
+const TEXT_ALIGNMENTS: { value: TextNode['textAlign']; label: string }[] = [
+  { value: 'left', label: '左寄せ' },
+  { value: 'center', label: '中央寄せ' },
+  { value: 'right', label: '右寄せ' },
+]
+
+const DEFAULT_SHADOW: Shadow = { x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+
 const SHORTCUTS = [
-  ['V / F / R / O / T', 'ツールの切り替え'],
+  ['V / F / R / O / L / T', 'ツールの切り替え'],
   ['Space + ドラッグ', '画面の移動'],
   ['⌘/Ctrl + ホイール', 'ズーム'],
   ['Shift + 1', '全体を表示'],
@@ -67,19 +94,75 @@ export function PropertiesPanel({ store, state }: Props) {
     store.apply((base) => fitTextNodes(updateNodes(base, selection, patch), selection))
   const preview = (patch: NodePatch) => store.preview((base) => updateNodes(base, selection, patch))
 
-  const shapes = nodes.filter((node) => node.type !== 'text')
+  // 塗りと線を持つ図形
+  const shapes = nodes.filter((node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame')
   const texts = nodes.filter((node) => node.type === 'text')
-  const rects = nodes.filter((node) => node.type === 'rect')
+  const lines = nodes.filter((node) => node.type === 'line')
   const frames = nodes.filter((node) => node.type === 'frame')
-  const onlyShapes = texts.length === 0
+  const rounded = nodes.filter((node) => node.type === 'rect' || node.type === 'frame' || node.type === 'image')
+  const filled = [...shapes, ...texts]
+  const stroked = [...shapes, ...lines]
+  const onlyShapes = shapes.length === nodes.length
+  const hasText = texts.length > 0
+  // 直線は水平・垂直にできるよう、幅や高さが 0 でもよい
+  const minSize = lines.length > 0 ? 0 : 1
   const fontFamily = common(texts.map((node) => node.fontFamily))
+  const autoWidth = common(texts.map((node) => node.autoWidth))
+  const fontWeight = common(texts.map((node) => node.fontWeight))
+  const textAlign = common(texts.map((node) => node.textAlign))
   const clipContent = common(frames.map((node) => node.clipContent))
+
+  const shadows = shapes.flatMap((node) => (node.shadow ? [node.shadow] : []))
+  const shadowEnabled = common(shapes.map((node) => node.shadow !== null))
+  /** 影のある図形だけ、影の一部を書き換える */
+  const patchShadows = (patch: Partial<Shadow>) => (base: DesignDocument) =>
+    selection.reduce((next, id) => {
+      const node = next.nodes[id]
+      if (!('shadow' in node) || !node.shadow) return next
+      return updateNode(next, id, { shadow: { ...node.shadow, ...patch } })
+    }, base)
+  // 1 つだけのときは親フレームに揃えるので、ページ直下では揃える先がない
+  const canAlign = nodes.length > 1 || nodes[0].parentId !== null
 
   return (
     <aside className="panel properties-panel" aria-label="プロパティ">
       <h2 className="panel-title">
         {nodes.length === 1 ? TYPE_LABELS[nodes[0].type] : `${nodes.length} 個を選択中`}
       </h2>
+
+      <Section title="整列">
+        <div className="button-row">
+          {ALIGNMENTS.map(({ alignment, label }) => (
+            <button
+              key={alignment}
+              type="button"
+              className="icon-button"
+              title={label}
+              aria-label={label}
+              disabled={!canAlign}
+              onClick={() => store.apply((base) => alignNodes(base, selection, alignment))}
+            >
+              <AlignIcon kind={alignment} />
+            </button>
+          ))}
+          {(['x', 'y'] as const).map((axis) => {
+            const label = axis === 'x' ? '左右に等間隔' : '上下に等間隔'
+            return (
+              <button
+                key={axis}
+                type="button"
+                className="icon-button"
+                title={label}
+                aria-label={label}
+                disabled={nodes.length < 3}
+                onClick={() => store.apply((base) => distributeNodes(base, selection, axis))}
+              >
+                <AlignIcon kind={axis === 'x' ? 'distribute-x' : 'distribute-y'} />
+              </button>
+            )
+          })}
+        </div>
+      </Section>
 
       <Section title="位置とサイズ">
         <div className="field-grid">
@@ -88,15 +171,16 @@ export function PropertiesPanel({ store, state }: Props) {
           <NumberField
             label="W"
             value={common(nodes.map((n) => n.width))}
-            min={1}
-            disabled={!onlyShapes}
-            onCommit={(width) => apply({ width })}
+            min={minSize}
+            // テキストは幅を決めると、その幅で折り返すようになる
+            onCommit={(width) => apply(hasText ? { width, autoWidth: false } : { width })}
           />
           <NumberField
             label="H"
             value={common(nodes.map((n) => n.height))}
-            min={1}
-            disabled={!onlyShapes}
+            min={minSize}
+            // テキストの高さは中身で決まる
+            disabled={hasText}
             onCommit={(height) => apply({ height })}
           />
         </div>
@@ -112,25 +196,28 @@ export function PropertiesPanel({ store, state }: Props) {
         />
       </Section>
 
-      <Section title="塗り">
-        <ColorField
-          label="塗り"
-          value={common(nodes.map((n) => n.fill))}
-          // テキストは塗りを消せない
-          nullable={onlyShapes}
-          fallback="#d9d9d9"
-          onPreview={(fill) => preview({ fill })}
-          onCommit={store.commitPreview}
-          onSet={(fill) => apply({ fill })}
-        />
-      </Section>
+      {filled.length === nodes.length && (
+        <Section title="塗り">
+          <ColorField
+            label="塗り"
+            value={common(filled.map((n) => n.fill))}
+            // テキストは塗りを消せない
+            nullable={onlyShapes}
+            fallback="#d9d9d9"
+            onPreview={(fill) => preview({ fill })}
+            onCommit={store.commitPreview}
+            onSet={(fill) => apply({ fill })}
+          />
+        </Section>
+      )}
 
-      {onlyShapes && (
+      {stroked.length === nodes.length && (
         <Section title="線">
           <ColorField
             label="線"
-            value={common(shapes.map((n) => n.stroke))}
-            nullable
+            value={common(stroked.map((n) => n.stroke))}
+            // 直線は線を消せない
+            nullable={lines.length === 0}
             fallback="#000000"
             onPreview={(stroke) => preview({ stroke })}
             onCommit={store.commitPreview}
@@ -138,21 +225,77 @@ export function PropertiesPanel({ store, state }: Props) {
           />
           <NumberField
             label="太さ"
-            value={common(shapes.map((n) => n.strokeWidth))}
+            value={common(stroked.map((n) => n.strokeWidth))}
             min={0}
             onCommit={(strokeWidth) => apply({ strokeWidth })}
           />
         </Section>
       )}
 
-      {rects.length === nodes.length && (
+      {rounded.length === nodes.length && (
         <Section title="角丸">
           <NumberField
             label="半径"
-            value={common(rects.map((n) => n.cornerRadius))}
+            value={common(rounded.map((n) => n.cornerRadius))}
             min={0}
             onCommit={(cornerRadius) => apply({ cornerRadius })}
           />
+        </Section>
+      )}
+
+      {onlyShapes && (
+        <Section title="影">
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={shadowEnabled === true}
+              ref={(input) => {
+                if (input) input.indeterminate = shadowEnabled === MIXED
+              }}
+              onChange={(event) => apply({ shadow: event.target.checked ? DEFAULT_SHADOW : null })}
+            />
+            影を付ける
+          </label>
+          {shadows.length > 0 && (
+            <>
+              <div className="field-grid">
+                <NumberField
+                  label="横"
+                  value={common(shadows.map((shadow) => shadow.x))}
+                  onCommit={(x) => store.apply(patchShadows({ x }))}
+                />
+                <NumberField
+                  label="縦"
+                  value={common(shadows.map((shadow) => shadow.y))}
+                  onCommit={(y) => store.apply(patchShadows({ y }))}
+                />
+                <NumberField
+                  label="ぼかし"
+                  value={common(shadows.map((shadow) => shadow.blur))}
+                  min={0}
+                  onCommit={(blur) => store.apply(patchShadows({ blur }))}
+                />
+                <NumberField
+                  label="濃さ"
+                  value={mapValue(common(shadows.map((shadow) => shadow.opacity)), (opacity) =>
+                    Math.round(opacity * 100),
+                  )}
+                  min={0}
+                  max={100}
+                  onCommit={(percent) => store.apply(patchShadows({ opacity: percent / 100 }))}
+                />
+              </div>
+              <ColorField
+                label="影"
+                value={common(shadows.map((shadow) => shadow.color))}
+                nullable={false}
+                fallback={DEFAULT_SHADOW.color}
+                onPreview={(color) => store.preview(patchShadows({ color }))}
+                onCommit={store.commitPreview}
+                onSet={(color) => store.apply(patchShadows({ color: color ?? DEFAULT_SHADOW.color }))}
+              />
+            </>
+          )}
         </Section>
       )}
 
@@ -181,6 +324,53 @@ export function PropertiesPanel({ store, state }: Props) {
             max={1000}
             onCommit={(fontSize) => apply({ fontSize })}
           />
+          <NumberField
+            label="行の高さ"
+            value={common(texts.map((n) => n.lineHeight))}
+            min={0.5}
+            max={5}
+            step={0.1}
+            onCommit={(lineHeight) => apply({ lineHeight })}
+          />
+          <div className="button-row">
+            <button
+              type="button"
+              className="icon-button"
+              title="太字"
+              aria-label="太字"
+              aria-pressed={fontWeight === 700}
+              onClick={() => apply({ fontWeight: fontWeight === 700 ? 400 : 700 })}
+            >
+              <b>B</b>
+            </button>
+            {TEXT_ALIGNMENTS.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                className="icon-button"
+                title={label}
+                aria-label={label}
+                aria-pressed={textAlign === value}
+                onClick={() => apply({ textAlign: value })}
+              >
+                <TextAlignIcon align={value} />
+              </button>
+            ))}
+          </div>
+          <label className="field">
+            <span className="field-label">折り返し</span>
+            <select
+              value={autoWidth === MIXED ? '' : autoWidth ? 'auto' : 'fixed'}
+              onChange={(event) => {
+                apply({ autoWidth: event.target.value === 'auto' })
+                event.target.blur()
+              }}
+            >
+              {autoWidth === MIXED && <option value="">混在</option>}
+              <option value="auto">しない（幅は自動）</option>
+              <option value="fixed">幅に合わせる</option>
+            </select>
+          </label>
           <label className="field">
             <span className="field-label">書体</span>
             <select
@@ -226,12 +416,22 @@ type NumberFieldProps = {
   value: number | Mixed
   min?: number
   max?: number
+  /** 上下キーで増減する量。Shift でその 10 倍 */
+  step?: number
   disabled?: boolean
   onCommit: (value: number) => void
 }
 
 /** 入力中は下書きとして持ち、Enter かフォーカスが外れたときに確定する */
-function NumberField({ label, value, min = -Infinity, max = Infinity, disabled, onCommit }: NumberFieldProps) {
+function NumberField({
+  label,
+  value,
+  min = -Infinity,
+  max = Infinity,
+  step = 1,
+  disabled,
+  onCommit,
+}: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null)
   const shown = draft ?? (value === MIXED ? '' : String(Math.round(value * 100) / 100))
 
@@ -239,7 +439,9 @@ function NumberField({ label, value, min = -Infinity, max = Infinity, disabled, 
     setDraft(null)
     if (text === null || text.trim() === '') return
     const parsed = Number(text)
-    if (Number.isFinite(parsed)) onCommit(Math.min(max, Math.max(min, parsed)))
+    if (!Number.isFinite(parsed)) return
+    // 0.1 刻みの足し算で出る端数を落とす
+    onCommit(Math.round(Math.min(max, Math.max(min, parsed)) * 100) / 100)
   }
 
   return (
@@ -264,9 +466,9 @@ function NumberField({ label, value, min = -Infinity, max = Infinity, disabled, 
             requestAnimationFrame(() => input.blur())
           } else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && value !== MIXED) {
             event.preventDefault()
-            const step = (event.shiftKey ? 10 : 1) * (event.key === 'ArrowUp' ? 1 : -1)
+            const delta = step * (event.shiftKey ? 10 : 1) * (event.key === 'ArrowUp' ? 1 : -1)
             const current = draft === null ? value : Number(draft)
-            commit(String((Number.isFinite(current) ? current : value) + step))
+            commit(String((Number.isFinite(current) ? current : value) + delta))
           }
         }}
       />

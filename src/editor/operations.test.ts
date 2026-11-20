@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { FrameNode } from '../document/types.ts'
-import { createFrame, createRect, createText } from './nodes.ts'
+import { createFrame, createImage, createLine, createRect, createText } from './nodes.ts'
 import { getAbsolutePosition } from '../document/geometry.ts'
 import {
+  addAsset,
+  alignNodes,
   copyFragment,
   createDocument,
+  distributeNodes,
   insertNode,
   moveNode,
   pasteFragment,
   placeNodes,
+  pruneAssets,
   removeNodes,
   reorderNodes,
   reparentNodes,
@@ -180,12 +184,24 @@ describe('resizeNodes', () => {
     expect(next.nodes[inner.id]).toBe(doc.nodes[inner.id])
   })
 
-  it('テキストは位置だけ動かす', () => {
+  it('直線は高さ 0 のまま伸び縮みできる', () => {
+    const line = createLine({ x: 0, y: 50, width: 100, height: 0 })
+    const doc = insertNode(createDocument(), line)
+    const from = { x: 0, y: 50, width: 100, height: 0 }
+    const next = resizeNodes(doc, [line.id], from, { x: 0, y: 50, width: 250, height: 1 })
+    expect(next.nodes[line.id]).toMatchObject({ x: 0, y: 50, width: 250, height: 0 })
+  })
+
+  it('テキストは幅を変えると折り返しになり、高さは変えない', () => {
     const text = createText({ x: 100, y: 100, width: 40, height: 20 }, 'abc')
     const doc = insertNode(createDocument(), text)
     const from = { x: 0, y: 0, width: 200, height: 200 }
-    const next = resizeNodes(doc, [text.id], from, { x: 0, y: 0, width: 400, height: 400 })
-    expect(next.nodes[text.id]).toMatchObject({ x: 200, y: 200, width: 40, height: 20 })
+
+    const wider = resizeNodes(doc, [text.id], from, { x: 0, y: 0, width: 400, height: 400 })
+    expect(wider.nodes[text.id]).toMatchObject({ x: 200, y: 200, width: 80, height: 20, autoWidth: false })
+
+    const taller = resizeNodes(doc, [text.id], from, { x: 0, y: 0, width: 200, height: 400 })
+    expect(taller.nodes[text.id]).toMatchObject({ x: 100, y: 200, width: 40, height: 20, autoWidth: true })
   })
 })
 
@@ -266,5 +282,73 @@ describe('copyFragment / pasteFragment', () => {
     const { document: next, ids } = pasteFragment(removeNodes(doc, [frame.id]), fragment)
     expect(next.nodes[ids[0]]).toMatchObject({ parentId: null, x: 125, y: 65 })
     expect(next.rootIds.at(-1)).toBe(ids[0])
+  })
+})
+
+describe('alignNodes', () => {
+  function three() {
+    const nodes = [
+      createRect({ x: 0, y: 0, width: 20, height: 20 }),
+      createRect({ x: 50, y: 30, width: 40, height: 10 }),
+      createRect({ x: 200, y: 80, width: 100, height: 20 }),
+    ]
+    const doc = nodes.reduce((next, node) => insertNode(next, node), createDocument())
+    const ids = nodes.map((node) => node.id)
+    const xs = (d: typeof doc) => ids.map((id) => d.nodes[id].x)
+    const ys = (d: typeof doc) => ids.map((id) => d.nodes[id].y)
+    return { doc, ids, xs, ys }
+  }
+
+  it('複数選択は選択範囲に揃える', () => {
+    const { doc, ids, xs, ys } = three()
+    expect(xs(alignNodes(doc, ids, 'left'))).toEqual([0, 0, 0])
+    expect(xs(alignNodes(doc, ids, 'right'))).toEqual([280, 260, 200])
+    expect(xs(alignNodes(doc, ids, 'center'))).toEqual([140, 130, 100])
+    expect(ys(alignNodes(doc, ids, 'top'))).toEqual([0, 0, 0])
+    expect(ys(alignNodes(doc, ids, 'bottom'))).toEqual([80, 90, 80])
+    expect(ys(alignNodes(doc, ids, 'middle'))).toEqual([40, 45, 40])
+  })
+
+  it('1 つだけなら親フレームに揃え、ページ直下では何もしない', () => {
+    const { doc, frame, inner, loose } = fixture()
+    expect(alignNodes(doc, [inner.id], 'right').nodes[inner.id]).toMatchObject({ x: 200, y: 10 })
+    expect(alignNodes(doc, [inner.id], 'middle').nodes[inner.id]).toMatchObject({ x: 20, y: 100 })
+    expect(alignNodes(doc, [loose.id], 'left')).toBe(doc)
+    expect(alignNodes(doc, [frame.id], 'left')).toBe(doc)
+  })
+
+  it('等間隔に並べる', () => {
+    const { doc, ids, xs, ys } = three()
+    // 幅 20 + 40 + 100、全体 300 なので間隔は 70
+    expect(xs(distributeNodes(doc, ids, 'x'))).toEqual([0, 90, 200])
+    expect(ys(distributeNodes(doc, ids, 'y'))).toEqual([0, 45, 80])
+    expect(distributeNodes(doc, ids.slice(0, 2), 'x')).toBe(doc)
+  })
+})
+
+describe('assets', () => {
+  const asset = { mime: 'image/png', data: 'AAAA' }
+
+  it('使われていないアセットを除く', () => {
+    const image = createImage(bounds, 'a')
+    const doc = insertNode(addAsset(addAsset(createDocument(), 'a', asset), 'b', asset), image)
+    expect(pruneAssets(doc).assets).toEqual({ a: asset })
+
+    const clean = addAsset(insertNode(createDocument(), image), 'a', asset)
+    expect(pruneAssets(clean)).toBe(clean)
+  })
+
+  it('コピーしたノードは、アセットのない別のドキュメントへ貼っても画像が欠けない', () => {
+    const image = createImage(bounds, 'a')
+    const source = insertNode(addAsset(createDocument(), 'a', asset), image)
+    const fragment = copyFragment(source, [image.id])
+    expect(fragment.assets).toEqual({ a: asset })
+
+    const { document: pasted, ids } = pasteFragment(createDocument(), fragment)
+    expect(pasted.assets).toEqual({ a: asset })
+    expect(pasted.nodes[ids[0]]).toMatchObject({ type: 'image', assetId: 'a' })
+
+    // 同じドキュメント内なら assets は作り直さない
+    expect(pasteFragment(source, fragment).document.assets).toBe(source.assets)
   })
 })

@@ -41,11 +41,29 @@ function hitSiblings(
       const dx = (local.x - node.width / 2) / rx
       const dy = (local.y - node.height / 2) / ry
       if (dx * dx + dy * dy <= 1) return node.id
+    } else if (node.type === 'line') {
+      // 細い線でもつかめるよう、太さによらず最低限の当たり幅を持たせる
+      const reach = Math.max(node.strokeWidth / 2, tolerance)
+      const down = node.direction === 'down'
+      const from = { x: 0, y: down ? 0 : node.height }
+      const to = { x: node.width, y: down ? node.height : 0 }
+      if (distanceToSegment(local, from, to) <= reach) return node.id
     } else if (inside) {
       return node.id
     }
   }
   return null
+}
+
+function distanceToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lengthSquared = dx * dx + dy * dy
+  const t =
+    lengthSquared === 0
+      ? 0
+      : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t))
 }
 
 /** ページ直下のフレームの名前ラベルに当たっていればそのフレーム。screen は画面座標 */

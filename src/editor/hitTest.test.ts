@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
-import { createEllipse, createFrame, createRect } from './nodes.ts'
+import { createEllipse, createFrame, createLine, createRect } from './nodes.ts'
 import { createDocument, insertNode, updateNode } from './operations.ts'
 
 function fixture() {
@@ -41,6 +41,24 @@ describe('hitTest', () => {
     const { doc, ellipse } = fixture()
     expect(hitTest(doc, { x: 450, y: 150 })).toBe(ellipse.id)
     expect(hitTest(doc, { x: 403, y: 103 })).toBeNull()
+  })
+
+  it('直線は線の近くだけで当たる', () => {
+    const down = { ...createLine({ x: 0, y: 0, width: 100, height: 100 }, 'down'), strokeWidth: 4 }
+    const up = createLine({ x: 200, y: 0, width: 100, height: 100 }, 'up')
+    const flat = createLine({ x: 0, y: 200, width: 100, height: 0 })
+    let doc = createDocument()
+    for (const line of [down, up, flat]) doc = insertNode(doc, line)
+
+    expect(hitTest(doc, { x: 50, y: 51 })).toBe(down.id)
+    // 枠の中でも、線から離れた角では当たらない
+    expect(hitTest(doc, { x: 90, y: 10 }, 3)).toBeNull()
+    expect(hitTest(doc, { x: 290, y: 10 }, 3)).toBe(up.id)
+    expect(hitTest(doc, { x: 210, y: 10 }, 3)).toBeNull()
+    // 高さ 0 の水平線
+    expect(hitTest(doc, { x: 50, y: 202 }, 3)).toBe(flat.id)
+    expect(hitTest(doc, { x: 50, y: 206 }, 3)).toBeNull()
+    expect(hitTest(doc, { x: 104, y: 200 }, 3)).toBeNull()
   })
 
   it('ロック中・非表示のノードは子も含めて当たらない', () => {

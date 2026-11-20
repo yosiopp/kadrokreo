@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 
 /** ウィンドウへのファイルのドロップを受け付ける。ドラッグ中かどうかを返す */
-export function useFileDrop(onFile: (file: File) => void): boolean {
+export function useFileDrop(onFiles: (files: File[]) => void): boolean {
   const [dragging, setDragging] = useState(false)
-  const onFileRef = useRef(onFile)
+  const onFilesRef = useRef(onFiles)
   useEffect(() => {
-    onFileRef.current = onFile
+    onFilesRef.current = onFiles
   })
 
   useEffect(() => {
@@ -24,8 +24,8 @@ export function useFileDrop(onFile: (file: File) => void): boolean {
       if (!hasFiles(event)) return
       event.preventDefault()
       setDragging(false)
-      const file = event.dataTransfer?.files[0]
-      if (file) onFileRef.current(file)
+      const files = [...(event.dataTransfer?.files ?? [])]
+      if (files.length > 0) onFilesRef.current(files)
     }
 
     window.addEventListener('dragover', onDragOver)

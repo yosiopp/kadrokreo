@@ -11,6 +11,7 @@
     "build:editor": "vite build --mode editor --outDir dist/editor",
     "lint": "oxlint",
     "test": "vitest run",
+    "e2e": "node e2e/run.mjs",
     "preview": "vite preview --outDir dist/viewer",
     "preview:editor": "vite preview --outDir dist/editor"
   },
@@ -24,6 +25,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "oxlint": "^1.90.0",
+    "playwright-core": "^1.65.1",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
     "vitest": "^5.1.1"

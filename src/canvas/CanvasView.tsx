@@ -10,6 +10,7 @@ import type { Point } from '../document/geometry.ts'
 import type { DesignDocument, NodeId } from '../document/types.ts'
 import type { Camera } from './camera.ts'
 import { isTextInput } from './dom.ts'
+import { onImageLoad } from './images.ts'
 import { renderDocument } from './render.ts'
 import { type Viewport, screenToWorld } from './viewport.ts'
 
@@ -96,6 +97,7 @@ export function CanvasView(props: Props) {
     })
     observer.observe(container)
     const unsubscribe = camera.subscribe(requestDraw)
+    const unsubscribeImages = onImageLoad(requestDraw)
 
     function onWheel(event: WheelEvent) {
       event.preventDefault()
@@ -131,6 +133,7 @@ export function CanvasView(props: Props) {
       requestDrawRef.current = () => {}
       observer.disconnect()
       unsubscribe()
+      unsubscribeImages()
       container.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('keyup', onKey)

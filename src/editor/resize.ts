@@ -26,7 +26,7 @@ export function handleCursor(handle: Handle): string {
 
 /**
  * ハンドルを (dx, dy) だけ引いたときの矩形。反対側の辺を越えて引くと裏返る。
- * keepAspect は角のハンドルでのみ効く。
+ * keepAspect のとき、辺のハンドルではもう一方の向きを中央を保ったまま伸縮する。
  */
 export function resizeBounds(
   start: Bounds,
@@ -44,17 +44,27 @@ export function resizeBounds(
   if (handle.includes('n')) top += dy
   if (handle.includes('s')) bottom += dy
 
-  if (keepAspect && handle.length === 2 && start.width > 0 && start.height > 0) {
-    const scale = Math.max(
-      Math.abs(right - left) / start.width,
-      Math.abs(bottom - top) / start.height,
-    )
-    const width = start.width * scale * (right < left ? -1 : 1)
-    const height = start.height * scale * (bottom < top ? -1 : 1)
-    if (handle.includes('w')) left = right - width
-    else right = left + width
-    if (handle.includes('n')) top = bottom - height
-    else bottom = top + height
+  if (keepAspect && start.width > 0 && start.height > 0) {
+    if (handle.length === 2) {
+      const scale = Math.max(
+        Math.abs(right - left) / start.width,
+        Math.abs(bottom - top) / start.height,
+      )
+      const width = start.width * scale * (right < left ? -1 : 1)
+      const height = start.height * scale * (bottom < top ? -1 : 1)
+      if (handle.includes('w')) left = right - width
+      else right = left + width
+      if (handle.includes('n')) top = bottom - height
+      else bottom = top + height
+    } else if (handle === 'e' || handle === 'w') {
+      const height = (start.height * Math.abs(right - left)) / start.width
+      top = start.y + (start.height - height) / 2
+      bottom = top + height
+    } else {
+      const width = (start.width * Math.abs(bottom - top)) / start.height
+      left = start.x + (start.width - width) / 2
+      right = left + width
+    }
   }
 
   return {

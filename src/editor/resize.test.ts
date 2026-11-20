@@ -22,8 +22,9 @@ describe('resizeBounds', () => {
   it('縦横比を保つ', () => {
     expect(resizeBounds(start, 'se', 100, 0, true)).toEqual({ x: 10, y: 20, width: 200, height: 100 })
     expect(resizeBounds(start, 'nw', -100, 0, true)).toEqual({ x: -90, y: -30, width: 200, height: 100 })
-    // 辺のハンドルでは効かない
-    expect(resizeBounds(start, 'e', 100, 0, true)).toEqual({ x: 10, y: 20, width: 200, height: 50 })
+    // 辺のハンドルでは、もう一方の向きが中央を保って伸びる
+    expect(resizeBounds(start, 'e', 100, 0, true)).toEqual({ x: 10, y: -5, width: 200, height: 100 })
+    expect(resizeBounds(start, 's', 0, 50, true)).toEqual({ x: -40, y: 20, width: 200, height: 100 })
   })
 })
 

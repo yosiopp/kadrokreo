@@ -1,7 +1,7 @@
 import { FRAME_LABEL_FONT } from '../canvas/render.ts'
-import { measureText } from '../canvas/text.ts'
+import { type TextStyle, measureText } from '../canvas/text.ts'
 import type { Size } from '../document/geometry.ts'
-import type { DesignDocument, NodeId, TextNode } from '../document/types.ts'
+import type { DesignDocument, NodeId } from '../document/types.ts'
 import { updateNode } from './operations.ts'
 
 let shared: CanvasRenderingContext2D | null = null
@@ -11,7 +11,7 @@ function context(): CanvasRenderingContext2D {
   return shared
 }
 
-export function measureTextNode(style: Pick<TextNode, 'text' | 'fontSize' | 'fontFamily'>): Size {
+export function measureTextNode(style: TextStyle): Size {
   return measureText(context(), style)
 }
 

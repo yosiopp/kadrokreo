@@ -1,14 +1,25 @@
-import { KDR_EXTENSION, KDR_FORMAT, KDR_VERSION } from '../document/kdr.ts'
+import {
+  KDR_EXTENSION,
+  KDR_FORMAT,
+  KDR_MAX_BYTES,
+  KDR_VERSION,
+  KdrError,
+} from '../document/kdr.ts'
 import type { DesignDocument } from '../document/types.ts'
+import { pruneAssets } from './operations.ts'
 
-/** kdr ファイルの中身（圧縮前の JSON） */
+/** kdr ファイルの中身（圧縮前の JSON）。削除済みの画像のデータは含めない */
 export function serializeKdr(doc: DesignDocument): string {
-  return JSON.stringify({ format: KDR_FORMAT, version: KDR_VERSION, document: doc })
+  return JSON.stringify({ format: KDR_FORMAT, version: KDR_VERSION, document: pruneAssets(doc) })
 }
 
 export async function encodeKdr(doc: DesignDocument): Promise<Blob> {
-  const gzipped = new Blob([serializeKdr(doc)]).stream().pipeThrough(new CompressionStream('gzip'))
-  return new Response(gzipped).blob()
+  const json = new Blob([serializeKdr(doc)])
+  // 読み込み側の上限を超えるファイルは、書き出せても開けない
+  if (json.size > KDR_MAX_BYTES) {
+    throw new KdrError('画像が多すぎて kdr に書き出せません。画像を減らすか小さくしてください。')
+  }
+  return new Response(json.stream().pipeThrough(new CompressionStream('gzip'))).blob()
 }
 
 export function kdrFileName(name: string): string {

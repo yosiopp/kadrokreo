@@ -229,7 +229,7 @@ input.document-name:focus {
   background: transparent;
   resize: none;
   overflow: hidden;
-  white-space: pre;
+  overflow-wrap: anywhere;
 }
 
 /* ツールバー */
@@ -449,6 +449,12 @@ input.document-name:focus {
 }
 
 /* プロパティ */
+
+.button-row {
+  display: flex;
+  gap: 1px;
+  margin: 0 -4px;
+}
 
 .field-grid {
   display: grid;
