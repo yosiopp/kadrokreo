@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
 import { createEllipse, createFrame, createLine, createRect } from './nodes.ts'
-import { createDocument, insertNode, updateNode } from './operations.ts'
+import { createPage, insertNode, updateNode } from './operations.ts'
 
 function fixture() {
   const frame = createFrame({ x: 100, y: 100, width: 200, height: 200 })
@@ -9,7 +9,7 @@ function fixture() {
   const child = createRect({ x: 10, y: 10, width: 50, height: 50 })
   const overflow = createRect({ x: 180, y: 0, width: 100, height: 20 })
   const ellipse = createEllipse({ x: 400, y: 100, width: 100, height: 100 })
-  let doc = createDocument()
+  let doc = createPage()
   doc = insertNode(doc, frame)
   doc = insertNode(doc, child, frame.id)
   doc = insertNode(doc, inner, frame.id)
@@ -47,7 +47,7 @@ describe('hitTest', () => {
     const down = { ...createLine({ x: 0, y: 0, width: 100, height: 100 }, 'down'), strokeWidth: 4 }
     const up = createLine({ x: 200, y: 0, width: 100, height: 100 }, 'up')
     const flat = createLine({ x: 0, y: 200, width: 100, height: 0 })
-    let doc = createDocument()
+    let doc = createPage()
     for (const line of [down, up, flat]) doc = insertNode(doc, line)
 
     expect(hitTest(doc, { x: 50, y: 51 })).toBe(down.id)

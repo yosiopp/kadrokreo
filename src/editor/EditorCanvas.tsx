@@ -12,7 +12,7 @@ import {
   getContentBounds,
   getNodesBounds,
 } from '../document/geometry.ts'
-import type { DesignDocument, LineNode, NodeId, SceneNode, TextNode } from '../document/types.ts'
+import type { LineNode, NodeId, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { TextEditor } from './TextEditor.tsx'
 import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
 import { fitTextNodes, measureFrameLabel, measureTextNode } from './measure.ts'
@@ -22,7 +22,7 @@ import {
   type ReorderDirection,
   copyFragment,
   insertNode,
-  pasteFragment,
+  pasteIntoPage,
   removeNodes,
   reorderNodes,
   reparentNodes,
@@ -106,8 +106,8 @@ function distance(a: Point, b: Point): number {
 }
 
 /** 直線の両端（ページ座標） */
-function lineEnds(doc: DesignDocument, line: LineNode): [Point, Point] {
-  const { x, y, width, height } = getAbsoluteBounds(doc, line.id)
+function lineEnds(page: Scene, line: LineNode): [Point, Point] {
+  const { x, y, width, height } = getAbsoluteBounds(page, line.id)
   return line.direction === 'down'
     ? [{ x, y }, { x: x + width, y: y + height }]
     : [{ x, y: y + height }, { x: x + width, y }]
@@ -127,8 +127,8 @@ function constrainAngle(from: Point, to: Point): Point {
   return roundPoint({ x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length })
 }
 
-function nextName(doc: DesignDocument, type: SceneNode['type']): string {
-  const count = Object.values(doc.nodes).filter((node) => node.type === type).length
+function nextName(page: Scene, type: SceneNode['type']): string {
+  const count = Object.values(page.nodes).filter((node) => node.type === type).length
   return `${NAMES[type]} ${count + 1}`
 }
 
@@ -148,15 +148,15 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
   /** 選択中のうち動かせるもの */
   function movableIds(): NodeId[] {
-    const { document: doc, selection } = store.getState()
-    return selection.filter((id) => !doc.nodes[id].locked)
+    const { page, selection } = store.getState()
+    return selection.filter((id) => !page.nodes[id].locked)
   }
 
   /** 直線を 1 本だけ選んでいるとき。枠のハンドルの代わりに、両端をつかんで動かせる */
   function selectedLine(): LineNode | null {
     if (tool !== 'select' || editingRef.current) return null
-    const { document: doc, selection } = store.getState()
-    const node = selection.length === 1 ? doc.nodes[selection[0]] : null
+    const { page, selection } = store.getState()
+    const node = selection.length === 1 ? page.nodes[selection[0]] : null
     return node?.type === 'line' && !node.locked ? node : null
   }
 
@@ -164,7 +164,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   function endpointAt(screen: Point): { id: NodeId; fixed: Point } | null {
     const line = selectedLine()
     if (!line) return null
-    const ends = lineEnds(store.getState().document, line)
+    const ends = lineEnds(store.getState().page, line)
     for (const [index, end] of ends.entries()) {
       if (distance(worldToScreen(camera.getViewport(), end), screen) <= HANDLE_SIZE) {
         return { id: line.id, fixed: ends[1 - index] }
@@ -177,7 +177,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   function resizeTarget(): { ids: NodeId[]; bounds: Bounds } | null {
     if (tool !== 'select' || editingRef.current || selectedLine()) return null
     const ids = movableIds()
-    const bounds = getNodesBounds(store.getState().document, ids)
+    const bounds = getNodesBounds(store.getState().page, ids)
     return bounds && { ids, bounds }
   }
 
@@ -186,13 +186,13 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
    * 動かしている最中のノードは除く。
    */
   function snapTargets(parentId: NodeId | null, exclude: ReadonlySet<NodeId>): Bounds[] {
-    const doc = store.getState().document
-    const parent = parentId === null ? null : doc.nodes[parentId]
-    const siblings = parent?.type === 'frame' ? parent.children : doc.rootIds
+    const page = store.getState().page
+    const parent = parentId === null ? null : page.nodes[parentId]
+    const siblings = parent?.type === 'frame' ? parent.children : page.rootIds
     const targets = siblings
-      .filter((id) => !exclude.has(id) && doc.nodes[id].visible)
-      .map((id) => getAbsoluteBounds(doc, id))
-    if (parent) targets.push(getAbsoluteBounds(doc, parent.id))
+      .filter((id) => !exclude.has(id) && page.nodes[id].visible)
+      .map((id) => getAbsoluteBounds(page, id))
+    if (parent) targets.push(getAbsoluteBounds(page, parent.id))
     return targets
   }
 
@@ -212,11 +212,11 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   }
 
   function pick(pointer: CanvasPointer): NodeId | null {
-    const doc = store.getState().document
+    const page = store.getState().page
     const viewport = camera.getViewport()
     return (
-      hitTestFrameLabel(doc, viewport, pointer.screen, measureFrameLabel) ??
-      hitTest(doc, pointer.world, 3 / viewport.zoom)
+      hitTestFrameLabel(page, viewport, pointer.screen, measureFrameLabel) ??
+      hitTest(page, pointer.world, 3 / viewport.zoom)
     )
   }
 
@@ -244,22 +244,22 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
   /** width を渡すと、その幅で折り返すテキストになる */
   function startNewText(world: Point, width?: number) {
-    const doc = store.getState().document
+    const page = store.getState().page
     // 既存のテキストの上をクリックしたら、新しく作らずそれを編集する
-    const hit = hitTest(doc, world)
-    if (hit && doc.nodes[hit].type === 'text') {
+    const hit = hitTest(page, world)
+    if (hit && page.nodes[hit].type === 'text') {
       store.select([hit])
       changeEditing({ id: hit, draft: null })
       return
     }
     const template: TextNode = {
       ...createText({ x: 0, y: 0, width: width ?? 0, height: 0 }),
-      name: nextName(doc, 'text'),
+      name: nextName(page, 'text'),
       autoWidth: width === undefined,
     }
     const size = measureTextNode(template)
-    const parentId = findFrameAt(doc, world)
-    const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(doc, parentId)
+    const parentId = findFrameAt(page, world)
+    const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(page, parentId)
     // クリックで作ったときは、その位置が 1 行目の中央に来るように置く
     const lift = width === undefined ? (template.fontSize * template.lineHeight) / 2 : 0
     const node: TextNode = {
@@ -282,7 +282,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       store.preview((base) => insertNode(base, next, parentId))
       store.select([node.id])
     } else {
-      const node = store.getState().document.nodes[current.id]
+      const node = store.getState().page.nodes[current.id]
       if (node?.type !== 'text') return
       const size = measureTextNode({ ...node, text })
       store.preview((base) => updateNode(base, current.id, { text, ...size }))
@@ -293,13 +293,13 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const current = editingRef.current
     if (!current) return
     changeEditing(null)
-    const node = store.getState().document.nodes[current.id]
+    const node = store.getState().page.nodes[current.id]
     if (node?.type === 'text' && node.text.trim() !== '') {
       store.commitPreview()
     } else {
       // 空のテキストは残さない
       store.cancelPreview()
-      if (!current.draft) store.apply((doc) => removeNodes(doc, [current.id]))
+      if (!current.draft) store.apply((page) => removeNodes(page, [current.id]))
     }
     onToolChange('select')
   }
@@ -312,7 +312,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       return
     }
     setHover(null)
-    const { document: doc, selection } = store.getState()
+    const { page, selection } = store.getState()
 
     if (tool === 'text') {
       gestureRef.current = { kind: 'text', screen: pointer.screen, world: pointer.world }
@@ -330,8 +330,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         kind: 'create',
         screen: pointer.screen,
         world,
-        node: { ...create({ x: 0, y: 0, width: 1, height: 1 }), name: nextName(doc, tool) },
-        parentId: findFrameAt(doc, world),
+        node: { ...create({ x: 0, y: 0, width: 1, height: 1 }), name: nextName(page, tool) },
+        parentId: findFrameAt(page, world),
         dragged: false,
       }
       return
@@ -413,7 +413,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (gesture.kind === 'press') {
       if (distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return
       const ids = movableIds()
-      const from = getNodesBounds(store.getState().document, ids)
+      const from = getNodesBounds(store.getState().page, ids)
       if (!from) {
         gestureRef.current = null
         return
@@ -431,7 +431,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       }
       const exclude = new Set(ids)
       // ポインタの下にあるフレームの中へ入れる（フレームの外へ出せばページ直下に戻る）
-      const parentId = findFrameAt(store.getState().document, pointer.world, exclude)
+      const parentId = findFrameAt(store.getState().page, pointer.world, exclude)
 
       // 近くの図形や親フレームの端・中央に吸着する。Cmd / Ctrl を押している間は吸着しない
       const targets = pointer.modKey ? [] : snapTargets(parentId, exclude)
@@ -451,9 +451,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       store.preview((base) => reparentNodes(translateNodes(base, ids, dx, dy), ids, parentId))
     } else if (gesture.kind === 'resize') {
       const { ids, from, handle } = gesture
-      const doc = store.getState().document
+      const page = store.getState().page
       // 画像は歪まないよう、Shift を押さない限り縦横比を保つ
-      const onlyImages = ids.every((id) => doc.nodes[id].type === 'image')
+      const onlyImages = ids.every((id) => page.nodes[id].type === 'image')
       const keepAspect = pointer.shiftKey !== onlyImages
       let to = resizeBounds(
         from,
@@ -463,16 +463,16 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         keepAspect,
       )
       const exclude = new Set(ids)
-      const targets = pointer.modKey ? [] : snapTargets(doc.nodes[ids[0]].parentId, exclude)
+      const targets = pointer.modKey ? [] : snapTargets(page.nodes[ids[0]].parentId, exclude)
       if (!keepAspect) to = snapResize(to, handle, targets, SNAP_DISTANCE / camera.getViewport().zoom)
       const target = to
       store.preview((base) => fitTextNodes(resizeNodes(base, ids, from, target), ids))
-      const resized = getNodesBounds(store.getState().document, ids)
+      const resized = getNodesBounds(store.getState().page, ids)
       gesture.guides = resized ? findGuides(resized, targets, handle) : []
     } else if (gesture.kind === 'marquee') {
       gesture.current = pointer.world
       const hits = nodesInMarquee(
-        store.getState().document,
+        store.getState().page,
         boundsFromPoints(gesture.world, gesture.current),
       )
       store.select([...new Set([...gesture.base, ...hits])])
@@ -552,27 +552,35 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
   function onDoubleClick(pointer: CanvasPointer) {
     if (tool !== 'select' || editingRef.current) return
-    const doc = store.getState().document
-    const hit = hitTest(doc, pointer.world, 3 / camera.getViewport().zoom)
-    if (hit && doc.nodes[hit].type === 'text') {
+    const page = store.getState().page
+    const hit = hitTest(page, pointer.world, 3 / camera.getViewport().zoom)
+    if (hit && page.nodes[hit].type === 'text') {
       store.select([hit])
       changeEditing({ id: hit, draft: null })
     }
   }
 
+  /** いまのページへ貼り付けて、貼り付けたものを選択する */
   function paste(fragment: Fragment, offset: number) {
+    const pageId = store.getState().page.id
     let ids: NodeId[] = []
-    store.apply((doc) => {
-      const result = pasteFragment(doc, fragment, offset)
+    store.applyDocument((document) => {
+      const result = pasteIntoPage(document, pageId, fragment, offset)
       ids = result.ids
       return result.document
     })
     store.select(ids)
   }
 
+  /** 選択中のノードを、使っている画像ごと切り出す */
+  function copySelection(): Fragment {
+    const { document, page, selection } = store.getState()
+    return copyFragment(page, document.assets, selection)
+  }
+
   function onKeyDown(event: KeyboardEvent) {
     if (isTextInput(event.target) || event.isComposing) return
-    const { document: doc, selection } = store.getState()
+    const { page, selection } = store.getState()
     const key = event.key.toLowerCase()
 
     if (key === 'escape') {
@@ -599,10 +607,10 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
           store.redo()
           break
         case 'a':
-          store.select(doc.rootIds.filter((id) => doc.nodes[id].visible && !doc.nodes[id].locked))
+          store.select(page.rootIds.filter((id) => page.nodes[id].visible && !page.nodes[id].locked))
           break
         case 'd':
-          if (selection.length > 0) paste(copyFragment(doc, selection), 10)
+          if (selection.length > 0) paste(copySelection(), 10)
           break
         case ']':
           reorder('forward')
@@ -641,7 +649,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       t: 'text',
     }
 
-    if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(doc))
+    if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)
     else if (Object.hasOwn(tools, key)) onToolChange(tools[key])
     else if (key === 'delete' || key === 'backspace') remove()
@@ -651,7 +659,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     else if (key === 'arrowright') nudge(step, 0)
     else if (key === 'arrowup') nudge(0, -step)
     else if (key === 'arrowdown') nudge(0, step)
-    else if (key === 'enter' && selection.length === 1 && doc.nodes[selection[0]].type === 'text') {
+    else if (key === 'enter' && selection.length === 1 && page.nodes[selection[0]].type === 'text') {
       changeEditing({ id: selection[0], draft: null })
     } else return
     event.preventDefault()
@@ -661,12 +669,12 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   // OS のクリップボードにある画像を貼り付けられない
   function onCopy(event: ClipboardEvent) {
     if (isTextInput(event.target) || gestureRef.current) return
-    const { document: doc, selection } = store.getState()
+    const { page, selection } = store.getState()
     if (selection.length === 0) return
-    clipboardRef.current = { fragment: copyFragment(doc, selection), pastes: 0 }
+    clipboardRef.current = { fragment: copySelection(), pastes: 0 }
     // OS のクリップボードも置き換える（中身はレイヤー名）。古い画像が残っていると、
     // 貼り付けでそちらが優先されてしまう
-    const names = clipboardRef.current.fragment.rootIds.map((id) => doc.nodes[id].name)
+    const names = clipboardRef.current.fragment.rootIds.map((id) => page.nodes[id].name)
     event.clipboardData?.setData('text/plain', names.join('\n'))
     event.preventDefault()
     if (event.type === 'cut') store.apply((base) => removeNodes(base, movableIds()))
@@ -699,7 +707,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   })
 
   function drawOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport) {
-    const { document: doc, selection } = state
+    const { page, selection } = state
     const gesture = gestureRef.current
     ctx.strokeStyle = ACCENT
     ctx.lineWidth = 1
@@ -716,16 +724,16 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
     // 直線は枠ではなく線そのものをなぞる
     const outlineNode = (id: NodeId) => {
-      const node = doc.nodes[id]
-      if (node.type !== 'line') return outline(getAbsoluteBounds(doc, id))
-      const [from, to] = lineEnds(doc, node).map((end) => worldToScreen(viewport, end))
+      const node = page.nodes[id]
+      if (node.type !== 'line') return outline(getAbsoluteBounds(page, id))
+      const [from, to] = lineEnds(page, node).map((end) => worldToScreen(viewport, end))
       ctx.beginPath()
       ctx.moveTo(from.x, from.y)
       ctx.lineTo(to.x, to.y)
       ctx.stroke()
     }
 
-    if (hover && !gesture && doc.nodes[hover] && !selection.includes(hover)) {
+    if (hover && !gesture && page.nodes[hover] && !selection.includes(hover)) {
       ctx.lineWidth = 2
       outlineNode(hover)
       ctx.lineWidth = 1
@@ -733,9 +741,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     for (const id of selection) outlineNode(id)
 
     const line = selectedLine()
-    if (line && doc.nodes[line.id]?.type === 'line') {
+    if (line && page.nodes[line.id]?.type === 'line') {
       ctx.fillStyle = '#ffffff'
-      for (const end of lineEnds(doc, doc.nodes[line.id] as LineNode)) {
+      for (const end of lineEnds(page, page.nodes[line.id] as LineNode)) {
         const p = worldToScreen(viewport, end)
         const x = Math.round(p.x - HANDLE_SIZE / 2) + 0.5
         const y = Math.round(p.y - HANDLE_SIZE / 2) + 0.5
@@ -797,7 +805,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
   return (
     <CanvasView
-      document={state.document}
+      scene={state.page}
+      assets={state.document.assets}
       camera={camera}
       hiddenId={editing?.id}
       cursor={tool === 'select' ? cursor : tool === 'text' ? 'text' : 'crosshair'}
@@ -811,7 +820,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       {editing && (
         <TextEditor
           key={editing.id}
-          document={state.document}
+          scene={state.page}
           camera={camera}
           id={editing.id}
           selectAll={editing.draft === null}

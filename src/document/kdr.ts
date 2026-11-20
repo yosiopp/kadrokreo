@@ -1,12 +1,22 @@
-import type { Asset, AssetId, DesignDocument, NodeId, SceneNode, Shadow } from './types.ts'
+import type {
+  Asset,
+  AssetId,
+  DesignDocument,
+  NodeId,
+  Page,
+  Scene,
+  SceneNode,
+  Shadow,
+} from './types.ts'
 
 // kdr ファイルの実体は gzip 圧縮した 1 つの JSON:
-//   { format: 'kadrokreo', version: 3, document: DesignDocument }
+//   { format: 'kadrokreo', version: 4, document: DesignDocument }
 // 古い version も読み込める。それぞれで増えたもの:
 //   2: 画像（assets）、テキストの折り返し（autoWidth）
 //   3: 直線、影、フレームと画像の角丸、テキストの太さ・行揃え・行の高さ
+//   4: 複数ページ（それまでは document が直接 nodes と rootIds を持っていた）
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 3
+export const KDR_VERSION = 4
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -70,7 +80,7 @@ export function parseKdr(value: unknown): DesignDocument {
   if (file.version > KDR_VERSION) {
     throw new KdrError('このファイルは新しいバージョンで作られているため開けません')
   }
-  if (file.version !== 1 && file.version !== 2 && file.version !== 3) {
+  if (file.version !== 1 && file.version !== 2 && file.version !== 3 && file.version !== 4) {
     throw new KdrError(`未対応のバージョンです: ${file.version}`)
   }
   const version: Version = file.version
@@ -83,25 +93,51 @@ export function parseKdr(value: unknown): DesignDocument {
     }
   }
 
-  const rawNodes = record(doc.nodes, 'document.nodes')
+  // version 3 までは 1 ページだけで、document が直接ノードを持っていた
+  const pages =
+    version >= 4
+      ? array(doc.pages, 'document.pages').map((raw, i) => parsePage(raw, `pages[${i}]`, version, assets))
+      : [{ id: 'page-1', name: 'Page 1', ...parseScene(doc, 'document', version, assets) }]
+  if (pages.length === 0) throw new KdrError('document.pages: ページがありません')
+  if (new Set(pages.map((page) => page.id)).size !== pages.length) {
+    throw new KdrError('document.pages: ページの id が重複しています')
+  }
+
+  return { name: string(doc.name, 'document.name'), pages, assets }
+}
+
+function parsePage(
+  value: unknown,
+  path: string,
+  version: Version,
+  assets: Record<AssetId, Asset>,
+): Page {
+  const raw = record(value, path)
+  return {
+    id: nodeId(raw.id, `${path}.id`),
+    name: string(raw.name, `${path}.name`),
+    ...parseScene(raw, path, version, assets),
+  }
+}
+
+function parseScene(
+  raw: Record<string, unknown>,
+  path: string,
+  version: Version,
+  assets: Record<AssetId, Asset>,
+): Scene {
   const nodes: Record<NodeId, SceneNode> = {}
-  for (const [id, raw] of Object.entries(rawNodes)) {
-    const node = parseNode(raw, `nodes.${id}`, version)
-    if (node.id !== id) throw new KdrError(`nodes.${id}: id がキーと一致しません`)
+  for (const [id, rawNode] of Object.entries(record(raw.nodes, `${path}.nodes`))) {
+    const node = parseNode(rawNode, `${path}.nodes.${id}`, version)
+    if (node.id !== id) throw new KdrError(`${path}.nodes.${id}: id がキーと一致しません`)
     if (node.type === 'image' && !Object.hasOwn(assets, node.assetId)) {
-      throw new KdrError(`nodes.${id}: 画像データがありません`)
+      throw new KdrError(`${path}.nodes.${id}: 画像データがありません`)
     }
     nodes[id] = node
   }
-
-  const document: DesignDocument = {
-    name: string(doc.name, 'document.name'),
-    nodes,
-    rootIds: idArray(doc.rootIds, 'document.rootIds'),
-    assets,
-  }
-  checkTree(document)
-  return document
+  const scene = { nodes, rootIds: idArray(raw.rootIds, `${path}.rootIds`) }
+  checkTree(scene)
+  return scene
 }
 
 const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/
@@ -122,7 +158,7 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3
+type Version = 1 | 2 | 3 | 4
 
 function parseNode(value: unknown, path: string, version: Version): SceneNode {
   const raw = record(value, path)
@@ -213,9 +249,9 @@ function parseShadow(value: unknown, path: string): Shadow {
 }
 
 /** rootIds から辿って、すべてのノードがちょうど 1 回ずつ現れる木になっていることを確かめる */
-function checkTree(doc: DesignDocument): void {
+function checkTree(scene: Scene): void {
   const seen = new Set<NodeId>()
-  const stack: { id: NodeId; parentId: NodeId | null; depth: number }[] = doc.rootIds.map((id) => ({
+  const stack: { id: NodeId; parentId: NodeId | null; depth: number }[] = scene.rootIds.map((id) => ({
     id,
     parentId: null,
     depth: 1,
@@ -223,17 +259,17 @@ function checkTree(doc: DesignDocument): void {
   while (stack.length > 0) {
     const { id, parentId, depth } = stack.pop()!
     if (depth > MAX_DEPTH) throw new KdrError('フレームの入れ子が深すぎます')
-    if (!Object.hasOwn(doc.nodes, id)) throw new KdrError(`存在しないノードへの参照です: ${id}`)
+    if (!Object.hasOwn(scene.nodes, id)) throw new KdrError(`存在しないノードへの参照です: ${id}`)
     if (seen.has(id)) throw new KdrError(`ノードが複数の場所から参照されています: ${id}`)
     seen.add(id)
 
-    const node = doc.nodes[id]
+    const node = scene.nodes[id]
     if (node.parentId !== parentId) throw new KdrError(`nodes.${id}: parentId が親と一致しません`)
     if (node.type === 'frame') {
       for (const childId of node.children) stack.push({ id: childId, parentId: id, depth: depth + 1 })
     }
   }
-  if (seen.size !== Object.keys(doc.nodes).length) {
+  if (seen.size !== Object.keys(scene.nodes).length) {
     throw new KdrError('どこからも参照されていないノードがあります')
   }
 }
@@ -293,7 +329,11 @@ function nodeId(value: unknown, path: string): NodeId {
   return id
 }
 
-function idArray(value: unknown, path: string): NodeId[] {
+function array(value: unknown, path: string): unknown[] {
   if (!Array.isArray(value)) throw new KdrError(`${path}: 配列ではありません`)
-  return value.map((item, i) => nodeId(item, `${path}[${i}]`))
+  return value
+}
+
+function idArray(value: unknown, path: string): NodeId[] {
+  return array(value, path).map((item, i) => nodeId(item, `${path}[${i}]`))
 }

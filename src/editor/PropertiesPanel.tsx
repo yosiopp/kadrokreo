@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import type { DesignDocument, SceneNode, Shadow, TextNode } from '../document/types.ts'
+import type { Page, SceneNode, Shadow, TextNode } from '../document/types.ts'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
 import {
@@ -68,8 +68,8 @@ const SHORTCUTS = [
 ]
 
 export function PropertiesPanel({ store, state }: Props) {
-  const { document: doc, selection } = state
-  const nodes = selection.map((id) => doc.nodes[id])
+  const { page, selection } = state
+  const nodes = selection.map((id) => page.nodes[id])
 
   if (nodes.length === 0) {
     return (
@@ -115,7 +115,7 @@ export function PropertiesPanel({ store, state }: Props) {
   const shadows = shapes.flatMap((node) => (node.shadow ? [node.shadow] : []))
   const shadowEnabled = common(shapes.map((node) => node.shadow !== null))
   /** 影のある図形だけ、影の一部を書き換える */
-  const patchShadows = (patch: Partial<Shadow>) => (base: DesignDocument) =>
+  const patchShadows = (patch: Partial<Shadow>) => (base: Page) =>
     selection.reduce((next, id) => {
       const node = next.nodes[id]
       if (!('shadow' in node) || !node.shadow) return next

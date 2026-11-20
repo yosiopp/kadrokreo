@@ -1,5 +1,5 @@
 import { type DragEvent, type MouseEvent, useState } from 'react'
-import type { DesignDocument, NodeId, SceneNode } from '../document/types.ts'
+import type { NodeId, Scene, SceneNode } from '../document/types.ts'
 import { EyeIcon, LockIcon, TypeIcon } from './icons.tsx'
 import { type Placement, placeNodes, updateNode } from './operations.ts'
 import type { EditorState, EditorStore } from './store.ts'
@@ -12,21 +12,21 @@ type Props = {
 type Row = { node: SceneNode; depth: number }
 
 /** 手前にあるものほど上に並べる */
-function buildRows(doc: DesignDocument, collapsed: ReadonlySet<NodeId>): Row[] {
+function buildRows(scene: Scene, collapsed: ReadonlySet<NodeId>): Row[] {
   const rows: Row[] = []
   function visit(ids: readonly NodeId[], depth: number) {
     for (const id of ids.toReversed()) {
-      const node = doc.nodes[id]
+      const node = scene.nodes[id]
       rows.push({ node, depth })
       if (node.type === 'frame' && !collapsed.has(id)) visit(node.children, depth + 1)
     }
   }
-  visit(doc.rootIds, 0)
+  visit(scene.rootIds, 0)
   return rows
 }
 
 export function LayersPanel({ store, state }: Props) {
-  const { document: doc, selection } = state
+  const { page, selection } = state
   const [collapsed, setCollapsed] = useState<ReadonlySet<NodeId>>(new Set())
   const [renaming, setRenaming] = useState<NodeId | null>(null)
   const [drop, setDrop] = useState<{ id: NodeId; placement: Placement } | null>(null)
@@ -78,10 +78,10 @@ export function LayersPanel({ store, state }: Props) {
     if (target.placement === 'inside' && collapsed.has(target.id)) toggleCollapsed(target.id)
   }
 
-  const rows = buildRows(doc, collapsed)
+  const rows = buildRows(page, collapsed)
 
   return (
-    <aside className="panel layers-panel" aria-label="レイヤー">
+    <section className="layers" aria-label="レイヤー">
       <h2 className="panel-title">レイヤー</h2>
       {rows.length === 0 && <p className="panel-hint">ツールを選んでキャンバスに図形を描くと、ここに並びます。</p>}
       <ul className="layer-list" onDragLeave={() => setDrop(null)}>
@@ -170,6 +170,6 @@ export function LayersPanel({ store, state }: Props) {
           </li>
         ))}
       </ul>
-    </aside>
+    </section>
   )
 }

@@ -1,12 +1,15 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createCamera } from '../canvas/camera.ts'
+import type { Viewport } from '../canvas/viewport.ts'
 import { getContentBounds } from '../document/geometry.ts'
 import { IMAGE_MIME_TYPES, decodeKdr } from '../document/kdr.ts'
+import type { DesignDocument, PageId } from '../document/types.ts'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
 import { useFileDrop } from '../ui/useFileDrop.ts'
 import { EditorCanvas, type Tool } from './EditorCanvas.tsx'
 import { LayersPanel } from './LayersPanel.tsx'
+import { PagesPanel } from './PagesPanel.tsx'
 import { PropertiesPanel } from './PropertiesPanel.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
@@ -41,9 +44,34 @@ function Editor({ store }: { store: EditorStore }) {
   const [tool, setTool] = useState<Tool>('select')
   const [message, setMessage] = useState<string | null>(null)
 
+  // ページごとに、最後に見ていた位置を覚えておく
+  const viewportsRef = useRef(new Map<PageId, Viewport>())
+  const shownPageRef = useRef(state.page.id)
+
   useEffect(() => {
-    camera.fit(getContentBounds(store.getState().document))
+    camera.fit(getContentBounds(store.getState().page))
   }, [camera, store])
+
+  const pageId = state.page.id
+  useEffect(() => {
+    const previous = shownPageRef.current
+    if (previous === pageId) return
+    viewportsRef.current.set(previous, camera.getViewport())
+    shownPageRef.current = pageId
+    const saved = viewportsRef.current.get(pageId)
+    if (saved) camera.setViewport(saved)
+    else camera.fit(getContentBounds(store.getState().page))
+  }, [camera, store, pageId])
+
+  /** ドキュメントを丸ごと差し替える */
+  function replaceDocument(doc: DesignDocument) {
+    store.load(doc)
+    viewportsRef.current.clear()
+    shownPageRef.current = doc.pages[0].id
+    camera.fit(getContentBounds(doc.pages[0]))
+    setTool('select')
+    setMessage(null)
+  }
 
   // 変更が落ち着いたら自動保存する。タブを閉じるときは待たずに書く
   useEffect(() => {
@@ -74,7 +102,7 @@ function Editor({ store }: { store: EditorStore }) {
     }
   }, [store])
 
-  const isEmpty = state.document.rootIds.length === 0
+  const isEmpty = state.document.pages.every((page) => page.rootIds.length === 0)
 
   function confirmDiscard(): boolean {
     return isEmpty || window.confirm('いま編集中の内容は破棄されます。よろしいですか？')
@@ -87,11 +115,7 @@ function Editor({ store }: { store: EditorStore }) {
   async function openDocument(file: File) {
     if (!confirmDiscard()) return
     try {
-      const doc = await decodeKdr(file)
-      store.load(doc)
-      camera.fit(getContentBounds(doc))
-      setTool('select')
-      setMessage(null)
+      replaceDocument(await decodeKdr(file))
     } catch (error) {
       showError(error, 'ファイルを開けませんでした')
     }
@@ -120,9 +144,7 @@ function Editor({ store }: { store: EditorStore }) {
 
   function newDocument() {
     if (!confirmDiscard()) return
-    store.load(createDocument())
-    camera.fit(null)
-    setMessage(null)
+    replaceDocument(createDocument())
   }
 
   async function exportFile() {
@@ -142,7 +164,7 @@ function Editor({ store }: { store: EditorStore }) {
         <span className="app-mode">editor</span>
         <NameField
           value={state.document.name}
-          onCommit={(name) => store.apply((doc) => renameDocument(doc, name))}
+          onCommit={(name) => store.applyDocument((doc) => renameDocument(doc, name))}
         />
         <Toolbar tool={tool} onToolChange={setTool}>
           <OpenFileButton
@@ -178,7 +200,7 @@ function Editor({ store }: { store: EditorStore }) {
           </button>
         </div>
         <div className="app-header-spacer" />
-        <ZoomControls camera={camera} getContentBounds={() => getContentBounds(store.getState().document)} />
+        <ZoomControls camera={camera} getContentBounds={() => getContentBounds(store.getState().page)} />
         <button type="button" onClick={newDocument}>
           新規
         </button>
@@ -196,7 +218,10 @@ function Editor({ store }: { store: EditorStore }) {
         </div>
       )}
       <div className="editor-body">
-        <LayersPanel store={store} state={state} />
+        <aside className="panel layers-panel">
+          <PagesPanel store={store} state={state} />
+          <LayersPanel store={store} state={state} />
+        </aside>
         <main className="app-main">
           <EditorCanvas
             store={store}

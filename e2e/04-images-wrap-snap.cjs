@@ -43,7 +43,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
       const tx = db.transaction(['document', 'assets'])
       const doc = tx.objectStore('document').get('current')
       const keys = tx.objectStore('assets').getAllKeys()
-      tx.oncomplete = () => resolve({ ...doc.result.document, assetKeys: keys.result })
+      tx.oncomplete = () => resolve({ ...((doc) => ({ ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }))(doc.result.document), assetKeys: keys.result })
     }
   }))
   const byName = async (name) => Object.values((await saved()).nodes).find((n) => n.name === name)
@@ -197,8 +197,8 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const kdrPath = path.join(OUT, 'with-image.kdr')
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
-  const used = new Set(Object.values(json.document.nodes).filter((n) => n.type === 'image').map((n) => n.assetId))
-  check('kdr v2 に画像が埋め込まれる', json.version === 3 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
+  const used = new Set(Object.values(json.document.pages[0].nodes).filter((n) => n.type === 'image').map((n) => n.assetId))
+  check('kdr に画像が埋め込まれる', json.version === 4 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

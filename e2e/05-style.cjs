@@ -37,7 +37,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
     open.onerror = () => reject(open.error)
     open.onsuccess = () => {
       const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document)
+      request.onsuccess = () => resolve(((doc) => ({ ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }))(request.result.document))
     }
   }))
   const byName = async (name) => { await page.waitForTimeout(700); return Object.values((await saved()).nodes).find((n) => n.name === name) }
@@ -132,7 +132,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const kdrPath = path.join(OUT, 'style.kdr')
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
-  check('kdr は version 3', json.version === 3)
+  check('kdr は version 4', json.version === 4)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -142,7 +142,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(400)
   await viewer.screenshot({ path: path.join(OUT, '17-viewer-style.png') })
-  for (const [file, label] of [['sample-v1.kdr', 'version 1'], ['sample-v2.kdr', 'version 2']]) {
+  for (const [file, label] of [['sample-v1.kdr', 'version 1'], ['sample-v2.kdr', 'version 2'], ['sample-v3.kdr', 'version 3']]) {
     await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, file))
     await viewer.waitForTimeout(500)
     check(`${label} の kdr も開ける`, (await viewer.locator('.app-message').count()) === 0)

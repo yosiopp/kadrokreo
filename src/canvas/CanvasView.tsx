@@ -7,11 +7,11 @@ import {
   useState,
 } from 'react'
 import type { Point } from '../document/geometry.ts'
-import type { DesignDocument, NodeId } from '../document/types.ts'
+import type { Asset, AssetId, NodeId, Scene } from '../document/types.ts'
 import type { Camera } from './camera.ts'
 import { isTextInput } from './dom.ts'
 import { onImageLoad } from './images.ts'
-import { renderDocument } from './render.ts'
+import { renderScene } from './render.ts'
 import { type Viewport, screenToWorld } from './viewport.ts'
 
 export type CanvasPointer = {
@@ -26,7 +26,9 @@ export type CanvasPointer = {
 }
 
 type Props = {
-  document: DesignDocument
+  /** 表示するページ */
+  scene: Scene
+  assets: Record<AssetId, Asset>
   camera: Camera
   /** 左ドラッグでパンする。編集操作のない viewer 用 */
   panWithPrimaryButton?: boolean
@@ -66,7 +68,7 @@ export function CanvasView(props: Props) {
 
     function draw() {
       frame = 0
-      const { document, drawOverlay, hiddenId } = propsRef.current
+      const { scene, assets, drawOverlay, hiddenId } = propsRef.current
       const size = camera.getSize()
       const pixelRatio = window.devicePixelRatio || 1
       const width = Math.round(size.width * pixelRatio)
@@ -78,7 +80,7 @@ export function CanvasView(props: Props) {
 
       const viewport = camera.getViewport()
       const labelColor = getComputedStyle(container).getPropertyValue('--canvas-label')
-      renderDocument(ctx, document, viewport, size, pixelRatio, { labelColor, hiddenId })
+      renderScene(ctx, scene, assets, viewport, size, pixelRatio, { labelColor, hiddenId })
       if (drawOverlay) {
         ctx.save()
         drawOverlay(ctx, viewport)

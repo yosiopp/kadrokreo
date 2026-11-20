@@ -1,23 +1,23 @@
-import type { DesignDocument, NodeId } from './types.ts'
+import type { NodeId, Scene } from './types.ts'
 
 export type Point = { x: number; y: number }
 export type Size = { width: number; height: number }
 export type Bounds = Point & Size
 
 /** ページ座標系での左上の位置 */
-export function getAbsolutePosition(doc: DesignDocument, id: NodeId): Point {
+export function getAbsolutePosition(scene: Scene, id: NodeId): Point {
   let x = 0
   let y = 0
-  for (let current: NodeId | null = id; current !== null; current = doc.nodes[current].parentId) {
-    x += doc.nodes[current].x
-    y += doc.nodes[current].y
+  for (let current: NodeId | null = id; current !== null; current = scene.nodes[current].parentId) {
+    x += scene.nodes[current].x
+    y += scene.nodes[current].y
   }
   return { x, y }
 }
 
-export function getAbsoluteBounds(doc: DesignDocument, id: NodeId): Bounds {
-  const { width, height } = doc.nodes[id]
-  return { ...getAbsolutePosition(doc, id), width, height }
+export function getAbsoluteBounds(scene: Scene, id: NodeId): Bounds {
+  const { width, height } = scene.nodes[id]
+  return { ...getAbsolutePosition(scene, id), width, height }
 }
 
 export function unionBounds(list: readonly Bounds[]): Bounds | null {
@@ -35,13 +35,13 @@ export function unionBounds(list: readonly Bounds[]): Bounds | null {
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
-export function getNodesBounds(doc: DesignDocument, ids: readonly NodeId[]): Bounds | null {
-  return unionBounds(ids.map((id) => getAbsoluteBounds(doc, id)))
+export function getNodesBounds(scene: Scene, ids: readonly NodeId[]): Bounds | null {
+  return unionBounds(ids.map((id) => getAbsoluteBounds(scene, id)))
 }
 
 /** ページ直下のノード全体を囲む矩形 */
-export function getContentBounds(doc: DesignDocument): Bounds | null {
-  return getNodesBounds(doc, doc.rootIds)
+export function getContentBounds(scene: Scene): Bounds | null {
+  return getNodesBounds(scene, scene.rootIds)
 }
 
 export function containsPoint(b: Bounds, p: Point): boolean {

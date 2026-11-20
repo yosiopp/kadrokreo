@@ -2,24 +2,24 @@ import { FRAME_LABEL_HEIGHT } from '../canvas/render.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import { type Bounds, type Point, getAbsoluteBounds, intersects } from '../document/geometry.ts'
 import { MAX_DEPTH } from '../document/kdr.ts'
-import type { DesignDocument, NodeId } from '../document/types.ts'
+import type { NodeId, Scene } from '../document/types.ts'
 
 /**
  * point（ページ座標）の位置で最も手前にあるノード。非表示・ロック中のノードとその子は対象外。
  * tolerance は小さな図形をつかみやすくするための遊び（ページ座標）。
  */
-export function hitTest(doc: DesignDocument, point: Point, tolerance = 0): NodeId | null {
-  return hitSiblings(doc, doc.rootIds, point, tolerance)
+export function hitTest(scene: Scene, point: Point, tolerance = 0): NodeId | null {
+  return hitSiblings(scene, scene.rootIds, point, tolerance)
 }
 
 function hitSiblings(
-  doc: DesignDocument,
+  scene: Scene,
   ids: readonly NodeId[],
   point: Point,
   tolerance: number,
 ): NodeId | null {
   for (let i = ids.length - 1; i >= 0; i--) {
-    const node = doc.nodes[ids[i]]
+    const node = scene.nodes[ids[i]]
     if (!node.visible || node.locked) continue
 
     const local = { x: point.x - node.x, y: point.y - node.y }
@@ -31,7 +31,7 @@ function hitSiblings(
 
     if (node.type === 'frame') {
       if (inside || !node.clipContent) {
-        const child = hitSiblings(doc, node.children, local, tolerance)
+        const child = hitSiblings(scene, node.children, local, tolerance)
         if (child) return child
       }
       if (inside) return node.id
@@ -68,13 +68,13 @@ function distanceToSegment(p: Point, a: Point, b: Point): number {
 
 /** ページ直下のフレームの名前ラベルに当たっていればそのフレーム。screen は画面座標 */
 export function hitTestFrameLabel(
-  doc: DesignDocument,
+  scene: Scene,
   viewport: Viewport,
   screen: Point,
   measureLabel: (text: string) => number,
 ): NodeId | null {
-  for (let i = doc.rootIds.length - 1; i >= 0; i--) {
-    const node = doc.nodes[doc.rootIds[i]]
+  for (let i = scene.rootIds.length - 1; i >= 0; i--) {
+    const node = scene.nodes[scene.rootIds[i]]
     if (node.type !== 'frame' || !node.visible || node.locked) continue
     const origin = worldToScreen(viewport, node)
     if (
@@ -94,13 +94,13 @@ export function hitTestFrameLabel(
  * exclude のノードとその子孫は候補にしない。
  */
 export function findFrameAt(
-  doc: DesignDocument,
+  scene: Scene,
   point: Point,
   exclude: ReadonlySet<NodeId> = new Set(),
 ): NodeId | null {
   function search(ids: readonly NodeId[], p: Point, depth: number): NodeId | null {
     for (let i = ids.length - 1; i >= 0; i--) {
-      const node = doc.nodes[ids[i]]
+      const node = scene.nodes[ids[i]]
       if (node.type !== 'frame' || !node.visible || node.locked || exclude.has(node.id)) continue
       const local = { x: p.x - node.x, y: p.y - node.y }
       const inside =
@@ -115,20 +115,20 @@ export function findFrameAt(
     }
     return null
   }
-  return search(doc.rootIds, point, 1)
+  return search(scene.rootIds, point, 1)
 }
 
 /**
  * 範囲選択。範囲に完全に収まったフレームはフレームごと、
  * はみ出しているフレームは中身のうち範囲にかかるものを選ぶ。
  */
-export function nodesInMarquee(doc: DesignDocument, marquee: Bounds): NodeId[] {
+export function nodesInMarquee(scene: Scene, marquee: Bounds): NodeId[] {
   const result: NodeId[] = []
   function visit(ids: readonly NodeId[]) {
     for (const id of ids) {
-      const node = doc.nodes[id]
+      const node = scene.nodes[id]
       if (!node.visible || node.locked) continue
-      const bounds = getAbsoluteBounds(doc, id)
+      const bounds = getAbsoluteBounds(scene, id)
       if (!intersects(bounds, marquee)) {
         if (node.type === 'frame' && !node.clipContent) visit(node.children)
         continue
@@ -137,7 +137,7 @@ export function nodesInMarquee(doc: DesignDocument, marquee: Bounds): NodeId[] {
       else result.push(id)
     }
   }
-  visit(doc.rootIds)
+  visit(scene.rootIds)
   return result
 }
 

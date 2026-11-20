@@ -47,7 +47,7 @@ function check(name, condition, detail = '') {
           open.onsuccess = () => {
             const request = open.result.transaction('document').objectStore('document').get('current')
             request.onerror = () => reject(request.error)
-            request.onsuccess = () => resolve(request.result.document)
+            request.onsuccess = () => resolve(((doc) => ({ ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }))(request.result.document))
           }
         }),
     )

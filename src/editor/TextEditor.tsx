@@ -2,10 +2,10 @@ import { useEffect, useRef, useSyncExternalStore } from 'react'
 import type { Camera } from '../canvas/camera.ts'
 import { worldToScreen } from '../canvas/viewport.ts'
 import { getAbsolutePosition } from '../document/geometry.ts'
-import type { DesignDocument, NodeId } from '../document/types.ts'
+import type { NodeId, Scene } from '../document/types.ts'
 
 type Props = {
-  document: DesignDocument
+  scene: Scene
   camera: Camera
   id: NodeId
   /** 既存のテキストを開いたときは全選択して、そのまま打ち替えられるようにする */
@@ -15,7 +15,7 @@ type Props = {
 }
 
 /** キャンバス上のテキストに重ねる入力欄。描画側と同じフォント・行送りにして見た目を揃える */
-export function TextEditor({ document: doc, camera, id, selectAll, onInput, onDone }: Props) {
+export function TextEditor({ scene, camera, id, selectAll, onInput, onDone }: Props) {
   const viewport = useSyncExternalStore(camera.subscribe, camera.getViewport)
   const ref = useRef<HTMLTextAreaElement>(null)
 
@@ -32,10 +32,10 @@ export function TextEditor({ document: doc, camera, id, selectAll, onInput, onDo
     textarea.style.height = `${textarea.scrollHeight}px`
   })
 
-  const node = doc.nodes[id]
+  const node = scene.nodes[id]
   if (node?.type !== 'text') return null
 
-  const position = worldToScreen(viewport, getAbsolutePosition(doc, id))
+  const position = worldToScreen(viewport, getAbsolutePosition(scene, id))
   const fontSize = node.fontSize * viewport.zoom
   // 幅が自動のときは、次の 1 文字が入る余白を足しておく。
   // 中央・右寄せでは、余白のぶん入力欄を左へずらして文字の位置を描画と合わせる

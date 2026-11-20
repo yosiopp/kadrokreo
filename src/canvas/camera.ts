@@ -38,6 +38,12 @@ export function createCamera() {
       }
     },
 
+    /** 保存しておいた表示位置に戻す */
+    setViewport(next: Viewport) {
+      pendingFit = null
+      set(next)
+    },
+
     panBy(dx: number, dy: number) {
       set(panBy(viewport, dx, dy))
     },

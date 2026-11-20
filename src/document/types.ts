@@ -1,5 +1,6 @@
 export type NodeId = string
 export type AssetId = string
+export type PageId = string
 
 type BaseNode = {
   id: NodeId
@@ -78,10 +79,20 @@ export type SceneNode = RectNode | EllipseNode | LineNode | TextNode | FrameNode
 /** 埋め込みファイル。kdr は 1 つの JSON なので、中身は base64 で持つ */
 export type Asset = { mime: string; data: string }
 
-export type DesignDocument = {
-  name: string
+/** 1 ページ分のノードの木 */
+export type Scene = {
   nodes: Record<NodeId, SceneNode>
   /** ページ直下のノード。先頭が最背面 */
   rootIds: NodeId[]
+}
+
+/** ページごとに独立したキャンバスを持つ。ノードの id はページの中で一意であればよい */
+export type Page = Scene & { id: PageId; name: string }
+
+export type DesignDocument = {
+  name: string
+  /** 必ず 1 ページ以上ある */
+  pages: Page[]
+  /** 全ページで共有する */
   assets: Record<AssetId, Asset>
 }

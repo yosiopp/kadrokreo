@@ -107,3 +107,20 @@ export function TextAlignIcon({ align }: { align: keyof typeof TEXT_ALIGN_SHAPES
     </Icon>
   )
 }
+
+export function DuplicateIcon() {
+  return (
+    <Icon>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1" />
+      <path d="M3.5 10.5h-1v-8h8v1" />
+    </Icon>
+  )
+}
+
+export function TrashIcon() {
+  return (
+    <Icon>
+      <path d="M2.5 4.5h11M6 4.5v-2h4v2M4 4.5l.7 9h6.6l.7-9M6.5 7v4M9.5 7v4" />
+    </Icon>
+  )
+}

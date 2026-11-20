@@ -6,13 +6,20 @@ import {
   addAsset,
   alignNodes,
   copyFragment,
+  addPage,
   createDocument,
+  createPage,
+  duplicatePage,
   distributeNodes,
   insertNode,
   moveNode,
+  movePage,
   pasteFragment,
+  pasteIntoPage,
   placeNodes,
   pruneAssets,
+  removePage,
+  renamePage,
   removeNodes,
   reorderNodes,
   reparentNodes,
@@ -20,6 +27,7 @@ import {
   topLevelIds,
   translateNodes,
   updateNode,
+  updatePage,
 } from './operations.ts'
 
 const bounds = { x: 0, y: 0, width: 100, height: 100 }
@@ -29,7 +37,7 @@ function fixture() {
   const inner = createFrame({ x: 20, y: 10, width: 200, height: 100 })
   const rect = createRect({ x: 5, y: 5, width: 10, height: 10 })
   const loose = createRect({ ...bounds, x: 900 })
-  let doc = createDocument()
+  let doc = createPage()
   doc = insertNode(doc, frame)
   doc = insertNode(doc, inner, frame.id)
   doc = insertNode(doc, rect, inner.id)
@@ -166,7 +174,7 @@ describe('resizeNodes', () => {
   it('選択範囲に合わせて位置と大きさを拡大縮小する', () => {
     const a = createRect({ x: 0, y: 0, width: 100, height: 100 })
     const b = createRect({ x: 100, y: 100, width: 100, height: 100 })
-    let doc = createDocument()
+    let doc = createPage()
     doc = insertNode(doc, a)
     doc = insertNode(doc, b)
 
@@ -186,7 +194,7 @@ describe('resizeNodes', () => {
 
   it('直線は高さ 0 のまま伸び縮みできる', () => {
     const line = createLine({ x: 0, y: 50, width: 100, height: 0 })
-    const doc = insertNode(createDocument(), line)
+    const doc = insertNode(createPage(), line)
     const from = { x: 0, y: 50, width: 100, height: 0 }
     const next = resizeNodes(doc, [line.id], from, { x: 0, y: 50, width: 250, height: 1 })
     expect(next.nodes[line.id]).toMatchObject({ x: 0, y: 50, width: 250, height: 0 })
@@ -194,7 +202,7 @@ describe('resizeNodes', () => {
 
   it('テキストは幅を変えると折り返しになり、高さは変えない', () => {
     const text = createText({ x: 100, y: 100, width: 40, height: 20 }, 'abc')
-    const doc = insertNode(createDocument(), text)
+    const doc = insertNode(createPage(), text)
     const from = { x: 0, y: 0, width: 200, height: 200 }
 
     const wider = resizeNodes(doc, [text.id], from, { x: 0, y: 0, width: 400, height: 400 })
@@ -220,7 +228,7 @@ describe('reparentNodes', () => {
 describe('placeNodes', () => {
   function flat() {
     const nodes = ['a', 'b', 'c', 'd'].map((name) => ({ ...createRect(bounds), name }))
-    const doc = nodes.reduce((next, node) => insertNode(next, node), createDocument())
+    const doc = nodes.reduce((next, node) => insertNode(next, node), createPage())
     const names = (d: typeof doc) => d.rootIds.map((id) => d.nodes[id].name).join('')
     return { doc, ids: nodes.map((node) => node.id), names }
   }
@@ -262,7 +270,7 @@ describe('placeNodes', () => {
 describe('copyFragment / pasteFragment', () => {
   it('子孫ごと新しい id で複製し、元の親の中へずらして置く', () => {
     const { doc, frame, inner, rect } = fixture()
-    const { document: next, ids } = pasteFragment(doc, copyFragment(doc, [inner.id, rect.id]), 10)
+    const { scene: next, ids } = pasteFragment(doc, copyFragment(doc, {}, [inner.id, rect.id]), 10)
 
     expect(ids).toHaveLength(1)
     const copy = next.nodes[ids[0]] as FrameNode
@@ -278,8 +286,8 @@ describe('copyFragment / pasteFragment', () => {
 
   it('元の親が消えていたらページ直下へ、見た目の位置を保って置く', () => {
     const { doc, frame, rect } = fixture()
-    const fragment = copyFragment(doc, [rect.id])
-    const { document: next, ids } = pasteFragment(removeNodes(doc, [frame.id]), fragment)
+    const fragment = copyFragment(doc, {}, [rect.id])
+    const { scene: next, ids } = pasteFragment(removeNodes(doc, [frame.id]), fragment)
     expect(next.nodes[ids[0]]).toMatchObject({ parentId: null, x: 125, y: 65 })
     expect(next.rootIds.at(-1)).toBe(ids[0])
   })
@@ -292,7 +300,7 @@ describe('alignNodes', () => {
       createRect({ x: 50, y: 30, width: 40, height: 10 }),
       createRect({ x: 200, y: 80, width: 100, height: 20 }),
     ]
-    const doc = nodes.reduce((next, node) => insertNode(next, node), createDocument())
+    const doc = nodes.reduce((next, node) => insertNode(next, node), createPage())
     const ids = nodes.map((node) => node.id)
     const xs = (d: typeof doc) => ids.map((id) => d.nodes[id].x)
     const ys = (d: typeof doc) => ids.map((id) => d.nodes[id].y)
@@ -328,27 +336,95 @@ describe('alignNodes', () => {
 
 describe('assets', () => {
   const asset = { mime: 'image/png', data: 'AAAA' }
+  const image = createImage(bounds, 'a')
+  const withImage = () => {
+    const doc = createDocument()
+    return addAsset(updatePage(doc, doc.pages[0].id, (page) => insertNode(page, image)), 'a', asset)
+  }
 
-  it('使われていないアセットを除く', () => {
-    const image = createImage(bounds, 'a')
-    const doc = insertNode(addAsset(addAsset(createDocument(), 'a', asset), 'b', asset), image)
+  it('どのページでも使われていないアセットを除く', () => {
+    const doc = addAsset(withImage(), 'b', asset)
     expect(pruneAssets(doc).assets).toEqual({ a: asset })
 
-    const clean = addAsset(insertNode(createDocument(), image), 'a', asset)
+    const clean = withImage()
     expect(pruneAssets(clean)).toBe(clean)
+
+    // 別のページで使われていれば残す
+    const other = insertNode(createPage('other'), createImage(bounds, 'b'))
+    expect(pruneAssets(addPage(doc, other)).assets).toEqual({ a: asset, b: asset })
   })
 
   it('コピーしたノードは、アセットのない別のドキュメントへ貼っても画像が欠けない', () => {
-    const image = createImage(bounds, 'a')
-    const source = insertNode(addAsset(createDocument(), 'a', asset), image)
-    const fragment = copyFragment(source, [image.id])
+    const source = withImage()
+    const fragment = copyFragment(source.pages[0], source.assets, [image.id])
     expect(fragment.assets).toEqual({ a: asset })
 
-    const { document: pasted, ids } = pasteFragment(createDocument(), fragment)
+    const empty = createDocument()
+    const { document: pasted, ids } = pasteIntoPage(empty, empty.pages[0].id, fragment)
     expect(pasted.assets).toEqual({ a: asset })
-    expect(pasted.nodes[ids[0]]).toMatchObject({ type: 'image', assetId: 'a' })
+    expect(pasted.pages[0].nodes[ids[0]]).toMatchObject({ type: 'image', assetId: 'a' })
 
     // 同じドキュメント内なら assets は作り直さない
-    expect(pasteFragment(source, fragment).document.assets).toBe(source.assets)
+    expect(pasteIntoPage(source, source.pages[0].id, fragment).document.assets).toBe(source.assets)
+  })
+})
+
+describe('ページ', () => {
+  function three() {
+    const pages = ['A', 'B', 'C'].map((name) => createPage(name))
+    const doc = { name: 'doc', pages, assets: {} }
+    const names = (d: typeof doc) => d.pages.map((page) => page.name).join('')
+    return { doc, ids: pages.map((page) => page.id), names }
+  }
+
+  it('新しいドキュメントには 1 ページある', () => {
+    expect(createDocument().pages).toHaveLength(1)
+  })
+
+  it('1 ページだけを書き換え、変わらなければ同じドキュメントを返す', () => {
+    const { doc, ids } = three()
+    const rect = createRect(bounds)
+    const next = updatePage(doc, ids[1], (page) => insertNode(page, rect))
+    expect(next.pages[1].rootIds).toEqual([rect.id])
+    expect(next.pages[0]).toBe(doc.pages[0])
+
+    expect(updatePage(doc, ids[1], (page) => page)).toBe(doc)
+    expect(updatePage(doc, 'missing', (page) => insertNode(page, rect))).toBe(doc)
+    expect(renamePage(doc, ids[0], 'A')).toBe(doc)
+    expect(renamePage(doc, ids[0], 'Z').pages[0].name).toBe('Z')
+  })
+
+  it('追加・削除・並べ替え', () => {
+    const { doc, ids, names } = three()
+    expect(names(addPage(doc, createPage('D')))).toBe('ABCD')
+    expect(names(addPage(doc, createPage('D'), 1))).toBe('ADBC')
+    expect(() => addPage(doc, doc.pages[0])).toThrow()
+
+    expect(names(removePage(doc, ids[1]))).toBe('AC')
+    expect(removePage(doc, 'missing')).toBe(doc)
+
+    expect(names(movePage(doc, ids[0], 2))).toBe('BCA')
+    expect(names(movePage(doc, ids[2], 0))).toBe('CAB')
+    expect(movePage(doc, ids[1], 1)).toBe(doc)
+  })
+
+  it('最後の 1 ページは消せない', () => {
+    const doc = createDocument()
+    expect(removePage(doc, doc.pages[0].id)).toBe(doc)
+  })
+
+  it('複製は中身ごと新しい id で作り、元のすぐ後ろに置く', () => {
+    const { doc, ids, names } = three()
+    const { doc: scene, frame } = fixture()
+    const filled = updatePage(doc, ids[0], (page) => ({ ...page, nodes: scene.nodes, rootIds: scene.rootIds }))
+
+    const result = duplicatePage(filled, ids[0])!
+    expect(names(result.document)).toBe('AA のコピーBC')
+    const copy = result.document.pages[1]
+    expect(copy.id).toBe(result.pageId)
+    expect(Object.keys(copy.nodes)).toHaveLength(Object.keys(scene.nodes).length)
+    expect(Object.keys(copy.nodes)).not.toContain(frame.id)
+    expect(copy.nodes[copy.rootIds[0]]).toMatchObject({ type: 'frame', x: 100, y: 50 })
+    expect(duplicatePage(doc, 'missing')).toBeNull()
   })
 })

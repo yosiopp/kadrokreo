@@ -1,5 +1,5 @@
 import { type Bounds, type Size, intersects } from '../document/geometry.ts'
-import type { DesignDocument, NodeId, SceneNode, Shadow } from '../document/types.ts'
+import type { Asset, AssetId, NodeId, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { getImage } from './images.ts'
 import { applyFont, layoutText } from './text.ts'
 import type { Viewport } from './viewport.ts'
@@ -16,7 +16,8 @@ export type RenderOptions = {
 
 /** 1 回の描画で変わらないもの */
 type Pass = {
-  doc: DesignDocument
+  scene: Scene
+  assets: Record<AssetId, Asset>
   options: RenderOptions
   /** 画面に映っている範囲（ページ座標） */
   visible: Bounds
@@ -26,9 +27,11 @@ type Pass = {
   layerDepth: number
 }
 
-export function renderDocument(
+/** 1 ページ分を描く */
+export function renderScene(
   ctx: CanvasRenderingContext2D,
-  doc: DesignDocument,
+  scene: Scene,
+  assets: Record<AssetId, Asset>,
   viewport: Viewport,
   size: Size,
   pixelRatio: number,
@@ -38,7 +41,8 @@ export function renderDocument(
   ctx.clearRect(0, 0, size.width, size.height)
 
   const pass: Pass = {
-    doc,
+    scene,
+    assets,
     options,
     visible: {
       x: viewport.x,
@@ -53,10 +57,10 @@ export function renderDocument(
   ctx.save()
   ctx.scale(viewport.zoom, viewport.zoom)
   ctx.translate(-viewport.x, -viewport.y)
-  for (const id of doc.rootIds) drawNode(ctx, pass, id, 0, 0)
+  for (const id of scene.rootIds) drawNode(ctx, pass, id, 0, 0)
   ctx.restore()
 
-  drawFrameLabels(ctx, doc, viewport, options)
+  drawFrameLabels(ctx, scene, viewport, options)
 }
 
 function drawNode(
@@ -66,7 +70,7 @@ function drawNode(
   originX: number,
   originY: number,
 ): void {
-  const node = pass.doc.nodes[id]
+  const node = pass.scene.nodes[id]
   if (!node.visible || node.opacity === 0) return
 
   const x = originX + node.x
@@ -169,7 +173,7 @@ function drawContent(
       }
       break
     case 'image': {
-      const asset = pass.doc.assets[node.assetId]
+      const asset = pass.assets[node.assetId]
       const bitmap = asset ? getImage(asset) : null
       ctx.save()
       if (node.cornerRadius > 0) {
@@ -275,15 +279,15 @@ function paintedBounds(node: SceneNode, x: number, y: number): Bounds {
 /** ページ直下のフレームの左上に名前を出す。画面座標で描くのでズームしても文字の大きさは変わらない */
 function drawFrameLabels(
   ctx: CanvasRenderingContext2D,
-  doc: DesignDocument,
+  scene: Scene,
   viewport: Viewport,
   options: RenderOptions,
 ): void {
   ctx.font = FRAME_LABEL_FONT
   ctx.fillStyle = options.labelColor
   ctx.textBaseline = 'middle'
-  for (const id of doc.rootIds) {
-    const node = doc.nodes[id]
+  for (const id of scene.rootIds) {
+    const node = scene.nodes[id]
     if (node.type !== 'frame' || !node.visible) continue
     const x = (node.x - viewport.x) * viewport.zoom
     const y = (node.y - viewport.y) * viewport.zoom

@@ -6,7 +6,7 @@ import { IMAGE_MIME_TYPES } from '../document/kdr.ts'
 import type { Asset } from '../document/types.ts'
 import { findFrameAt } from './hitTest.ts'
 import { createId, createImage } from './nodes.ts'
-import { addAsset, insertNode } from './operations.ts'
+import { addAsset, insertNode, updatePage } from './operations.ts'
 import type { EditorStore } from './store.ts'
 
 /** kdr に base64 で埋め込むので、元のファイルの大きさを抑える */
@@ -52,9 +52,9 @@ async function toBase64(blob: Blob): Promise<string> {
 export function placeImage(store: EditorStore, camera: Camera, image: ImportedImage, offset = 0): void {
   const size = camera.getSize()
   const center = screenToWorld(camera.getViewport(), { x: size.width / 2, y: size.height / 2 })
-  const doc = store.getState().document
-  const parentId = findFrameAt(doc, center)
-  const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(doc, parentId)
+  const page = store.getState().page
+  const parentId = findFrameAt(page, center)
+  const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(page, parentId)
 
   const assetId = createId()
   const node = {
@@ -69,6 +69,8 @@ export function placeImage(store: EditorStore, camera: Camera, image: ImportedIm
     ),
     name: image.name,
   }
-  store.apply((base) => insertNode(addAsset(base, assetId, image.asset), node, parentId))
+  store.applyDocument((doc) =>
+    updatePage(addAsset(doc, assetId, image.asset), page.id, (base) => insertNode(base, node, parentId)),
+  )
   store.select([node.id])
 }
