@@ -61,6 +61,26 @@ describe('hitTest', () => {
     expect(hitTest(doc, { x: 104, y: 200 }, 3)).toBeNull()
   })
 
+  it('回したノードは、回した後の形で当たる', () => {
+    // 200 × 20 の横長を 90° 回すと、中心 (100, 100) の縦長になる
+    const bar = { ...createRect({ x: 0, y: 90, width: 200, height: 20 }), rotation: 90 }
+    const doc = insertNode(createPage(), bar)
+    expect(hitTest(doc, { x: 100, y: 10 })).toBe(bar.id)
+    expect(hitTest(doc, { x: 100, y: 190 })).toBe(bar.id)
+    // 回す前に枠があった場所
+    expect(hitTest(doc, { x: 10, y: 100 })).toBeNull()
+  })
+
+  it('回したフレームの中の子も、一緒に回った位置で当たる', () => {
+    const frame = { ...createFrame({ x: 0, y: 0, width: 200, height: 100 }), rotation: 180 }
+    const child = createRect({ x: 0, y: 0, width: 20, height: 20 })
+    const doc = insertNode(insertNode(createPage(), frame), child, frame.id)
+    // 左上にあった子は、180° 回って右下へ行く
+    expect(hitTest(doc, { x: 190, y: 90 })).toBe(child.id)
+    expect(hitTest(doc, { x: 10, y: 10 })).toBe(frame.id)
+    expect(findFrameAt(doc, { x: 190, y: 90 })).toBe(frame.id)
+  })
+
   it('ロック中・非表示のノードは子も含めて当たらない', () => {
     const { doc, frame, ellipse } = fixture()
     expect(hitTest(updateNode(doc, frame.id, { locked: true }), { x: 120, y: 120 })).toBeNull()

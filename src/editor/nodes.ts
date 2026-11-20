@@ -25,6 +25,7 @@ function base(name: string, bounds: Bounds) {
     name,
     parentId: null,
     ...bounds,
+    rotation: 0,
     visible: true,
     locked: false,
     opacity: 1,

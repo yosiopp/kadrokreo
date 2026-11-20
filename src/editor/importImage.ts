@@ -1,7 +1,7 @@
 import type { Camera } from '../canvas/camera.ts'
 import { primeImage } from '../canvas/images.ts'
 import { screenToWorld } from '../canvas/viewport.ts'
-import { getAbsolutePosition } from '../document/geometry.ts'
+import { toLocal } from '../document/geometry.ts'
 import { IMAGE_MIME_TYPES } from '../document/kdr.ts'
 import type { Asset } from '../document/types.ts'
 import { findFrameAt } from './hitTest.ts'
@@ -54,14 +54,15 @@ export function placeImage(store: EditorStore, camera: Camera, image: ImportedIm
   const center = screenToWorld(camera.getViewport(), { x: size.width / 2, y: size.height / 2 })
   const page = store.getState().page
   const parentId = findFrameAt(page, center)
-  const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(page, parentId)
+  // フレームが回っていても、その中での座標に直して置く
+  const local = toLocal(page, parentId, center)
 
   const assetId = createId()
   const node = {
     ...createImage(
       {
-        x: Math.round(center.x - image.width / 2 - origin.x) + offset,
-        y: Math.round(center.y - image.height / 2 - origin.y) + offset,
+        x: Math.round(local.x - image.width / 2) + offset,
+        y: Math.round(local.y - image.height / 2) + offset,
         width: image.width,
         height: image.height,
       },

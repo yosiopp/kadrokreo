@@ -29,11 +29,11 @@ const PNG = {
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 }
 
-function kdrJson(document: unknown, version = 4) {
+function kdrJson(document: unknown, version = 5) {
   return { format: 'kadrokreo', version, document }
 }
 
-/** 1 ページだけの version 4 のファイル */
+/** 1 ページだけの最新 version のファイル */
 function kdrOf(scene: unknown, assets: unknown = {}) {
   return kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...(scene as object) }], assets })
 }
@@ -96,7 +96,8 @@ describe('parseKdr', () => {
   it('別形式や未対応バージョンを拒否する', () => {
     const doc = documentOf(valid())
     expect(() => parseKdr({ format: 'other', version: 1, document: doc })).toThrow(KdrError)
-    expect(() => parseKdr(kdrJson(doc, 5))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 6))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)
   })
@@ -155,6 +156,18 @@ describe('parseKdr', () => {
       pages: [{ id: 'page-1', name: 'Page 1', nodes: page.nodes, rootIds: page.rootIds }],
       assets: {},
     })
+  })
+
+  it('version 4 のファイルも読める（回転なし）', () => {
+    const page = valid()
+    const v4Nodes = Object.fromEntries(
+      Object.entries(page.nodes).map(([id, { rotation: _rotation, ...rest }]) => [id, rest]),
+    )
+    const v4 = { name: 'x', pages: [{ ...page, nodes: v4Nodes }], assets: {} }
+
+    expect(parseKdr(kdrJson(v4, 4)).pages[0]).toEqual(page)
+    // version 5 では省略できない
+    expect(() => parseKdr(kdrJson(v4, 5))).toThrow('rotation')
   })
 
   it('直線と影を検証する', () => {

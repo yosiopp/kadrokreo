@@ -1,11 +1,20 @@
-import { type Bounds, type Size, intersects } from '../document/geometry.ts'
+import {
+  type Bounds,
+  IDENTITY,
+  type Matrix,
+  type Size,
+  intersects,
+  multiply,
+  nodeMatrix,
+  transformRect,
+} from '../document/geometry.ts'
 import type { Asset, AssetId, NodeId, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { getImage } from './images.ts'
 import { applyFont, layoutText } from './text.ts'
 import type { Viewport } from './viewport.ts'
 
 export const FRAME_LABEL_FONT = '11px system-ui, sans-serif'
-/** フレーム名ラベルの高さ（画面ピクセル）。フレームの上辺のすぐ上に置く */
+/** フレーム名ラベルの高さ（画面ピクセル）。フレームを囲む矩形の上辺のすぐ上に置く */
 export const FRAME_LABEL_HEIGHT = 18
 
 export type RenderOptions = {
@@ -57,34 +66,30 @@ export function renderScene(
   ctx.save()
   ctx.scale(viewport.zoom, viewport.zoom)
   ctx.translate(-viewport.x, -viewport.y)
-  for (const id of scene.rootIds) drawNode(ctx, pass, id, 0, 0)
+  for (const id of scene.rootIds) drawNode(ctx, pass, id, IDENTITY)
   ctx.restore()
 
   drawFrameLabels(ctx, scene, viewport, options)
 }
 
-function drawNode(
-  ctx: CanvasRenderingContext2D,
-  pass: Pass,
-  id: NodeId,
-  originX: number,
-  originY: number,
-): void {
+/** parent は、親の座標系からページ座標系への変換。ctx はすでに親の座標系になっている */
+function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent: Matrix): void {
   const node = pass.scene.nodes[id]
   if (!node.visible || node.opacity === 0) return
 
-  const x = originX + node.x
-  const y = originY + node.y
+  const local = nodeMatrix(node)
+  const world = multiply(parent, local)
   // はみ出した子を描くフレーム以外は、画面外なら丸ごと省ける
   const selfContained = node.type !== 'frame' || node.clipContent
-  if (selfContained && !intersects(paintedBounds(node, x, y), pass.visible)) return
+  if (selfContained && !intersects(transformRect(world, paintedRect(node)), pass.visible)) return
 
   // 半透明のフレームは、中身を別のキャンバスに描いてから 1 枚の絵として重ねる。
   // 子を 1 つずつ半透明で描くと、子どうしの重なりが透けてしまう
   if (node.type === 'frame' && node.opacity < 1 && node.children.length > 0) {
     const layer = acquireLayer(ctx, pass.layerDepth)
     pass.layerDepth++
-    drawContent(layer, pass, node, x, y)
+    layer.transform(...local)
+    drawContent(layer, pass, node, world)
     pass.layerDepth--
 
     ctx.save()
@@ -97,7 +102,8 @@ function drawNode(
 
   ctx.save()
   ctx.globalAlpha *= node.opacity
-  drawContent(ctx, pass, node, x, y)
+  ctx.transform(...local)
+  drawContent(ctx, pass, node, world)
   ctx.restore()
 }
 
@@ -117,39 +123,34 @@ function acquireLayer(target: CanvasRenderingContext2D, depth: number): CanvasRe
   return layer
 }
 
-/** 不透明度を除いたノードの中身を、ページ座標 (x, y) に描く */
+/**
+ * 不透明度を除いたノードの中身を描く。ctx はノードの座標系（枠の左上が原点）になっている。
+ * world は、その座標系からページ座標系への変換。
+ */
 function drawContent(
   ctx: CanvasRenderingContext2D,
   pass: Pass,
   node: SceneNode,
-  x: number,
-  y: number,
+  world: Matrix,
 ): void {
+  const { width, height } = node
   switch (node.type) {
     case 'rect':
       ctx.beginPath()
-      ctx.roundRect(x, y, node.width, node.height, clampRadius(node.cornerRadius, node))
+      ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
       paint(ctx, pass, node)
       break
     case 'ellipse':
       ctx.beginPath()
-      ctx.ellipse(
-        x + node.width / 2,
-        y + node.height / 2,
-        node.width / 2,
-        node.height / 2,
-        0,
-        0,
-        Math.PI * 2,
-      )
+      ctx.ellipse(width / 2, height / 2, width / 2, height / 2, 0, 0, Math.PI * 2)
       paint(ctx, pass, node)
       break
     case 'line':
       if (node.strokeWidth > 0) {
         const down = node.direction === 'down'
         ctx.beginPath()
-        ctx.moveTo(x, down ? y : y + node.height)
-        ctx.lineTo(x + node.width, down ? y + node.height : y)
+        ctx.moveTo(0, down ? 0 : height)
+        ctx.lineTo(width, down ? height : 0)
         ctx.strokeStyle = node.stroke
         ctx.lineWidth = node.strokeWidth
         ctx.stroke()
@@ -167,8 +168,7 @@ function drawContent(
         const baseline = (lineHeight - contentHeight) / 2 + metrics.fontBoundingBoxAscent
         const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
         layoutText(ctx, node).forEach((line, i) => {
-          const indent = (node.width - line.width) * align
-          ctx.fillText(line.text, x + indent, y + lineHeight * i + baseline)
+          ctx.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline)
         })
       }
       break
@@ -178,16 +178,16 @@ function drawContent(
       ctx.save()
       if (node.cornerRadius > 0) {
         ctx.beginPath()
-        ctx.roundRect(x, y, node.width, node.height, clampRadius(node.cornerRadius, node))
+        ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
         ctx.clip()
       }
       if (bitmap) {
         ctx.imageSmoothingQuality = 'high'
-        ctx.drawImage(bitmap, x, y, node.width, node.height)
+        ctx.drawImage(bitmap, 0, 0, width, height)
       } else {
         // デコードが済むまでの仮の表示
         ctx.fillStyle = '#d9d9d9'
-        ctx.fillRect(x, y, node.width, node.height)
+        ctx.fillRect(0, 0, width, height)
       }
       ctx.restore()
       break
@@ -195,13 +195,13 @@ function drawContent(
     case 'frame': {
       const outline = () => {
         ctx.beginPath()
-        ctx.roundRect(x, y, node.width, node.height, clampRadius(node.cornerRadius, node))
+        ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
       }
       outline()
       if (node.fill) fillWithShadow(ctx, pass, node.fill, node.shadow)
       ctx.save()
       if (node.clipContent) ctx.clip()
-      for (const childId of node.children) drawNode(ctx, pass, childId, x, y)
+      for (const childId of node.children) drawNode(ctx, pass, childId, world)
       ctx.restore()
       // 枠線は子より手前に描く
       if (node.stroke && node.strokeWidth > 0) {
@@ -245,6 +245,7 @@ function fillWithShadow(
   ctx.restore()
 }
 
+/** 影のずれは回転に従わない（図形を回しても、影は同じ向きに落ちる） */
 function applyShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow | null): void {
   if (!shadow) return
   const alpha = Math.round(shadow.opacity * 255)
@@ -258,25 +259,25 @@ function clampRadius(radius: number, size: Size): number {
   return Math.max(0, Math.min(radius, size.width / 2, size.height / 2))
 }
 
-/** 線の太さや影も含めて、ノードが描かれうる範囲 */
-function paintedBounds(node: SceneNode, x: number, y: number): Bounds {
+/** 線の太さや影も含めて、ノードが描かれうる範囲（ノードの座標系） */
+function paintedRect(node: SceneNode): Bounds {
   const stroke = 'stroke' in node && node.stroke ? node.strokeWidth / 2 : 0
   const shadow = 'shadow' in node ? node.shadow : null
-  // ぼかしは指定した長さより少し外まで広がる
-  const spread = shadow ? shadow.blur * 2 : 0
-  const left = stroke + Math.max(0, spread - (shadow?.x ?? 0))
-  const right = stroke + Math.max(0, spread + (shadow?.x ?? 0))
-  const top = stroke + Math.max(0, spread - (shadow?.y ?? 0))
-  const bottom = stroke + Math.max(0, spread + (shadow?.y ?? 0))
+  // ぼかしは指定した長さより少し外まで広がる。影のずれは回転に従わないので、どの向きにも余裕を取る
+  const spread = shadow ? shadow.blur * 2 + Math.max(Math.abs(shadow.x), Math.abs(shadow.y)) : 0
+  const outset = stroke + spread
   return {
-    x: x - left,
-    y: y - top,
-    width: node.width + left + right,
-    height: node.height + top + bottom,
+    x: -outset,
+    y: -outset,
+    width: node.width + outset * 2,
+    height: node.height + outset * 2,
   }
 }
 
-/** ページ直下のフレームの左上に名前を出す。画面座標で描くのでズームしても文字の大きさは変わらない */
+/**
+ * ページ直下のフレームの左上に名前を出す。画面座標で描くのでズームしても文字の大きさは変わらない。
+ * 回転したフレームでは、フレームを囲む矩形の左上に置く。
+ */
 function drawFrameLabels(
   ctx: CanvasRenderingContext2D,
   scene: Scene,
@@ -289,8 +290,9 @@ function drawFrameLabels(
   for (const id of scene.rootIds) {
     const node = scene.nodes[id]
     if (node.type !== 'frame' || !node.visible) continue
-    const x = (node.x - viewport.x) * viewport.zoom
-    const y = (node.y - viewport.y) * viewport.zoom
+    const bounds = transformRect(nodeMatrix(node), { x: 0, y: 0, width: node.width, height: node.height })
+    const x = (bounds.x - viewport.x) * viewport.zoom
+    const y = (bounds.y - viewport.y) * viewport.zoom
     ctx.fillText(node.name, x, y - FRAME_LABEL_HEIGHT / 2)
   }
 }

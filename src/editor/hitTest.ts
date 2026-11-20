@@ -1,6 +1,12 @@
 import { FRAME_LABEL_HEIGHT } from '../canvas/render.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
-import { type Bounds, type Point, getAbsoluteBounds, intersects } from '../document/geometry.ts'
+import {
+  type Bounds,
+  type Point,
+  getAbsoluteBounds,
+  intersects,
+  toNodeSpace,
+} from '../document/geometry.ts'
 import { MAX_DEPTH } from '../document/kdr.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 
@@ -22,7 +28,7 @@ function hitSiblings(
     const node = scene.nodes[ids[i]]
     if (!node.visible || node.locked) continue
 
-    const local = { x: point.x - node.x, y: point.y - node.y }
+    const local = toNodeSpace(node, point)
     const inside =
       local.x >= -tolerance &&
       local.x <= node.width + tolerance &&
@@ -76,7 +82,8 @@ export function hitTestFrameLabel(
   for (let i = scene.rootIds.length - 1; i >= 0; i--) {
     const node = scene.nodes[scene.rootIds[i]]
     if (node.type !== 'frame' || !node.visible || node.locked) continue
-    const origin = worldToScreen(viewport, node)
+    // ラベルは、フレームを囲む矩形の左上に出している
+    const origin = worldToScreen(viewport, getAbsoluteBounds(scene, node.id))
     if (
       screen.y >= origin.y - FRAME_LABEL_HEIGHT &&
       screen.y <= origin.y &&
@@ -102,7 +109,7 @@ export function findFrameAt(
     for (let i = ids.length - 1; i >= 0; i--) {
       const node = scene.nodes[ids[i]]
       if (node.type !== 'frame' || !node.visible || node.locked || exclude.has(node.id)) continue
-      const local = { x: p.x - node.x, y: p.y - node.y }
+      const local = toNodeSpace(node, p)
       const inside =
         local.x >= 0 && local.x <= node.width && local.y >= 0 && local.y <= node.height
       // これより深い階層には入れられないフレームは候補にしない

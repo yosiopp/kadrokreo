@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import type { Camera } from '../canvas/camera.ts'
 import { worldToScreen } from '../canvas/viewport.ts'
-import { getAbsolutePosition } from '../document/geometry.ts'
+import { getWorldCenter, getWorldRotation } from '../document/geometry.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 
 type Props = {
@@ -35,7 +35,10 @@ export function TextEditor({ scene, camera, id, selectAll, onInput, onDone }: Pr
   const node = scene.nodes[id]
   if (node?.type !== 'text') return null
 
-  const position = worldToScreen(viewport, getAbsolutePosition(scene, id))
+  const center = worldToScreen(viewport, getWorldCenter(scene, id))
+  const rotation = getWorldRotation(scene, id)
+  const width = node.width * viewport.zoom
+  const height = node.height * viewport.zoom
   const fontSize = node.fontSize * viewport.zoom
   // 幅が自動のときは、次の 1 文字が入る余白を足しておく。
   // 中央・右寄せでは、余白のぶん入力欄を左へずらして文字の位置を描画と合わせる
@@ -48,9 +51,12 @@ export function TextEditor({ scene, camera, id, selectAll, onInput, onDone }: Pr
       value={node.text}
       spellCheck={false}
       style={{
-        left: position.x - slack * align,
-        top: position.y,
-        width: node.width * viewport.zoom + slack,
+        left: center.x - width / 2 - slack * align,
+        top: center.y - height / 2,
+        width: width + slack,
+        // 回転したテキストは、描画と同じく枠の中心を軸に回す
+        transform: rotation === 0 ? undefined : `rotate(${rotation}deg)`,
+        transformOrigin: `${slack * align + width / 2}px ${height / 2}px`,
         whiteSpace: node.autoWidth ? 'pre' : 'pre-wrap',
         fontSize,
         lineHeight: node.lineHeight,

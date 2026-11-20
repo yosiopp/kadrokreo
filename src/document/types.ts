@@ -7,11 +7,13 @@ type BaseNode = {
   name: string
   /** null はページ直下 */
   parentId: NodeId | null
-  /** 親の左上を原点とする座標 */
+  /** 親の左上を原点とする座標。回転していても、回す前の枠の左上を指す */
   x: number
   y: number
   width: number
   height: number
+  /** 枠の中心を軸にした時計回りの角度（度）。子も一緒に回る */
+  rotation: number
   visible: boolean
   locked: boolean
   opacity: number

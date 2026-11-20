@@ -5,12 +5,20 @@ import { isTextInput } from '../canvas/dom.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import {
   type Bounds,
+  type Matrix,
   type Point,
+  type Size,
+  applyMatrix,
   boundsFromPoints,
   getAbsoluteBounds,
-  getAbsolutePosition,
   getContentBounds,
+  getCorners,
   getNodesBounds,
+  getWorldMatrix,
+  getWorldRotation,
+  normalizeAngle,
+  rotateVector,
+  toLocal,
 } from '../document/geometry.ts'
 import type { LineNode, NodeId, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { TextEditor } from './TextEditor.tsx'
@@ -26,7 +34,9 @@ import {
   removeNodes,
   reorderNodes,
   reparentNodes,
+  reshapeNode,
   resizeNodes,
+  rotateNodes,
   translateNodes,
   updateNode,
 } from './operations.ts'
@@ -51,6 +61,10 @@ type Gesture =
   | { kind: 'press'; screen: Point; world: Point; collapseTo: NodeId | null }
   | { kind: 'move'; world: Point; ids: NodeId[]; from: Bounds; guides: Guide[] }
   | { kind: 'resize'; world: Point; handle: Handle; from: Bounds; ids: NodeId[]; guides: Guide[] }
+  // 回転したノード 1 つを、その向きに沿ってリサイズする。size はつかんだ時点の大きさ
+  | { kind: 'reshape'; world: Point; handle: Handle; id: NodeId; rotation: number; size: Size }
+  // pivot（ページ座標）を軸に回す。delta はつかんでから回した角度
+  | { kind: 'rotate'; ids: NodeId[]; pivot: Point; startAngle: number; baseRotation: number; delta: number }
   | { kind: 'marquee'; world: Point; current: Point; base: NodeId[] }
   | {
       kind: 'create'
@@ -72,6 +86,25 @@ const GUIDE = '#f24822'
 const SNAP_DISTANCE = 6
 const DRAG_THRESHOLD = 4
 const HANDLE_SIZE = 8
+/** 回転ハンドルを枠の上辺からどれだけ離すか（画面ピクセル） */
+const ROTATE_HANDLE_OFFSET = 22
+
+/**
+ * 選択範囲を囲む枠。1 つだけ選んでいてそれが回っていれば、その向きに合わせる。
+ * それ以外は軸に平行に囲む。
+ */
+type SelectionBox = {
+  ids: NodeId[]
+  /** 枠の座標系（左上が原点）からページ座標系への変換 */
+  matrix: Matrix
+  size: Size
+  /** ページ上での枠の向き（度） */
+  rotation: number
+  /** ページ上で囲む、軸に平行な矩形 */
+  bounds: Bounds
+  /** 枠がノードの向きに合っているとき、そのノード */
+  oriented: NodeId | null
+}
 const NAMES = {
   frame: 'Frame',
   rect: 'Rectangle',
@@ -107,10 +140,25 @@ function distance(a: Point, b: Point): number {
 
 /** 直線の両端（ページ座標） */
 function lineEnds(page: Scene, line: LineNode): [Point, Point] {
-  const { x, y, width, height } = getAbsoluteBounds(page, line.id)
-  return line.direction === 'down'
-    ? [{ x, y }, { x: x + width, y: y + height }]
-    : [{ x, y: y + height }, { x: x + width, y }]
+  const { width, height } = line
+  const matrix = getWorldMatrix(page, line.id)
+  const [from, to] =
+    line.direction === 'down'
+      ? [{ x: 0, y: 0 }, { x: width, y: height }]
+      : [{ x: 0, y: height }, { x: width, y: 0 }]
+  return [applyMatrix(matrix, from), applyMatrix(matrix, to)]
+}
+
+/** ハンドルを引いた後の枠の大きさを整数にする。つかんでいない側の辺は動かさない */
+function roundBox(box: Bounds, handle: Handle): Bounds {
+  const width = Math.max(1, Math.round(box.width))
+  const height = Math.max(1, Math.round(box.height))
+  return {
+    x: handle.includes('w') ? box.x + box.width - width : box.x,
+    y: handle.includes('n') ? box.y + box.height - height : box.y,
+    width,
+    height,
+  }
 }
 
 /** from から to へ引く直線の枠と向き */
@@ -125,6 +173,11 @@ function constrainAngle(from: Point, to: Point): Point {
   const angle = Math.round(Math.atan2(to.y - from.y, to.x - from.x) / step) * step
   const length = distance(from, to)
   return roundPoint({ x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length })
+}
+
+/** from から見た to の向き（度）。右が 0 で時計回り */
+function angleFrom(from: Point, to: Point): number {
+  return (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI
 }
 
 function nextName(page: Scene, type: SceneNode['type']): string {
@@ -173,12 +226,45 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     return null
   }
 
-  /** リサイズハンドルを出す対象 */
-  function resizeTarget(): { ids: NodeId[]; bounds: Bounds } | null {
+  /** リサイズと回転のハンドルを出す枠 */
+  function selectionBox(): SelectionBox | null {
     if (tool !== 'select' || editingRef.current || selectedLine()) return null
+    const page = store.getState().page
     const ids = movableIds()
-    const bounds = getNodesBounds(store.getState().page, ids)
-    return bounds && { ids, bounds }
+    const bounds = getNodesBounds(page, ids)
+    if (!bounds) return null
+
+    const rotation = ids.length === 1 ? normalizeAngle(getWorldRotation(page, ids[0])) : 0
+    if (rotation !== 0) {
+      const { width, height } = page.nodes[ids[0]]
+      const matrix = getWorldMatrix(page, ids[0])
+      return { ids, matrix, size: { width, height }, rotation, bounds, oriented: ids[0] }
+    }
+    return {
+      ids,
+      matrix: [1, 0, 0, 1, bounds.x, bounds.y],
+      size: { width: bounds.width, height: bounds.height },
+      rotation: 0,
+      bounds,
+      oriented: null,
+    }
+  }
+
+  /** 枠の座標系の点を画面座標に直す */
+  function boxToScreen(box: SelectionBox, point: Point): Point {
+    return worldToScreen(camera.getViewport(), applyMatrix(box.matrix, point))
+  }
+
+  /** 画面に映っている枠の大きさ。どのハンドルを出すかを決めるのに使う */
+  function screenSize(box: SelectionBox): Bounds {
+    const zoom = camera.getViewport().zoom
+    return { x: 0, y: 0, width: box.size.width * zoom, height: box.size.height * zoom }
+  }
+
+  /** 回転ハンドルの位置（画面座標）。枠の上辺の中央から少し離す */
+  function rotateHandlePoint(box: SelectionBox): Point {
+    const offset = ROTATE_HANDLE_OFFSET / camera.getViewport().zoom
+    return boxToScreen(box, { x: box.size.width / 2, y: -offset })
   }
 
   /**
@@ -197,18 +283,22 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   }
 
   function handleAt(screen: Point): Handle | null {
-    const target = resizeTarget()
-    if (!target) return null
-    const bounds = toScreenBounds(camera.getViewport(), target.bounds)
+    const box = selectionBox()
+    if (!box) return null
     // 角を先に調べる
-    const handles = visibleHandles(bounds).toSorted((a, b) => b.length - a.length)
+    const handles = visibleHandles(screenSize(box)).toSorted((a, b) => b.length - a.length)
     for (const handle of handles) {
-      const p = handlePoint(bounds, handle)
+      const p = boxToScreen(box, handlePoint({ x: 0, y: 0, ...box.size }, handle))
       if (Math.abs(p.x - screen.x) <= HANDLE_SIZE && Math.abs(p.y - screen.y) <= HANDLE_SIZE) {
         return handle
       }
     }
     return null
+  }
+
+  function rotateHandleAt(screen: Point): boolean {
+    const box = selectionBox()
+    return box !== null && distance(rotateHandlePoint(box), screen) <= HANDLE_SIZE
   }
 
   function pick(pointer: CanvasPointer): NodeId | null {
@@ -220,26 +310,20 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     )
   }
 
-  /** shape はページ座標の枠。直線なら向きも含む */
+  /** shape は親の座標系での枠。直線なら向きも含む */
   function previewCreate(
     gesture: Extract<Gesture, { kind: 'create' }>,
     shape: Bounds & Partial<Pick<LineNode, 'direction'>>,
   ) {
     // 直線は水平・垂直に引けるよう、幅や高さが 0 でもよい
     const minSize = gesture.node.type === 'line' ? 0 : 1
-    store.preview((base) => {
-      const origin =
-        gesture.parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(base, gesture.parentId)
-      const node = {
-        ...gesture.node,
-        ...shape,
-        x: shape.x - origin.x,
-        y: shape.y - origin.y,
-        width: Math.max(minSize, shape.width),
-        height: Math.max(minSize, shape.height),
-      }
-      return insertNode(base, node, gesture.parentId)
-    })
+    const node = {
+      ...gesture.node,
+      ...shape,
+      width: Math.max(minSize, shape.width),
+      height: Math.max(minSize, shape.height),
+    }
+    store.preview((base) => insertNode(base, node, gesture.parentId))
   }
 
   /** width を渡すと、その幅で折り返すテキストになる */
@@ -259,14 +343,14 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     }
     const size = measureTextNode(template)
     const parentId = findFrameAt(page, world)
-    const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(page, parentId)
+    const local = toLocal(page, parentId, world)
     // クリックで作ったときは、その位置が 1 行目の中央に来るように置く
     const lift = width === undefined ? (template.fontSize * template.lineHeight) / 2 : 0
     const node: TextNode = {
       ...template,
       ...size,
-      x: Math.round(world.x - origin.x),
-      y: Math.round(world.y - origin.y - lift),
+      x: Math.round(local.x),
+      y: Math.round(local.y - lift),
     }
     store.preview((base) => insertNode(base, node, parentId))
     store.select([node.id])
@@ -343,15 +427,40 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       return
     }
 
+    const box = selectionBox()
+    if (box && rotateHandleAt(pointer.screen)) {
+      const pivot = applyMatrix(box.matrix, { x: box.size.width / 2, y: box.size.height / 2 })
+      gestureRef.current = {
+        kind: 'rotate',
+        ids: box.ids,
+        pivot,
+        startAngle: angleFrom(pivot, pointer.world),
+        // 1 つだけ選んでいるときは、そのノードの角度をきりのよい値に揃えられるようにする
+        baseRotation: box.ids.length === 1 ? page.nodes[box.ids[0]].rotation : 0,
+        delta: 0,
+      }
+      return
+    }
+
     const handle = handleAt(pointer.screen)
-    const target = handle && resizeTarget()
-    if (handle && target) {
+    if (handle && box?.oriented) {
+      gestureRef.current = {
+        kind: 'reshape',
+        world: pointer.world,
+        handle,
+        id: box.oriented,
+        rotation: box.rotation,
+        size: box.size,
+      }
+      return
+    }
+    if (handle && box) {
       gestureRef.current = {
         kind: 'resize',
         world: pointer.world,
         handle,
-        from: target.bounds,
-        ids: target.ids,
+        from: box.bounds,
+        ids: box.ids,
         guides: [],
       }
       return
@@ -389,23 +498,52 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       if (tool !== 'select' || editingRef.current) return
       const handle = handleAt(pointer.screen)
       const endpoint = endpointAt(pointer.screen)
-      setCursor(handle ? handleCursor(handle) : endpoint ? 'crosshair' : 'default')
-      setHover(handle || endpoint ? null : pick(pointer))
+      const rotating = rotateHandleAt(pointer.screen)
+      const rotation = selectionBox()?.rotation ?? 0
+      setCursor(
+        rotating ? 'grab' : handle ? handleCursor(handle, rotation) : endpoint ? 'crosshair' : 'default',
+      )
+      setHover(rotating || handle || endpoint ? null : pick(pointer))
+      return
+    }
+
+    if (gesture.kind === 'rotate') {
+      const { ids, pivot, baseRotation } = gesture
+      let delta = Math.round(normalizeAngle(angleFrom(pivot, pointer.world) - gesture.startAngle))
+      // Shift で 15° 刻みに揃える
+      if (pointer.shiftKey) delta = Math.round((baseRotation + delta) / 15) * 15 - baseRotation
+      gesture.delta = delta
+      store.preview((base) => rotateNodes(base, ids, pivot, delta))
+      redraw()
+      return
+    }
+
+    if (gesture.kind === 'reshape') {
+      const { id, handle, size } = gesture
+      // ポインタの動きを、ノードの向きに沿った成分に直す
+      const moved = rotateVector(
+        { x: pointer.world.x - gesture.world.x, y: pointer.world.y - gesture.world.y },
+        -gesture.rotation,
+      )
+      // 画像は歪まないよう、Shift を押さない限り縦横比を保つ
+      const keepAspect = pointer.shiftKey !== (store.getState().page.nodes[id]?.type === 'image')
+      const box = roundBox(
+        resizeBounds({ x: 0, y: 0, ...size }, handle, moved.x, moved.y, keepAspect),
+        handle,
+      )
+      store.preview((base) => fitTextNodes(reshapeNode(base, id, box), [id]))
       return
     }
 
     if (gesture.kind === 'endpoint') {
       const { id, fixed } = gesture
-      const end = pointer.shiftKey ? constrainAngle(fixed, pointer.world) : roundPoint(pointer.world)
-      const shape = lineBetween(fixed, end)
       store.preview((base) => {
-        const node = base.nodes[id]
-        const abs = getAbsolutePosition(base, id)
-        return updateNode(base, id, {
-          ...shape,
-          x: node.x + shape.x - abs.x,
-          y: node.y + shape.y - abs.y,
-        })
+        // 親の座標系で引き直す。線自体が回っていた場合、その向きは両端の位置に織り込まれる
+        const parentId = base.nodes[id].parentId
+        const from = toLocal(base, parentId, fixed)
+        const to = toLocal(base, parentId, pointer.world)
+        const end = pointer.shiftKey ? constrainAngle(from, to) : roundPoint(to)
+        return updateNode(base, id, { ...lineBetween(from, end), rotation: 0 })
       })
       return
     }
@@ -454,7 +592,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       const page = store.getState().page
       // 画像は歪まないよう、Shift を押さない限り縦横比を保つ
       const onlyImages = ids.every((id) => page.nodes[id].type === 'image')
-      const keepAspect = pointer.shiftKey !== onlyImages
+      // 斜めに回ったノードは歪ませられないので、含まれていれば常に縦横比を保つ
+      const skewed = ids.some((id) => getWorldRotation(page, id) % 90 !== 0)
+      const keepAspect = skewed || pointer.shiftKey !== onlyImages
       let to = resizeBounds(
         from,
         handle,
@@ -479,25 +619,24 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     } else if (gesture.kind === 'create') {
       if (!gesture.dragged && distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return
       gesture.dragged = true
+      // フレームの中に描くときは、フレームが回っていてもその中の座標で形を決める
+      const page = store.getState().page
+      const from = roundPoint(toLocal(page, gesture.parentId, gesture.world))
+      const to = toLocal(page, gesture.parentId, pointer.world)
       if (gesture.node.type === 'line') {
         // Shift で水平・垂直・45° に揃える
-        const to = pointer.shiftKey
-          ? constrainAngle(gesture.world, pointer.world)
-          : roundPoint(pointer.world)
-        previewCreate(gesture, lineBetween(gesture.world, to))
+        const end = pointer.shiftKey ? constrainAngle(from, to) : roundPoint(to)
+        previewCreate(gesture, lineBetween(from, end))
         return
       }
-      let end = roundPoint(pointer.world)
+      let end = roundPoint(to)
       if (pointer.shiftKey) {
-        const dx = end.x - gesture.world.x
-        const dy = end.y - gesture.world.y
+        const dx = end.x - from.x
+        const dy = end.y - from.y
         const side = Math.max(Math.abs(dx), Math.abs(dy))
-        end = {
-          x: gesture.world.x + (dx < 0 ? -side : side),
-          y: gesture.world.y + (dy < 0 ? -side : side),
-        }
+        end = { x: from.x + (dx < 0 ? -side : side), y: from.y + (dy < 0 ? -side : side) }
       }
-      previewCreate(gesture, boundsFromPoints(gesture.world, end))
+      previewCreate(gesture, boundsFromPoints(from, end))
     }
   }
 
@@ -512,8 +651,11 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         break
       case 'move':
       case 'resize':
+      case 'reshape':
+      case 'rotate':
       case 'endpoint':
         store.commitPreview()
+        redraw()
         break
       case 'marquee':
         redraw()
@@ -521,8 +663,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       case 'create':
         // ドラッグせずクリックしただけなら既定の大きさで置く
         if (!gesture.dragged) {
-          const height = gesture.node.type === 'line' ? 0 : 100
-          previewCreate(gesture, { ...gesture.world, width: 100, height })
+          const at = roundPoint(toLocal(store.getState().page, gesture.parentId, gesture.world))
+          previewCreate(gesture, { ...at, width: 100, height: gesture.node.type === 'line' ? 0 : 100 })
         }
         store.commitPreview()
         store.select([gesture.node.id])
@@ -712,25 +854,33 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     ctx.strokeStyle = ACCENT
     ctx.lineWidth = 1
 
-    const outline = (bounds: Bounds) => {
-      const b = toScreenBounds(viewport, bounds)
-      ctx.strokeRect(
-        Math.round(b.x) + 0.5,
-        Math.round(b.y) + 0.5,
-        Math.round(b.width),
-        Math.round(b.height),
-      )
+    /** ページ座標の点をつないだ線を引く */
+    const polyline = (points: Point[], close: boolean) => {
+      ctx.beginPath()
+      for (const [index, point] of points.entries()) {
+        const p = worldToScreen(viewport, point)
+        // 回っていない枠の線がにじまないよう、ピクセルの中心に合わせる
+        const x = Math.round(p.x) + 0.5
+        const y = Math.round(p.y) + 0.5
+        if (index === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      if (close) ctx.closePath()
+      ctx.stroke()
     }
 
-    // 直線は枠ではなく線そのものをなぞる
+    const drawHandle = (p: Point) => {
+      const x = Math.round(p.x - HANDLE_SIZE / 2) + 0.5
+      const y = Math.round(p.y - HANDLE_SIZE / 2) + 0.5
+      ctx.fillRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
+      ctx.strokeRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
+    }
+
+    // 回っていればその向きのまま枠をなぞる。直線は枠ではなく線そのものをなぞる
     const outlineNode = (id: NodeId) => {
       const node = page.nodes[id]
-      if (node.type !== 'line') return outline(getAbsoluteBounds(page, id))
-      const [from, to] = lineEnds(page, node).map((end) => worldToScreen(viewport, end))
-      ctx.beginPath()
-      ctx.moveTo(from.x, from.y)
-      ctx.lineTo(to.x, to.y)
-      ctx.stroke()
+      if (node.type === 'line') polyline(lineEnds(page, node), false)
+      else polyline(getCorners(page, id), true)
     }
 
     if (hover && !gesture && page.nodes[hover] && !selection.includes(hover)) {
@@ -744,29 +894,39 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (line && page.nodes[line.id]?.type === 'line') {
       ctx.fillStyle = '#ffffff'
       for (const end of lineEnds(page, page.nodes[line.id] as LineNode)) {
-        const p = worldToScreen(viewport, end)
-        const x = Math.round(p.x - HANDLE_SIZE / 2) + 0.5
-        const y = Math.round(p.y - HANDLE_SIZE / 2) + 0.5
-        ctx.fillRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
-        ctx.strokeRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
+        drawHandle(worldToScreen(viewport, end))
       }
     }
 
-    const target = resizeTarget()
-    if (target && gesture?.kind !== 'move') {
-      if (selection.length > 1) outline(target.bounds)
-      const screen = toScreenBounds(viewport, target.bounds)
+    const box = selectionBox()
+    if (box && gesture?.kind !== 'move') {
+      const { width: w, height: h } = box.size
+      const corner = (x: number, y: number) => applyMatrix(box.matrix, { x, y })
+      if (selection.length > 1) polyline([corner(0, 0), corner(w, 0), corner(w, h), corner(0, h)], true)
+
+      // 回転ハンドル。上辺の中央から柄を伸ばした先に置く
+      const knob = rotateHandlePoint(box)
+      const stem = boxToScreen(box, { x: w / 2, y: 0 })
+      ctx.beginPath()
+      ctx.moveTo(stem.x, stem.y)
+      ctx.lineTo(knob.x, knob.y)
+      ctx.stroke()
       ctx.fillStyle = '#ffffff'
-      for (const handle of visibleHandles(screen)) {
-        const p = handlePoint(screen, handle)
-        const x = Math.round(p.x - HANDLE_SIZE / 2) + 0.5
-        const y = Math.round(p.y - HANDLE_SIZE / 2) + 0.5
-        ctx.fillRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
-        ctx.strokeRect(x, y, HANDLE_SIZE, HANDLE_SIZE)
+      ctx.beginPath()
+      ctx.arc(knob.x, knob.y, HANDLE_SIZE / 2, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+
+      for (const handle of visibleHandles(screenSize(box))) {
+        drawHandle(boxToScreen(box, handlePoint({ x: 0, y: 0, width: w, height: h }, handle)))
       }
 
-      // 選択範囲の大きさを下に出す
-      const label = `${Math.round(target.bounds.width)} × ${Math.round(target.bounds.height)}`
+      // 選択範囲の大きさを下に出す。回している最中は角度を出す
+      const label =
+        gesture?.kind === 'rotate'
+          ? `${normalizeAngle(gesture.baseRotation + gesture.delta)}°`
+          : `${Math.round(w)} × ${Math.round(h)}`
+      const screen = toScreenBounds(viewport, box.bounds)
       ctx.font = '11px system-ui, sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'

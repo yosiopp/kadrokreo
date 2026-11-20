@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { normalizeAngle } from '../document/geometry.ts'
 import type { Page, SceneNode, Shadow, TextNode } from '../document/types.ts'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
@@ -182,6 +183,11 @@ export function PropertiesPanel({ store, state }: Props) {
             // テキストの高さは中身で決まる
             disabled={hasText}
             onCommit={(height) => apply({ height })}
+          />
+          <NumberField
+            label="回転"
+            value={common(nodes.map((n) => n.rotation))}
+            onCommit={(rotation) => apply({ rotation: normalizeAngle(rotation) })}
           />
         </div>
       </Section>

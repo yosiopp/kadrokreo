@@ -10,13 +10,14 @@ import type {
 } from './types.ts'
 
 // kdr ファイルの実体は gzip 圧縮した 1 つの JSON:
-//   { format: 'kadrokreo', version: 4, document: DesignDocument }
+//   { format: 'kadrokreo', version: 5, document: DesignDocument }
 // 古い version も読み込める。それぞれで増えたもの:
 //   2: 画像（assets）、テキストの折り返し（autoWidth）
 //   3: 直線、影、フレームと画像の角丸、テキストの太さ・行揃え・行の高さ
 //   4: 複数ページ（それまでは document が直接 nodes と rootIds を持っていた）
+//   5: 回転
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 4
+export const KDR_VERSION = 5
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -80,10 +81,10 @@ export function parseKdr(value: unknown): DesignDocument {
   if (file.version > KDR_VERSION) {
     throw new KdrError('このファイルは新しいバージョンで作られているため開けません')
   }
-  if (file.version !== 1 && file.version !== 2 && file.version !== 3 && file.version !== 4) {
+  if (!Number.isInteger(file.version) || file.version < 1) {
     throw new KdrError(`未対応のバージョンです: ${file.version}`)
   }
-  const version: Version = file.version
+  const version = file.version as Version
 
   const doc = record(file.document, 'document')
   const assets: Record<AssetId, Asset> = {}
@@ -158,7 +159,7 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3 | 4
+type Version = 1 | 2 | 3 | 4 | 5
 
 function parseNode(value: unknown, path: string, version: Version): SceneNode {
   const raw = record(value, path)
@@ -175,6 +176,7 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
     y: number(raw.y, at('y')),
     width: size(raw.width, at('width')),
     height: size(raw.height, at('height')),
+    rotation: added(5, 0, () => number(raw.rotation, at('rotation'))),
     visible: boolean(raw.visible, at('visible')),
     locked: boolean(raw.locked, at('locked')),
     opacity: ratio(raw.opacity, at('opacity')),

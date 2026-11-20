@@ -198,7 +198,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const used = new Set(Object.values(json.document.pages[0].nodes).filter((n) => n.type === 'image').map((n) => n.assetId))
-  check('kdr に画像が埋め込まれる', json.version === 4 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
+  check('kdr に画像が埋め込まれる', json.version === 5 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

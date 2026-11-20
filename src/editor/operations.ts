@@ -1,7 +1,15 @@
 import {
   type Bounds,
+  type Point,
+  applyMatrix,
   getAbsoluteBounds,
-  getAbsolutePosition,
+  getWorldCenter,
+  getWorldMatrix,
+  getWorldRotation,
+  normalizeAngle,
+  poseInParent,
+  rotateVector,
+  tidy,
   unionBounds,
 } from '../document/geometry.ts'
 import { MAX_DEPTH } from '../document/kdr.ts'
@@ -164,7 +172,7 @@ export function removeNodes<T extends Scene>(scene: T, ids: readonly NodeId[]): 
 }
 
 /**
- * 親の付け替え・重なり順の変更。キャンバス上の見た目の位置は保つ。
+ * 親の付け替え・重なり順の変更。キャンバス上の見た目の位置と向きは保つ。
  * index は自分を取り除いた後の兄弟の中での位置（0 が最背面）。省略すると最前面。
  */
 export function moveNode<T extends Scene>(
@@ -182,9 +190,15 @@ export function moveNode<T extends Scene>(
   }
 
   const detached = updateSiblings(scene, node.parentId, (ids) => ids.filter((other) => other !== id))
-  const from = getAbsolutePosition(scene, id)
-  const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(scene, parentId)
-  const moved = { ...node, parentId, x: from.x - origin.x, y: from.y - origin.y }
+  // 親が回っていても、ページ上での位置と向きが変わらないように置き直す
+  const pose = poseInParent(
+    scene,
+    parentId,
+    getWorldCenter(scene, id),
+    getWorldRotation(scene, id),
+    node,
+  )
+  const moved = { ...node, parentId, x: pose.x, y: pose.y, rotation: pose.rotation }
   const next = updateSiblings(
     { ...detached, nodes: { ...detached.nodes, [id]: moved } },
     parentId,
@@ -214,6 +228,7 @@ export function sortByDocumentOrder(scene: Scene, ids: readonly NodeId[]): NodeI
   return collectSubtrees(scene, scene.rootIds).filter((id) => wanted.has(id))
 }
 
+/** dx, dy はページ上での移動量 */
 export function translateNodes<T extends Scene>(
   scene: T,
   ids: readonly NodeId[],
@@ -221,15 +236,66 @@ export function translateNodes<T extends Scene>(
   dy: number,
 ): T {
   if (dx === 0 && dy === 0) return scene
+  return topLevelIds(scene, ids).reduce(
+    (next, id) => updateNode(next, id, shifted(scene, id, dx, dy)),
+    scene,
+  )
+}
+
+/** ページ上で (dx, dy) だけ動かしたときの x, y。親が回っていれば、親の向きに合わせて移動量を直す */
+function shifted(scene: Scene, id: NodeId, dx: number, dy: number): Point {
+  const node = scene.nodes[id]
+  const delta = rotateVector({ x: dx, y: dy }, -getWorldRotation(scene, node.parentId))
+  return { x: tidy(node.x + delta.x), y: tidy(node.y + delta.y) }
+}
+
+/** ページ上の点 pivot を軸に、まとめて delta 度（時計回り）回す */
+export function rotateNodes<T extends Scene>(
+  scene: T,
+  ids: readonly NodeId[],
+  pivot: Point,
+  delta: number,
+): T {
+  if (delta === 0) return scene
   return topLevelIds(scene, ids).reduce((next, id) => {
     const node = scene.nodes[id]
-    return updateNode(next, id, { x: node.x + dx, y: node.y + dy })
+    const center = getWorldCenter(scene, id)
+    const arm = rotateVector({ x: center.x - pivot.x, y: center.y - pivot.y }, delta)
+    const pose = poseInParent(
+      scene,
+      node.parentId,
+      { x: pivot.x + arm.x, y: pivot.y + arm.y },
+      getWorldRotation(scene, id) + delta,
+      node,
+    )
+    return updateNode(next, id, { x: pose.x, y: pose.y, rotation: pose.rotation })
   }, scene)
+}
+
+/**
+ * ノードの枠を、いまのノードの座標系で表した box に変える。向きは変えない。
+ * 回転したノードを、回転した軸に沿ってリサイズするのに使う。
+ */
+export function reshapeNode<T extends Scene>(scene: T, id: NodeId, box: Bounds): T {
+  const node = scene.nodes[id]
+  if (!node) return scene
+  const center = applyMatrix(getWorldMatrix(scene, id), {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+  })
+  const size = { width: box.width, height: node.type === 'text' ? node.height : box.height }
+  const pose = poseInParent(scene, node.parentId, center, getWorldRotation(scene, id), size)
+  const patch = { x: pose.x, y: pose.y, ...size }
+  if (node.type === 'text' && box.width !== node.width) {
+    return updateNode(scene, id, { ...patch, autoWidth: false })
+  }
+  return updateNode(scene, id, patch)
 }
 
 /**
  * ページ座標の矩形 from に収まっていたノード群を、to に収まるよう拡大縮小する。
  * 子の位置と大きさは変えない。
+ * 斜めに回っているノードは歪ませられないので、中心を動かし、面積が合う倍率で大きさを変える。
  * テキストは幅を変えると折り返しに切り替わる。高さは中身で決まるので、呼び出し側で合わせ直すこと。
  */
 export function resizeNodes<T extends Scene>(
@@ -242,6 +308,35 @@ export function resizeNodes<T extends Scene>(
   const scaleY = from.height === 0 ? 1 : to.height / from.height
   return topLevelIds(scene, ids).reduce((next, id) => {
     const node = scene.nodes[id]
+    const rotation = normalizeAngle(getWorldRotation(scene, id))
+    // ページ上では回っていなくても、親と逆向きに回して打ち消しているノードはこちらで扱う
+    if (rotation !== 0 || node.rotation !== 0) {
+      const center = getWorldCenter(scene, id)
+      const moved = {
+        x: to.x + (center.x - from.x) * scaleX,
+        y: to.y + (center.y - from.y) * scaleY,
+      }
+      // 90° 回っていれば縦と横が入れ替わる
+      const uniform = Math.sqrt(Math.abs(scaleX * scaleY))
+      const [scaleW, scaleH] =
+        rotation === 0 || rotation === 180
+          ? [Math.abs(scaleX), Math.abs(scaleY)]
+          : Math.abs(rotation) === 90
+            ? [Math.abs(scaleY), Math.abs(scaleX)]
+            : [uniform, uniform]
+      const minSize = node.type === 'line' ? 0 : 1
+      const size = {
+        width: Math.max(minSize, Math.round(node.width * scaleW)),
+        height: node.type === 'text' ? node.height : Math.max(minSize, Math.round(node.height * scaleH)),
+      }
+      const pose = poseInParent(scene, node.parentId, moved, getWorldRotation(scene, id), size)
+      const patch = { x: pose.x, y: pose.y, ...size }
+      if (node.type === 'text' && size.width !== node.width) {
+        return updateNode(next, id, { ...patch, autoWidth: false })
+      }
+      return updateNode(next, id, patch)
+    }
+
     const abs = getAbsoluteBounds(scene, id)
     const left = Math.round(to.x + (abs.x - from.x) * scaleX)
     const top = Math.round(to.y + (abs.y - from.y) * scaleY)
@@ -291,7 +386,6 @@ export function alignNodes<T extends Scene>(
   if (!reference) return scene
 
   return targets.reduce((next, id) => {
-    const node = scene.nodes[id]
     const abs = getAbsoluteBounds(scene, id)
     const offsets: Record<Alignment, [number, number]> = {
       left: [reference.x - abs.x, 0],
@@ -302,7 +396,10 @@ export function alignNodes<T extends Scene>(
       bottom: [0, reference.y + reference.height - abs.height - abs.y],
     }
     const [dx, dy] = offsets[alignment]
-    return updateNode(next, id, { x: Math.round(node.x + dx), y: Math.round(node.y + dy) })
+    const position = shifted(scene, id, dx, dy)
+    // 回っていなければ、これまでどおり整数の位置に置く
+    if (getWorldRotation(scene, id) !== 0) return updateNode(next, id, position)
+    return updateNode(next, id, { x: Math.round(position.x), y: Math.round(position.y) })
   }, scene)
 }
 
@@ -327,7 +424,7 @@ export function distributeNodes<T extends Scene>(
   return items.reduce((next, { id, bounds }) => {
     const delta = Math.round(position - bounds[axis])
     position += bounds[size] + gap
-    return updateNode(next, id, { [axis]: scene.nodes[id][axis] + delta })
+    return updateNode(next, id, shifted(scene, id, axis === 'x' ? delta : 0, axis === 'y' ? delta : 0))
   }, scene)
 }
 
@@ -389,7 +486,7 @@ export function reorderNodes<T extends Scene>(
 }
 
 /**
- * コピーしたノード群。rootIds のノードの x, y はページ座標、parentId はコピー元の親。
+ * コピーしたノード群。rootIds のノードの x, y, rotation はページ直下に置いたときの値、parentId はコピー元の親。
  * 別のドキュメントへ貼り付けても画像が欠けないよう、使っているアセットも持つ。
  */
 export type Fragment = {
@@ -406,7 +503,16 @@ export function copyFragment(
   const rootIds = sortByDocumentOrder(scene, topLevelIds(scene, ids))
   const nodes: Record<NodeId, SceneNode> = {}
   for (const id of collectSubtrees(scene, rootIds)) nodes[id] = scene.nodes[id]
-  for (const id of rootIds) nodes[id] = { ...nodes[id], ...getAbsolutePosition(scene, id) }
+  for (const id of rootIds) {
+    const pose = poseInParent(
+      scene,
+      null,
+      getWorldCenter(scene, id),
+      getWorldRotation(scene, id),
+      nodes[id],
+    )
+    nodes[id] = { ...nodes[id], x: pose.x, y: pose.y, rotation: pose.rotation }
+  }
 
   const used: Record<AssetId, Asset> = {}
   for (const node of Object.values(nodes)) {
@@ -441,8 +547,9 @@ export function pasteFragment<T extends Scene>(
     const { [id]: root, ...rest } = clones
     const parent = root.parentId === null ? undefined : scene.nodes[root.parentId]
     const parentId = parent?.type === 'frame' ? parent.id : null
-    const origin = parentId === null ? { x: 0, y: 0 } : getAbsolutePosition(scene, parentId)
-    const placed = { ...root, x: root.x - origin.x + offset, y: root.y - origin.y + offset }
+    const center = { x: root.x + root.width / 2 + offset, y: root.y + root.height / 2 + offset }
+    const pose = poseInParent(scene, parentId, center, root.rotation, root)
+    const placed = { ...root, x: pose.x, y: pose.y, rotation: pose.rotation }
     // 子孫は親より先に nodes へ入れておく（重複して入れても同じ値なので害はない）
     next = insertNode({ ...next, nodes: { ...next.nodes, ...descendantsOf(rest, root) } }, placed, parentId)
   }

@@ -18,10 +18,13 @@ export function handlePoint(bounds: Bounds, handle: Handle): Point {
   return { x, y }
 }
 
-export function handleCursor(handle: Handle): string {
-  if (handle === 'n' || handle === 's') return 'ns-resize'
-  if (handle === 'e' || handle === 'w') return 'ew-resize'
-  return handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize'
+const HANDLE_ANGLES: Record<Handle, number> = { n: 0, ne: 45, e: 90, se: 135, s: 180, sw: 225, w: 270, nw: 315 }
+const CURSORS = ['ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize']
+
+/** rotation は枠の向き（度）。回した枠では、ハンドルを引く向きに合うカーソルにする */
+export function handleCursor(handle: Handle, rotation = 0): string {
+  const angle = (((HANDLE_ANGLES[handle] + rotation) % 180) + 180) % 180
+  return CURSORS[Math.round(angle / 45) % 4]
 }
 
 /**
