@@ -238,6 +238,14 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await viewer.locator('.list-button:text-is("ホーム画面")').click()
   await shot(viewer, '8-viewer-frame.png')
 
+  // カードの中の長方形を選び、隣の長方形にポインタを重ねて間隔を出す
+  await viewer.locator('button:text-is("全体表示")').click()
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Rectangle 2"))').click()
+  // 全体表示では、デザイン全体（中心は (450,346)）がキャンバスの中央に等倍で来る。Rectangle 3 の中心は (260,455)
+  const canvas = await viewer.locator('.canvas-view').boundingBox()
+  await viewer.mouse.move(canvas.x + canvas.width / 2 + 260 - 450, canvas.y + canvas.height / 2 + 455 - 346)
+  await shot(viewer, '10-viewer-inspect.png')
+
   await browser.close()
 })().catch((e) => {
   console.error('CRASHED', e)

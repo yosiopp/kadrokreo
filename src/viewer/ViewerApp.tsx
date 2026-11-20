@@ -1,7 +1,10 @@
-import { useState } from 'react'
-import { CanvasView } from '../canvas/CanvasView.tsx'
+import { useEffect, useState } from 'react'
+import { type CanvasPointer, CanvasView } from '../canvas/CanvasView.tsx'
 import { createCamera } from '../canvas/camera.ts'
+import { isTextInput } from '../canvas/dom.ts'
 import { pngFileName, renderPng } from '../canvas/exportPng.ts'
+import { hitTest } from '../canvas/hitTest.ts'
+import type { Viewport } from '../canvas/viewport.ts'
 import { getAbsoluteBounds, getContentBounds } from '../document/geometry.ts'
 import { decodeKdr } from '../document/kdr.ts'
 import type { DesignDocument, NodeId, PageId } from '../document/types.ts'
@@ -10,6 +13,9 @@ import { OpenFileButton } from '../ui/OpenFile.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
 import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { useFileDrop } from '../ui/useFileDrop.ts'
+import { InspectPanel } from './InspectPanel.tsx'
+import { LayerTree } from './LayerTree.tsx'
+import { drawInspectOverlay } from './overlay.ts'
 
 export default function ViewerApp() {
   const [camera] = useState(createCamera)
@@ -17,16 +23,45 @@ export default function ViewerApp() {
   const [pageId, setPageId] = useState<PageId | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [scale, setScale] = useState(1)
+  // viewer は、既存のデザインツールの開発者向けモードに当たる表示。図形を選んで、大きさ・色・間隔・CSS を確かめられる。
+  // 選択は画面の状態で、ドキュメントは変えない
+  const [selectedId, setSelectedId] = useState<NodeId | null>(null)
+  const [hoverId, setHoverId] = useState<NodeId | null>(null)
 
   const page = doc ? (doc.pages.find((candidate) => candidate.id === pageId) ?? doc.pages[0]) : null
   // ページ直下のフレームを「画面」として一覧に出す
   const frames = page ? page.rootIds.map((id) => page.nodes[id]).filter((node) => node.type === 'frame') : []
+
+  function clearSelection() {
+    setSelectedId(null)
+    setHoverId(null)
+  }
+
+  /** ポインタの下で最も手前にあるノード。インスタンスの中身や、ロック中のものも対象にする */
+  function nodeAt(pointer: CanvasPointer): NodeId | null {
+    if (!page) return null
+    return hitTest(page, pointer.world, {
+      tolerance: 3 / camera.getViewport().zoom,
+      deep: true,
+      locked: true,
+    })
+  }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextInput(event.target) || event.isComposing) return
+      if (event.key === 'Escape') clearSelection()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
 
   async function openFile(file: File) {
     try {
       const next = await decodeKdr(file)
       setDoc(next)
       setPageId(next.pages[0].id)
+      clearSelection()
       camera.fit(getContentBounds(next.pages[0]))
       setMessage(null)
     } catch (error) {
@@ -34,11 +69,11 @@ export default function ViewerApp() {
     }
   }
 
-  /** フレーム 1 つ、または表示中のページ全体を PNG として保存する。ドキュメントは変更しない */
-  async function exportPng(frameId?: NodeId) {
+  /** ノード 1 つ、または表示中のページ全体を PNG として保存する。ドキュメントは変更しない */
+  async function exportPng(nodeId?: NodeId) {
     if (!doc || !page) return
-    const targets = frameId ? [frameId] : page.rootIds
-    const name = frameId ? page.nodes[frameId].name : `${doc.name} - ${page.name}`
+    const targets = nodeId ? [nodeId] : page.rootIds
+    const name = nodeId ? page.nodes[nodeId].name : `${doc.name} - ${page.name}`
     try {
       const png = await renderPng(page, doc.assets, targets, scale)
       downloadBlob(png, pngFileName(safeFileName(name), scale))
@@ -84,6 +119,7 @@ export default function ViewerApp() {
                       aria-current={item.id === page.id ? 'page' : undefined}
                       onClick={() => {
                         setPageId(item.id)
+                        clearSelection()
                         camera.fit(getContentBounds(item))
                       }}
                     >
@@ -127,11 +163,30 @@ export default function ViewerApp() {
                 ページを PNG に
               </ExportControls>
             </section>
+            {page.rootIds.length > 0 && (
+              <section aria-label="レイヤー">
+                <h2 className="panel-title">レイヤー</h2>
+                <LayerTree scene={page} selectedId={selectedId} onSelect={setSelectedId} />
+              </section>
+            )}
           </aside>
         )}
         <main className="app-main">
           {doc && page ? (
-            <CanvasView scene={page} assets={doc.assets} camera={camera} panWithPrimaryButton />
+            <CanvasView
+              scene={page}
+              assets={doc.assets}
+              camera={camera}
+              panWithPrimaryButton
+              // ドラッグは画面の移動。動かさずに離したときだけ、その場所のものを選ぶ
+              cursor="default"
+              drawOverlay={(ctx: CanvasRenderingContext2D, viewport: Viewport) =>
+                drawInspectOverlay(ctx, viewport, page, selectedId, hoverId)
+              }
+              onClick={(pointer) => setSelectedId(nodeAt(pointer))}
+              onPointerMove={(pointer) => setHoverId(nodeAt(pointer))}
+              onPointerLeave={() => setHoverId(null)}
+            />
           ) : (
             <div className="empty-state">
               <p>kdr ファイルを開くと、ここにデザインが表示されます。</p>
@@ -140,6 +195,16 @@ export default function ViewerApp() {
           )}
           {dragging && <div className="drop-overlay">kdr ファイルをドロップして開く</div>}
         </main>
+        {doc && page && (
+          <InspectPanel
+            document={doc}
+            page={page}
+            selectedId={selectedId}
+            scale={scale}
+            onScaleChange={setScale}
+            onExport={() => selectedId && exportPng(selectedId)}
+          />
+        )}
       </div>
     </div>
   )

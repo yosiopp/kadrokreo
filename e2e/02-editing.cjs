@@ -197,7 +197,8 @@ function check(name, condition, detail = '') {
   await viewer.locator('input[type=file]').setInputFiles(path.join(OUT, 'sample.kdr'))
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(200)
-  const shot = async () => (await viewer.locator('canvas').screenshot()).toString('base64')
+  // ポインタを重ねた図形には枠が出るので、キャンバスの外へ出してから撮る
+  const shot = async () => { await viewer.mouse.move(600, 10); return (await viewer.locator('canvas').screenshot()).toString('base64') }
   const a = await shot()
   await viewer.mouse.move(600, 400)
   await viewer.mouse.down()

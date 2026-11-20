@@ -32,6 +32,8 @@ type Props = {
   camera: Camera
   /** 左ドラッグでパンする。編集操作のない viewer 用 */
   panWithPrimaryButton?: boolean
+  /** 左ドラッグでパンするとき、動かさずに離した（クリックした）場合に呼ぶ */
+  onClick?: (pointer: CanvasPointer) => void
   hiddenId?: NodeId | null
   cursor?: string
   /** ドキュメントの上に画面座標で重ねて描く（選択枠など） */
@@ -40,9 +42,14 @@ type Props = {
   onPointerMove?: (pointer: CanvasPointer) => void
   onPointerUp?: (pointer: CanvasPointer) => void
   onPointerCancel?: () => void
+  /** ポインタがキャンバスの外へ出た */
+  onPointerLeave?: () => void
   onDoubleClick?: (pointer: CanvasPointer) => void
   children?: ReactNode
 }
+
+/** これより動かさずに離したら、ドラッグではなくクリックとみなす（画面ピクセル） */
+const CLICK_TRAVEL = 4
 
 export function CanvasView(props: Props) {
   const { camera } = props
@@ -50,7 +57,10 @@ export function CanvasView(props: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const propsRef = useRef(props)
   const requestDrawRef = useRef(() => {})
-  const dragRef = useRef<{ kind: 'pan'; x: number; y: number } | { kind: 'forward' } | null>(null)
+  // pan の travel は、押してから動いた距離。クリックとドラッグを見分けるのに使う
+  const dragRef = useRef<
+    { kind: 'pan'; x: number; y: number; travel: number; click: boolean } | { kind: 'forward' } | null
+  >(null)
   const [spaceHeld, setSpaceHeld] = useState(false)
   const [panning, setPanning] = useState(false)
 
@@ -161,7 +171,9 @@ export function CanvasView(props: Props) {
     // 入力欄など、キャンバスの上に重ねた要素への操作は拾わない
     if (event.target !== canvasRef.current || dragRef.current) return
     if (event.button === 1 || (event.button === 0 && panMode)) {
-      dragRef.current = { kind: 'pan', x: event.clientX, y: event.clientY }
+      // Space や中ボタンでのパンは、動かさなくてもクリックとはみなさない
+      const click = event.button === 0 && !spaceHeld
+      dragRef.current = { kind: 'pan', x: event.clientX, y: event.clientY, travel: 0, click }
       setPanning(true)
     } else if (event.button === 0) {
       dragRef.current = { kind: 'forward' }
@@ -177,6 +189,7 @@ export function CanvasView(props: Props) {
     const drag = dragRef.current
     if (drag?.kind === 'pan') {
       camera.panBy(event.clientX - drag.x, event.clientY - drag.y)
+      drag.travel += Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y)
       drag.x = event.clientX
       drag.y = event.clientY
     } else if (drag || event.target === canvasRef.current) {
@@ -188,8 +201,10 @@ export function CanvasView(props: Props) {
     const drag = dragRef.current
     if (!drag) return
     dragRef.current = null
-    if (drag.kind === 'pan') setPanning(false)
-    else if (cancelled) props.onPointerCancel?.()
+    if (drag.kind === 'pan') {
+      setPanning(false)
+      if (drag.click && !cancelled && drag.travel < CLICK_TRAVEL) props.onClick?.(toPointer(event))
+    } else if (cancelled) props.onPointerCancel?.()
     else props.onPointerUp?.(toPointer(event))
   }
 
@@ -197,11 +212,15 @@ export function CanvasView(props: Props) {
     <div
       ref={containerRef}
       className="canvas-view"
-      style={{ cursor: panning ? 'grabbing' : panMode ? 'grab' : props.cursor }}
+      // cursor を指定すれば、左ドラッグでパンする場合でも、ふだんはそのカーソルを出す
+      style={{
+        cursor: panning ? 'grabbing' : spaceHeld ? 'grab' : (props.cursor ?? (panMode ? 'grab' : undefined)),
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={(event) => endDrag(event, false)}
       onPointerCancel={(event) => endDrag(event, true)}
+      onPointerLeave={() => props.onPointerLeave?.()}
       // 中ボタンのオートスクロールを止める
       onMouseDown={(event) => event.button === 1 && event.preventDefault()}
       onDoubleClick={(event) => {

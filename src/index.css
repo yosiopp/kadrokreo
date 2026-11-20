@@ -485,6 +485,89 @@ input.document-name:focus {
   background: var(--bg-selected);
 }
 
+/* viewer のインスペクト（既存のデザインツールの開発者向けモードに当たる表示） */
+
+.inspect-panel {
+  flex: none;
+  width: 264px;
+  border-left: 1px solid var(--border);
+}
+
+.inspect-type {
+  margin: 0;
+  padding: 0 12px 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.inspect-list {
+  margin: 0;
+}
+
+.inspect-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.inspect-row dt {
+  flex: none;
+  width: 84px;
+  color: var(--text-muted);
+}
+
+.inspect-row dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+/* 値は、押すとコピーできる */
+.inspect-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: auto;
+  min-height: 22px;
+  padding: 2px 4px;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+}
+
+.inspect-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.inspect-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.inspect-code {
+  margin: 0;
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-hover);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.inspect-layer {
+  cursor: pointer;
+}
+
 /* レイヤー */
 
 .layer-list {

@@ -53,13 +53,13 @@ describe('hitTest', () => {
 
     expect(hitTest(doc, { x: 50, y: 51 })).toBe(down.id)
     // 枠の中でも、線から離れた角では当たらない
-    expect(hitTest(doc, { x: 90, y: 10 }, 3)).toBeNull()
-    expect(hitTest(doc, { x: 290, y: 10 }, 3)).toBe(up.id)
-    expect(hitTest(doc, { x: 210, y: 10 }, 3)).toBeNull()
+    expect(hitTest(doc, { x: 90, y: 10 }, { tolerance: 3 })).toBeNull()
+    expect(hitTest(doc, { x: 290, y: 10 }, { tolerance: 3 })).toBe(up.id)
+    expect(hitTest(doc, { x: 210, y: 10 }, { tolerance: 3 })).toBeNull()
     // 高さ 0 の水平線
-    expect(hitTest(doc, { x: 50, y: 202 }, 3)).toBe(flat.id)
-    expect(hitTest(doc, { x: 50, y: 206 }, 3)).toBeNull()
-    expect(hitTest(doc, { x: 104, y: 200 }, 3)).toBeNull()
+    expect(hitTest(doc, { x: 50, y: 202 }, { tolerance: 3 })).toBe(flat.id)
+    expect(hitTest(doc, { x: 50, y: 206 }, { tolerance: 3 })).toBeNull()
+    expect(hitTest(doc, { x: 104, y: 200 }, { tolerance: 3 })).toBeNull()
   })
 
   it('塗った多角形は内側で当たり、へこんだ部分では当たらない', () => {
@@ -75,11 +75,11 @@ describe('hitTest', () => {
   it('折れ線は線の近くだけで当たる', () => {
     const path = createPath(pathFromPoints([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }]), false)
     const doc = insertNode(createPage(), path)
-    expect(hitTest(doc, { x: 50, y: 2 }, 3)).toBe(path.id)
-    expect(hitTest(doc, { x: 98, y: 50 }, 3)).toBe(path.id)
+    expect(hitTest(doc, { x: 50, y: 2 }, { tolerance: 3 })).toBe(path.id)
+    expect(hitTest(doc, { x: 98, y: 50 }, { tolerance: 3 })).toBe(path.id)
     // 枠の中でも、線から離れた所や、閉じていない辺では当たらない
-    expect(hitTest(doc, { x: 30, y: 60 }, 3)).toBeNull()
-    expect(hitTest(doc, { x: 50, y: 50 }, 3)).toBeNull()
+    expect(hitTest(doc, { x: 30, y: 60 }, { tolerance: 3 })).toBeNull()
+    expect(hitTest(doc, { x: 50, y: 50 }, { tolerance: 3 })).toBeNull()
   })
 
   it('回したノードは、回した後の形で当たる', () => {
@@ -103,15 +103,18 @@ describe('hitTest', () => {
   })
 
   it('ロック中・非表示のノードは子も含めて当たらない', () => {
-    const { doc, frame, ellipse } = fixture()
+    const { doc, frame, child, ellipse } = fixture()
     expect(hitTest(updateNode(doc, frame.id, { locked: true }), { x: 120, y: 120 })).toBeNull()
     expect(hitTest(updateNode(doc, ellipse.id, { visible: false }), { x: 450, y: 150 })).toBeNull()
+    // viewer では、ロック中のものも対象にできる
+    const locked = updateNode(doc, frame.id, { locked: true })
+    expect(hitTest(locked, { x: 120, y: 120 }, { locked: true })).toBe(child.id)
   })
 
   it('tolerance のぶんだけ外側でも当たる', () => {
     const { doc, frame } = fixture()
     expect(hitTest(doc, { x: 98, y: 150 })).toBeNull()
-    expect(hitTest(doc, { x: 98, y: 150 }, 3)).toBe(frame.id)
+    expect(hitTest(doc, { x: 98, y: 150 }, { tolerance: 3 })).toBe(frame.id)
   })
 })
 

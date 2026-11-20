@@ -369,7 +369,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const viewport = camera.getViewport()
     return (
       hitTestFrameLabel(page, viewport, pointer.screen, measureFrameLabel) ??
-      hitTest(page, pointer.world, 3 / viewport.zoom)
+      hitTest(page, pointer.world, { tolerance: 3 / viewport.zoom })
     )
   }
 
@@ -794,11 +794,11 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (tool !== 'select' || editingRef.current) return
     const page = store.getState().page
     const tolerance = 3 / camera.getViewport().zoom
-    const top = hitTest(page, pointer.world, tolerance)
+    const top = hitTest(page, pointer.world, { tolerance })
     if (!top) return
     // インスタンスは、ダブルクリックで中身を選べる（文言や色を、そのインスタンスだけ変えられる）
     const inner = isInstance(page.nodes[top])
-    const hit = inner ? (hitTest(page, pointer.world, tolerance, true) ?? top) : top
+    const hit = inner ? (hitTest(page, pointer.world, { tolerance, deep: true }) ?? top) : top
     if (page.nodes[hit].type === 'text') {
       store.select([hit])
       changeEditing({ id: hit, draft: null })

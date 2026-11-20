@@ -454,7 +454,7 @@ describe('インスタンスの扱い', () => {
     const { doc, instanceId } = withInstance()
     const page = doc.pages[0]
     const labelCopy = frameOf(page, instanceId).children[1]
-    expect(hitTest(page, { x: 150, y: 135 }, 0, true)).toBe(labelCopy)
+    expect(hitTest(page, { x: 150, y: 135 }, { deep: true })).toBe(labelCopy)
     expect(owningInstance(page, labelCopy)?.id).toBe(instanceId)
     expect(owningInstance(page, instanceId)).toBeNull()
   })
