@@ -235,10 +235,10 @@ export function InspectPanel({
 
   const code = nodeCode(page, node.id, style)
   const cssKey = `${node.id}/css`
-  // 中身のあるフレームは、子孫までまとめた HTML（形式が React なら JSX）と CSS も出す
+  // 中身のあるフレームは、子孫までまとめた HTML（形式が React なら JSX、Vue なら .vue ファイル）と CSS も出す
   const markup =
     node.type === 'frame' && node.children.length > 0 ? nodeMarkup(page, node.id, { style, assets: document.assets }) : null
-  const markupName = style.format === 'html' ? 'HTML' : 'JSX'
+  const markupName = style.format === 'html' ? 'HTML' : style.format === 'vue' ? 'Vue' : 'JSX'
   const instance = instanceOf(page, node.id)
   const main = instance ? findMain(document, instance.component.id) : null
   return (

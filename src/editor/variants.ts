@@ -12,7 +12,9 @@ import {
 import { swapComponent } from './components.ts'
 import { wrapInAutoLayout } from './layout.ts'
 import { createId } from './nodes.ts'
-import { copyFragment, moveNode, pasteFragment, updateNode, updatePage } from './operations.ts'
+import { copyFragment, pasteFragment } from './operations/clipboard.ts'
+import { updatePage } from './operations/document.ts'
+import { moveNode, updateNode } from './operations/tree.ts'
 
 // バリアントを作る・選ぶ操作。バリアントの表し方（名前の形とまとまり）は document/variants.ts を参照。
 

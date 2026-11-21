@@ -135,7 +135,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const links = json.document.pages.flatMap((p) => Object.values(p.nodes)).filter((n) => n.component).map((n) => n.component.role).sort()
-  check('kdr につながりが入る', json.version === 15 && links.join() === 'instance,instance,instance,main', links.join())
+  check('kdr につながりが入る', json.version === 16 && links.join() === 'instance,instance,instance,main', links.join())
 
   // ── コンポーネントの一覧から置く ──
   const componentRows = page.locator('.component-row')

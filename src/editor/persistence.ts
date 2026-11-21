@@ -1,17 +1,16 @@
 import { KDR_VERSION, kdrFile, parseKdr } from '../document/kdr.ts'
-import type { Asset, AssetId, DesignDocument } from '../document/types.ts'
-import { pruneAssets } from './operations.ts'
+import type { AssetId, DesignDocument } from '../document/types.ts'
+import { pruneAssets } from './operations/document.ts'
 
 // 編集中のドキュメントはブラウザの IndexedDB に自動保存する。
-// 画像は大きいので別のストアに分け、一度書いたものは書き直さない。
+// 画像は大きいので別のストアに分け、一度書いたものは書き直さない（id は中身のハッシュなので、同じ id なら中身も同じ）。
+// 画像は { mime, bytes }（バイト列）のまま保存する（v15 までは base64 の文字列だった）。
 // ドキュメントはメモリ上の形（平らなノードの表）のまま保存し、読むときに kdr の形へ直して parseKdr で検証する。
-// kdr の version が違う保存データ（古い形）は読めないので捨て、空のドキュメントから始める。
+// kdr の version が違う保存データ（古い形）は読めないので、画像ごと捨てて空のドキュメントから始める。
 const DB_NAME = 'kadrokreo'
 const DOCUMENT_STORE = 'document'
 const ASSET_STORE = 'assets'
 const CURRENT = 'current'
-/** IndexedDB に移る前の保存先。残っていれば一度だけ読む */
-const LEGACY_STORAGE_KEY = 'kadrokreo:document'
 
 let database: Promise<IDBDatabase> | null = null
 /** IndexedDB に書き込み済みのアセット */
@@ -53,13 +52,18 @@ export async function loadSavedDocument(): Promise<DesignDocument | null> {
     const [file, ids, assets] = await Promise.all([
       result(transaction.objectStore(DOCUMENT_STORE).get(CURRENT)),
       result(assetStore.getAllKeys()),
-      result(assetStore.getAll() as IDBRequest<Asset[]>),
+      result(assetStore.getAll() as IDBRequest<unknown[]>),
     ])
-    if (file === undefined) return loadLegacyDocument()
+    if (file === undefined) return null
 
-    if (file.version !== KDR_VERSION) return null
+    if (file?.version !== KDR_VERSION) {
+      // 古い形の保存データ（base64 の画像など）は読めない。残しておいても使わないので消す
+      await clearAll(db)
+      return null
+    }
+    // 画像の形は parseKdr が確かめる（壊れたもの・古い形のものがあれば、読み込みごと失敗して空から始める）
     const stored = Object.fromEntries(ids.map((id, i) => [String(id), assets[i]]))
-    const doc = pruneAssets(parseKdr(kdrFile({ ...file.document, assets: stored })))
+    const doc = pruneAssets(parseKdr(kdrFile(file.document), stored))
 
     // 削除された画像のデータはここで片付ける（編集中は Undo で戻せるよう残してある）
     const orphans = ids.filter((id) => !Object.hasOwn(doc.assets, String(id)))
@@ -76,9 +80,12 @@ export async function loadSavedDocument(): Promise<DesignDocument | null> {
   }
 }
 
-function loadLegacyDocument(): DesignDocument | null {
-  const raw = localStorage.getItem(LEGACY_STORAGE_KEY)
-  return raw === null ? null : parseKdr(JSON.parse(raw))
+async function clearAll(db: IDBDatabase): Promise<void> {
+  const transaction = db.transaction([DOCUMENT_STORE, ASSET_STORE], 'readwrite')
+  transaction.objectStore(DOCUMENT_STORE).clear()
+  transaction.objectStore(ASSET_STORE).clear()
+  await completed(transaction)
+  savedAssets.clear()
 }
 
 /** 保存できたかどうかを返す */

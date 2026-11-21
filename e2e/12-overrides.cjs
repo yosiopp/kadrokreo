@@ -169,7 +169,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const links = Object.values(json.document.pages[0].nodes).filter((n) => n.component)
   const exported = links.filter((n) => n.component.role === 'instance').map((n) => Object.values(n.component.overrides).map((o) => o.text || (o.fills && o.fills[0].color)).sort().join('+'))
-  check('kdr v15 に上書きが入る。元は上書きを持たない', json.version === 15 && exported.sort().join() === '#e11d48+予約する,#e11d48+送信する' && links.filter((n) => n.component.role === 'main').every((n) => !('overrides' in n.component)), exported.join())
+  check('kdr v16 に上書きが入る。元は上書きを持たない', json.version === 16 && exported.sort().join() === '#e11d48+予約する,#e11d48+送信する' && links.filter((n) => n.component.role === 'main').every((n) => !('overrides' in n.component)), exported.join())
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

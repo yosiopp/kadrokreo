@@ -1,7 +1,7 @@
 import { tidy } from '../document/geometry.ts'
 import { followsConstraints } from '../document/autoLayout.ts'
 import type { Constraint, FrameNode, NodeId, Scene } from '../document/types.ts'
-import { type NodePatch, patchNodes } from './operations.ts'
+import { type NodePatch, patchNodes } from './operations/tree.ts'
 
 // 親のフレームの大きさが変わったときに、子を親の辺に追従させる（既存のデザインツールの constraints）。
 // 効くのは、親が自動で並べないフレームの子と、自動で並べるフレームの並びから外した子。

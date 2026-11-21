@@ -1,6 +1,6 @@
 import { solid } from '../src/document/paint.ts'
 import type { Effect, SceneNode } from '../src/document/types.ts'
-import type { NodePatch } from '../src/editor/operations.ts'
+import type { NodePatch } from '../src/editor/operations/tree.ts'
 import { UsageError } from './args.ts'
 
 // set / add の「名前=値」を、ノードへの patch に直す。

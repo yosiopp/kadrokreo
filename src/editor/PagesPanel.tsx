@@ -9,7 +9,7 @@ import {
   movePage,
   removePage,
   renamePage,
-} from './operations.ts'
+} from './operations/document.ts'
 import type { EditorState, EditorStore } from './store.ts'
 
 type Props = {

@@ -23,17 +23,9 @@ import {
 } from './components.ts'
 import { nodesInMarquee } from './hitTest.ts'
 import { createFrame, createImage, createRect, createText } from './nodes.ts'
-import {
-  addPage,
-  copyFragment,
-  createDocument,
-  createPage,
-  insertNode,
-  pasteIntoPage,
-  removeNodes,
-  updateNode,
-  updatePage,
-} from './operations.ts'
+import { copyFragment } from './operations/clipboard.ts'
+import { addPage, createDocument, createPage, pasteIntoPage, updatePage } from './operations/document.ts'
+import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
 import { setLayoutFill } from './layout.ts'
 import { createEditorStore } from './store.ts'
 

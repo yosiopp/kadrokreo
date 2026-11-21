@@ -168,6 +168,9 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.locator('.inspect-layer:has(.layer-name:text-is("Text 1"))').click()
   await viewer.keyboard.up('Shift')
   check('レイヤー一覧でも、Shift を押しながら選べる', (await title()) === '2 個を選択' && (await treeSelected()).join() === 'Text 1,Rectangle 1', (await treeSelected()).join())
+  // 上下に離れた 2 つは、縦の間隔だけ（重なっている横の向きの辺のずれは出さない）
+  const stacked = await rows('間隔')
+  check('上下に離れた 2 つは、縦の間隔だけを出す', stacked.length === 1 && stacked[0].startsWith('縦='), stacked.join())
   await panel.locator('.inspect-selection button:text-is("Text 1")').click()
   check('選んでいるものの一覧から 1 つに絞れる', (await title()) === 'Text 1', await title())
 
@@ -237,6 +240,14 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('1 つのノードの欄も Tailwind のクラスになる', (await panel.locator('section[aria-label="Tailwind のクラス"] .inspect-code').textContent()).startsWith('relative w-[400px] h-[300px]'))
   await viewer.locator('.inspect-layer:has(.layer-name:text-is("Rectangle 1"))').click()
   check('選び直しても形式はそのまま', (await panel.locator('section[aria-label="Tailwind のクラス"] .inspect-code').textContent()) === 'absolute left-[30px] top-[40px] w-[60px] h-[60px] bg-[#4f46e5] rounded-[8px]', await panel.locator('.inspect-code').first().textContent())
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Frame 1"))').click()
+  await format.selectOption('vue')
+  const vueSection = panel.locator('section[aria-label="Vue"]')
+  const vue = await vueSection.locator('.inspect-code').allTextContents()
+  check('Vue（SFC）にすると、<template> と <style scoped> をまとめた 1 つのファイルが出る', vue.length === 1 && vue[0].startsWith('<template>\n  <div class="frame-1">') && vue[0].includes('    <div class="rectangle-2"></div>') && vue[0].includes('</template>\n\n<style scoped>\n.frame-1 {') && vue[0].endsWith('</style>'), JSON.stringify(vue[0]?.slice(0, 160)))
+  check('Vue のときも 1 つのノードの欄は CSS', (await panel.locator('section[aria-label="CSS"] .inspect-code').textContent()).startsWith('position: relative;'))
+  await vueSection.locator('button:text-is("Vue をコピー")').click()
+  check('Vue のファイルをコピーできる', (await clipboard()) === vue[0])
   await format.selectOption('html')
 
   // ── フレームの名前のラベルで選ぶ ──

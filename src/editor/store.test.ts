@@ -1,15 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createRect } from './nodes.ts'
-import {
-  addPage,
-  createDocument,
-  createPage,
-  insertNode,
-  removeNodes,
-  removePage,
-  renameDocument,
-  updateNode,
-} from './operations.ts'
+import { addPage, createDocument, createPage, removePage, renameDocument } from './operations/document.ts'
+import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
 import { createEditorStore } from './store.ts'
 
 function setup() {

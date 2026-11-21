@@ -241,8 +241,11 @@ export type SceneNode =
   | FrameNode
   | ImageNode
 
-/** 埋め込みファイル。kdr は 1 つの JSON なので、中身は base64 で持つ */
-export type Asset = { mime: string; data: string }
+/**
+ * 埋め込みファイル（画像の元のファイルそのもの）。id は中身の SHA-256（document/sha256.ts）。
+ * kdr では tar の assets/<id>.<拡張子> に入る。メモリ上も自動保存（IndexedDB）でもバイト列のまま持つ（base64 にしない）
+ */
+export type Asset = { mime: string; bytes: Uint8Array<ArrayBuffer> }
 
 /** 1 ページ分のノードの木 */
 export type Scene = {

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { componentEntries } from './componentList.ts'
 import { makeComponent } from './components.ts'
 import { createFrame } from './nodes.ts'
-import { addPage, createDocument, createPage, insertNode, updatePage } from './operations.ts'
+import { addPage, createDocument, createPage, updatePage } from './operations/document.ts'
+import { insertNode } from './operations/tree.ts'
 import { addVariant } from './variants.ts'
 
 /** 1 ページ目に「Card」と「ボタン」（バリアント 2 つ）、2 ページ目に「avatar」の元 */

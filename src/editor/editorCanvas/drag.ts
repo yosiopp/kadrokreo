@@ -18,14 +18,8 @@ import { findFrameAt, nodesInMarquee } from '../hitTest.ts'
 import { placeInLayout } from '../layout.ts'
 import { fitTextNodes } from '../measure.ts'
 import { createEllipse, createFrame, createLine, createRect } from '../nodes.ts'
-import {
-  insertNode,
-  reparentNodes,
-  reshapeNode,
-  resizeNodes,
-  rotateNodes,
-  translateNodes,
-} from '../operations.ts'
+import { reshapeNode, resizeNodes, rotateNodes, translateNodes } from '../operations/transform.ts'
+import { insertNode, reparentNodes } from '../operations/tree.ts'
 import { type Handle, resizeBounds } from '../resize.ts'
 import { type Guide, findGuides, snapMove, snapResize } from '../snap.ts'
 import type { EditorStore } from '../store.ts'

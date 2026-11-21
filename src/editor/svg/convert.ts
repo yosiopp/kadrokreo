@@ -16,7 +16,7 @@ import { type Vertex, mapVertices, pathBounds, pathFromPoints } from '../../docu
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
 import type { ColorStop, FrameNode, NodeId, Paint, PathNode, SceneNode, Style, TextNode } from '../../document/types.ts'
 import { createEllipse, createFrame, createPath, createRect, createText } from '../nodes.ts'
-import type { Fragment } from '../operations.ts'
+import type { Fragment } from '../operations/clipboard.ts'
 import type { SvgElement, SvgNode } from './xml.ts'
 import {
   type Rgba,

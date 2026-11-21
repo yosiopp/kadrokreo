@@ -1,6 +1,6 @@
 import type { NodeId, Scene, TextNode } from '../src/document/types.ts'
 import { hugWidth, wrapLine, wrapWidth } from '../src/canvas/text.ts'
-import { patchNodes } from '../src/editor/operations.ts'
+import { patchNodes } from '../src/editor/operations/tree.ts'
 
 // Node には Canvas がないので、文字の幅は字の種類ごとのおおよその値で見積もる。
 // editor で開き直して文字を変えれば、ブラウザで測った正しい大きさに直る。

@@ -1,7 +1,7 @@
 // 大きなデザインでの性能を測る。npm run check には入れていない（数分かかり、値も揺れるため）。
-//   npm run bench                         決まった 2 つの大きさ（medium・large）で測る
+//   npm run bench                         決まった 3 つの大きさ（medium・large・photos）で測る
 //   npm run bench -- --preset medium      1 つだけ
-//   npm run bench -- --nodes 5000 --depth 6 --instances 500 --images 20   大きさを指定して測る
+//   npm run bench -- --nodes 5000 --depth 6 --instances 500 --images 20 --imageSize 512   大きさを指定して測る
 //   npm run bench -- --no-build           dist/ のビルドをそのまま使う
 //   npm run bench -- --runs 50            1 つの操作で測る回数（既定 30）
 // 本番と同じビルド（vite build）を vite preview で配り、Chrome（Playwright）で開いて操作する。
@@ -11,7 +11,7 @@
 // ポインタを 1 回動かすごとに描画が終わるまで（rAF 2 回）待ち、その間に増えた分を 1 回の時間とする。
 // 何もしないで同じだけ待ったときの増分（計測そのものの手間）を差し引く。画面の更新を待つ時間（vsync）は含まない。
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,10 +26,12 @@ const OUT = join(here, 'out')
 mkdirSync(OUT, { recursive: true })
 
 const PRESETS = {
-  // HANDOVER の「2,000 行」「写し 1,000 個」に合わせた大きさ
+  // 以前に見積もった「2,000 行」「写し 1,000 個」に合わせた大きさ
   medium: { nodes: 2000, depth: 4, instances: 170, images: 10 },
   // 1 桁大きいもの
   large: { nodes: 10000, depth: 8, instances: 1000, images: 50 },
+  // 写真のような重い画像（1 枚約 3MB、圧縮が効かない）を並べたもの。kdr を開く時間とメモリを見る
+  photos: { nodes: 200, depth: 2, instances: 10, images: 24, imageSize: 1024 },
 }
 
 function parseArgs(argv) {
@@ -39,7 +41,7 @@ function parseArgs(argv) {
     if (name === '--no-build') args.build = false
     else if (name === '--preset') args.presets = [argv[++i]]
     else if (name === '--runs') args.runs = Number(argv[++i])
-    else if (['--nodes', '--depth', '--instances', '--images'].includes(name)) {
+    else if (['--nodes', '--depth', '--instances', '--images', '--imageSize'].includes(name)) {
       args.custom ??= { ...PRESETS.medium }
       args.custom[name.slice(2)] = Number(argv[++i])
     } else throw new Error(`知らない引数です: ${name}`)
@@ -53,8 +55,8 @@ const cases = args.custom ? [['custom', args.custom]] : args.presets.map((name) 
 
 const optionArgs = (options) => Object.entries(options).flatMap(([key, value]) => [`--${key}`, String(value)])
 
-function node(script, extra) {
-  const result = spawnSync('node', [join(root, script), ...extra], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+function node(script, extra, flags = []) {
+  const result = spawnSync('node', [...flags, join(root, script), ...extra], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   if (result.status !== 0) throw new Error(`${script} が失敗しました\n${result.stderr}`)
   return JSON.parse(result.stdout)
 }
@@ -105,9 +107,15 @@ async function openPage(browser, url) {
   page.on('dialog', (dialog) => dialog.accept())
   const cdp = await context.newCDPSession(page)
   await cdp.send('Performance.enable')
-  const busy = async () => {
+  const metric = async (name) => {
     const { metrics } = await cdp.send('Performance.getMetrics')
-    return metrics.find((metric) => metric.name === 'TaskDuration').value * 1000
+    return metrics.find((item) => item.name === name).value
+  }
+  const busy = async () => (await metric('TaskDuration')) * 1000
+  /** GC したあとの JS のヒープ（MB）。ArrayBuffer の中身など、ヒープの外のメモリは含まない */
+  const heap = async () => {
+    await cdp.send('HeapProfiler.collectGarbage')
+    return (await metric('JSHeapUsedSize')) / 1024 / 1024
   }
   const frames = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))))
   await page.goto(url)
@@ -133,7 +141,7 @@ async function openPage(browser, url) {
     }
     return stats(samples)
   }
-  return { context, page, errors, busy, frames, measure, overhead }
+  return { context, page, errors, busy, heap, frames, measure, overhead }
 }
 
 /** ページ上の点を、開いた直後（全体表示）の画面の点にする */
@@ -152,9 +160,11 @@ const center = (bounds) => ({ x: bounds.x + bounds.width / 2, y: bounds.y + boun
 async function measureOpen(browser, url, kdrPath, rowSelector, rows) {
   const walls = []
   const tasks = []
+  const heaps = []
   for (let i = 0; i < 3; i++) {
     const session = await openPage(browser, url)
     const input = session.page.locator(url.includes(editorPort) ? 'input[type=file][accept^=".kdr"]' : 'input[type=file]').first()
+    const heapBefore = await session.heap()
     const before = await session.busy()
     const start = Date.now()
     await input.setInputFiles(kdrPath)
@@ -166,9 +176,10 @@ async function measureOpen(browser, url, kdrPath, rowSelector, rows) {
     await session.frames()
     walls.push(Date.now() - start)
     tasks.push((await session.busy()) - before)
+    heaps.push((await session.heap()) - heapBefore)
     await session.context.close()
   }
-  return { wall: stats(walls), main: stats(tasks) }
+  return { wall: stats(walls), main: stats(tasks), heap: stats(heaps) }
 }
 
 /** パン（ホイール）とズーム（Ctrl + ホイール）1 回ごと */
@@ -245,6 +256,10 @@ async function benchEditor(browser, url, caseName, kdrPath, document, meta) {
   results.marquee = await drag(toScreen(center(meta.empty)), { x: 12, y: -4 }, `${caseName}-editor-marquee`, true)
   check('範囲選択で何も選んでいない', (await selectedNames()).length > 0)
   await page.keyboard.press('Escape')
+  // 範囲選択の途中で、選択が変わらない動き（何もない場所の中で行き来する）
+  results.marqueeSame = await drag(toScreen(center(meta.empty)), { x: 2, y: 1 }, `${caseName}-editor-marquee-same`)
+  check('何もない場所の範囲選択で何か選んだ', (await selectedNames()).length === 0)
+  await page.keyboard.press('Escape')
 
   // コンポーネントの元の色を変えたときの同期（色の欄に打ち込む = preview と確定）
   await page.locator('.layer-row:has(.layer-name:text-is("Background"))').first().click()
@@ -295,6 +310,8 @@ async function benchViewer(browser, url, kdrPath, meta) {
 
 const LABELS = [
   ['pure', 'decodeKdr', 'kdr を読む（展開・解析・検証）', 'Node'],
+  ['memory', 'peak', 'kdr を読む途中の最大メモリの増分（RSS、MB）', 'Node'],
+  ['memory', 'retained', 'kdr を読んだあとに残るメモリ（ヒープ + 外、MB）', 'Node'],
   ['pure', 'syncComponentsNoop', 'syncComponents（変更なし）', 'Node'],
   ['pure', 'syncComponentsUnrelated', 'syncComponents（元に関係ない変更）', 'Node'],
   ['pure', 'syncComponentsMainChanged', 'syncComponents（元の色を変えた）', 'Node'],
@@ -304,14 +321,17 @@ const LABELS = [
   ['pure', 'inspectPage', 'viewer の一覧（色・文字・影）を作る', 'Node'],
   ['editor', 'open.main', 'kdr を開く（メインスレッド）', 'editor'],
   ['editor', 'open.wall', 'kdr を開く（経過時間）', 'editor'],
+  ['editor', 'open.heap', 'kdr を開いたあとの JS ヒープの増分（MB）', 'editor'],
   ['editor', 'dragLayersOpen', 'ドラッグ 1 歩（レイヤーを開いた状態）', 'editor'],
   ['editor', 'dragLayersClosed', 'ドラッグ 1 歩（ページ直下を閉じた状態）', 'editor'],
   ['editor', 'marquee', '範囲選択 1 歩', 'editor'],
+  ['editor', 'marqueeSame', '範囲選択 1 歩（選択が変わらない）', 'editor'],
   ['editor', 'componentSync', '元の色を変える（同期と描き直し）', 'editor'],
   ['editor', 'pan', 'パン 1 回', 'editor'],
   ['editor', 'zoom', 'ズーム 1 回', 'editor'],
   ['viewer', 'open.main', 'kdr を開く（メインスレッド）', 'viewer'],
   ['viewer', 'open.wall', 'kdr を開く（経過時間）', 'viewer'],
+  ['viewer', 'open.heap', 'kdr を開いたあとの JS ヒープの増分（MB）', 'viewer'],
   ['viewer', 'summary', '選択を外して一覧を出す', 'viewer'],
   ['viewer', 'pan', 'パン 1 回', 'viewer'],
   ['viewer', 'zoom', 'ズーム 1 回', 'viewer'],
@@ -336,7 +356,7 @@ function table(results) {
   const sizes = names.map((name) => {
     const { meta } = results[name]
     const o = meta.options
-    return `- ${name}: ノード ${meta.totalNodes}（うち写し ${meta.copies}、レイヤーの行 ${meta.layerRows}）、深さ ${o.depth}、インスタンス ${o.instances}、画像 ${o.images}`
+    return `- ${name}: ノード ${meta.totalNodes}（うち写し ${meta.copies}、レイヤーの行 ${meta.layerRows}）、深さ ${o.depth}、インスタンス ${o.instances}、画像 ${o.images}（一辺 ${o.imageSize}px）、kdr ${results[name].fileMB}MB`
   })
   return [...sizes, '', ...lines].join('\n')
 }
@@ -369,13 +389,18 @@ try {
     // 書き出した kdr を本体の decodeKdr で読む（形式が変わってもここは変えずに済む）
     const document = await decodeKdr(new Blob([readFileSync(kdrPath)]))
     console.log(`ノード ${meta.totalNodes}（写し ${meta.copies}）、レイヤーの行 ${meta.layerRows}`)
+    const fileMB = Number((statSync(kdrPath).size / 1024 / 1024).toFixed(1))
+    console.log('Node で kdr を読むメモリを測っています…')
+    // 1 回ごとに新しいプロセスで（前の回の残りが混ざらないように）
+    const memoryRuns = [0, 1, 2].map(() => node('cli/bench/memory.ts', [kdrPath], ['--expose-gc']))
+    const memory = { peak: stats(memoryRuns.map((run) => run.peakMB)), retained: stats(memoryRuns.map((run) => run.retainedMB)) }
     console.log('Node で純粋な関数を測っています…')
     const pure = node('cli/bench/pure.ts', optionArgs(options)).timings
     console.log('editor を測っています…')
     const editor = await benchEditor(browser, editorUrl, name, kdrPath, document, meta)
     console.log('viewer を測っています…')
     const viewer = await benchViewer(browser, viewerUrl, kdrPath, meta)
-    results[name] = { meta, pure, editor, viewer }
+    results[name] = { meta, fileMB, memory, pure, editor, viewer }
     for (const side of [editor, viewer]) {
       if (side.errors.length > 0) console.log(`コンソールエラー: ${side.errors.join(' / ')}`)
       if (side.checks?.length > 0) console.log(`操作が狙いどおりに効いていません: ${side.checks.join(' / ')}`)

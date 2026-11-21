@@ -1,6 +1,6 @@
 import { isLine } from '../../document/path.ts'
 import type { EllipseNode, FrameNode, NodeId, Override, Page, PathNode, RectNode, SceneNode } from '../../document/types.ts'
-import type { NodePatch } from '../operations.ts'
+import type { NodePatch } from '../operations/tree.ts'
 import type { EditorState, EditorStore } from '../store.ts'
 
 /** プロパティパネルの各節が受け取る、選択の情報と変更の手段 */

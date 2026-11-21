@@ -1,6 +1,6 @@
 import { KDR_VERSION, KdrError, decodeKdr } from '../src/document/kdr.ts'
 import { encodeKdr } from '../src/editor/exportKdr.ts'
-import { createDocument } from '../src/editor/operations.ts'
+import { createDocument } from '../src/editor/operations/document.ts'
 import { UsageError, parseArgs } from './args.ts'
 import { COMMANDS, type Command } from './commands.ts'
 import { Session } from './session.ts'

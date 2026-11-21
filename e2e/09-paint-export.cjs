@@ -144,7 +144,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const nodes = Object.values(json.document.pages[0].nodes)
-  check('kdr にグラデーションと収め方が入る', json.version === 15 && nodes.some((n) => n.fills && n.fills.some((p) => p.type === 'linear')) && nodes.some((n) => n.fit === 'contain'))
+  check('kdr にグラデーションと収め方が入る', json.version === 16 && nodes.some((n) => n.fills && n.fills.some((p) => p.type === 'linear')) && nodes.some((n) => n.fit === 'contain'))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

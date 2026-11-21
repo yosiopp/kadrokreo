@@ -162,7 +162,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const rotations = Object.values(json.document.pages[0].nodes).map((n) => n.rotation).sort((a, b) => a - b)
-  check('kdr に角度が入る', json.version === 15 && rotations.join() === '-25,0,20,30', rotations.join())
+  check('kdr に角度が入る', json.version === 16 && rotations.join() === '-25,0,20,30', rotations.join())
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

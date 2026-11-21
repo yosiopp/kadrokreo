@@ -7,7 +7,9 @@ import { layerRows } from '../../src/document/layers.ts'
 import type { DesignDocument, Page } from '../../src/document/types.ts'
 import { syncComponents } from '../../src/editor/components.ts'
 import { encodeKdr } from '../../src/editor/exportKdr.ts'
-import { setFill, translateNodes, updatePage } from '../../src/editor/operations.ts'
+import { updatePage } from '../../src/editor/operations/document.ts'
+import { setFill } from '../../src/editor/operations/paints.ts'
+import { translateNodes } from '../../src/editor/operations/transform.ts'
 import { createEditorStore } from '../../src/editor/store.ts'
 import { inspectPage, summarizePage } from '../../src/viewer/summary.ts'
 import { fitTextEstimated } from '../textMeasure.ts'
@@ -33,7 +35,9 @@ export async function runPureBench(document: DesignDocument, meta: ReturnType<ty
   const page = document.pages[0]
   const onPage = (recipe: (page: Page) => Page) => (doc: DesignDocument) => updatePage(doc, page.id, recipe)
   const dragTargetId = page.rootIds[0]
-  const moved = onPage((scene) => translateNodes(scene, [dragTargetId], 1, 0))(document)
+  // 毎回別のドキュメントにする（同じ参照だと、合っていたドキュメントの覚え書きで同期が飛ばされる）
+  let step = 0
+  const moved = () => onPage((scene) => translateNodes(scene, [dragTargetId], ++step % 2 === 0 ? 1 : -1, 0))(document)
   let flip = false
   const recolored = () => {
     flip = !flip
@@ -46,10 +50,10 @@ export async function runPureBench(document: DesignDocument, meta: ReturnType<ty
   return {
     // kdr のバイト列からメモリ上の形まで（展開・JSON の解析・検証）
     decodeKdr: await time(() => decodeKdr(new Blob([bytes])), 10, 2),
-    // 合っているドキュメントの同期（コンポーネントに関係ない変更のたびに走る分）
+    // 合っているドキュメントの同期（同じ参照なので、覚え書きで飛ばす）
     syncComponentsNoop: await time(() => syncComponents(document, fitTextEstimated)),
-    // 元に関係ない変更（長方形を 1 つ動かした）のあとの同期
-    syncComponentsUnrelated: await time(() => syncComponents(moved, fitTextEstimated)),
+    // 元に関係ない変更（長方形を 1 つ動かした）のあとの同期。長方形を動かす時間を含む
+    syncComponentsUnrelated: await time(() => syncComponents(moved(), fitTextEstimated)),
     // 元の色を変えたあとの同期（全インスタンスの rebuild）
     syncComponentsMainChanged: await time(() => syncComponents(recolored(), fitTextEstimated), 10, 2),
     // ストアに変更を 1 つ通す時間（上書きを覚える・並べ直し・同期をまとめた settle を含む）

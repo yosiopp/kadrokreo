@@ -9,8 +9,9 @@ import { camelClass, componentName, jsxStyle, parseDeclarations, tailwindClasses
 // 選んだノードを、中身（子孫）まで含めた HTML と CSS で表す。実装の手がかりにするためのもので、ドキュメントは変えない。
 // 一つひとつの要素の CSS は nodeCss と同じもの。要素にはレイヤー名から作ったクラス名を付ける。
 // 出力形式（CodeStyle の format）が React や Tailwind なら、同じ木を JSX のコンポーネントにし、CSS をその形式で付ける。
+// Vue なら、HTML と同じ木を <template> に、CSS を <style scoped> に入れた単一ファイルコンポーネント（.vue）にする。
 
-/** html は形式が React などなら JSX のコード。css は、その形式で CSS が要らなければ空文字 */
+/** html は形式が React などなら JSX のコード、Vue なら .vue ファイルの全体。css は、その形式で別に CSS が要らなければ空文字 */
 export type Markup = { html: string; css: string }
 
 /** 画像の src。snippet はファイル名だけ（元の画像を保存して置く前提）、standalone はファイルに埋め込む */
@@ -49,7 +50,7 @@ export function nodeMarkup(
 ): Markup {
   const { style = {}, assets = {}, images = 'file' } = options
   const format = style.format ?? DEFAULT_CODE_STYLE.format
-  const jsx = format !== 'html'
+  const jsx = format !== 'html' && format !== 'vue'
   // 選んだノードを根にした木として扱う
   const root = scene.nodes[id]
   const tree: Scene = { nodes: { ...scene.nodes, [id]: { ...root, parentId: null } }, rootIds: [id] }
@@ -95,7 +96,7 @@ export function nodeMarkup(
     let css = nodeCss(tree, node.id, style)
     // SVG は枠の外に出る線の太さの分を切らない
     if (node.type === 'path') css += '\noverflow: visible;'
-    if (format === 'html' || format === 'css-modules') rules.push(`.${name} {\n${css.replace(/^/gm, '  ')}\n}`)
+    if (format !== 'react' && format !== 'tailwind') rules.push(`.${name} {\n${css.replace(/^/gm, '  ')}\n}`)
 
     const attr = attribute(name, css)
     switch (node.type) {
@@ -111,7 +112,10 @@ export function nodeMarkup(
         break
       }
       case 'text': {
-        const text = jsx ? escapeJsx(node.text).replace(/\n/g, '<br />') : escapeHtml(node.text).replace(/\n/g, '<br>')
+        // Vue のテンプレートも {{ }} を式と読むので、JSX と同じく { } を文字参照にする
+        const text = jsx
+          ? escapeJsx(node.text).replace(/\n/g, '<br />')
+          : (format === 'vue' ? escapeJsx(node.text) : escapeHtml(node.text)).replace(/\n/g, '<br>')
         lines.push(`${indent}<div ${attr}>${text}</div>`)
         break
       }
@@ -119,7 +123,7 @@ export function nodeMarkup(
         const asset = Object.hasOwn(assets, node.assetId) ? assets[node.assetId] : undefined
         const src =
           images === 'embed' && asset
-            ? `data:${asset.mime};base64,${asset.data}`
+            ? `data:${asset.mime};base64,${toBase64(asset.bytes)}`
             : `${slug(node.name) || 'image'}.${asset ? imageExtension(asset.mime) : 'png'}`
         lines.push(`${indent}<img ${attr} src="${escapeHtml(src)}" alt="${escapeHtml(node.name)}"${jsx ? ' />' : '>'}`)
         break
@@ -135,9 +139,14 @@ export function nodeMarkup(
         lines.push(`${indent}<div ${attr}></div>`)
     }
   }
-  visit(tree.nodes[id], jsx ? 2 : 0)
+  visit(tree.nodes[id], jsx ? 2 : format === 'vue' ? 1 : 0)
 
   const css = rules.join('\n\n')
+  if (format === 'vue') {
+    // <style> を閉じられないようにする（中身は信頼できない入力の kdr から作る）
+    const scoped = css.replace(/</g, '\\3c ')
+    return { html: ['<template>', ...lines, '</template>', '', '<style scoped>', scoped, '</style>'].join('\n'), css: '' }
+  }
   if (!jsx) return { html: lines.join('\n'), css }
   // JSX は、レイヤー名を名前にしたコンポーネントにする
   const component = componentName(slug(root.name))
@@ -248,4 +257,14 @@ function escapeJsx(text: string): string {
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/** data URI に埋め込むための base64 */
+function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  // 引数の数に上限があるので、少しずつ文字列にする
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  }
+  return btoa(binary)
 }

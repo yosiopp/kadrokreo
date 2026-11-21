@@ -18,7 +18,7 @@ import {
   sortByDocumentOrder,
   topLevelIds,
   updateNode,
-} from './operations.ts'
+} from './operations/tree.ts'
 
 // オートレイアウト。フレームの子を children の順に並べ、必要ならフレームの大きさを中身に合わせる。
 // 並べた結果は各ノードの x / y / width / height に書き込むので、描画や viewer はこの設定を知らなくてよい。

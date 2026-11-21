@@ -14,32 +14,49 @@ export type Distance = {
 }
 
 /**
- * 選んでいる矩形 a から、相手の矩形 b までの間隔。線は a の中心を通る。
- * 離れていれば向かい合う辺どうし、重なっていれば（b が a を含むときなど）同じ側の辺どうしを測る。
- * 間隔が 0 の向きには線を出さない。
+ * 選んでいる矩形 a から、相手の矩形 b までの間隔。既存のデザインツールに合わせて、見たい線だけに絞る。
+ * - 離れている向きは、向かい合う辺どうしを測る。
+ * - 重なっている向きは、同じ側の辺どうし（左と左、右と右）を測る。ただし、もう一方の向きに離れていれば出さない
+ *   （上下に並んだ 2 つで知りたいのは縦の間隔。左右の辺のずれまで出すと線が重なって読めない）。
+ * - 線は、もう一方の向きで 2 つが重なっている範囲の中央を通る（相手の正面にない線を引かない）。
+ *   重なっていなければ（斜め向かい）a の中心を通り、相手の辺まで補助線を引く。
+ * 間隔が 0 の線は出さない。
  */
 export function measureBetween(a: Bounds, b: Bounds): Distance[] {
-  const horizontal = spans(a.x, a.x + a.width, b.x, b.x + b.width).map(([from, to, edge]): Distance => {
-    const y = a.y + a.height / 2
+  const ax = [a.x, a.x + a.width] as const
+  const ay = [a.y, a.y + a.height] as const
+  const bx = [b.x, b.x + b.width] as const
+  const by = [b.y, b.y + b.height] as const
+  const apartX = ax[1] < bx[0] || bx[1] < ax[0]
+  const apartY = ay[1] < by[0] || by[1] < ay[0]
+  const horizontal = (apartY && !apartX ? [] : spans(...ax, ...bx)).map(([from, to, edge]): Distance => {
+    const y = across(ay, by)
     return {
       from: { x: from, y },
       to: { x: to, y },
       distance: tidy(to - from),
       axis: 'x',
-      guide: guideTo(y, b.y, b.y + b.height, (along) => ({ x: edge, y: along })),
+      guide: guideTo(y, ...by, (along) => ({ x: edge, y: along })),
     }
   })
-  const vertical = spans(a.y, a.y + a.height, b.y, b.y + b.height).map(([from, to, edge]): Distance => {
-    const x = a.x + a.width / 2
+  const vertical = (apartX && !apartY ? [] : spans(...ay, ...by)).map(([from, to, edge]): Distance => {
+    const x = across(ax, bx)
     return {
       from: { x, y: from },
       to: { x, y: to },
       distance: tidy(to - from),
       axis: 'y',
-      guide: guideTo(x, b.x, b.x + b.width, (along) => ({ x: along, y: edge })),
+      guide: guideTo(x, ...bx, (along) => ({ x: along, y: edge })),
     }
   })
   return [...horizontal, ...vertical].filter((item) => item.distance !== 0)
+}
+
+/** 線を通す位置。2 つの範囲が重なっていればその中央、重なっていなければ a の中央 */
+function across(a: readonly [number, number], b: readonly [number, number]): number {
+  const low = Math.max(a[0], b[0])
+  const high = Math.min(a[1], b[1])
+  return high > low ? (low + high) / 2 : (a[0] + a[1]) / 2
 }
 
 /** 回した図形を含む 2 つの間隔。outlines は「何を測ったか」を示すために破線で描く枠（ページ座標の四隅） */

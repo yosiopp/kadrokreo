@@ -13,7 +13,7 @@ import {
   setShadow,
   setStroke,
   withStopColor,
-} from '../operations.ts'
+} from '../operations/paints.ts'
 import { type PanelContext, linesIn, shapesIn, textsIn, common, mapValue } from './context.ts'
 import { CheckField, ColorField, NumberField, Section, SelectField } from './fields.tsx'
 

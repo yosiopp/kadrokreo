@@ -16,73 +16,137 @@ import type {
   Sizing,
   Constraint,
 } from './types.ts'
+import { TarError, readTar, type TarEntry } from './tar.ts'
 
-// kdr ファイルの実体は gzip 圧縮した 1 つの JSON:
-//   { format: 'kadrokreo', version: 15, document: { name, pages: [{ id, name, children: [ノード, …] }], assets } }
+// kdr ファイルの実体は、次のファイルを tar にまとめて gzip で圧縮した 1 つのファイル（中身は `tar xzf` で取り出せる）:
+//   document.json              { format: 'kadrokreo', version: 16, document: { name, pages: [{ id, name, children: [ノード, …] }] } }
+//   assets/<id>.<png|jpg|webp|gif>   画像の元のファイルそのまま。id は中身の SHA-256（16 進 64 文字）
 // ノードは木のまま入れ子で持ち（フレームの children にノードそのものが入る）、親の id は書かない。
 // 既定値（DEFAULTS）と同じ項目は書かず、読むときに補う。だから、既定値を持つ項目を足すだけなら
 // 古いファイルもそのまま読める（version を上げなくてよい）。読み込みは今の version だけに対応する。
 //   15: 形を組み直した（入れ子の木、既定値の省略、塗り・線・効果の配列、大きさの決め方 sizing、直線をパスに）。
 //       14 までのファイルは読まない（依頼主の指示で、後方互換を捨てた）
+//   16: gzip した 1 つの JSON（画像は base64 で document.assets に入れていた）から、tar.gz に画像のファイルを切り出した形へ。
+//       15 までのファイルは読まない（依頼主の指示）
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 15
+export const KDR_VERSION = 16
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
+/** kdr の中のドキュメントのファイル名 */
+export const KDR_DOCUMENT_NAME = 'document.json'
 
-/** 展開後サイズの上限。細工された圧縮ファイルでメモリを食い潰されないようにする */
+/** 画像の種類と、kdr の中のファイルの拡張子 */
+const IMAGE_EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
+const ASSET_NAME_PATTERN = /^assets\/([A-Za-z0-9_-]{1,64})\.(png|jpg|webp|gif)$/
+
+// 細工された圧縮ファイルでメモリを食い潰されないよう、展開した大きさに上限を設ける
+/** 展開した tar 全体の上限 */
 export const KDR_MAX_BYTES = 256 * 1024 * 1024
+/** document.json の上限 */
+export const KDR_MAX_JSON_BYTES = 64 * 1024 * 1024
+/** 画像 1 枚の上限（取り込める画像の大きさもこれに揃える） */
+export const KDR_MAX_ASSET_BYTES = 32 * 1024 * 1024
+/** 画像の数の上限 */
+export const KDR_MAX_ASSETS = 10_000
+
+export type KdrLimits = { maxBytes?: number; maxJsonBytes?: number; maxAssetBytes?: number }
 
 export class KdrError extends Error {
   override name = 'KdrError'
 }
 
-export async function decodeKdr(
-  file: Blob,
-  { maxBytes = KDR_MAX_BYTES }: { maxBytes?: number } = {},
-): Promise<DesignDocument> {
-  const bytes = await gunzip(file, maxBytes)
-
-  let value: unknown
-  try {
-    value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-  } catch {
-    throw new KdrError('kdr ファイルの中身が JSON として読めません')
-  }
-  return parseKdr(value)
+/** kdr の中の画像のファイル名 */
+export function assetFileName(id: AssetId, asset: Asset): string {
+  const extension = IMAGE_EXTENSIONS[asset.mime]
+  if (extension === undefined) throw new KdrError(`assets.${id}: 未対応の画像形式です`)
+  return `assets/${id}.${extension}`
 }
 
-async function gunzip(file: Blob, maxBytes: number): Promise<Uint8Array> {
+export async function decodeKdr(file: Blob, limits: KdrLimits = {}): Promise<DesignDocument> {
+  const { document, assets } = await readKdrArchive(file, limits)
+  return parseKdr(document, assets)
+}
+
+/**
+ * kdr を展開して tar を読み、document.json（JSON として解析しただけのもの）と画像を返す。中身の検証は parseKdr がする。
+ * 名前は document.json と assets/<id>.<拡張子> だけを受け付け、同じ名前・同じ id が 2 つあればエラーにする
+ */
+export async function readKdrArchive(
+  file: Blob,
+  { maxBytes = KDR_MAX_BYTES, maxJsonBytes = KDR_MAX_JSON_BYTES, maxAssetBytes = KDR_MAX_ASSET_BYTES }: KdrLimits = {},
+): Promise<{ document: unknown; assets: Record<AssetId, Asset> }> {
   const reader = file.stream().pipeThrough(new DecompressionStream('gzip')).getReader()
-  const chunks: Uint8Array[] = []
   let total = 0
-  for (;;) {
+  const next = async (): Promise<Uint8Array | null> => {
     let result
     try {
       result = await reader.read()
     } catch {
       throw new KdrError('kdr ファイルを展開できません（gzip 形式ではありません）')
     }
-    if (result.done) break
-    total += result.value.byteLength
-    if (total > maxBytes) {
-      await reader.cancel()
-      throw new KdrError('kdr ファイルが大きすぎます')
+    if (result.done) return null
+    // v15 までの kdr は gzip した JSON そのもの（tar の見出しは名前から始まるので { にはならない）
+    if (total === 0 && result.value[0] === 0x7b) {
+      throw new KdrError('このファイルは古いバージョン（v15 以前）で作られているため開けません')
     }
-    chunks.push(result.value)
+    total += result.value.byteLength
+    if (total > maxBytes) throw new KdrError('kdr ファイルが大きすぎます')
+    return result.value
   }
 
-  const bytes = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
+  const names = new Set<string>()
+  const ids = new Set<AssetId>()
+  const check = (name: string, size: number) => {
+    if (names.has(name)) throw new KdrError(`kdr の中に同じ名前のファイルが 2 つあります: ${name}`)
+    names.add(name)
+    if (name === KDR_DOCUMENT_NAME) {
+      if (size > maxJsonBytes) throw new KdrError(`${name} が大きすぎます`)
+      return
+    }
+    const match = ASSET_NAME_PATTERN.exec(name)
+    if (match === null || match[1] === '__proto__') throw new KdrError(`kdr の中に知らないファイルがあります: ${name.slice(0, 120)}`)
+    if (ids.has(match[1])) throw new KdrError(`kdr の中に同じ id の画像が 2 つあります: ${match[1]}`)
+    ids.add(match[1])
+    if (ids.size > KDR_MAX_ASSETS) throw new KdrError('kdr の中の画像が多すぎます')
+    if (size > maxAssetBytes) throw new KdrError(`${name}: 画像が大きすぎます`)
   }
-  return bytes
+
+  let entries: TarEntry[]
+  try {
+    entries = await readTar(next, check)
+  } catch (error) {
+    if (error instanceof TarError) throw new KdrError(`kdr ファイルの中身が読めません: ${error.message}`)
+    throw error
+  } finally {
+    // 途中でやめたときも、展開を止めて後片付けする
+    reader.cancel().catch(() => {})
+  }
+
+  let document: unknown = undefined
+  const assets: Record<AssetId, Asset> = {}
+  for (const entry of entries) {
+    if (entry.name === KDR_DOCUMENT_NAME) {
+      try {
+        document = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(entry.bytes))
+      } catch {
+        throw new KdrError(`${KDR_DOCUMENT_NAME} が JSON として読めません`)
+      }
+      continue
+    }
+    const [, id, extension] = ASSET_NAME_PATTERN.exec(entry.name)!
+    const mime = Object.keys(IMAGE_EXTENSIONS).find((key) => IMAGE_EXTENSIONS[key] === extension)!
+    assets[id] = { mime, bytes: entry.bytes }
+  }
+  if (document === undefined) throw new KdrError(`kdr の中に ${KDR_DOCUMENT_NAME} がありません`)
+  return { document, assets }
 }
 
-/** 展開済みの JSON を検証し、既知のフィールドだけを持つドキュメントに組み直す */
-export function parseKdr(value: unknown): DesignDocument {
+/**
+ * 展開済みの JSON（document.json の中身）と画像を検証し、既知のフィールドだけを持つドキュメントに組み直す。
+ * 画像はノードや上書きから使われているものだけを残す（使われていない画像は捨てる）
+ */
+export function parseKdr(value: unknown, files: Record<AssetId, unknown> = {}): DesignDocument {
   const file = record(value, 'ファイル')
   if (file.format !== KDR_FORMAT) throw new KdrError('kdr ファイルではありません')
   if (typeof file.version !== 'number') throw new KdrError('version がありません')
@@ -98,7 +162,7 @@ export function parseKdr(value: unknown): DesignDocument {
 
   const doc = record(file.document, 'document')
   const assets: Record<AssetId, Asset> = {}
-  for (const [id, raw] of Object.entries(record(doc.assets, 'document.assets'))) {
+  for (const [id, raw] of Object.entries(record(files, 'assets'))) {
     assets[nodeId(id, `assets.${id}`)] = parseAsset(raw, `assets.${id}`)
   }
 
@@ -108,7 +172,25 @@ export function parseKdr(value: unknown): DesignDocument {
     throw new KdrError('document.pages: ページの id が重複しています')
   }
 
-  return { name: string(doc.name, 'document.name'), pages, assets }
+  const used: Record<AssetId, Asset> = {}
+  for (const id of usedAssetIds(pages)) used[id] = assets[id]
+  return { name: string(doc.name, 'document.name'), pages, assets: used }
+}
+
+/** ノード（画像）と、インスタンスの上書き（画像の差し替え）から使われている画像の id */
+export function usedAssetIds(pages: readonly Scene[]): Set<AssetId> {
+  const used = new Set<AssetId>()
+  for (const page of pages) {
+    for (const node of Object.values(page.nodes)) {
+      if (node.type === 'image') used.add(node.assetId)
+      if (node.type === 'frame' && node.component?.role === 'instance') {
+        for (const override of Object.values(node.component.overrides)) {
+          if (override.assetId !== undefined) used.add(override.assetId)
+        }
+      }
+    }
+  }
+  return used
 }
 
 function parsePage(value: unknown, path: string, assets: Record<AssetId, Asset>): Page {
@@ -144,17 +226,15 @@ function parseChildren(
   })
 }
 
-const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/
-
+/** 画像の形式と中身（バイト列）。自動保存から読んだものなど、どこから来たものでも同じように確かめる */
 function parseAsset(value: unknown, path: string): Asset {
   const raw = record(value, path)
   const mime = string(raw.mime, `${path}.mime`)
   if (!IMAGE_MIME_TYPES.includes(mime)) throw new KdrError(`${path}.mime: 未対応の画像形式です`)
-  const data = string(raw.data, `${path}.data`)
-  if (data.length % 4 !== 0 || !BASE64_PATTERN.test(data)) {
-    throw new KdrError(`${path}.data: base64 ではありません`)
+  if (!(raw.bytes instanceof Uint8Array) || !(raw.bytes.buffer instanceof ArrayBuffer)) {
+    throw new KdrError(`${path}.bytes: バイト列ではありません`)
   }
-  return { mime, data }
+  return { mime, bytes: raw.bytes as Uint8Array<ArrayBuffer> }
 }
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -462,17 +542,16 @@ function fontWeight(value: unknown, path: string): number {
 }
 
 /**
- * kdr ファイルの中身（圧縮前の JSON にするもの）。ノードを入れ子の木にし、既定値と同じ項目を省く。
- * 画像は渡されたものをそのまま入れるので、使っていない画像を除くなら先に除いておく
+ * kdr の document.json の中身（JSON にするもの）。ノードを入れ子の木にし、既定値と同じ項目を省く。
+ * 画像は入らない（tar の assets/ に別のファイルとして入れる。editor/exportKdr.ts）
  */
-export function kdrFile(doc: DesignDocument): { format: string; version: number; document: unknown } {
+export function kdrFile(doc: Pick<DesignDocument, 'name' | 'pages'>): { format: string; version: number; document: unknown } {
   return {
     format: KDR_FORMAT,
     version: KDR_VERSION,
     document: {
       name: doc.name,
       pages: doc.pages.map((page) => ({ id: page.id, name: page.name, children: page.rootIds.map((id) => nodeFile(page, id)) })),
-      assets: doc.assets,
     },
   }
 }

@@ -179,6 +179,13 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.reload()
   await page.waitForSelector('.layer-row')
   check('再読み込みで画像も復元', (await layers()).includes('photo'), (await layers()).join())
+  const storedAsset = await page.evaluate(() => new Promise((resolve) => {
+    indexedDB.open('kadrokreo').onsuccess = (event) => {
+      const request = event.target.result.transaction('assets').objectStore('assets').getAll()
+      request.onsuccess = () => resolve(request.result.map((asset) => ({ mime: asset.mime, isBytes: asset.bytes instanceof Uint8Array, hasData: 'data' in asset })))
+    }
+  }))
+  check('自動保存の画像はバイト列（base64 の文字列ではない）', storedAsset.length >= 1 && storedAsset.every((asset) => asset.isBytes && !asset.hasData), JSON.stringify(storedAsset))
   await page.waitForTimeout(500)
   await page.locator('button:text-is("全体表示")').click()
   await page.waitForTimeout(300)
@@ -196,7 +203,16 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const used = new Set(Object.values(json.document.pages[0].nodes).filter((n) => n.type === 'image').map((n) => n.assetId))
-  check('kdr に画像が埋め込まれる', json.version === 15 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
+  check('kdr に画像が埋め込まれる', json.version === 16 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
+  // 画像は assets/<中身の SHA-256>.<拡張子> のファイルとして入り、tar で取り出すと元のファイルと同じ
+  const sha256 = (bytes) => require('crypto').createHash('sha256').update(bytes).digest('hex')
+  const listed = require('child_process').execFileSync('tar', ['-tzf', kdrPath], { encoding: 'utf8' }).trim().split('\n')
+  const extracted = [...used].map((id) => require('child_process').execFileSync('tar', ['-xzOf', kdrPath, `assets/${id}.png`]))
+  check(
+    'kdr の画像は assets/<sha256>.png で、id は中身のハッシュ',
+    listed[0] === 'document.json' && listed.length === used.size + 1 && extracted.every((bytes, i) => sha256(bytes) === [...used][i]),
+    listed.join(),
+  )
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -213,13 +229,43 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [original] = await Promise.all([viewer.waitForEvent('download'), viewer.locator('button:text-is("元の画像を保存")').click()])
   const originalPath = path.join(OUT, 'original-image.bin')
   await original.saveAs(originalPath)
-  check('viewer で、画像の元のファイルを保存できる', original.suggestedFilename() === `${imageName}.png` && fs.readFileSync(originalPath).equals(Buffer.from(json.document.assets[picked.assetId].data, 'base64')), original.suggestedFilename())
+  check('viewer で、画像の元のファイルを保存できる', original.suggestedFilename() === `${imageName}.png` && fs.readFileSync(originalPath).equals(Buffer.from(json.document.assets[picked.assetId].bytes)), original.suggestedFilename())
   await viewer.keyboard.press('Escape')
   check('画像でないものには、元の画像を保存するボタンは出ない', (await viewer.locator('button:text-is("元の画像を保存")').count()) === 0)
   // viewer に画像を落としても何も起きない（kdr として開こうとしてエラー表示）
   await viewer.locator('input[type=file]').setInputFiles(photo)
   await viewer.waitForSelector('.app-message')
   check('viewer は画像ファイルを受け付けない', true)
+
+  // 古い形の自動保存（v15: 画像は base64 の文字列）が残っていても落ちず、空のドキュメントで始まり、古いデータは片付く
+  const writeOld = (version) => page.evaluate((version) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('kadrokreo')
+    open.onsuccess = () => {
+      const tx = open.result.transaction(['document', 'assets'], 'readwrite')
+      const image = { id: 'img', name: 'old photo', type: 'image', parentId: null, x: 0, y: 0, width: 10, height: 10, assetId: 'a1' }
+      tx.objectStore('document').put({ version, document: { name: '古い', assets: {}, pages: [{ id: 'p1', name: 'P', nodes: { img: image }, rootIds: ['img'] }] } }, 'current')
+      tx.objectStore('assets').put({ mime: 'image/png', data: 'iVBORw0KGgo=' }, 'a1')
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    }
+  }), version)
+  const assetCount = () => page.evaluate(() => new Promise((resolve) => {
+    indexedDB.open('kadrokreo').onsuccess = (event) => {
+      const request = event.target.result.transaction('assets').objectStore('assets').count()
+      request.onsuccess = () => resolve(request.result)
+    }
+  }))
+  for (const version of [15, 16]) {
+    await writeOld(version)
+    await page.reload()
+    await page.waitForSelector('.canvas-view canvas')
+    await page.waitForTimeout(500)
+    check(`古い形の自動保存（version ${version}・base64 の画像）が残っていても、空のドキュメントで始まる`, !(await layers()).includes('old photo'), (await layers()).join())
+    if (version === 15) {
+      const count = await assetCount()
+      check('古い version の自動保存は画像ごと消える', count === 0, `assets=${count}`)
+    }
+  }
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

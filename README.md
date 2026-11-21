@@ -26,7 +26,7 @@ viewer は、デザインを実装する人のための表示（既存のデザ�
 - **viewer モード**（既定）: kdr ファイルを読み込んで閲覧する。図形の設定・CSS・間隔を確かめられる。編集や変更はできない
 - **editor モード**: Docker でオプションを付けて起動した場合のみ。kdr ファイルに書き出しができる
 - コメント機能は存在しない
-- kdr ファイルの実体は gzip 圧縮された 1 つの JSON ファイル
+- kdr ファイルの実体は、ドキュメントの JSON と画像のファイルを tar にまとめて gzip 圧縮した 1 つのファイル（tar.gz）
 
 ## 起動
 
@@ -132,7 +132,7 @@ viewer として起動したコンテナからは、編集機能のコードそ�
   形や並びまで変えたいときは切り離す
 - 回転は枠の中心が軸。フレームを回すと中身も一緒に回る。回したものは、その向きに沿ってリサイズできる。
   斜めに回ったものを含む複数選択をまとめてリサイズするときは、歪まないよう縦横比が固定される
-- 画像（PNG / JPEG / WebP / GIF、16MB まで）はツールバーのボタン、ウィンドウへのドロップ、貼り付けで配置する。
+- 画像（PNG / JPEG / WebP / GIF、32MB まで）はツールバーのボタン、ウィンドウへのドロップ、貼り付けで配置する。
   リサイズは縦横比を保つ（`Shift` で解除）
 - SVG は画像としてではなく、図形に変換して取り込む（同じボタンや「開く」、ドロップ、貼り付け。デザインツールで「SVG としてコピー」した文字も貼れる）。
   SVG 全体が 1 つのフレームに、`g` は入れ子のフレームになり、取り込んだあとは普通の図形として編集できる。
@@ -167,15 +167,17 @@ viewer は、デザインを実装する人のための表示（既存のデザ�
   （HTML ではパスを SVG の `path` の `d` で出し、曲線は `C`。グラデーションの塗り・線は `linearGradient`）。
   パネルの上の欄で、色の書き方（HEX / RGB / HSL）と長さの単位（px / rem）を切り替えられる。rem の基準（1rem が何 px か、既定は 16）も変えられる。
   色の書き方は、設定の一覧・CSS・ページの色の一覧のすべてに効く
-- 同じ欄の「形式」で、コードの出し方を HTML + CSS・React（`style`）・React（CSS Modules）・React（Tailwind のクラス）から選べる。
+- 同じ欄の「形式」で、コードの出し方を HTML + CSS・React（`style`）・React（CSS Modules）・React（Tailwind のクラス）・Vue（単一ファイルコンポーネント）から選べる。
   React の形式では、1 つのノードの欄が `style` のオブジェクトか Tailwind のクラスになり、子孫までまとめたものは JSX のコンポーネント（名前はレイヤー名から）になる。
   CSS Modules なら `styles.クラス名` を付けた JSX と、その CSS が出る。Tailwind は決まったクラスがあればそれを使い、なければ `[プロパティ:値]` で書く。
+  Vue では、子孫までまとめたものが `<template>` と `<style scoped>` を並べた `.vue` ファイルの中身になる（1 つのノードの欄は CSS のまま）。
   形式も、選び直したり選択を外したりしてもそのまま（ブラウザには保存しない）
 - 中身のあるフレームを選ぶと、子孫までまとめた HTML と CSS も出る（要素のクラス名はレイヤー名から作る。非表示のものは含めない）。
   画像を埋め込んだ HTML ファイルとして保存すれば、そのままブラウザで開いて見比べられる（ファイルは形式によらず HTML + CSS）。
   線は描画と同じく枠の辺の上に引き（CSS では `outline` と負の `outline-offset`）、直線・折れ線の端の矢印も SVG で出る
 - キャンバスをダブルクリックすると、そこにあるフレームが画面に収まる
-- 選んだまま別の図形にポインタを重ねると、その図形との間隔が出る。親のフレームに重ねれば、4 辺までの余白が出る
+- 選んだまま別の図形にポインタを重ねると、その図形との間隔が出る。親のフレームに重ねれば、4 辺までの余白が出る。
+  上下（左右）に離れていれば、その向きの間隔だけが出る。線は 2 つが重なっている範囲の中央を通る
   回した図形どうしは、向きが同じ（90° の倍数の違いも含む）なら辺に沿って測る。向きが違えば、回した図形を囲む矩形（破線で出る）どうしを測る
 - `Shift` を押しながら押すと、いくつも選べる（キャンバスでもレイヤー一覧でも。もう一度押すと外れる）。
   2 つ選ぶと、その間隔がキャンバスとパネルに出る。パネルには全体を囲む矩形の位置と大きさも出て、まとめて PNG に書き出せる
@@ -233,7 +235,7 @@ kdr -f demo2.kdr -w set Card fill=#ffffff
 | --- | --- |
 | `new [名前]` | 新しいドキュメント（先頭にだけ置ける） |
 | `info` / `ls [ノード] [--all] [--json]` / `get ノード [項目]` / `find 文字列` / `bounds ノード` | 調べる（`get パス d` は形を SVG の path の d で出す） |
-| `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の中身、コンポーネントの一覧 |
+| `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の `document.json` の中身、コンポーネントの一覧 |
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
 | `add 種類 …` | `rect` `ellipse` `frame` `text`（`--text`）`line`（`--from x,y --to x,y`）`path`（`--points "x,y …" [--closed]` か、曲線を含めるなら SVG の path の `--d "M0 0 C…"`）`image`（`--src 画像`） |
 | `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`sizing.width=fill`、`maxWidth=320`、`constraints.horizontal=end`、`fill=null` で外す）。`fill` / `stroke` / `shadow` は、単色の塗り・線と最初の影の略記。配列は `fills=[…]` と JSON で書くか、`fills.0.color=#ff0000` のように番号でつなぐ |
@@ -280,12 +282,20 @@ kdr() { docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" kadrokreo 
 
 ## kdr ファイル
 
-次の JSON を gzip 圧縮したもの（version 15）。
+次のファイルを tar（POSIX ustar）にまとめて gzip で圧縮したもの（version 16）。拡張子は `.kdr` のまま。
+中身は `tar -xzf design.kdr` でそのまま取り出せる。
+
+| tar の中の名前 | 中身 |
+| --- | --- |
+| `document.json` | ドキュメント（下の JSON。UTF-8） |
+| `assets/<id>.<png\|jpg\|webp\|gif>` | 画像の元のファイルそのまま。`<id>` は中身の SHA-256（16 進 64 文字） |
+
+`document.json` の中身:
 
 ```json
 {
   "format": "kadrokreo",
-  "version": 15,
+  "version": 16,
   "document": {
     "name": "Untitled",
     "pages": [
@@ -306,8 +316,7 @@ kdr() { docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" kadrokreo 
           }
         ]
       }
-    ],
-    "assets": { "<id>": { "mime": "image/png", "data": "<base64>" } }
+    ]
   }
 }
 ```
@@ -331,10 +340,12 @@ kdr() { docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" kadrokreo 
 - インスタンスの中身（写し）も普通のノードとして書く。表示するだけなら、コンポーネントのつながり（`component`）を読まなくてよい。
   インスタンスの `overrides` は元の側のノードの id ごとの上書き（`text` `fills` `strokes` `visible` `fontSize` `fontFamily` `fontWeight` `assetId`、
   元の中に置いたインスタンスへの `componentId`（入れ子のインスタンスの差し替え先のコンポーネント））。
-- 読み込み時には `src/document/kdr.ts` で型・木構造（id の重複、深さ 100 まで）・展開後のサイズ（256MB）・画像の形式を検証し、知らないフィールドは捨てる。
-  画像は base64 で `assets` に埋め込み、全ページで共有する。
-- **読めるのは今の version のファイルだけ**。14 以前のファイル（ノードを平らな表で持ち、全項目を書いていた形）は、
-  version 15 で形を組み直したときに読まないことにした。既定値のある項目を足すだけなら、今後は version を上げずに済む。
+- 画像のノード（と上書き）の `assetId` は `assets/` のファイルの `<id>` を指す。画像は全ページで共有する。
+- 読み込み時には `src/document/kdr.ts` で型・木構造（id の重複、深さ 100 まで）・画像の形式を検証し、知らないフィールドは捨てる。
+  tar は決まった名前（`document.json` と `assets/<id>.<拡張子>`）の普通のファイルだけを受け付け、同じ名前・同じ id が 2 つあるもの、
+  `document.json` がないものは読まない。どこからも使われていない画像は捨てる。展開後の大きさは全体 256MB・`document.json` 64MB・画像 1 枚 32MB まで。
+- **読めるのは今の version のファイルだけ**。15 以前のファイル（gzip した 1 つの JSON で、画像を base64 で `document.assets` に入れていた形）は、
+  version 16 で tar.gz にしたときに読まないことにした（14 以前は v15 で形を組み直したときに捨てた）。既定値のある項目を足すだけなら、version を上げずに済む。
 
 ## 構成
 
@@ -367,7 +378,7 @@ npm run bench        # 大きなデザインでの性能を測る（bench/out �
 ./cli/kadrokreo.ts --help   # コマンドライン（npm link すれば kdr --help）
 ```
 
-設計の要点、作業の経緯、次にやることは [`docs/HANDOVER.md`](docs/HANDOVER.md)（引き継ぎ資料）にまとめてある。
+設計の要点、決めたことと理由、次にやることは [`docs/HANDOVER.md`](docs/HANDOVER.md)（引き継ぎ資料の入口。詳細は `docs/handover/`）、作業の経緯は [`docs/HISTORY.md`](docs/HISTORY.md) にまとめてある。
 
 ## 未対応
 

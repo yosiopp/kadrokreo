@@ -255,6 +255,14 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await viewer.locator('.inspect-layer:has(.layer-name:text-is("ボタン"))').first().click()
   await shot(viewer, '11-viewer-instance.png')
 
+  // カードを選び、コードの形式を Vue にする。子孫までまとめた .vue の中身が出る（形式は HTML に戻しておく）
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("カード"))').first().click()
+  const codeFormat = viewer.locator('select[aria-label="コードの形式"]')
+  await codeFormat.selectOption('vue')
+  await viewer.locator('section[aria-label="Vue"]').scrollIntoViewIfNeeded()
+  await shot(viewer, '13-viewer-vue.png')
+  await codeFormat.selectOption('html')
+
   // ── editor のバリアント（ほかのキャプチャに写らないよう、最後に 2 ページ目で作る） ──
   await page.bringToFront()
   await page.locator('.page-row:has(.page-name:text-is("設定"))').click()

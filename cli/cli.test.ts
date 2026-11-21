@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { gzipSync, gunzipSync } from 'node:zlib'
-import { KDR_VERSION, decodeKdr } from '../src/document/kdr.ts'
+import { createHash } from 'node:crypto'
+import { KDR_VERSION, decodeKdr, readKdrArchive } from '../src/document/kdr.ts'
 import type { DesignDocument, FrameNode, TextNode } from '../src/document/types.ts'
 import { type IO, run } from './run.ts'
 
@@ -144,7 +145,9 @@ describe('kadrokreo CLI', () => {
     expect(nodeByName(doc, 'Path')).toMatchObject({ width: 100, height: 80, closed: true, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 1 }] })
     const image = nodeByName(doc, 'Image')
     expect(image).toMatchObject({ width: 20, height: 10 })
-    expect(Object.values(doc.assets)).toEqual([{ mime: 'image/png', data: Buffer.from(png).toString('base64') }])
+    expect(Object.values(doc.assets)).toEqual([{ mime: 'image/png', bytes: new Uint8Array(png) }])
+    // アセットの id は中身の SHA-256
+    expect(Object.keys(doc.assets)).toEqual([createHash('sha256').update(png).digest('hex')])
 
     // 同じ画像をもう一度足しても、アセットは 1 つのまま
     await h.run(['-f', 'a.kdr', '-w', 'add', 'image', '--src', 'a.png', '--name', 'Again'])
@@ -376,7 +379,7 @@ describe('kadrokreo CLI', () => {
     expect(nodeByName(doc, 'Dot')).toMatchObject({ fills: [{ type: 'linear', angle: 0 }] })
     await h.run(argv('-f a.kdr -w set Box fill=null shadow=null'))
     expect(nodeByName(await h.doc('a.kdr'), 'Box')).toMatchObject({ fills: [], effects: [] })
-    const file = JSON.parse(gunzipSync(h.fs.get('a.kdr')!).toString())
+    const file = (await readKdrArchive(new Blob([new Uint8Array(h.fs.get('a.kdr')!)]))).document as { document: { pages: { children: { name: string }[] }[] } }
     const box = file.document.pages[0].children.find((node: { name: string }) => node.name === 'Box')
     expect(box).not.toHaveProperty('fills')
     expect(box).not.toHaveProperty('rotation')

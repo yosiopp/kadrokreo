@@ -25,15 +25,8 @@ import { RedoIcon, UndoIcon } from './icons.tsx'
 import { placeImage, readImageFile } from './importImage.ts'
 import { SVG_ACCEPT, convertSvgText, isSvgFile, placeSvg, readSvgFile, svgWarningMessage } from './importSvg.ts'
 import { fitTextNodes } from './measure.ts'
-import {
-  addOrReuseAsset,
-  createDocument,
-  patchNodes,
-  renameDocument,
-  sortByDocumentOrder,
-  topLevelIds,
-  updatePage,
-} from './operations.ts'
+import { addOrReuseAsset, createDocument, renameDocument, updatePage } from './operations/document.ts'
+import { patchNodes, sortByDocumentOrder, topLevelIds } from './operations/tree.ts'
 import { createId } from './nodes.ts'
 import { loadSavedDocument, saveDocument } from './persistence.ts'
 import { type EditorStore, createEditorStore } from './store.ts'

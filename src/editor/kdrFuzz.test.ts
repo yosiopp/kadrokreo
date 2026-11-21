@@ -3,11 +3,14 @@ import { renderScene } from '../canvas/render.ts'
 import { measureText } from '../canvas/text.ts'
 import { getContentBounds } from '../document/geometry.ts'
 import { KDR_VERSION, KdrError, MAX_DEPTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
-import type { DesignDocument } from '../document/types.ts'
+import { tarParts } from '../document/tar.ts'
+import { fromBase64, gzipBlob, kdrBlob, tarGz } from '../document/testKdr.ts'
+import type { Asset, DesignDocument } from '../document/types.ts'
 import { inspectNode, inspectSelection, nodeCss } from '../viewer/inspect.ts'
 import { nodeCode, nodeMarkup } from '../viewer/markup.ts'
 import { inspectPage, summarizePage } from '../viewer/summary.ts'
 import { syncComponents } from './components.ts'
+import { kdrEntries } from './exportKdr.ts'
 
 // kdr の読み込みのファズテスト。viewer は外から受け取った kdr を開くので、どんな入力でも
 // 「KdrError になる」か「正しく読めて、描画・インスペクト・書き出し直しまで落ちない」かのどちらかになることを確かめる。
@@ -131,17 +134,19 @@ function exercise(doc: DesignDocument) {
 
   // 書き出して読み直すと同じものになる（-0 は JSON で 0 になるので、書き出した JSON どうしで比べる）
   const json = JSON.stringify(kdrFile(doc))
-  expect(JSON.stringify(kdrFile(parseKdr(JSON.parse(json))))).toBe(json)
+  expect(JSON.stringify(kdrFile(parseKdr(JSON.parse(json), doc.assets)))).toBe(json)
+  // tar にまとめられる（画像の名前が tar に入れられる形）
+  tarParts(kdrEntries(doc))
   // editor で開くと、インスタンスを元に合わせて作り直してから自動保存する。それも読み直せなければならない
   const synced = syncComponents(doc)
-  parseKdr(JSON.parse(JSON.stringify(kdrFile(synced))))
+  parseKdr(JSON.parse(JSON.stringify(kdrFile(synced))), synced.assets)
 }
 
 /** parseKdr を呼び、KdrError 以外の例外を出さないことと、読めたら使えることを確かめる */
-function parseOrReject(value: unknown): 'ok' | 'error' {
+function parseOrReject(value: unknown, assets: unknown = {}): 'ok' | 'error' {
   let doc: DesignDocument
   try {
-    doc = parseKdr(value)
+    doc = parseKdr(value, assets as Record<string, unknown>)
   } catch (error) {
     if (error instanceof KdrError) return 'error'
     throw error
@@ -153,7 +158,7 @@ function parseOrReject(value: unknown): 'ok' | 'error' {
 // ---- ランダムなドキュメント ----
 
 const ID_POOL = ['a', 'b', 'n1', 'constructor', 'toString', 'hasOwnProperty', 'valueOf', '__proto__', 'x'.repeat(64), 'x'.repeat(65), '', 'p1']
-const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+const PNG = fromBase64('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
 
 /** JSON で表せる極端な値。NaN / Infinity は JSON にないので、文字列の段階で別に差し込む */
 const EXTREMES: unknown[] = [
@@ -279,12 +284,13 @@ function randomNode(c: Context, depth: number): Record<string, unknown> {
   return node
 }
 
-function randomFile(r: Random): Record<string, unknown> {
+/** ランダムなファイル。file は document.json の中身、assets は tar の assets/ に入る画像 */
+function randomFile(r: Random): { file: Record<string, unknown>; assets: Record<string, Asset> } {
   const c: Context = { r, counter: 0, components: [], assets: [] }
-  const assets: Record<string, unknown> = {}
+  const assets: Record<string, Asset> = {}
   for (let i = 0; i < r.int(0, 2); i++) {
     const id = `img${i}`
-    assets[id] = { mime: 'image/png', data: PNG }
+    assets[id] = { mime: r.pick(['image/png', 'image/jpeg', 'image/webp', 'image/gif']), bytes: PNG.slice() }
     c.assets.push(id)
   }
   const pages = Array.from({ length: r.int(1, 3) }, (_, i) => ({
@@ -292,7 +298,7 @@ function randomFile(r: Random): Record<string, unknown> {
     name: `Page ${i}`,
     children: Array.from({ length: r.int(0, 5) }, () => randomNode(c, 1)),
   }))
-  return { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'fuzz', pages, assets } }
+  return { file: { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'fuzz', pages } }, assets }
 }
 
 // ---- 壊し方 ----
@@ -301,7 +307,8 @@ type Slot = { parent: Record<string, unknown> | unknown[]; key: string | number 
 
 /** 木の中の場所（親とキー）を全部集める */
 function slotsOf(value: unknown, out: Slot[] = [], seen = new Set<unknown>()): Slot[] {
-  if (typeof value !== 'object' || value === null || seen.has(value)) return out
+  // バイト列（画像の中身）は中まで辿らず、丸ごと置き換える対象にする
+  if (typeof value !== 'object' || value === null || seen.has(value) || ArrayBuffer.isView(value)) return out
   seen.add(value)
   const entries: [string | number, unknown][] = Array.isArray(value) ? value.map((item, i) => [i, item]) : Object.entries(value)
   for (const [key, item] of entries) {
@@ -397,14 +404,10 @@ function mutateText(r: Random, text: string): string {
   }
 }
 
-async function gzip(data: string | Uint8Array): Promise<Blob> {
-  return new Response(new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream('gzip'))).blob()
-}
-
-async function decodeOrReject(blob: Blob, maxBytes?: number): Promise<'ok' | 'error'> {
+async function decodeOrReject(blob: Blob, limits: Parameters<typeof decodeKdr>[1] = {}): Promise<'ok' | 'error'> {
   let doc: DesignDocument
   try {
-    doc = await decodeKdr(blob, maxBytes === undefined ? {} : { maxBytes })
+    doc = await decodeKdr(blob, limits)
   } catch (error) {
     if (error instanceof KdrError) return 'error'
     throw error
@@ -421,7 +424,8 @@ describe('kdr の読み込みのファズテスト', () => {
     for (let seed = 1; seed <= 300; seed++) {
       const r = makeRandom(seed)
       try {
-        if (parseOrReject(randomFile(r)) === 'ok') ok++
+        const { file, assets } = randomFile(r)
+        if (parseOrReject(file, assets) === 'ok') ok++
       } catch (error) {
         throw new Error(`種 ${seed} で失敗: ${String(error)}`, { cause: error })
       }
@@ -434,11 +438,12 @@ describe('kdr の読み込みのファズテスト', () => {
     const results = { ok: 0, error: 0 }
     for (let seed = 1; seed <= 1500; seed++) {
       const r = makeRandom(seed * 7919)
-      const file = randomFile(r)
+      // 画像（の表とバイト列）も壊す対象に入れる
+      const both = randomFile(r)
       const cycles = r.chance(0.2)
-      for (let i = r.int(1, 4); i > 0; i--) mutate(r, file, cycles)
+      for (let i = r.int(1, 4); i > 0; i--) mutate(r, both, cycles)
       try {
-        results[parseOrReject(file)]++
+        results[parseOrReject(both.file, both.assets)]++
       } catch (error) {
         throw new Error(`種 ${seed * 7919} で失敗: ${String(error)}`, { cause: error })
       }
@@ -450,20 +455,29 @@ describe('kdr の読み込みのファズテスト', () => {
   it('文字列を壊した JSON（NaN・1e999・切れた JSON・重複したキー）は、KdrError になるか、読めて使える', async () => {
     for (let seed = 1; seed <= 400; seed++) {
       const r = makeRandom(seed * 104729)
-      let text = JSON.stringify(randomFile(r))
+      const { file, assets } = randomFile(r)
+      let text = JSON.stringify(file)
       for (let i = r.int(1, 3); i > 0; i--) text = mutateText(r, text)
       try {
-        await decodeOrReject(await gzip(text))
+        await decodeOrReject(await kdrBlob(text, assets))
       } catch (error) {
         throw new Error(`種 ${seed * 104729} で失敗: ${String(error)}`, { cause: error })
       }
     }
   })
 
-  it('gzip でないもの・壊れた gzip・空のファイル・UTF-8 でない中身は KdrError になる', async () => {
+  it('gzip でないもの・壊れた gzip・空のファイル・tar でない中身・UTF-8 でない document.json は KdrError になる', async () => {
     const r = makeRandom(42)
-    const valid = new Uint8Array(await (await gzip(JSON.stringify(randomFile(r)))).arrayBuffer())
-    const inputs: Blob[] = [new Blob([]), new Blob(['{}']), await gzip(new Uint8Array([0xff, 0xfe, 0xfd])), await gzip('')]
+    const { file, assets } = randomFile(r)
+    const valid = new Uint8Array(await (await kdrBlob(file, assets)).arrayBuffer())
+    const inputs: Blob[] = [
+      new Blob([]),
+      new Blob(['{}']),
+      await gzipBlob(new Uint8Array([0xff, 0xfe, 0xfd])),
+      await gzipBlob(''),
+      await gzipBlob(JSON.stringify(file)),
+      await kdrBlob(new Uint8Array([0xff, 0xfe, 0xfd])),
+    ]
     for (let i = 0; i < 50; i++) {
       const bytes = Uint8Array.from({ length: r.int(1, 200) }, () => r.int(0, 255))
       inputs.push(new Blob([bytes]))
@@ -475,9 +489,141 @@ describe('kdr の読み込みのファズテスト', () => {
   })
 
   it('展開すると上限を超えるファイルは、展開の途中で KdrError になる', async () => {
-    const bomb = await gzip(new Uint8Array(4 * 1024 * 1024))
+    const bomb = await gzipBlob(new Uint8Array(4 * 1024 * 1024))
     expect(bomb.size).toBeLessThan(64 * 1024)
     await expect(decodeKdr(bomb, { maxBytes: 1024 * 1024 })).rejects.toThrow(KdrError)
+    // 見出しは正しく、中身が大きい（document.json・画像）ものも、上限を超えた所で止まる
+    const json = await tarGz([{ name: 'document.json', bytes: ' '.repeat(4 * 1024 * 1024) }])
+    await expect(decodeKdr(json, { maxBytes: 1024 * 1024 })).rejects.toThrow('大きすぎ')
+    await expect(decodeKdr(json, { maxJsonBytes: 1024 * 1024 })).rejects.toThrow('大きすぎ')
+  })
+})
+
+/** 画像 1 枚（img0）を使うか、何も使わない、小さな正しいファイル */
+function simpleFile(withImage: boolean) {
+  const children = withImage ? [{ type: 'image', id: 'i', name: 'I', x: 0, y: 0, width: 1, height: 1, assetId: 'img0' }] : []
+  return { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P', children }] } }
+}
+
+describe('kdr の tar のファズテスト', () => {
+  /** 正しい kdr の tar（gzip する前）のバイト列 */
+  async function validTar(r: Random): Promise<Uint8Array> {
+    const { file, assets } = randomFile(r)
+    const blob = await kdrBlob(file, assets)
+    return new Uint8Array(await new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
+  }
+
+  it('tar のバイトを壊したもの（見出し・中身・詰め物・途中で切る・つなげる）は、KdrError になるか、読めて使える', async () => {
+    const results = { ok: 0, error: 0 }
+    for (let seed = 1; seed <= 400; seed++) {
+      const r = makeRandom(seed * 31337)
+      let tar = await validTar(r)
+      for (let i = r.int(1, 3); i > 0; i--) {
+        switch (r.int(0, 4)) {
+          case 0: {
+            // 見出しの中の 1 バイト（名前・大きさ・種類・チェックサム・magic のあたり）
+            const header = r.int(0, Math.floor(tar.length / 512) - 1) * 512
+            tar[header + r.pick([0, 5, 99, 124, 130, 135, 148, 150, 156, 257, 262, 345])] = r.int(0, 255)
+            break
+          }
+          case 1:
+            tar[r.int(0, tar.length - 1)] ^= 1 << r.int(0, 7)
+            break
+          case 2:
+            tar = tar.slice(0, r.int(0, tar.length))
+            break
+          case 3: {
+            // 同じものを後ろにつなげる（終わりの印のあとの中身）
+            const doubled = new Uint8Array(tar.length * 2)
+            doubled.set(tar)
+            doubled.set(tar, tar.length)
+            tar = doubled
+            break
+          }
+          default:
+            // 0 のブロックを足す（詰め物）
+            tar = Uint8Array.from([...tar, ...new Uint8Array(512 * r.int(1, 20))])
+        }
+      }
+      try {
+        results[await decodeOrReject(await gzipBlob(tar as Uint8Array<ArrayBuffer>))]++
+      } catch (error) {
+        throw new Error(`種 ${seed * 31337} で失敗: ${String(error)}`, { cause: error })
+      }
+    }
+    expect(results.ok).toBeGreaterThan(20)
+    expect(results.error).toBeGreaterThan(100)
+  })
+
+  it('ランダムな名前と中身の並び（重複・知らない名前・パスの細工・空・巨大な名前）は、KdrError になるか、読めて使える', async () => {
+    const NAMES = [
+      'document.json', 'document.json', 'assets/img0.png', 'assets/img1.jpg', 'assets/img0.gif', 'assets/img2.webp',
+      'assets/img0.PNG', 'assets/img0.svg', 'assets/', 'assets', '../document.json', 'assets/../document.json', '/document.json',
+      './document.json', 'assets/a/b.png', 'assets/__proto__.png', 'assets/constructor.png', `assets/${'x'.repeat(64)}.png`,
+      `assets/${'x'.repeat(65)}.png`, 'DOCUMENT.JSON', 'document.json/', 'assets\\img0.png',
+    ]
+    const results = { ok: 0, error: 0 }
+    for (let seed = 1; seed <= 300; seed++) {
+      const r = makeRandom(seed * 7)
+      // 画像を使わないドキュメント（どの画像も捨てられる）なので、名前の扱いだけで結果が決まる
+      const file = simpleFile(false)
+      const entries = Array.from({ length: r.int(0, 5) }, () => {
+        const name = r.pick(NAMES)
+        const bytes = name.endsWith('.json') ? JSON.stringify(file) : r.chance(0.8) ? PNG.slice() : new Uint8Array(r.int(0, 2000))
+        return { name, bytes }
+      })
+      try {
+        results[await decodeOrReject(await tarGz(entries))]++
+      } catch (error) {
+        throw new Error(`種 ${seed * 7} で失敗: ${String(error)}`, { cause: error })
+      }
+    }
+    expect(results.ok).toBeGreaterThan(10)
+    expect(results.error).toBeGreaterThan(100)
+  })
+
+  /** 正しい kdr の tar の最初の見出しを書き換え、チェックサムを合わせ直したもの */
+  async function craftedHeader(patch: (header: Uint8Array) => void, fixChecksum = true): Promise<Blob> {
+    const { file } = randomFile(makeRandom(5))
+    const tar = new Uint8Array(await new Response((await kdrBlob(file)).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
+    const header = tar.subarray(0, 512)
+    patch(header)
+    if (fixChecksum) {
+      header.fill(0x20, 148, 156)
+      const sum = header.reduce((total, byte) => total + byte, 0)
+      header.set(new TextEncoder().encode(sum.toString(8).padStart(6, '0') + '\0 '), 148)
+    }
+    return gzipBlob(tar)
+  }
+  const write = (header: Uint8Array, offset: number, text: string) => header.set(new TextEncoder().encode(text), offset)
+
+  it('細工した見出し（リンク・ディレクトリ・拡張の見出し・読めない大きさ・巨大な大きさ・壊れたチェックサム）は KdrError になる', async () => {
+    expect(await decodeOrReject(await craftedHeader(() => {}))).toBe('ok')
+    const patches: ((header: Uint8Array) => void)[] = [
+      (h) => write(h, 156, '2'), // シンボリックリンク
+      (h) => write(h, 156, '1'), // ハードリンク
+      (h) => write(h, 156, '5'), // ディレクトリ
+      (h) => write(h, 156, 'x'), // pax の拡張の見出し
+      (h) => write(h, 156, 'L'), // GNU の長い名前
+      (h) => write(h, 124, '0000000009x\0'), // 8 進でない大きさ
+      (h) => write(h, 124, '77777777777\0'), // 8GB の大きさ
+      (h) => h.set([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff], 124), // base-256 の大きさ
+      (h) => write(h, 257, 'nottar'), // magic が違う
+      (h) => write(h, 345, 'assets'), // prefix で名前を変える（assets/document.json になる）
+    ]
+    for (const patch of patches) expect(await decodeOrReject(await craftedHeader(patch))).toBe('error')
+    expect(await decodeOrReject(await craftedHeader((h) => write(h, 0, 'x'), false))).toBe('error')
+  })
+})
+
+describe('kdr の読み込みの上限', () => {
+  it('画像 1 枚・document.json・全体の上限を超えたものは、中身を読む前に KdrError になる', async () => {
+    const file = simpleFile(true)
+    const big = await tarGz([{ name: 'document.json', bytes: JSON.stringify(file) }, { name: 'assets/img0.png', bytes: new Uint8Array(300_000) }])
+    expect(await decodeOrReject(big)).toBe('ok')
+    expect(await decodeOrReject(big, { maxAssetBytes: 100_000 })).toBe('error')
+    expect(await decodeOrReject(big, { maxJsonBytes: 10 })).toBe('error')
+    expect(await decodeOrReject(big, { maxBytes: 200_000 })).toBe('error')
   })
 })
 
@@ -488,7 +634,7 @@ describe('kdr の読み込みの極端な入力', () => {
     let text = ''
     for (let i = 0; i < depth; i++) text += open(i)
     text += ']}'.repeat(depth)
-    return `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","assets":{},"pages":[{"id":"p","name":"P","children":[${text}]}]}}`
+    return `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","pages":[{"id":"p","name":"P","children":[${text}]}]}}`
   }
 
   it(`フレームの入れ子は ${MAX_DEPTH} 段まで読めて、それより深いと KdrError になる`, () => {
@@ -499,29 +645,29 @@ describe('kdr の読み込みの極端な入力', () => {
   it('10 万段の入れ子でもスタックが溢れず KdrError になる', async () => {
     const text = nestedFramesJson(100_000)
     expect(() => parseKdr(JSON.parse(text))).toThrow(KdrError)
-    expect(await decodeOrReject(await gzip(text))).toBe('error')
+    expect(await decodeOrReject(await kdrBlob(text))).toBe('error')
   })
 
   it('ノード以外の場所の深い入れ子（名前・オートレイアウト・上書き・未知の項目）も KdrError になるか読み飛ばす', async () => {
     const deep = '['.repeat(200_000) + ']'.repeat(200_000)
     const deepObject = '{"a":'.repeat(100_000) + '1' + '}'.repeat(100_000)
     const node = (patch: string) =>
-      `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","assets":{},"pages":[{"id":"p","name":"P","children":[{"type":"frame","id":"f","name":"F","x":0,"y":0,"width":10,"height":10,${patch}}]}]}}`
-    expect(await decodeOrReject(await gzip(node(`"name2":${deep}`)))).toBe('ok')
-    expect(await decodeOrReject(await gzip(node(`"extra":${deepObject}`)))).toBe('ok')
+      `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","pages":[{"id":"p","name":"P","children":[{"type":"frame","id":"f","name":"F","x":0,"y":0,"width":10,"height":10,${patch}}]}]}}`
+    expect(await decodeOrReject(await kdrBlob(node(`"name2":${deep}`)))).toBe('ok')
+    expect(await decodeOrReject(await kdrBlob(node(`"extra":${deepObject}`)))).toBe('ok')
     // 知らない項目は読み飛ばすので、オートレイアウトや上書きの中の深い入れ子は読める
-    expect(await decodeOrReject(await gzip(node(`"layout":${deepObject}`)))).toBe('ok')
-    expect(await decodeOrReject(await gzip(node(`"component":{"id":"c","role":"instance","overrides":${deepObject}}`)))).toBe('ok')
+    expect(await decodeOrReject(await kdrBlob(node(`"layout":${deepObject}`)))).toBe('ok')
+    expect(await decodeOrReject(await kdrBlob(node(`"component":{"id":"c","role":"instance","overrides":${deepObject}}`)))).toBe('ok')
     // 知っている項目の型が違えば KdrError
     for (const patch of [`"fills":${deep}`, `"layout":{"gap":${deep}}`, `"component":{"id":"c","role":"instance","overrides":{"a":{"text":${deep}}}}`]) {
-      expect(await decodeOrReject(await gzip(node(patch)))).toBe('error')
+      expect(await decodeOrReject(await kdrBlob(node(patch)))).toBe('error')
     }
   })
 
   it('本当に循環する参照（JSON にはできないが、parseKdr には渡せる）でも止まって KdrError になる', () => {
     const frame: Record<string, unknown> = { type: 'frame', id: 'f', name: 'F', x: 0, y: 0, width: 10, height: 10 }
     frame.children = [frame]
-    const file = { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', assets: {}, pages: [{ id: 'p', name: 'P', children: [frame] }] } }
+    const file = { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P', children: [frame] }] } }
     expect(() => parseKdr(file)).toThrow(KdrError)
 
     // id が毎回違っても、入れ子の上限で止まる
@@ -533,13 +679,13 @@ describe('kdr の読み込みの極端な入力', () => {
 
   it('巨大な配列（20 万個の子）を読んで描画できる', () => {
     const children = Array.from({ length: 200_000 }, (_, i) => ({ type: 'rect', id: `r${i}`, name: 'R', x: i, y: 0, width: 1, height: 1 }))
-    const file = { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', assets: {}, pages: [{ id: 'p', name: 'P', children: [{ type: 'frame', id: 'f', name: 'F', x: 0, y: 0, width: 10, height: 10, children }] }] } }
+    const file = { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P', children: [{ type: 'frame', id: 'f', name: 'F', x: 0, y: 0, width: 10, height: 10, children }] }] } }
     expect(parseOrReject(file)).toBe('ok')
   })
 
   it('行が非常に多いテキスト（30 万行）も大きさを測って描画できる', () => {
     const node = { type: 'text', id: 't', name: 'T', x: 0, y: 0, width: 10, height: 10, text: 'a\n'.repeat(300_000), fontSize: 12, fontFamily: 'sans-serif', sizing: { width: 'hug' } }
-    const doc = parseKdr({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', assets: {}, pages: [{ id: 'p', name: 'P', children: [node] }] } })
+    const doc = parseKdr({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P', children: [node] }] } })
     const text = doc.pages[0].nodes.t
     if (text.type !== 'text') throw new Error('テキストではない')
     expect(measureText(fakeContext(), text).height).toBeGreaterThan(300_000)
@@ -556,7 +702,7 @@ describe('kdr の読み込みの極端な入力', () => {
       { type: 'text', id: 'd', name: 'D', x: 0, y: 0, width: big, height: 10, text: 'hello', fontSize: big, lineHeight: big, fontFamily: 'x', fills: [gradient] },
       { type: 'frame', id: 'e', name: 'E', x: big, y: big, width: big, height: big, opacity: 0.5, rotation: -1e300, fills: [gradient], layout: { gap: big, paddingTop: big }, sizing: { width: 'hug', height: 'hug' }, children: [{ type: 'rect', id: 'f', name: 'F', x: 0, y: 0, width: big, height: big, sizing: { width: 'fill' } }] },
     ]
-    expect(parseOrReject({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', assets: {}, pages: [{ id: 'p', name: 'P', children }] } })).toBe('ok')
+    expect(parseOrReject({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P', children }] } })).toBe('ok')
   })
 
   it('Object.prototype にある名前の id（constructor・toString など）でも読めて使える', () => {
@@ -565,7 +711,7 @@ describe('kdr の読み込みの極端な入力', () => {
       { type: 'frame', id: 'constructor', name: 'Main', x: 0, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'main' }, children: [{ type: 'text', id: 'valueOf', name: 'T', x: 0, y: 0, width: 50, height: 20, text: 'x', fontSize: 12, fontFamily: 'sans-serif' }] },
       { type: 'frame', id: 'hasOwnProperty', name: 'Inst', x: 200, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'instance', overrides: { isPrototypeOf: { text: 'y' } } } },
     ]
-    const doc = parseKdr({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', assets: {}, pages: [{ id: 'valueOf', name: 'P', children }] } })
+    const doc = parseKdr({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'valueOf', name: 'P', children }] } })
     expect(Object.keys(doc.pages[0].nodes).sort()).toEqual(['constructor', 'hasOwnProperty', 'valueOf'])
     exercise(doc)
     expect(ids).toContain('constructor')
@@ -573,10 +719,12 @@ describe('kdr の読み込みの極端な入力', () => {
 
   it('__proto__ を id やキーに使ったファイルは KdrError になる', () => {
     const texts = [
-      `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","assets":{"__proto__":{"mime":"image/png","data":"${PNG}"}},"pages":[{"id":"p","name":"P"}]}}`,
-      `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","assets":{},"pages":[{"id":"__proto__","name":"P"}]}}`,
-      `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","assets":{},"pages":[{"id":"p","name":"P","children":[{"type":"frame","id":"f","name":"F","x":0,"y":0,"width":1,"height":1,"component":{"id":"c","role":"instance","overrides":{"__proto__":{"text":"x"}}}}]}]}}`,
+      `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","pages":[{"id":"__proto__","name":"P"}]}}`,
+      `{"format":"kadrokreo","version":${KDR_VERSION},"document":{"name":"x","pages":[{"id":"p","name":"P","children":[{"type":"frame","id":"f","name":"F","x":0,"y":0,"width":1,"height":1,"component":{"id":"c","role":"instance","overrides":{"__proto__":{"text":"x"}}}}]}]}}`,
     ]
     for (const text of texts) expect(() => parseKdr(JSON.parse(text))).toThrow(KdrError)
+    // 画像の id（JSON.parse は __proto__ を自分の項目として作る）
+    const file = { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P' }] } }
+    expect(() => parseKdr(file, JSON.parse('{"__proto__":{"mime":"image/png","bytes":null}}'))).toThrow(KdrError)
   })
 })

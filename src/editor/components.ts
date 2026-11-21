@@ -27,7 +27,8 @@ import { variantSetOf } from '../document/variants.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createId } from './nodes.ts'
-import { insertNode, removeNodes, updateNode, updatePage } from './operations.ts'
+import { updatePage } from './operations/document.ts'
+import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
 
 // コンポーネント。フレームを「元（main）」として登録し、その写しである「インスタンス」を置ける。
 // インスタンスの中身は、元の子孫をそのまま写した普通のノードで、ページに入っている。
@@ -515,14 +516,50 @@ export function resetOverrides(
  * fitText を渡すと、文言を上書きしたテキストの大きさを測り直す。
  */
 export function syncComponents(doc: DesignDocument, fitText?: FitText): DesignDocument {
+  // 前に確かめて合っていたドキュメント（ストアの preview の繰り返しなど）は、見直さない
+  if (syncedDocs.has(doc) && syncedDocs.get(doc) === fitText) return doc
   // 元の中にインスタンスがあると、内側から順に直す必要がある。変化がなくなるまで繰り返す
   let current = doc
   for (let pass = 0; pass < MAX_PASSES; pass++) {
     const next = syncOnce(current, fitText)
-    if (next === current) break
+    if (next === current) {
+      syncedDocs.set(current, fitText)
+      break
+    }
     current = next
   }
   return current
+}
+
+// 同期を飛ばすための覚え書き。ドキュメントもノードも書き換えない（変えるときは作り直す）ので、
+// 参照が同じなら中身も同じ。覚えるのは「合っていた」ことだけで、結果はいつも作り直したときと同じになる
+
+/** 確かめて、どのインスタンスも合っていたドキュメントと、そのとき使った fitText */
+const syncedDocs = new WeakMap<DesignDocument, FitText | undefined>()
+
+/**
+ * 確かめて合っていたインスタンスと、そのとき写しの姿を決めたものの参照。
+ * インスタンス自身（キー）・親（伸ばすかどうか）・元とその子孫・いまの中身・fitText がどれも同じ参照なら、
+ * 作り直しても同じになるので比べずに済む。
+ */
+const syncedInstances = new WeakMap<InstanceNode, readonly unknown[]>()
+
+/**
+ * syncedInstances に覚えておくもの。入れ子のインスタンスを差し替えているインスタンスは、
+ * ほかのコンポーネントの元にも左右されるので覚えない（null）
+ */
+function syncKey(page: Scene, instance: InstanceNode, source: Scene, main: FrameNode, fitText: FitText | undefined): unknown[] | null {
+  if (Object.values(instance.component.overrides).some((override) => override.componentId !== undefined)) return null
+  const key: unknown[] = [fitText, instance.parentId === null ? null : page.nodes[instance.parentId]]
+  for (const id of subtreeIds(source, main.id)) key.push(source.nodes[id])
+  // 元と中身の境目。どちらも木をたどる順は決まっているので、数が変われば並びもずれて違いが分かる
+  key.push(syncedInstances)
+  for (const id of subtreeIds(page, instance.id)) if (id !== instance.id) key.push(page.nodes[id])
+  return key
+}
+
+function sameKey(a: readonly unknown[] | undefined, b: readonly unknown[]): boolean {
+  return a !== undefined && a.length === b.length && a.every((value, i) => value === b[i])
 }
 
 /** 入れ子の深さの上限を兼ねる。これより深い入れ子は、次の変更のときに続きが直る */
@@ -535,7 +572,16 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
 
   let changed = false
   const pages = doc.pages.map((page) => {
-    let next = page
+    // ページのノードの表は、最初に書き換えるときに 1 回だけ写し、あとはその写しを書き換えていく。
+    // インスタンスごとに写すと、インスタンスの数 × ノードの数かかる（元を変えたときに全部のインスタンスが作り直しになる）
+    let next: Page = page
+    let owned = false
+    const own = () => {
+      if (owned) return next.nodes
+      next = { ...next, nodes: { ...next.nodes } }
+      owned = true
+      return next.nodes
+    }
     for (const node of Object.values(page.nodes)) {
       // 作り直しの途中で消えたノードは飛ばす
       const instance = next.nodes[node.id]
@@ -544,10 +590,24 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
       // 元がない、または自分自身を含むことになる（循環する）なら、ただのフレームにする
       const enclosing = enclosingMain(next, instance.id)
       if (!main || (enclosing !== null && reaches(instance.component.id, enclosing))) {
-        next = updateNode(next, instance.id, { component: null })
+        own()[instance.id] = { ...instance, component: null }
         continue
       }
-      next = rebuild(next, instance, main.page, main.node, fitText, ctx, swapChain(next, instance))
+      const key = syncKey(next, instance, main.page, main.node, fitText)
+      if (key && sameKey(syncedInstances.get(instance), key)) continue
+      const plan = planRebuild(next, instance, main.page, main.node, fitText, ctx, swapChain(next, instance))
+      if (!plan) {
+        if (key) syncedInstances.set(instance, key)
+        continue
+      }
+      if (plan.strays.length > 0) {
+        // 写しを外へ出してしまったときだけ。めったにないので、ふつうに消して新しい表を持ち直す
+        next = removeNodes(next, plan.strays)
+        owned = true
+      }
+      const nodes = own()
+      for (const id of plan.currentIds) delete nodes[id]
+      Object.assign(nodes, plan.expected)
     }
     if (next !== page) changed = true
     return next
@@ -628,22 +688,39 @@ function rebuild<S extends Scene>(
   ctx: SyncContext,
   chain: readonly string[],
 ): S {
+  const plan = planRebuild(page, instance, source, main, fitText, ctx, chain)
+  if (!plan) return page
+  const cleaned = plan.strays.length > 0 ? removeNodes(page, plan.strays) : page
+  const nodes = { ...cleaned.nodes }
+  for (const id of plan.currentIds) delete nodes[id]
+  Object.assign(nodes, plan.expected)
+  return { ...cleaned, nodes }
+}
+
+/**
+ * rebuild でする置き換えの中身。すでに同じなら null。
+ * currentIds（いまのインスタンスとその中身）を消して expected を入れる。strays は先に消す、インスタンスの外にある同じ id のノード
+ */
+function planRebuild(
+  page: Scene,
+  instance: InstanceNode,
+  source: Scene,
+  main: FrameNode,
+  fitText: FitText | undefined,
+  ctx: SyncContext,
+  chain: readonly string[],
+): { currentIds: NodeId[]; expected: Record<NodeId, SceneNode>; strays: NodeId[] } | null {
   const expected = expectedCopies(page, instance, swappedSource(source, main.id, instance.component.overrides, ctx, chain, fitText), main, fitText)
   const currentIds = subtreeIds(page, instance.id)
   const same =
     currentIds.length === Object.keys(expected).length &&
     currentIds.every((id) => sameNode(page.nodes[id], expected[id]))
-  if (same) return page
+  if (same) return null
 
   // 写しと同じ id のノードがインスタンスの外にあれば（写しを外へ出してしまったとき）、二重にならないよう消す
   const inside = new Set(currentIds)
   const strays = Object.keys(expected).filter((id) => Object.hasOwn(page.nodes, id) && !inside.has(id))
-  const cleaned = strays.length > 0 ? removeNodes(page, strays) : page
-
-  const nodes = { ...cleaned.nodes }
-  for (const id of currentIds) delete nodes[id]
-  Object.assign(nodes, expected)
-  return { ...cleaned, nodes }
+  return { currentIds, expected, strays }
 }
 
 /**

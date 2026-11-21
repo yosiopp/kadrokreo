@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { KDR_VERSION, KdrError, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
 import { solid } from '../document/paint.ts'
 import type { DesignDocument, Page } from '../document/types.ts'
-import { encodeKdr } from './exportKdr.ts'
+import { encodeKdr, kdrEntries } from './exportKdr.ts'
+import { fromBase64, gzipBlob, kdrBlob, tarGz } from '../document/testKdr.ts'
+import { sha256Hex } from '../document/sha256.ts'
 import { pathFromPoints } from '../document/path.ts'
 import {
   createEllipse,
@@ -13,7 +15,8 @@ import {
   createRect,
   createText,
 } from './nodes.ts'
-import { addAsset, createPage, insertNode, removeNodes } from './operations.ts'
+import { addAsset, addOrReuseAsset, createPage, updatePage } from './operations/document.ts'
+import { insertNode, removeNodes } from './operations/tree.ts'
 
 function samplePage(): Page {
   const frame = createFrame({ x: 0, y: 0, width: 400, height: 300 })
@@ -29,14 +32,10 @@ function documentOf(...pages: Page[]): DesignDocument {
   return { name: 'サンプル', pages, assets: {} }
 }
 
-async function gzip(text: string): Promise<Blob> {
-  return new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).blob()
-}
-
 // 1x1 の透明な PNG
 const PNG = {
   mime: 'image/png',
-  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  bytes: fromBase64('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='),
 }
 
 type RawNode = Record<string, unknown>
@@ -46,8 +45,8 @@ function kdrJson(document: unknown, version: number = KDR_VERSION) {
 }
 
 /** 1 ページだけのファイル。children はページ直下のノード（ファイルの形のまま） */
-function kdrOf(children: unknown[], assets: unknown = {}) {
-  return kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'Page 1', children }], assets })
+function kdrOf(children: unknown[]) {
+  return kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'Page 1', children }] })
 }
 
 /** ファイルの形の最小のノード（既定値の項目は省いてある） */
@@ -56,8 +55,8 @@ function rawNode(patch: RawNode = {}): RawNode {
 }
 
 /** 1 つのノードだけのファイルを読み、そのノードを返す */
-function parseOne(node: RawNode, assets: unknown = {}) {
-  return parseKdr(kdrOf([node], assets)).pages[0].nodes[node.id as string]
+function parseOne(node: RawNode, assets: Record<string, unknown> = {}) {
+  return parseKdr(kdrOf([node]), assets).pages[0].nodes[node.id as string]
 }
 
 /** メモリ上のノードを、ファイルの形にする */
@@ -72,9 +71,22 @@ describe('kdr', () => {
     expect(await decodeKdr(await encodeKdr(doc))).toEqual(doc)
   })
 
-  it('実体は gzip 圧縮された 1 つの JSON', async () => {
-    const bytes = new Uint8Array(await (await encodeKdr(documentOf(samplePage()))).arrayBuffer())
+  it('実体は tar を gzip で圧縮した 1 つのファイルで、document.json と assets/<sha256>.<拡張子> が入る', async () => {
+    const image = createImage({ x: 0, y: 0, width: 1, height: 1 }, 'x')
+    const { document, assetId } = addOrReuseAsset(documentOf(createPage('A')), PNG, () => 'unused')
+    const doc = updatePage(document, document.pages[0].id, (page) => insertNode(page, { ...image, assetId }))
+    expect(assetId).toBe(sha256Hex(PNG.bytes))
+    const blob = await encodeKdr(doc)
+    const bytes = new Uint8Array(await blob.arrayBuffer())
     expect([...bytes.slice(0, 2)]).toEqual([0x1f, 0x8b])
+    const tar = new Uint8Array(await new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
+    expect(new TextDecoder().decode(tar.slice(0, 13))).toBe('document.json')
+    expect(new TextDecoder().decode(tar.slice(257, 262))).toBe('ustar')
+    expect(kdrEntries(doc).map((entry) => entry.name)).toEqual(['document.json', `assets/${assetId}.png`])
+    // document.json には画像のデータを入れない
+    expect(JSON.parse(new TextDecoder().decode(kdrEntries(doc)[0].bytes))).toEqual(kdrFile(doc))
+    // 同じドキュメントなら同じバイト列（時刻などを入れない）
+    expect(new Uint8Array(await (await encodeKdr(doc)).arrayBuffer())).toEqual(bytes)
   })
 
   it('画像を埋め込んだまま往復し、どのページでも使われていない画像は書き出さない', async () => {
@@ -92,17 +104,58 @@ describe('kdr', () => {
   })
 
   it('gzip でないファイルは読めない', async () => {
-    await expect(decodeKdr(new Blob(['{"format":"kadrokreo"}']))).rejects.toThrow(KdrError)
+    await expect(decodeKdr(new Blob(['{"format":"kadrokreo"}']))).rejects.toThrow('gzip')
   })
 
-  it('JSON でない中身は読めない', async () => {
-    await expect(decodeKdr(await gzip('not json'))).rejects.toThrow(KdrError)
+  it('tar でない中身（v15 までの gzip した JSON など）は読めない', async () => {
+    const json = JSON.stringify(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', children: [] }], assets: {} }))
+    await expect(decodeKdr(await gzipBlob(json))).rejects.toThrow(KdrError)
   })
 
-  it('展開後のサイズが上限を超えるファイルは読めない', async () => {
-    const file = await gzip(' '.repeat(1_000_000))
+  it('document.json が JSON でなければ読めない', async () => {
+    await expect(decodeKdr(await kdrBlob('not json'))).rejects.toThrow('JSON')
+  })
+
+  it('展開後のサイズ・document.json・画像 1 枚が上限を超えるファイルは読めない', async () => {
+    const file = await kdrBlob(' '.repeat(1_000_000))
     expect(file.size).toBeLessThan(10_000)
     await expect(decodeKdr(file, { maxBytes: 100_000 })).rejects.toThrow('大きすぎ')
+    await expect(decodeKdr(file, { maxJsonBytes: 100_000 })).rejects.toThrow('document.json が大きすぎ')
+    const image = rawNode({ type: 'image', assetId: 'a1' })
+    const big = await kdrBlob(kdrOf([image]), { a1: { mime: 'image/png', bytes: new Uint8Array(200_000) } })
+    await expect(decodeKdr(big, { maxAssetBytes: 100_000 })).rejects.toThrow('画像が大きすぎ')
+    expect((await decodeKdr(big)).assets.a1.bytes).toHaveLength(200_000)
+  })
+
+  it('決まった名前のファイルだけを受け付け、同じ名前や同じ id が 2 つあれば読めない', async () => {
+    const json = JSON.stringify(kdrOf([rawNode({ type: 'image', assetId: 'a1' })]))
+    const png = PNG.bytes
+    const ok = await tarGz([{ name: 'document.json', bytes: json }, { name: 'assets/a1.png', bytes: png }])
+    expect((await decodeKdr(ok)).assets).toEqual({ a1: PNG })
+    const cases: [{ name: string; bytes: Uint8Array<ArrayBuffer> | string }[], string][] = [
+      [[{ name: 'assets/a1.png', bytes: png }], 'document.json がありません'],
+      [[{ name: 'document.json', bytes: json }, { name: 'document.json', bytes: json }], '同じ名前'],
+      [[{ name: 'document.json', bytes: json }, { name: 'assets/a1.png', bytes: png }, { name: 'assets/a1.jpg', bytes: png }], '同じ id'],
+      [[{ name: 'document.json', bytes: json }, { name: 'assets/a1.svg', bytes: '<svg/>' }], '知らないファイル'],
+      [[{ name: 'document.json', bytes: json }, { name: '../assets/a1.png', bytes: png }], '知らないファイル'],
+      [[{ name: 'document.json', bytes: json }, { name: 'assets/../a1.png', bytes: png }], '知らないファイル'],
+      [[{ name: 'document.json', bytes: json }, { name: '/etc/passwd', bytes: png }], '知らないファイル'],
+      [[{ name: './document.json', bytes: json }], '知らないファイル'],
+      [[{ name: 'document.json', bytes: json }, { name: 'assets/__proto__.png', bytes: png }], '知らないファイル'],
+      [[{ name: 'document.json', bytes: json }], '画像データがありません'],
+    ]
+    for (const [entries, message] of cases) await expect(decodeKdr(await tarGz(entries))).rejects.toThrow(message)
+  })
+
+  it('どこからも使われていない画像は読み込みで捨てる', async () => {
+    const file = await kdrBlob(kdrOf([rawNode({ type: 'image', assetId: 'a1' })]), { a1: PNG, a2: PNG })
+    expect(Object.keys((await decodeKdr(file)).assets)).toEqual(['a1'])
+  })
+
+  it('画像が上限を超えるドキュメントは書き出さない', async () => {
+    const image = createImage({ x: 0, y: 0, width: 1, height: 1 }, 'big')
+    const doc = addAsset(documentOf(insertNode(createPage('A'), image)), 'big', { mime: 'image/png', bytes: new Uint8Array(33 * 1024 * 1024) })
+    await expect(encodeKdr(doc)).rejects.toThrow('書き出せません')
   })
 })
 
@@ -400,13 +453,15 @@ describe('parseKdr', () => {
     expect(parseOne(withOverrides({ n1: { assetId: 'a1' } }), { a1: PNG })).toMatchObject({ component: { overrides: { n1: { assetId: 'a1' } } } })
   })
 
-  it('画像は対応形式の base64 で、データが揃っているものだけ受け付ける', () => {
+  it('画像は対応形式のバイト列で、データが揃っているものだけ受け付ける', () => {
     const image = rawNode({ type: 'image', assetId: 'a1' })
-    expect(parseKdr(kdrOf([image], { a1: PNG })).assets).toEqual({ a1: PNG })
+    expect(parseKdr(kdrOf([image]), { a1: PNG }).assets).toEqual({ a1: PNG })
     expect(parseOne(image, { a1: PNG })).toMatchObject({ fit: 'cover', cornerRadius: 0 })
     expect(() => parseOne(image, {})).toThrow('画像データ')
     expect(() => parseOne(image, { a1: { ...PNG, mime: 'image/svg+xml' } })).toThrow('画像形式')
-    expect(() => parseOne(image, { a1: { ...PNG, data: '<svg onload=alert(1)>' } })).toThrow('base64')
+    expect(() => parseOne(image, { a1: { mime: 'image/png', data: 'iVBORw0K' } })).toThrow('バイト列')
+    expect(() => parseOne(image, { a1: { mime: 'image/png', bytes: [1, 2, 3] } })).toThrow('バイト列')
+    expect(() => parseOne(image, { a1: null })).toThrow('assets.a1')
   })
 
   it('知らないフィールドは捨てる', () => {

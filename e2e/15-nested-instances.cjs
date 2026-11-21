@@ -122,7 +122,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const exported = Object.values(json.document.pages[0].nodes).find((n) => n.id === instance.id)
-  check('kdr に差し替えが入る', json.version === 15 && exported.component.overrides[nestedKey].componentId === icon.component.id)
+  check('kdr に差し替えが入る', json.version === 16 && exported.component.overrides[nestedKey].componentId === icon.component.id)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

@@ -3,7 +3,7 @@ import { createHistory, pushHistory, redoHistory, undoHistory } from './history.
 import { type FitText, captureOverrides, syncComponents } from './components.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
-import { updatePage } from './operations.ts'
+import { updatePage } from './operations/document.ts'
 
 export type EditorState = {
   document: DesignDocument

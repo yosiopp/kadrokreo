@@ -9,7 +9,7 @@ import {
   splitSegment,
 } from '../document/path.ts'
 import type { NodeId, Scene } from '../document/types.ts'
-import { updateNode } from './operations.ts'
+import { updateNode } from './operations/tree.ts'
 
 // パスの頂点と制御点の編集。頂点は親の座標系の Vertex（制御点は位置）で扱い、
 // reshapePath が形（枠と割合の頂点）を作り直す。回転は 0 に戻して頂点に織り込む（直線の端と同じ）。

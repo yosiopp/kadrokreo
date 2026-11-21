@@ -14,7 +14,9 @@ import {
   wrapInAutoLayout,
 } from './layout.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
-import { createDocument, createPage, insertNode, removeNodes, setSize, updateNode } from './operations.ts'
+import { createDocument, createPage } from './operations/document.ts'
+import { setSize } from './operations/transform.ts'
+import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
 import { createEditorStore } from './store.ts'
 
 const LAYOUT: AutoLayout = {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { pathFromPoints, pathSegments, segmentAt } from '../document/path.ts'
 import { createFrame, createPath } from './nodes.ts'
-import { createPage, insertNode } from './operations.ts'
+import { createPage } from './operations/document.ts'
+import { insertNode } from './operations/tree.ts'
 import {
   deleteVertex,
   insertVertex,

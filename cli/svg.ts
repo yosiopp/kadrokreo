@@ -3,7 +3,8 @@
 // 依存を足さないのは、SVG に要る XML は要素・属性・文字・CDATA くらいで小さく書けること、
 // CLI は Node の型の除去だけでビルドせずに動かしていて依存を増やしたくないこと、ENTITY の展開を最初から持たないほうが安全なことから
 import type { NodeId, Page, Scene } from '../src/document/types.ts'
-import { insertNode, pasteFragment } from '../src/editor/operations.ts'
+import { pasteFragment } from '../src/editor/operations/clipboard.ts'
+import { insertNode } from '../src/editor/operations/tree.ts'
 import { type SvgImport, convertSvg } from '../src/editor/svg/convert.ts'
 import { parseSvgXml } from '../src/editor/svg/xml.ts'
 import { estimateTextSize } from './textMeasure.ts'

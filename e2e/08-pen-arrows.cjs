@@ -176,7 +176,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const types = Object.values(json.document.pages[0].nodes).map((n) => n.type).sort().join()
-  check('kdr にパスと矢印が入る', json.version === 15 && types === 'path,path,path,path', types)
+  check('kdr にパスと矢印が入る', json.version === 16 && types === 'path,path,path,path', types)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

@@ -1,13 +1,13 @@
 // 書き出した kdr を読むための e2e の共通部品。
-// kdr はノードを入れ子にして既定値を省いた形なので、本体の parseKdr（src/document/kdr.ts。Node が型を消して読む）で
-// メモリ上の形（ページごとの平らな nodes の表）に直す。生の JSON も raw で見られる。
-const zlib = require('zlib')
+// kdr は tar.gz（document.json と assets/<sha256>.<拡張子>）で、ノードは入れ子にして既定値を省いた形なので、
+// 本体の readKdrArchive と parseKdr（src/document/kdr.ts。Node が型を消して読む）で
+// メモリ上の形（ページごとの平らな nodes の表、画像は { mime, bytes }）に直す。document.json の中身も raw で見られる。
 
-/** bytes（gzip した kdr）を読み、{ format, version, raw, document } を返す。document.pages[i].nodes はノードの表 */
+/** bytes（kdr）を読み、{ format, version, raw, names, document } を返す。document.pages[i].nodes はノードの表、names は tar の中の名前 */
 async function parseKdrBytes(bytes) {
-  const raw = JSON.parse(zlib.gunzipSync(bytes).toString('utf8'))
-  const { parseKdr } = await import('../src/document/kdr.ts')
-  return { format: raw.format, version: raw.version, raw, document: parseKdr(raw) }
+  const { readKdrArchive, parseKdr } = await import('../src/document/kdr.ts')
+  const { document: raw, assets } = await readKdrArchive(new Blob([bytes]))
+  return { format: raw.format, version: raw.version, raw, names: ['document.json', ...Object.keys(assets)], document: parseKdr(raw, assets) }
 }
 
 

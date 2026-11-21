@@ -1,13 +1,14 @@
-// コードの出力形式（HTML + CSS、React の style、React の CSS Modules、Tailwind のクラス）。
+// コードの出力形式（HTML + CSS、React の style、React の CSS Modules、Tailwind のクラス、Vue の単一ファイルコンポーネント）。
 // どの形式も、もとは nodeCss が出す CSS の宣言で、それを各形式の書き方に直す。値は変えない。
 
-export type CodeFormat = 'html' | 'react' | 'css-modules' | 'tailwind'
+export type CodeFormat = 'html' | 'react' | 'css-modules' | 'tailwind' | 'vue'
 
 export const CODE_FORMAT_LABELS: Record<CodeFormat, string> = {
   html: 'HTML + CSS',
   react: 'React（style）',
   'css-modules': 'React（CSS Modules）',
   tailwind: 'React（Tailwind）',
+  vue: 'Vue（SFC）',
 }
 
 export type Declaration = [property: string, value: string]

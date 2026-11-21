@@ -1,7 +1,7 @@
 import { kdrFile, parseKdr } from '../src/document/kdr.ts'
-import type { Asset, DesignDocument, FrameNode, NodeId, Page, Scene, SceneNode } from '../src/document/types.ts'
+import type { DesignDocument, FrameNode, NodeId, Page, Scene, SceneNode } from '../src/document/types.ts'
 import { createEditorStore } from '../src/editor/store.ts'
-import { updatePage } from '../src/editor/operations.ts'
+import { updatePage } from '../src/editor/operations/document.ts'
 import { UsageError } from './args.ts'
 import { fitTextEstimated } from './textMeasure.ts'
 
@@ -151,11 +151,9 @@ export function renameNodeId<T extends Scene>(scene: T, from: NodeId, to: NodeId
 
 /**
  * kdr として読み込める形かを確かめ、読み込んだときと同じ形（既知の項目だけ）に組み直す。
- * 画像のデータは読み込み時か追加時に確かめてあるので、ここでは中身を省いて速くする。
+ * 画像は JSON に入らないので、そのまま渡す。使われなくなった画像も（取り消しに備えて）残す
  */
 export function validate(doc: DesignDocument): DesignDocument {
-  const placeholders: Record<string, Asset> = {}
-  for (const [id, asset] of Object.entries(doc.assets)) placeholders[id] = { mime: asset.mime, data: '' }
-  const json = JSON.stringify(kdrFile({ ...doc, assets: placeholders }))
-  return { ...parseKdr(JSON.parse(json)), assets: doc.assets }
+  const json = JSON.stringify(kdrFile(doc))
+  return { ...parseKdr(JSON.parse(json), doc.assets), assets: doc.assets }
 }

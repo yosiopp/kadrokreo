@@ -6,7 +6,8 @@ import { variantProperties, variantSetOf, variantsIn } from '../document/variant
 import { createInstance, makeComponent, syncComponents } from './components.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
-import { createDocument, insertNode, updateNode, updatePage } from './operations.ts'
+import { createDocument, updatePage } from './operations/document.ts'
+import { insertNode, updateNode } from './operations/tree.ts'
 import {
   addVariant,
   addVariantProperty,

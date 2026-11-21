@@ -5,15 +5,11 @@ import { getContentBounds } from '../../document/geometry.ts'
 import type { NodeId } from '../../document/types.ts'
 import { makeComponent } from '../components.ts'
 import { flowParent, moveInLayout, wrapInAutoLayout } from '../layout.ts'
-import {
-  type Fragment,
-  type ReorderDirection,
-  copyFragment,
-  pasteIntoPage,
-  removeNodes,
-  reorderNodes,
-  translateNodes,
-} from '../operations.ts'
+import { type ReorderDirection, reorderNodes } from '../operations/arrange.ts'
+import { type Fragment, copyFragment } from '../operations/clipboard.ts'
+import { pasteIntoPage } from '../operations/document.ts'
+import { translateNodes } from '../operations/transform.ts'
+import { removeNodes } from '../operations/tree.ts'
 import type { EditorStore } from '../store.ts'
 import { isSvgFile, looksLikeSvg } from '../importSvg.ts'
 import type { Tool } from '../tools.ts'

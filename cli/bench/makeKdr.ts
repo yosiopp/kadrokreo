@@ -24,6 +24,8 @@ export type BenchOptions = {
   instances: number
   /** 画像の数（どれも別の中身なので、アセットも同じ数になる） */
   images: number
+  /** 画像 1 枚の一辺（ピクセル）。32 より大きいと乱数の模様にする（圧縮が効かない、写真に近い重さ） */
+  imageSize: number
 }
 
 /** 計測スクリプトが画面の位置を計算するのに使う、決まった名前のノードのページ上の枠 */
@@ -43,7 +45,7 @@ export type BenchMeta = {
   mainId: NodeId
 }
 
-export const DEFAULT_OPTIONS: BenchOptions = { nodes: 2000, depth: 4, instances: 170, images: 10 }
+export const DEFAULT_OPTIONS: BenchOptions = { nodes: 2000, depth: 4, instances: 170, images: 10, imageSize: 32 }
 
 const PALETTE = [
   '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#10b981', '#14b8a6',
@@ -71,10 +73,22 @@ function idMaker(prefix: string) {
 function makePng(index: number, size = 32): Asset {
   const raw = Buffer.alloc((size * 3 + 1) * size)
   const [r, g, b] = [(index * 53) & 255, (index * 97) & 255, (index * 151) & 255]
+  const noisy = size > 32
+  let seed = (index + 1) * 2654435761
   for (let y = 0; y < size; y++) {
     raw[y * (size * 3 + 1)] = 0
     for (let x = 0; x < size; x++) {
       const offset = y * (size * 3 + 1) + 1 + x * 3
+      if (noisy) {
+        // xorshift の乱数（決まった順）
+        seed ^= seed << 13
+        seed ^= seed >>> 17
+        seed ^= seed << 5
+        raw[offset] = seed & 255
+        raw[offset + 1] = (seed >>> 8) & 255
+        raw[offset + 2] = (seed >>> 16) & 255
+        continue
+      }
       raw[offset] = (r + x * 4) & 255
       raw[offset + 1] = (g + y * 4) & 255
       raw[offset + 2] = b
@@ -98,7 +112,7 @@ function makePng(index: number, size = 32): Asset {
     chunk('IDAT', deflateSync(raw)),
     chunk('IEND', Buffer.alloc(0)),
   ])
-  return { mime: 'image/png', data: png.toString('base64') }
+  return { mime: 'image/png', bytes: new Uint8Array(png) }
 }
 
 export function makeBenchDocument(options: BenchOptions): { document: DesignDocument; meta: BenchMeta } {
@@ -238,14 +252,14 @@ export function makeBenchDocument(options: BenchOptions): { document: DesignDocu
     )
     for (let i = 0; i < options.images; i++) {
       const assetId = `img${i}`
-      assets[assetId] = makePng(i)
+      assets[assetId] = makePng(i, options.imageSize)
       add({ ...createImage({ x: 8 + (i % imageColumns) * 72, y: 8 + Math.floor(i / imageColumns) * 72, width: 64, height: 64 }, assetId), name: `Image ${i}` }, images)
     }
   }
 
   const page: Page = { id: 'page1', name: 'Bench', nodes, rootIds }
   // 読み込んだときと同じ形に組み直してから、インスタンスの中身を入れる
-  const parsed = parseKdr(JSON.parse(JSON.stringify(kdrFile({ name: 'Bench', pages: [page], assets }))))
+  const parsed = parseKdr(JSON.parse(JSON.stringify(kdrFile({ name: 'Bench', pages: [page] }))), assets)
   const document = syncComponents(parsed, fitTextEstimated)
   const synced = document.pages[0]
   const totalNodes = Object.keys(synced.nodes).length
@@ -278,7 +292,7 @@ export function parseOptions(argv: readonly string[]): { options: BenchOptions; 
     }
     const key = name.replace(/^--/, '') as keyof BenchOptions
     if (!(key in DEFAULT_OPTIONS) || value === undefined || !/^\d+$/.test(value)) {
-      throw new Error(`使い方: makeKdr.ts [--nodes N] [--depth N] [--instances N] [--images N] -o 出力.kdr（${name} が読めません）`)
+      throw new Error(`使い方: makeKdr.ts [--nodes N] [--depth N] [--instances N] [--images N] [--imageSize N] -o 出力.kdr（${name} が読めません）`)
     }
     options[key] = Number(value)
   }

@@ -2,15 +2,19 @@ import type { Camera } from '../canvas/camera.ts'
 import { primeImage } from '../canvas/images.ts'
 import { screenToWorld } from '../canvas/viewport.ts'
 import { toLocal } from '../document/geometry.ts'
-import { IMAGE_MIME_TYPES } from '../document/kdr.ts'
+import { IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../document/kdr.ts'
 import type { Asset } from '../document/types.ts'
 import { findFrameAt } from './hitTest.ts'
 import { createId, createImage } from './nodes.ts'
-import { addOrReuseAsset, insertNode, updatePage } from './operations.ts'
+import { addOrReuseAsset, updatePage } from './operations/document.ts'
+import { insertNode } from './operations/tree.ts'
 import type { EditorStore } from './store.ts'
 
-/** kdr に base64 で埋め込むので、元のファイルの大きさを抑える */
-const MAX_IMAGE_BYTES = 16 * 1024 * 1024
+/**
+ * 取り込める画像の大きさ。kdr は画像 1 枚ごとに上限を設けている（細工されたファイル対策）ので、それと揃える
+ * （取り込めても書き出せない・開けない画像を作らない）。画像は元のファイルのバイト列のまま持つ
+ */
+const MAX_IMAGE_BYTES = KDR_MAX_ASSET_BYTES
 
 export type ImportedImage = { name: string; asset: Asset; width: number; height: number }
 
@@ -19,7 +23,7 @@ export async function readImageFile(file: File): Promise<ImportedImage> {
     throw new Error(`${file.name}: PNG / JPEG / WebP / GIF 以外の画像は取り込めません`)
   }
   if (file.size > MAX_IMAGE_BYTES) {
-    throw new Error(`${file.name}: 画像が大きすぎます（16MB まで）`)
+    throw new Error(`${file.name}: 画像が大きすぎます（${MAX_IMAGE_BYTES / 1024 / 1024}MB まで）`)
   }
 
   let bitmap: ImageBitmap
@@ -28,7 +32,7 @@ export async function readImageFile(file: File): Promise<ImportedImage> {
   } catch {
     throw new Error(`${file.name}: 画像として読み込めません`)
   }
-  const asset = { mime: file.type, data: await toBase64(file) }
+  const asset = { mime: file.type, bytes: new Uint8Array(await file.arrayBuffer()) }
   primeImage(asset, bitmap)
   return {
     name: file.name.replace(/\.[^.]+$/, '') || 'Image',
@@ -36,16 +40,6 @@ export async function readImageFile(file: File): Promise<ImportedImage> {
     width: bitmap.width,
     height: bitmap.height,
   }
-}
-
-async function toBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  let binary = ''
-  // 引数の数に上限があるので、少しずつ文字列にする
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  }
-  return btoa(binary)
 }
 
 /** 画面の中央に元の大きさで置く。そこにフレームがあればその中へ入れる。offset は複数枚を少しずつずらすため */

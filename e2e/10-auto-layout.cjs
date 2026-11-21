@@ -259,7 +259,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const frames = Object.values(json.document.pages[0].nodes).filter((node) => node.type === 'frame')
-  check('kdr に設定が入る', json.version === 15 && frames.filter((frame) => frame.name !== 'Frame 3').every((frame) => frame.layout) && Object.values(json.document.pages[0].nodes).some((node) => node.constraints && node.constraints.horizontal === 'end'), JSON.stringify(frames.map((f) => f.layout && f.layout.direction)))
+  check('kdr に設定が入る', json.version === 16 && frames.filter((frame) => frame.name !== 'Frame 3').every((frame) => frame.layout) && Object.values(json.document.pages[0].nodes).some((node) => node.constraints && node.constraints.horizontal === 'end'), JSON.stringify(frames.map((f) => f.layout && f.layout.direction)))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

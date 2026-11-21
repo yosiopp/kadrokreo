@@ -131,7 +131,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const kdrPath = path.join(OUT, 'style.kdr')
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
-  check('kdr は version 15', json.version === 15)
+  check('kdr は version 16', json.version === 16)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

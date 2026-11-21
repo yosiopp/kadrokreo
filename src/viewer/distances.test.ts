@@ -46,6 +46,44 @@ describe('measureBetween', () => {
     expect(result[1]).toMatchObject({ from: { x: 80, y: 25 }, to: { x: 200, y: 25 } })
   })
 
+  it('一方の向きに離れていれば、重なっている向きの辺のずれは出さず、離れている向きの間隔だけ', () => {
+    // 上下に並んでいて、左右は一部だけ重なる
+    expect(measureBetween(box(0, 0, 100, 40), box(30, 100, 100, 40))).toEqual([
+      { from: { x: 65, y: 40 }, to: { x: 65, y: 100 }, distance: 60, axis: 'y', guide: null },
+    ])
+    // 左右に並んでいて、相手のほうが縦に長い
+    expect(measureBetween(box(0, 20, 50, 20), box(80, 0, 50, 100)).map((item) => item.axis)).toEqual(['x'])
+  })
+
+  it('線は 2 つが重なっている範囲の中央を通り、補助線は要らない', () => {
+    // a の中心の高さ（20）は相手の外だが、重なっている 30〜40 の中央を通す
+    const [only] = measureBetween(box(0, 0, 100, 40), box(150, 30, 50, 50))
+    expect(only).toEqual({ from: { x: 100, y: 35 }, to: { x: 150, y: 35 }, distance: 50, axis: 'x', guide: null })
+  })
+
+  it('相手を含んでいれば、相手の中を通って 4 辺までの余白を測る', () => {
+    const result = measureBetween(box(0, 0, 200, 100), box(20, 10, 60, 30))
+    expect(result.map((item) => item.distance)).toEqual([20, 120, 10, 60])
+    expect(result[0]).toMatchObject({ from: { x: 0, y: 25 }, to: { x: 20, y: 25 }, guide: null })
+    expect(result[2]).toMatchObject({ from: { x: 50, y: 0 }, to: { x: 50, y: 10 }, guide: null })
+  })
+
+  it('一部だけ重なっていれば、縦横とも同じ側の辺どうしを、重なりの中を通して測る', () => {
+    const result = measureBetween(box(0, 0, 100, 100), box(60, 40, 100, 100))
+    expect(result.map((item) => [item.axis, item.distance])).toEqual([
+      ['x', 60],
+      ['x', 60],
+      ['y', 40],
+      ['y', 40],
+    ])
+    expect(result[0].from.y).toBe(70)
+    expect(result[2].from.x).toBe(80)
+  })
+
+  it('接していれば（間隔 0）、重なっている向きの辺のずれを出す', () => {
+    expect(measureBetween(box(0, 0, 60, 40), box(0, 40, 100, 40)).map((item) => item.distance)).toEqual([40])
+  })
+
   it('辺が揃っている向きや、接している向きには線を出さない', () => {
     expect(measureBetween(box(0, 0, 100, 40), box(0, 0, 100, 40))).toEqual([])
     expect(measureBetween(box(0, 0, 100, 40), box(100, 0, 50, 40))).toEqual([])
@@ -111,7 +149,8 @@ describe('measureCorners', () => {
     // 45° 回した 100 × 100 の正方形は、囲む矩形が約 141.42 四方
     const result = measureCorners(corners(0, 0, 100, 100, 45), corners(200, 0, 50, 50, 0))
     expect(result.angle).toBe(0)
-    expect(result.distances.map((item) => item.distance)).toEqual([104.29, 45.71, 45.71])
+    // 横に離れているので、縦（重なっている向き）の線は出さない
+    expect(result.distances.map((item) => item.distance)).toEqual([104.29])
     expect(result.outlines).toHaveLength(1)
     expect(result.outlines[0][0]).toEqual({ x: -70.71, y: -70.71 })
   })

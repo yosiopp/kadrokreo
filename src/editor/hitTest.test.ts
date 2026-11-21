@@ -4,7 +4,8 @@ import { findFrameAt, nodesInMarquee } from './hitTest.ts'
 import { solid } from '../document/paint.ts'
 import { pathFromPoints } from '../document/path.ts'
 import { createEllipse, createFrame, createLine, createPath, createRect } from './nodes.ts'
-import { createPage, insertNode, updateNode } from './operations.ts'
+import { createPage } from './operations/document.ts'
+import { insertNode, updateNode } from './operations/tree.ts'
 
 function fixture() {
   const frame = createFrame({ x: 100, y: 100, width: 200, height: 200 })

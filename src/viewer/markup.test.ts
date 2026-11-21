@@ -91,7 +91,7 @@ describe('nodeMarkup', () => {
       fit: 'cover',
     }
     const scene = sceneOf(frame({ children: ['line', 'path', 'image'] }), line, path, image)
-    const assets = { a1: { mime: 'image/jpeg', data: 'AAAA' } }
+    const assets = { a1: { mime: 'image/jpeg', bytes: new Uint8Array([0, 0, 0]) } }
     const lines = nodeMarkup(scene, 'frame', { assets }).html.split('\n')
     expect(lines[1]).toBe('  <svg class="line" viewBox="0 0 100 50"><line x1="0" y1="0" x2="100" y2="50"/></svg>')
     expect(lines[2]).toBe('  <svg class="shape" viewBox="0 0 100 50"><path d="M0 0 L100 0 L50 50 Z"/></svg>')
@@ -310,6 +310,27 @@ describe('nodeMarkup の出力形式', () => {
     expect(css).toBe('')
   })
 
+  it('Vue（SFC）は、HTML と同じ木を <template> に、CSS を <style scoped> に入れた 1 つのファイルにする', () => {
+    const html = nodeMarkup(card(), 'frame').html
+    const plain = nodeMarkup(card(), 'frame')
+    const { html: vue, css } = nodeMarkup(card(), 'frame', { style: { format: 'vue' } })
+    const lines = vue.split('\n')
+    expect(lines[0]).toBe('<template>')
+    expect(lines[1]).toBe('  <div class="card">')
+    expect(lines[2]).toBe('    <div class="icon"></div>')
+    // {{ }} を式と読まれないように { } は文字参照、改行は <br>
+    expect(lines[3]).toBe('    <div class="label">&#123;a&#125;<br>b</div>')
+    // 中身は HTML + CSS と同じ（字下げと文字の { } だけが違う）
+    expect(vue).toContain(html.split('\n')[3].trim())
+    expect(vue).toContain(`</template>\n\n<style scoped>\n${plain.css}\n</style>`)
+    expect(css).toBe('')
+  })
+
+  it('Vue の <style> は中身から閉じられない', () => {
+    const scene = sceneOf(frame({ name: 'Card', children: ['label'] }), text({ id: 'label', parentId: 'frame', fontFamily: 'a</style><script>' }))
+    expect(nodeMarkup(scene, 'frame', { style: { format: 'vue' } }).html).not.toContain('</style><script>')
+  })
+
   it('画像は JSX では閉じた img にする', () => {
     const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover' }
     const { html } = nodeMarkup(sceneOf(image), 'image', { style: { format: 'react' } })
@@ -320,9 +341,10 @@ describe('nodeMarkup の出力形式', () => {
 describe('nodeCode', () => {
   const scene = () => sceneOf(frame({ children: ['rect'] }), rect({ parentId: 'frame', x: 10, cornerRadius: 4 }))
 
-  it('HTML + CSS と CSS Modules は CSS', () => {
+  it('HTML + CSS と CSS Modules と Vue は CSS', () => {
     expect(nodeCode(scene(), 'rect').title).toBe('CSS')
     expect(nodeCode(scene(), 'rect', { format: 'css-modules' }).code).toBe(nodeCode(scene(), 'rect').code)
+    expect(nodeCode(scene(), 'rect', { format: 'vue' })).toEqual(nodeCode(scene(), 'rect'))
   })
 
   it('React は style のオブジェクト、Tailwind はクラスの並び', () => {
