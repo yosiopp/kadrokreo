@@ -75,9 +75,15 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await page.keyboard.press('r')
   await drag([80, 50], [440, 220])
   await fill('#4f46e5')
-  await page.locator('label:has-text("グラデーション") input').check()
-  await page.locator('[aria-label="グラデーションの終わりの色"]').fill('#c026d3')
+  await page.locator('.field:has(.field-label:text-is("塗りの種類")) select').selectOption('linear')
+  await page.locator('[aria-label="塗りの2 番目の色"]').fill('#c026d3')
+  await page.locator('button:text-is("塗りに色を足す")').click()
+  await page.locator('[aria-label="塗りの2 番目の色"]').fill('#7c3aed')
   await set('角度', 30)
+  // 上の 2 隅だけ、画面の角丸に合わせる
+  await page.locator('label:has-text("角ごとに変える") input').check()
+  await set('左上', 28)
+  await set('右上', 28)
   await rename('Rectangle 1', 'ヘッダー')
 
   await text(108, 120, 'デザインを共有', { size: 26, color: '#ffffff', bold: true })
@@ -146,7 +152,7 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await text(210, 560, 'はじめる', { size: 15, color: '#ffffff', bold: true })
   await page.keyboard.press('Shift+A')
   await set('上', 12); await set('右', 36); await set('下', 12); await set('左', 36)
-  await page.locator('[aria-label="塗りを有効にする"]').check()
+  await page.locator('[aria-label="塗りを有効にする"]').click()
   await fill('#4f46e5')
   await set('半径', 22)
   await page.locator('[aria-label="左右中央揃え"]').click()
@@ -215,6 +221,15 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await page.keyboard.press('Meta+z')
   await page.keyboard.press('Escape')
 
+  // ボタンの元に説明文を付け、文言をプロパティにする（インスタンスでは欄で選べる）
+  await page.locator('.layer-row[data-copy="false"]:has(.layer-name:text-is("Text 3"))').first().click()
+  await page.locator('button:text-is("文言をプロパティに")').click()
+  await row('ボタン').last().click()
+  await page.locator('.component-properties input').first().fill('ラベル')
+  await page.locator('.component-properties input').first().press('Enter')
+  await page.locator('[aria-label="コンポーネントの説明"]').fill('画面でいちばん主な操作に使うボタン')
+  await page.locator('[aria-label="コンポーネントの説明"]').press('Tab')
+
   // フレームの外に置いたインスタンス。一覧で中身を開いておく
   await click(600, 620)
   await row('ボタン').first().locator('.layer-caret').click()
@@ -224,6 +239,12 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await page.emulateMedia({ colorScheme: 'dark' })
   await shot(page, '5-editor-dark.png')
   await page.emulateMedia({ colorScheme: 'light' })
+
+  // 右クリックメニュー（ヘッダーの右側を右クリックし、別のページへ移す先を開いておく）
+  await page.mouse.click(...at(410, 200), { button: 'right' })
+  await page.getByRole('menuitem', { name: '別のページへ移す' }).hover()
+  await shot(page, '14-editor-context-menu.png')
+  await page.keyboard.press('Escape')
 
   // ── viewer ──
   const [download] = await Promise.all([
@@ -269,7 +290,7 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await text(640, 140, 'タグ', { size: 14 })
   await page.keyboard.press('Shift+A')
   await set('上', 6); await set('右', 14); await set('下', 6); await set('左', 14)
-  await page.locator('[aria-label="塗りを有効にする"]').check()
+  await page.locator('[aria-label="塗りを有効にする"]').click()
   await fill('#e0e7ff')
   await set('半径', 14)
   await rename(await page.locator('.layer-row[data-selected="true"] .layer-name').textContent(), 'タグ')
@@ -280,8 +301,8 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   // 真偽値のプロパティ「無効」を足す（インスタンスではチェック欄になる）
   await row('タグ').click()
   await page.locator('button:text-is("プロパティを追加")').click()
-  await page.locator('.variant-property input').nth(1).fill('無効')
-  await page.locator('.variant-property input').nth(1).press('Enter')
+  await page.locator('.variant-property-block > .variant-property input').nth(1).fill('無効')
+  await page.locator('.variant-property-block > .variant-property input').nth(1).press('Enter')
   await row('種類=標準, 無効=標準').click()
   await set('無効', 'false')
   await row('種類=選択中, 無効=標準').click()
@@ -295,6 +316,17 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   // 一覧でまとまりを開き、バリアントを選んで置けることを見せる
   await page.locator('.component-row:has(.component-name:text-is("タグ")) .component-toggle').click()
   await shot(page, '12-editor-variants.png')
+
+  // 親の辺への固定。2 ページ目のフレーム（(120, 80)〜(520, 360)）の右下に、少し回した長方形を右・下に固定して選ぶ。
+  // キャンバスに、回した図形を囲む矩形から親の右辺・下辺への破線が出る
+  await page.locator('.component-row:has(.component-name:text-is("タグ")) .component-toggle').click()
+  await page.keyboard.press('r')
+  await drag([300, 200], [390, 240])
+  await fill('#4f46e5')
+  await set('回転', 12)
+  await page.locator('.field:has(.field-label:text-is("横")) select').selectOption('end')
+  await page.locator('.field:has(.field-label:text-is("縦")) select').selectOption('end')
+  await shot(page, '15-editor-constraints.png')
 
   await browser.close()
 })().catch((e) => {

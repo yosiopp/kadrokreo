@@ -63,6 +63,7 @@ describe('nodeMarkup', () => {
       closed: false,
       startCap: 'none',
       endCap: 'none',
+      capSize: 0,
     }
     const path: PathNode = {
       ...base,
@@ -79,6 +80,7 @@ describe('nodeMarkup', () => {
       closed: true,
       startCap: 'none',
       endCap: 'none',
+      capSize: 0,
     }
     const image: ImageNode = {
       ...base,
@@ -88,7 +90,7 @@ describe('nodeMarkup', () => {
       type: 'image',
       assetId: 'a1',
       cornerRadius: 0,
-      fit: 'cover',
+      fit: 'cover', positionX: 0.5, positionY: 0.5,
     }
     const scene = sceneOf(frame({ children: ['line', 'path', 'image'] }), line, path, image)
     const assets = { a1: { mime: 'image/jpeg', bytes: new Uint8Array([0, 0, 0]) } }
@@ -98,6 +100,32 @@ describe('nodeMarkup', () => {
     expect(lines[3]).toBe('  <img class="photo" src="photo.jpg" alt="Photo">')
     const embedded = nodeMarkup(scene, 'image', { assets, images: 'embed' }).html
     expect(embedded).toBe('<img class="photo" src="data:image/jpeg;base64,AAAA" alt="Photo">')
+  })
+
+  it('頂点の角の丸めは曲線（C）にして書く', () => {
+    const path: PathNode = {
+      ...base,
+      id: 'path',
+      name: 'Round',
+      type: 'path',
+      width: 100,
+      height: 100,
+      fills: solid('#000000'),
+      strokes: [],
+      strokeWidth: 1,
+      effects: [],
+      points: [
+        { x: 0, y: 0, radius: 10 },
+        { x: 1, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      closed: true,
+      startCap: 'none',
+      endCap: 'none',
+      capSize: 0,
+    }
+    const html = nodeMarkup(sceneOf(path), 'path').html
+    expect(html).toMatch(/<path d="M17\.07 17\.07 C[^"]* 24\.14 0 L100 0 L100 100 Z"\/>/)
   })
 
   it('端の矢印は、線を矢印の分だけ短くし、線の色で塗った三角形にする', () => {
@@ -119,12 +147,18 @@ describe('nodeMarkup', () => {
       closed: false,
       startCap: 'none',
       endCap: 'arrow',
+      capSize: 0,
     }
     // 矢印の長さは max(2 × 4, 10) = 10。線は 10 × 0.8 = 8 手前で止める
     expect(nodeMarkup(sceneOf(line), 'line').html).toBe(
       '<svg class="arrow" viewBox="0 0 100 0"><line x1="0" y1="0" x2="92" y2="0"/>' +
         '<polygon points="100,0 90,4 90,-4" fill="#ff0000" stroke="none"/></svg>',
     )
+    // 丸の印は円、大きさを指定すればその大きさ（半径は 0.4 倍）。四角の端は線の外へ太さの半分だけ出る
+    const marked = nodeMarkup(sceneOf({ ...line, startCap: 'square', endCap: 'circle', capSize: 20 }), 'line').html
+    expect(marked).toContain('<line x1="0" y1="0" x2="100" y2="0"/>')
+    expect(marked).toContain('<circle cx="100" cy="0" r="8" fill="#ff0000" stroke="none"/>')
+    expect(marked).toContain('<polygon points="0,1 -1,1 -1,-1 0,-1" fill="#ff0000" stroke="none"/>')
     const path: PathNode = {
       ...base,
       ...paint,
@@ -143,6 +177,7 @@ describe('nodeMarkup', () => {
       closed: false,
       startCap: 'arrow',
       endCap: 'none',
+      capSize: 0,
     }
     const html = nodeMarkup(sceneOf(path), 'path', { style: { color: 'rgb' } }).html
     // 塗りは元の形のまま、線は始点側を短くする
@@ -170,6 +205,7 @@ describe('nodeMarkup', () => {
       closed: false,
       startCap: 'none',
       endCap: 'none',
+      capSize: 0,
     }
     expect(nodeMarkup(sceneOf(path), 'path').html).toBe(
       '<svg class="curve" viewBox="0 0 100 100"><path d="M0 0 C100 0 100 0 100 100"/></svg>',
@@ -208,6 +244,7 @@ describe('nodeMarkup', () => {
       closed: true,
       startCap: 'none',
       endCap: 'none',
+      capSize: 0,
     }
     const html = nodeMarkup(sceneOf(path), 'path').html
     expect(html).toContain(
@@ -216,6 +253,11 @@ describe('nodeMarkup', () => {
     )
     expect(html).toContain('<linearGradient id="blob-stroke"')
     expect(html).toContain('<path d="M0 0 L100 0 L50 50 Z" fill="url(#blob-fill)" stroke="url(#blob-stroke)"/>')
+    // 円形のグラデーションは、半径 1 の円を変換で枠に合わせた楕円にする
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: gradient.stops }
+    expect(nodeMarkup(sceneOf({ ...path, fills: [radial] }), 'path').html).toContain(
+      '<radialGradient id="blob-fill" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(50 0 0 25 50 25)">',
+    )
     // React の形式では stop の属性名を JSX の書き方にする
     expect(nodeMarkup(sceneOf(path), 'path', { style: { format: 'react' } }).html).toContain('stopColor="#ff0000"')
   })
@@ -263,6 +305,7 @@ describe('nodeMarkup の出力形式', () => {
         closed: true,
         startCap: 'none',
         endCap: 'none',
+        capSize: 0,
       } satisfies PathNode,
     )
 
@@ -332,7 +375,7 @@ describe('nodeMarkup の出力形式', () => {
   })
 
   it('画像は JSX では閉じた img にする', () => {
-    const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover' }
+    const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5 }
     const { html } = nodeMarkup(sceneOf(image), 'image', { style: { format: 'react' } })
     expect(html).toContain(`<img style={{ width: 100, height: 50, objectFit: 'cover' }} src="photo.png" alt="Photo" />`)
   })

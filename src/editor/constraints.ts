@@ -1,6 +1,6 @@
-import { tidy } from '../document/geometry.ts'
+import { nodeMatrix, tidy, transformRect } from '../document/geometry.ts'
 import { followsConstraints } from '../document/autoLayout.ts'
-import type { Constraint, FrameNode, NodeId, Scene } from '../document/types.ts'
+import type { Constraint, FrameNode, NodeId, Scene, SceneNode } from '../document/types.ts'
 import { type NodePatch, patchNodes } from './operations/tree.ts'
 
 // 親のフレームの大きさが変わったときに、子を親の辺に追従させる（既存のデザインツールの constraints）。
@@ -78,22 +78,82 @@ function followParent<T extends Scene>(
   })
   if (targets.length === 0) return current
   return patchNodes(current, targets, (child) => {
+    if (child.rotation !== 0) return followRotated(child, previous, frame, resized)
     const horizontal = constrain(child.constraints.horizontal, child.x, child.width, previous.width, frame.width)
     const vertical = constrain(child.constraints.vertical, child.y, child.height, previous.height, frame.height)
     const patch: NodePatch = { x: tidy(horizontal.start), y: tidy(vertical.start) }
-    const width = tidy(horizontal.size)
-    // テキストの高さは中身で決まる
-    const height = child.type === 'text' ? child.height : tidy(vertical.size)
-    if (width !== child.width) {
-      patch.width = width
-      // 中身に合わせていた向きを伸縮したら固定にする（そうしないと中身の大きさへ戻る）
-      if (child.sizing.width === 'hug') patch.sizing = { ...child.sizing, width: 'fixed' }
-      if (child.type === 'text') resized.push(child.id)
-    }
-    if (height !== child.height) {
-      patch.height = height
-      if (child.sizing.height === 'hug') patch.sizing = { ...(patch.sizing ?? child.sizing), height: 'fixed' }
-    }
-    return patch
+    return resizePatch(child, patch, tidy(horizontal.size), tidy(vertical.size), resized)
   })
+}
+
+/** 大きさが変わる向きの書き換えを patch に足す。テキストの高さは中身で決まるので変えない */
+function resizePatch(child: SceneNode, patch: NodePatch, width: number, height: number, resized: NodeId[]): NodePatch {
+  if (child.type === 'text') height = child.height
+  if (width !== child.width) {
+    patch.width = width
+    // 中身に合わせていた向きを伸縮したら固定にする（そうしないと中身の大きさへ戻る）
+    if (child.sizing.width === 'hug') patch.sizing = { ...child.sizing, width: 'fixed' }
+    if (child.type === 'text') resized.push(child.id)
+  }
+  if (height !== child.height) {
+    patch.height = height
+    if (child.sizing.height === 'hug') patch.sizing = { ...(patch.sizing ?? child.sizing), height: 'fixed' }
+  }
+  return patch
+}
+
+/** 回した図形を囲む矩形（親の座標系） */
+function boundingBox(node: Pick<SceneNode, 'x' | 'y' | 'width' | 'height' | 'rotation'>) {
+  return transformRect(nodeMatrix(node), { x: 0, y: 0, width: node.width, height: node.height })
+}
+
+/**
+ * 回した子の追従。親の辺からの距離や割合は、見た目どおり、回した図形を囲む矩形で測る（既存のデザインツールと同じ）。
+ * 囲む矩形の大きさが変わる（左右・上下・拡大縮小）ときは、囲む矩形がその大きさになる枠の幅・高さを解き、
+ * 解けない角度（45° 付近）や、テキスト（高さが中身で決まる）では、縦横比を保って拡大縮小する・大きさを保つ。
+ * どの場合も、囲む矩形の中心を、追従したあとの囲む矩形の中心に合わせる
+ */
+export function followRotated(child: SceneNode, previous: FrameNode, frame: FrameNode, resized: NodeId[] = []): NodePatch {
+  const box = boundingBox(child)
+  const horizontal = constrain(child.constraints.horizontal, box.x, box.width, previous.width, frame.width)
+  const vertical = constrain(child.constraints.vertical, box.y, box.height, previous.height, frame.height)
+  const size = rotatedSize(child, box, horizontal.size, vertical.size)
+  const width = tidy(size.width)
+  const height = child.type === 'text' ? child.height : tidy(size.height)
+  // 新しい大きさで、x / y はそのままにしたときの囲む矩形から、中心のずれを直す
+  const moved = boundingBox({ ...child, width, height })
+  const patch: NodePatch = {
+    x: tidy(child.x + horizontal.start + horizontal.size / 2 - (moved.x + moved.width / 2)),
+    y: tidy(child.y + vertical.start + vertical.size / 2 - (moved.y + moved.height / 2)),
+  }
+  return resizePatch(child, patch, width, height, resized)
+}
+
+/** 囲む矩形を boxWidth × boxHeight にする、回した枠の幅・高さ */
+function rotatedSize(
+  child: SceneNode,
+  box: { width: number; height: number },
+  boxWidth: number,
+  boxHeight: number,
+): { width: number; height: number } {
+  if (Math.abs(boxWidth - box.width) < 1e-9 && Math.abs(boxHeight - box.height) < 1e-9) return child
+  // テキストは高さが中身で決まるので、大きさを保つ（位置だけ追従する）
+  if (child.type === 'text') return child
+  const radians = (child.rotation * Math.PI) / 180
+  const c = Math.abs(Math.cos(radians))
+  const s = Math.abs(Math.sin(radians))
+  // 囲む矩形の幅 = c·w + s·h、高さ = s·w + c·h を w・h について解く
+  const det = c * c - s * s
+  if (Math.abs(det) > 0.2) {
+    const width = (c * boxWidth - s * boxHeight) / det
+    const height = (c * boxHeight - s * boxWidth) / det
+    if (width >= 1 && height >= 1) return { width, height }
+  }
+  // 解けなければ縦横比を保つ。両方の向きが変わるなら、割合の相乗平均
+  const rx = box.width === 0 ? 1 : boxWidth / box.width
+  const ry = box.height === 0 ? 1 : boxHeight / box.height
+  const changedX = Math.abs(rx - 1) > 1e-9
+  const changedY = Math.abs(ry - 1) > 1e-9
+  const ratio = changedX && changedY ? Math.sqrt(rx * ry) : changedX ? rx : ry
+  return { width: Math.max(1, child.width * ratio), height: Math.max(1, child.height * ratio) }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
-import { pngFileName, renderPng } from '../canvas/exportPng.ts'
+import { pngBaseName, pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { assetBlob } from '../canvas/images.ts'
 import { getAbsoluteBounds, getContentBounds, getNodesBounds } from '../document/geometry.ts'
 import { decodeKdr } from '../document/kdr.ts'
@@ -143,12 +143,7 @@ export default function ViewerApp() {
   async function exportPng(nodeIds?: readonly NodeId[]) {
     if (!doc || !page) return
     const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
-    const name =
-      targets.length === 0 || !nodeIds
-        ? `${doc.name} - ${page.name}`
-        : targets.length === 1
-          ? page.nodes[targets[0]].name
-          : `${page.nodes[targets[0]].name} ほか ${targets.length - 1} 個`
+    const name = pngBaseName(doc, page, targets, !nodeIds)
     try {
       const png = await renderPng(page, doc.assets, targets, scale)
       downloadBlob(png, pngFileName(safeFileName(name), scale))

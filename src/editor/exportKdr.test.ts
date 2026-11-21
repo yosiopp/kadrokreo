@@ -65,6 +65,11 @@ function fileNode(page: Page, index = 0): RawNode {
   return file.document.pages[0].children[index]
 }
 
+/** ファイルの形のノード 1 つを読んで、書き出し直した形 */
+function roundTrip(node: RawNode): RawNode {
+  return fileNode(parseKdr(kdrOf([node]), {}).pages[0])
+}
+
 describe('kdr', () => {
   it('書き出したファイルを読み込むと同じドキュメントに戻る', async () => {
     const doc = documentOf(samplePage(), createPage('設定'))
@@ -326,6 +331,26 @@ describe('parseKdr', () => {
     expect(() => parseOne(rawNode({ fills: Array(17).fill({ type: 'solid', color: '#000000' }) }))).toThrow('多すぎ')
   })
 
+  it('円形のグラデーションを検証する', () => {
+    const stops = [{ offset: 0, color: '#000000' }, { offset: 0.4, color: '#ff0000' }, { offset: 1, color: '#ffffff' }]
+    const radial = { type: 'radial', cx: 0.5, cy: -0.25, rx: 0.5, ry: 1.5, stops }
+    expect(parseOne(rawNode({ fills: [radial], strokes: [radial] }))).toMatchObject({ fills: [radial], strokes: [radial] })
+    expect(() => parseOne(rawNode({ fills: [{ ...radial, rx: -1 }] }))).toThrow('fills[0].rx')
+    expect(() => parseOne(rawNode({ fills: [{ ...radial, cy: 'top' }] }))).toThrow('fills[0].cy')
+    expect(() => parseOne(rawNode({ fills: [{ type: 'radial', cx: 0.5, cy: 0.5, ry: 0.5, stops }] }))).toThrow('fills[0].rx')
+    // 書き出しても形は変わらない
+    expect(roundTrip(rawNode({ fills: [radial] }))).toMatchObject({ fills: [radial] })
+  })
+
+  it('角丸は数値か 4 隅の配列。0 なら書き出しで省く', () => {
+    expect(parseOne(rawNode({ cornerRadius: [1, 2, 3, 4] }))).toMatchObject({ cornerRadius: [1, 2, 3, 4] })
+    expect(parseOne(rawNode({ cornerRadius: 8 }))).toMatchObject({ cornerRadius: 8 })
+    expect(() => parseOne(rawNode({ cornerRadius: [1, 2, 3] }))).toThrow('4 隅')
+    expect(() => parseOne(rawNode({ cornerRadius: [1, 2, -3, 4] }))).toThrow('cornerRadius[2]')
+    expect(roundTrip(rawNode({ cornerRadius: [0, 8, 0, 8] }))).toMatchObject({ cornerRadius: [0, 8, 0, 8] })
+    expect(roundTrip(rawNode({}))).not.toHaveProperty('cornerRadius')
+  })
+
   it('大きさの決め方を検証する。中身に合わせられないノードの hug は拒否する', () => {
     expect(parseOne(rawNode({ sizing: { width: 'fill' } }))).toMatchObject({ sizing: { width: 'fill', height: 'fixed' } })
     expect(() => parseOne(rawNode({ sizing: { width: 'auto' } }))).toThrow('sizing.width')
@@ -366,7 +391,39 @@ describe('parseKdr', () => {
     expect(() => parseOne(raw({ points: [{ x: 0, y: 0 }] }))).toThrow('頂点')
     expect(() => parseOne(raw({ points: [{ x: 0, y: 0 }, { x: '1', y: 0 }] }))).toThrow('points[1].x')
     expect(() => parseOne(raw({ points: 'M0 0L1 1' }))).toThrow('points')
-    expect(() => parseOne(raw({ endCap: 'circle' }))).toThrow('endCap')
+    expect(() => parseOne(raw({ endCap: 'dot' }))).toThrow('endCap')
+  })
+
+  it('端の形（丸・四角・印）と端の大きさ capSize を検証する。capSize 0 は書き出しで省く', () => {
+    const raw = (patch: RawNode) => rawNode({ type: 'path', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], ...patch })
+    for (const cap of ['round', 'square', 'arrow', 'circle', 'diamond']) {
+      expect(parseOne(raw({ startCap: cap, endCap: cap }))).toMatchObject({ startCap: cap, endCap: cap })
+    }
+    expect(parseOne(raw({}))).toMatchObject({ capSize: 0 })
+    expect(parseOne(raw({ capSize: 24 }))).toMatchObject({ capSize: 24 })
+    expect(() => parseOne(raw({ capSize: -1 }))).toThrow('capSize')
+    expect(() => parseOne(raw({ capSize: '8' }))).toThrow('capSize')
+    const path = createPath(pathFromPoints([{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 0 }]), false)
+    expect(fileNode(insertNode(createPage(), path))).not.toHaveProperty('capSize')
+    const sized = { ...path, endCap: 'circle' as const, capSize: 12 }
+    expect(fileNode(insertNode(createPage(), sized))).toMatchObject({ endCap: 'circle', capSize: 12 })
+    expect(parseOne(fileNode(insertNode(createPage(), sized)))).toEqual(sized)
+  })
+
+  it('頂点の角の丸め radius を検証する。0 や省略は丸めない頂点で、書き出しでも書かない', () => {
+    const raw = (points: unknown) => rawNode({ type: 'path', points, closed: true })
+    const square = [{ x: 0, y: 0, radius: 8 }, { x: 1, y: 0 }, { x: 1, y: 1, radius: 0 }]
+    expect(parseOne(raw(square))).toMatchObject({ points: [{ x: 0, y: 0, radius: 8 }, { x: 1, y: 0 }, { x: 1, y: 1 }] })
+    expect(parseOne(raw(square))).not.toHaveProperty('points.2.radius')
+    expect(() => parseOne(raw([{ x: 0, y: 0, radius: -2 }, { x: 1, y: 1 }]))).toThrow('points[0].radius')
+    expect(() => parseOne(raw([{ x: 0, y: 0 }, { x: 1, y: 1, radius: 'a' }]))).toThrow('points[1].radius')
+    const path = createPath(pathFromPoints([{ x: 0, y: 0, radius: 6 }, { x: 40, y: 0 }, { x: 40, y: 40 }], true), true)
+    const file = fileNode(insertNode(createPage(), path))
+    // 枠は丸めた形を囲むので、丸めた頂点は枠の外（割合が 0 未満）に出る
+    expect((file.points as RawNode[])[0]).toMatchObject({ radius: 6 })
+    expect((file.points as RawNode[])[0].x).toBeLessThan(0)
+    expect(Object.keys((file.points as RawNode[])[1])).toEqual(['x', 'y'])
+    expect(parseOne(file)).toEqual(path)
   })
 
   it('パスの頂点の制御点 in / out を検証する。省けば角の頂点で、書き出しでも書かない', () => {
@@ -416,10 +473,39 @@ describe('parseKdr', () => {
 
   it('コンポーネントとのつながりを検証する', () => {
     const main = rawNode({ type: 'frame', component: { id: 'c1', role: 'main' } })
-    expect(parseOne(main)).toMatchObject({ component: { id: 'c1', role: 'main' } })
+    // 説明文とプロパティは省けば空
+    expect(parseOne(main)).toEqual(expect.objectContaining({ component: { id: 'c1', role: 'main', description: '', properties: [] } }))
     expect(parseOne(main)).not.toHaveProperty('component.overrides')
     expect(() => parseOne(rawNode({ type: 'frame', component: { id: 'c1', role: 'copy' } }))).toThrow('component.role')
-    expect(() => parseOne(rawNode({ type: 'frame', component: { id: '../x', role: 'main' } }))).toThrow('component.id')
+    expect(() => parseOne(rawNode({ type: 'frame', component: { id: '../x', role: 'main', description: '', properties: [] } }))).toThrow('component.id')
+  })
+
+  it('コンポーネントの説明文とプロパティを検証し、空なら書き出さない', () => {
+    const withMain = (link: Record<string, unknown>) => rawNode({ type: 'frame', component: { id: 'c1', role: 'main', ...link } })
+    const properties = [
+      { name: '文言', type: 'text', targets: ['n1'] },
+      { name: '印', type: 'boolean', targets: ['n2', 'n3'] },
+      { name: 'アイコン', type: 'instance', targets: [] },
+    ]
+    expect(parseOne(withMain({ description: '主な操作', properties }))).toMatchObject({
+      component: { description: '主な操作', properties },
+    })
+    // targets は省けば空
+    expect(parseOne(withMain({ properties: [{ name: 'a', type: 'text' }] }))).toMatchObject({
+      component: { properties: [{ name: 'a', type: 'text', targets: [] }] },
+    })
+    expect(() => parseOne(withMain({ description: 1 }))).toThrow('component.description')
+    expect(() => parseOne(withMain({ properties: {} }))).toThrow('component.properties')
+    expect(() => parseOne(withMain({ properties: [{ name: 'a', type: 'color' }] }))).toThrow('component.properties[0].type')
+    expect(() => parseOne(withMain({ properties: [{ name: ' ', type: 'text' }] }))).toThrow('component.properties[0].name')
+    expect(() => parseOne(withMain({ properties: [{ name: 'a', type: 'text', targets: ['../x'] }] }))).toThrow('properties[0].targets[0]')
+    expect(() => parseOne(withMain({ properties: [{ name: 'a', type: 'text' }, { name: 'a', type: 'boolean' }] }))).toThrow('重複')
+
+    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'main' as const, description: '', properties: [] } }
+    const page = insertNode(createPage(), frame)
+    expect(fileNode(page).component).toEqual({ id: 'c1', role: 'main' })
+    const described = insertNode(createPage(), { ...frame, component: { ...frame.component, description: 'x', properties: [{ name: 'a', type: 'text' as const, targets: [] }] } })
+    expect(fileNode(described).component).toEqual({ id: 'c1', role: 'main', description: 'x', properties: [{ name: 'a', type: 'text', targets: [] }] })
   })
 
   it('インスタンスごとの上書きを検証する', () => {
@@ -456,7 +542,9 @@ describe('parseKdr', () => {
   it('画像は対応形式のバイト列で、データが揃っているものだけ受け付ける', () => {
     const image = rawNode({ type: 'image', assetId: 'a1' })
     expect(parseKdr(kdrOf([image]), { a1: PNG }).assets).toEqual({ a1: PNG })
-    expect(parseOne(image, { a1: PNG })).toMatchObject({ fit: 'cover', cornerRadius: 0 })
+    expect(parseOne(image, { a1: PNG })).toMatchObject({ fit: 'cover', cornerRadius: 0, positionX: 0.5, positionY: 0.5 })
+    expect(parseOne({ ...image, positionX: 0, positionY: 1 }, { a1: PNG })).toMatchObject({ positionX: 0, positionY: 1 })
+    expect(() => parseOne({ ...image, positionX: 1.5 }, { a1: PNG })).toThrow('positionX')
     expect(() => parseOne(image, {})).toThrow('画像データ')
     expect(() => parseOne(image, { a1: { ...PNG, mime: 'image/svg+xml' } })).toThrow('画像形式')
     expect(() => parseOne(image, { a1: { mime: 'image/png', data: 'iVBORw0K' } })).toThrow('バイト列')

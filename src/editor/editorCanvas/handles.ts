@@ -81,26 +81,33 @@ export type PointPart = 'vertex' | 'in' | 'out'
 
 /**
  * 頂点を編集中に出す制御点のハンドル。選んだ頂点の 2 つと、両隣の頂点のうち選んだ頂点へ向かう辺の制御点
- * （どちらの端の曲がり具合も、選んだ頂点のまわりで直せるように）
+ * （どちらの端の曲がり具合も、選んだ頂点のまわりで直せるように）。頂点を複数選んでいれば、それぞれの分をまとめる
  */
 export function visibleControls(
   vertices: readonly Vertex[],
-  selected: number | null,
+  selected: readonly number[],
   closed: boolean,
 ): { index: number; part: 'in' | 'out'; point: Point }[] {
-  if (selected === null || !vertices[selected]) return []
   const count = vertices.length
   const controls: { index: number; part: 'in' | 'out'; point: Point }[] = []
+  const seen = new Set<string>()
   const add = (index: number, part: 'in' | 'out') => {
     const point = vertices[index]?.[part]
-    if (point) controls.push({ index, part, point })
+    const key = `${index}${part}`
+    if (point && !seen.has(key)) {
+      seen.add(key)
+      controls.push({ index, part, point })
+    }
   }
-  add(selected, 'in')
-  add(selected, 'out')
-  const prev = selected > 0 ? selected - 1 : closed ? count - 1 : -1
-  const next = selected < count - 1 ? selected + 1 : closed ? 0 : -1
-  if (prev >= 0 && prev !== selected) add(prev, 'out')
-  if (next >= 0 && next !== selected && next !== prev) add(next, 'in')
+  for (const index of selected) {
+    if (!vertices[index]) continue
+    add(index, 'in')
+    add(index, 'out')
+    const prev = index > 0 ? index - 1 : closed ? count - 1 : -1
+    const next = index < count - 1 ? index + 1 : closed ? 0 : -1
+    if (prev >= 0 && prev !== index) add(prev, 'out')
+    if (next >= 0 && next !== index) add(next, 'in')
+  }
   return controls
 }
 

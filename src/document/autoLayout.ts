@@ -27,13 +27,16 @@ export function hugs(node: SceneNode, axis: 'width' | 'height'): boolean {
 /**
  * node の大きさの下限・上限が効く向き。大きさを自動で決める向きだけ:
  * 親いっぱいに伸ばしている向きと、自動で並べるフレームやテキストが中身に合わせている向き
- * （テキストの幅は上限で折り返す。テキストの高さは中身で決まるので数えない）。
+ * （テキストの幅は上限で折り返す。テキストの高さはいつも中身で決まるので、下限・上限がいつも効く）。
  * 手で決めた（固定の）大きさには効かない（既存のデザインツールと同じ）
  */
 export function sizeLimited(scene: Scene, node: SceneNode): { width: boolean; height: boolean } {
   const stretched = stretchedAxes(scene, node)
   const textHug = node.type === 'text' && node.sizing.width === 'hug'
-  return { width: stretched.width || hugs(node, 'width') || textHug, height: stretched.height || hugs(node, 'height') }
+  return {
+    width: stretched.width || hugs(node, 'width') || textHug,
+    height: stretched.height || hugs(node, 'height') || node.type === 'text',
+  }
 }
 
 /** value を node の下限・上限に収める。下限と上限が食い違えば下限を優先する（CSS と同じ） */

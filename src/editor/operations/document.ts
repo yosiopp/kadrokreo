@@ -1,7 +1,9 @@
+import { getWorldCenter, getWorldRotation, poseInParent } from '../../document/geometry.ts'
 import { sha256Hex } from '../../document/sha256.ts'
 import type { Asset, AssetId, DesignDocument, NodeId, Page, PageId } from '../../document/types.ts'
 import { createId } from '../nodes.ts'
 import { type Fragment, copyFragment, pasteFragment } from './clipboard.ts'
+import { collectSubtrees, removeNodes, sortByDocumentOrder, topLevelIds } from './tree.ts'
 
 // ドキュメント・ページ・アセットの操作。どれも新しいドキュメントを返し、変化がなければ同じ参照を返す
 
@@ -138,4 +140,36 @@ export function pasteIntoPage(
   const missing = Object.keys(fragment.assets).some((id) => !Object.hasOwn(doc.assets, id))
   const document = missing ? { ...pasted, assets: { ...fragment.assets, ...doc.assets } } : pasted
   return { document, ids }
+}
+
+/**
+ * ノードを子孫ごと別のページへ移す。移した先ではページ直下の最前面に、ページ上の位置と向きを保って置く。
+ * 切り取り＆貼り付けと違い、id もコンポーネントの元もそのまま残る（元を移しても、写しにならない）
+ */
+export function moveNodesToPage(
+  doc: DesignDocument,
+  fromPageId: PageId,
+  ids: readonly NodeId[],
+  toPageId: PageId,
+): DesignDocument {
+  const from = doc.pages.find((page) => page.id === fromPageId)
+  const to = doc.pages.find((page) => page.id === toPageId)
+  if (!from || !to || from === to) return doc
+  const rootIds = sortByDocumentOrder(from, topLevelIds(from, ids))
+  if (rootIds.length === 0) return doc
+
+  const moved: Page['nodes'] = {}
+  for (const id of collectSubtrees(from, rootIds)) moved[id] = from.nodes[id]
+  for (const id of rootIds) {
+    const pose = poseInParent(from, null, getWorldCenter(from, id), getWorldRotation(from, id), moved[id])
+    moved[id] = { ...moved[id], parentId: null, x: pose.x, y: pose.y, rotation: pose.rotation }
+  }
+  return {
+    ...doc,
+    pages: doc.pages.map((page) => {
+      if (page === from) return removeNodes(page, rootIds)
+      if (page === to) return { ...page, nodes: { ...page.nodes, ...moved }, rootIds: [...page.rootIds, ...rootIds] }
+      return page
+    }),
+  }
 }

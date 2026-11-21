@@ -1,6 +1,6 @@
 import type { Effect, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { hasStroke } from '../document/paint.ts'
-import { formatColor } from './colors.ts'
+import { colorAlpha, formatColor } from './colors.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, type InspectSection, shadowCss } from './inspect.ts'
 
 // ページで使われている色と文字の設定の一覧。何も選んでいないときに見せる。
@@ -13,8 +13,36 @@ export type TextStyleUse = Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeigh
 }
 export type ShadowUse = { shadow: Effect; count: number; nodes: NodeId[] }
 
+/** 下の塗りを隠すか。グラデーションも枠全体を覆う（端の色が外まで続く）ので、どの色も不透明なら隠す */
+function isOpaque(paint: Paint): boolean {
+  // 塗りごとの不透明度を足したら（backlog「塗りの残り」）、ここで見る
+  return paint.type === 'solid' ? colorAlpha(paint.color) >= 1 : paint.stops.every((stop) => colorAlpha(stop.color) >= 1)
+}
+
 /**
- * 表示されているノードの塗りと線の色、テキストの書式を数える。
+ * 重ねた塗り（下から順）のうち、見えるもの。上から見ていき、不透明な塗りより下は隠れるので数えない。
+ * seeThrough なら、塗りを 1 枚ずつ半透明で重ねて描くので、どれも透けて見える。
+ */
+export function visiblePaints(paints: readonly Paint[], seeThrough = false): Paint[] {
+  if (seeThrough) return [...paints]
+  for (let i = paints.length - 1; i >= 0; i--) {
+    if (isOpaque(paints[i])) return paints.slice(i)
+  }
+  return [...paints]
+}
+
+/**
+ * ノードの塗りを 1 枚ずつ半透明で描くか（render.ts の drawNode と同じ決まり）。不透明度が 1 未満のノードはそう描くが、
+ * 中身のあるフレームだけは、自分の塗りと子を別のキャンバスにふつうに描いてから 1 枚の絵として透かすので、下の塗りは隠れたまま
+ */
+function paintsSeeThrough(node: SceneNode): boolean {
+  return node.opacity < 1 && !(node.type === 'frame' && node.children.length > 0)
+}
+
+/**
+ * 表示されているノードの、見えている塗りと線の色、テキストの書式を数える。
+ * 不透明な塗りの下に重ねて隠れた塗りの色は数えない（visiblePaints）。隠れた色は一覧に出ないので、
+ * そこから使っている図形は選べない。確かめるときは、図形を選んでインスペクトの「塗り」を見る（そこには重ねた塗りを全部出す）。
  * 色は使われている数の多い順、文字は大きい順に並べる。影の色は、濃さを別に持つので数えない。
  */
 export function summarizePage(scene: Scene): {
@@ -27,8 +55,8 @@ export function summarizePage(scene: Scene): {
   const shadows = new Map<string, ShadowUse>()
 
   function visit(node: SceneNode) {
-    // 非表示のものは、その中身も画面に出ない
-    if (!node.visible) return
+    // 非表示や不透明度 0 のものは、その中身も画面に出ない（描画も省く）
+    if (!node.visible || node.opacity === 0) return
     const countColor = (value: string) => {
       const color = value.toLowerCase()
       const use = colors.get(color) ?? { color, count: 0, nodes: [] }
@@ -36,8 +64,9 @@ export function summarizePage(scene: Scene): {
       if (use.nodes.at(-1) !== node.id) use.nodes.push(node.id)
       colors.set(color, use)
     }
+    const seeThrough = paintsSeeThrough(node)
     const countPaints = (paints: readonly Paint[]) => {
-      for (const paint of paints) {
+      for (const paint of visiblePaints(paints, seeThrough)) {
         if (paint.type === 'solid') countColor(paint.color)
         else for (const stop of paint.stops) countColor(stop.color)
       }

@@ -5,7 +5,14 @@ import { createPage } from './operations/document.ts'
 import { insertNode } from './operations/tree.ts'
 import {
   deleteVertex,
+  deleteVertices,
   insertVertex,
+  moveVertices,
+  openAtSegment,
+  refitPath,
+  setVertexKind,
+  setVertexRadius,
+  vertexKind,
   isSmooth,
   moveControl,
   moveVertex,
@@ -102,5 +109,77 @@ describe('パスの頂点の編集', () => {
     expect(after[1].in).toBeDefined()
     // 何もしなければ同じ参照
     expect(reshapePath(page, path.id, () => null)).toBe(page)
+  })
+})
+
+describe('頂点の複数選択・種類・角の丸め・辺から開く', () => {
+  const square = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 100, y: 100 },
+    { x: 0, y: 100 },
+  ]
+
+  it('moveVertices は選んだ頂点だけを制御点ごと動かす', () => {
+    const curved = [{ x: 0, y: 0, out: { x: 10, y: 0 } }, ...square.slice(1)]
+    const moved = moveVertices(curved, [0, 2], 5, -5)
+    expect(moved[0]).toEqual({ x: 5, y: -5, out: { x: 15, y: -5 } })
+    expect(moved[1]).toBe(curved[1])
+    expect(moved[2]).toEqual({ x: 105, y: 95 })
+  })
+
+  it('deleteVertices はまとめて消し、残りが少なすぎるときは消さない', () => {
+    expect(deleteVertices(square, true, [1])).toHaveLength(3)
+    expect(deleteVertices(square, true, [1, 3])).toBeNull()
+    expect(deleteVertices(square, false, [1, 3])).toEqual([square[0], square[2]])
+    expect(deleteVertices(square, false, [])).toBeNull()
+  })
+
+  it('setVertexKind は角となめらかを切り替え、折れた曲線はなめらかに揃える', () => {
+    const smooth = setVertexKind(square, [1, 2], true, 'smooth')
+    expect(vertexKind(smooth[1])).toBe('smooth')
+    expect(vertexKind(smooth[2])).toBe('smooth')
+    expect(vertexKind(smooth[0])).toBe('corner')
+    expect(setVertexKind(smooth, [1], true, 'corner')[1]).toEqual({ x: 100, y: 0 })
+    const broken = { x: 50, y: 50, in: { x: 40, y: 40 }, out: { x: 60, y: 50 } }
+    expect(vertexKind(broken)).toBe('curve')
+    const fixed = setVertexKind([square[0], broken, square[2]], [1], false, 'smooth')[1]
+    expect(vertexKind(fixed)).toBe('smooth')
+    // out の向きはそのまま、in の長さも保つ
+    expect(fixed.out).toEqual(broken.out)
+    expect(Math.hypot(fixed.in!.x - 50, fixed.in!.y - 50)).toBeCloseTo(Math.hypot(10, 10))
+  })
+
+  it('setVertexRadius は選んだ頂点の丸めを変え、0 で外す', () => {
+    const rounded = setVertexRadius(square, [0, 2], 12)
+    expect(rounded[0]).toEqual({ x: 0, y: 0, radius: 12 })
+    expect(rounded[1]).toEqual({ x: 100, y: 0 })
+    expect(setVertexRadius(rounded, [0], 0)[0]).toEqual({ x: 0, y: 0 })
+  })
+
+  it('openAtSegment は閉じた形を辺で開き、辺の次の頂点を始点にする', () => {
+    const curved = square.map((vertex, i) => (i === 1 ? { ...vertex, out: { x: 120, y: 30 } } : i === 2 ? { ...vertex, in: { x: 120, y: 70 }, radius: 4 } : vertex))
+    const opened = openAtSegment(curved, true, 1)!
+    expect(opened.closed).toBe(false)
+    // 1 → 2 の辺を消したので、2 から始まって 1 で終わる。消した辺の制御点と、端の丸めは外す
+    expect(opened.vertices).toEqual([{ x: 100, y: 100 }, square[3], square[0], { x: 100, y: 0 }])
+    expect(openAtSegment(square, false, 0)).toBeNull()
+  })
+
+  it('refitPath は角の丸めに合わせて枠を作り直す。頂点の位置は変わらない', () => {
+    const triangle = createPath(pathFromPoints([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 50, y: 100 }], true), true)
+    const page = insertNode(createPage(), {
+      ...triangle,
+      points: triangle.points.map((point) => ({ ...point, radius: 20 })),
+    })
+    const refit = refitPath(page, triangle.id)
+    const node = refit.nodes[triangle.id]
+    expect(node.height).toBeLessThan(100)
+    expect(node.x).toBeGreaterThan(0)
+    const before = parentVertices(page, triangle.id)
+    parentVertices(refit, triangle.id).forEach((vertex, i) => {
+      expect(vertex.x).toBeCloseTo(before[i].x)
+      expect(vertex.y).toBeCloseTo(before[i].y)
+    })
   })
 })

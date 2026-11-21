@@ -195,7 +195,7 @@ export function makeBenchDocument(options: BenchOptions): { document: DesignDocu
   // コンポーネントの元。写しは 6 個（背景・アバター・見出し・説明・バッジとその中の文字）
   const mainTop = empty.y + empty.height + 40
   const main = frame('Card', { x: 0, y: mainTop, ...card }, null, '#ffffff')
-  main.component = { id: 'card', role: 'main' }
+  main.component = { id: 'card', role: 'main', description: '', properties: [] }
   main.effects = [SHADOWS[1]]
   const mainRect = add({ ...createRect({ x: 0, y: 0, ...card }), name: 'Background', fills: solid('#f8fafc') }, main)
   add({ ...createEllipse({ x: 16, y: 16, width: 40, height: 40 }), name: 'Avatar', fills: solid('#6366f1') }, main)

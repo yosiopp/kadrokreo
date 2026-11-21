@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AutoLayout, FrameNode, Scene, SceneNode } from '../document/types.ts'
+import { nodeMatrix, transformRect } from '../document/geometry.ts'
 import {
   enableAutoLayout,
   moveInLayout,
@@ -590,6 +591,45 @@ describe('親の辺に固定する（constraints）', () => {
     const grown = node(store, frame.id).width - before
     expect(grown).toBeGreaterThan(0)
     expect(node(store, rect.id).x).toBe(170 + grown)
+  })
+
+  it('回した子は、囲む矩形で親の辺からの距離を測って伸縮する', () => {
+    // 90° 回すと、囲む矩形は x 155〜175・y 55〜85（20 × 30）
+    const { store, frame, rect } = setup({ horizontal: 'stretch', vertical: 'start' })
+    store.apply((base) => updateNode(base, rect.id, { rotation: 90 }))
+    store.apply((base) => setSize(base, [frame.id], { width: 300 }))
+    // 見た目の横幅（枠の高さ）が 100 伸び、左の辺は 155 のまま
+    const turned = node(store, rect.id)
+    expect(turned).toMatchObject({ width: 30, height: 120 })
+    const box = transformRect(nodeMatrix(turned), { x: 0, y: 0, width: turned.width, height: turned.height })
+    expect(box.x).toBeCloseTo(155)
+    expect(box.width).toBeCloseTo(120)
+    expect(box.y).toBeCloseTo(55)
+  })
+
+  it('回した子の拡大縮小は、45° 付近では縦横比を保ち、囲む矩形の中心を割合どおりに動かす', () => {
+    const { store, frame, rect } = setup({ horizontal: 'scale', vertical: 'scale' })
+    store.apply((base) => updateNode(base, rect.id, { rotation: 45 }))
+    store.apply((base) => setSize(base, [frame.id], { width: 100, height: 50 }))
+    const turned = node(store, rect.id)
+    expect(turned).toMatchObject({ width: 15, height: 10 })
+    // 中心（165, 70）が半分の（82.5, 35）へ
+    expect(turned.x + turned.width / 2).toBeCloseTo(82.5)
+    expect(turned.y + turned.height / 2).toBeCloseTo(35)
+  })
+
+  it('回したテキストは大きさを保ち、囲む矩形の中心だけ追従する', () => {
+    const frame = createFrame({ x: 0, y: 0, width: 200, height: 100 })
+    const label = {
+      ...createText({ x: 10, y: 10, width: 30, height: 20 }, 'abc'),
+      rotation: 30,
+      constraints: { horizontal: 'stretch', vertical: 'start' } as const,
+    }
+    const store = createEditorStore(createDocument())
+    store.apply((base) => insertNode(insertNode(base, frame), label, frame.id))
+    const before = node(store, label.id)
+    store.apply((base) => setSize(base, [frame.id], { width: 300 }))
+    expect(node(store, label.id)).toMatchObject({ width: before.width, height: before.height, x: before.x + 50, y: before.y })
   })
 
   it('左右に伸縮したテキストは、幅を固定にして折り返す', () => {

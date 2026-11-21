@@ -9,6 +9,7 @@ import {
   createDocument,
   createPage,
   duplicatePage,
+  moveNodesToPage,
   movePage,
   pasteIntoPage,
   pruneAssets,
@@ -148,5 +149,26 @@ describe('ページ', () => {
     expect(Object.keys(copy.nodes)).not.toContain(frame.id)
     expect(copy.nodes[copy.rootIds[0]]).toMatchObject({ type: 'frame', x: 100, y: 50 })
     expect(duplicatePage(doc, 'missing')).toBeNull()
+  })
+
+  it('ノードを子孫ごと別のページへ移す。id はそのままで、ページ上の位置を保ってページ直下の最前面に置く', () => {
+    const { doc, ids } = three()
+    const { doc: scene, frame, inner, rect } = fixture()
+    const other = createRect(bounds)
+    let filled = updatePage(doc, ids[0], (page) => ({ ...page, nodes: scene.nodes, rootIds: scene.rootIds }))
+    filled = updatePage(filled, ids[1], (page) => insertNode(page, other))
+
+    const next = moveNodesToPage(filled, ids[0], [inner.id, rect.id], ids[1])
+    const [a, b] = next.pages
+    expect(Object.keys(a.nodes)).not.toContain(inner.id)
+    expect(a.nodes[frame.id]).toMatchObject({ children: [] })
+    expect(b.rootIds).toEqual([other.id, inner.id])
+    // フレーム (100, 50) の中の (20, 10) は、ページ上の (120, 60)
+    expect(b.nodes[inner.id]).toMatchObject({ parentId: null, x: 120, y: 60, children: [rect.id] })
+    expect(b.nodes[rect.id]).toMatchObject({ parentId: inner.id, x: 5, y: 5 })
+
+    expect(moveNodesToPage(filled, ids[0], [inner.id], ids[0])).toBe(filled)
+    expect(moveNodesToPage(filled, ids[0], ['missing'], ids[1])).toBe(filled)
+    expect(moveNodesToPage(filled, ids[0], [inner.id], 'missing')).toBe(filled)
   })
 })

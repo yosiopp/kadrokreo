@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatColor } from './colors.ts'
+import { colorAlpha, formatColor } from './colors.ts'
 
 describe('formatColor', () => {
   it('HEX は大文字か小文字で、透明度つきは rgba', () => {
@@ -19,5 +19,14 @@ describe('formatColor', () => {
     expect(formatColor('#ff00ff', 'hsl')).toBe('hsl(300, 100%, 50%)')
     expect(formatColor('#808080', 'hsl')).toBe('hsl(0, 0%, 50%)')
     expect(formatColor('#ffffff', 'hsl', { alpha: 1 })).toBe('hsla(0, 0%, 100%, 1)')
+  })
+})
+
+describe('colorAlpha', () => {
+  it('#rrggbb は不透明、#rrggbbaa は末尾の 2 桁が不透明度', () => {
+    expect(colorAlpha('#123456')).toBe(1)
+    expect(colorAlpha('#123456ff')).toBe(1)
+    expect(colorAlpha('#12345680')).toBeCloseTo(0.5, 2)
+    expect(colorAlpha('#12345600')).toBe(0)
   })
 })

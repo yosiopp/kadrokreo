@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { componentEntries } from './componentList.ts'
+import { componentEntries, groupByPage } from './componentList.ts'
 import { makeComponent } from './components.ts'
 import { createFrame } from './nodes.ts'
 import { addPage, createDocument, createPage, updatePage } from './operations/document.ts'
@@ -47,5 +47,18 @@ describe('コンポーネントの一覧', () => {
     // まとまりの名前が当てはまれば、すべてのバリアント
     expect(names(componentEntries(doc, 'ボタ', 'document'))).toEqual([['ボタン', ['種類=標準', '種類=2']]])
     expect(componentEntries(doc, 'ない', 'document')).toEqual([])
+  })
+})
+
+describe('ページごとの見出し', () => {
+  it('ページ順の行を、ページごとにまとめる', () => {
+    const doc = fixture()
+    const groups = groupByPage(componentEntries(doc, '', 'document'))
+    expect(groups.map((group) => [group.page.name, group.entries.map((entry) => entry.name)])).toEqual([
+      [doc.pages[0].name, ['Card', 'ボタン']],
+      ['Page 2', ['avatar']],
+    ])
+    // 検索で 1 ページだけになれば、見出しも 1 つ
+    expect(groupByPage(componentEntries(doc, 'ava', 'document')).map((group) => group.page.name)).toEqual(['Page 2'])
   })
 })

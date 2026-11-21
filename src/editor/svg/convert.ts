@@ -14,7 +14,7 @@ import {
 import { gradientLine } from '../../document/paint.ts'
 import { type Vertex, mapVertices, pathBounds, pathFromPoints } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
-import type { ColorStop, FrameNode, NodeId, Paint, PathNode, SceneNode, Style, TextNode } from '../../document/types.ts'
+import type { Cap, ColorStop, FrameNode, NodeId, Paint, PathNode, SceneNode, Style, TextNode } from '../../document/types.ts'
 import { createEllipse, createFrame, createPath, createRect, createText } from '../nodes.ts'
 import type { Fragment } from '../operations/clipboard.ts'
 import type { SvgElement, SvgNode } from './xml.ts'
@@ -38,7 +38,7 @@ import {
 // - rect / circle / ellipse は、かかっている変換が「回転と縦横の拡大」で表せれば矩形・楕円のノード（回転つき）に、
 //   歪めたり裏返したりしていればパスにする。line / polyline / polygon / path はパス。path の輪郭が複数あれば、
 //   輪郭ごとのパスをフレームにまとめる（kadrokreo のパスは輪郭を 1 つしか持てないので、穴は塗りつぶされる）。
-// - 塗りは単色と linearGradient。kadrokreo の塗りは不透明度を持たないので、fill-opacity などはノードの opacity に寄せる。
+// - 塗りは単色と linearGradient・radialGradient。kadrokreo の塗りは不透明度を持たないので、fill-opacity などはノードの opacity に寄せる。
 // - スクリプト・foreignObject・外部参照は読まない。表せないもの（フィルタ・マスク・クリップパス・パターン・円形のグラデーションなど）は
 //   近い形に置き換えるか読み飛ばし、warnings で知らせる。
 
@@ -88,6 +88,8 @@ type Inherited = {
   fontWeight: string
   textAnchor: string
   visible: boolean
+  /** stroke-linecap。開いたパスの両端の形になる */
+  lineCap: string
 }
 
 const ROOT_INHERITED: Inherited = {
@@ -102,6 +104,7 @@ const ROOT_INHERITED: Inherited = {
   fontWeight: 'normal',
   textAnchor: 'start',
   visible: true,
+  lineCap: 'butt',
 }
 
 /** 要素を描かない（定義だけの）要素。黙って読み飛ばす */
@@ -257,6 +260,8 @@ class Converter {
     if (textAnchor !== undefined) next.textAnchor = textAnchor
     const visibility = get('visibility')
     if (visibility !== undefined) next.visible = visibility === 'visible'
+    const lineCap = get('stroke-linecap')
+    if (lineCap !== undefined) next.lineCap = lineCap
     return next
   }
 
@@ -579,8 +584,12 @@ class Converter {
     } else if (fill.paints.length > 0) alpha = fill.alpha
     else if (stroke.paints.length > 0) alpha = stroke.alpha
     const id = element.attributes.id
+    // 線の端の形（stroke-linecap）は、開いたパスの両端に写す。閉じた形には端がない
+    const cap: Cap | null = inherited.lineCap === 'round' || inherited.lineCap === 'square' ? inherited.lineCap : null
+    const caps = node.type === 'path' && !node.closed && cap && stroke.paints.length > 0 ? { startCap: cap, endCap: cap } : {}
     const named = {
       ...node,
+      ...caps,
       name: id !== undefined && id !== '' ? id : node.name,
       fills: fill.paints,
       strokes: stroke.paints,
@@ -630,9 +639,8 @@ class Converter {
         return paint ? { paints: [paint], alpha: opacity } : none
       }
       if (element?.name === 'radialGradient') {
-        this.warn('円形のグラデーション（単色にした）')
-        const stops = this.stops(element, inherited)
-        return stops.length > 0 ? { paints: [{ type: 'solid', color: stops[0].color }], alpha: opacity } : none
+        const paint = this.radialGradient(element, inherited, matrix, userBox, node)
+        return paint ? { paints: [paint], alpha: opacity } : none
       }
       if (element?.name === 'pattern') this.warn('パターンの塗り')
       else this.warn('たどれない塗りの参照')
@@ -752,6 +760,58 @@ class Converter {
       return { offset, color: stop.color }
     })
     return { type: 'linear', angle, stops: mapped }
+  }
+
+  /**
+   * radialGradient を kadrokreo の円形のグラデーションにする。中心と横・縦の半径をノードの枠に対する割合に直す。
+   * 焦点（fx / fy）と、回したり傾けたりした楕円の向きは持てないので、中心と半径の長さだけを写す
+   */
+  private radialGradient(
+    element: SvgElement,
+    inherited: Inherited,
+    matrix: Matrix,
+    userBox: Bounds,
+    node: SceneNode,
+  ): Paint | null {
+    const stops = this.stops(element, inherited)
+    if (stops.length === 0) return null
+    const last: Paint = { type: 'solid', color: stops[stops.length - 1].color }
+    if (stops.length === 1) return { type: 'solid', color: stops[0].color }
+    const chain = this.gradientChain(element)
+    const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
+    const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
+    const coordinate = (name: string, axis: 'width' | 'height' | 'diagonal') => {
+      const raw = attribute(name)
+      if (raw === undefined) return userSpace ? (this.length('50%', axis) ?? 0) : 0.5
+      if (userSpace) return this.length(raw, axis) ?? 0
+      return parseFraction(raw) ?? 0.5
+    }
+    const c = { x: coordinate('cx', 'width'), y: coordinate('cy', 'height') }
+    const r = coordinate('r', 'diagonal')
+    if (attribute('fx') !== undefined || attribute('fy') !== undefined) {
+      const fx = attribute('fx') === undefined ? c.x : coordinate('fx', 'width')
+      const fy = attribute('fy') === undefined ? c.y : coordinate('fy', 'height')
+      if (fx !== c.x || fy !== c.y) this.warn('円形のグラデーションの焦点（中心に寄せた）')
+    }
+    const gradientTransform = parseTransform(attribute('gradientTransform')) ?? IDENTITY
+    let toPage: Matrix
+    if (userSpace) toPage = multiply(matrix, gradientTransform)
+    else {
+      if (userBox.width === 0 || userBox.height === 0) return last
+      toPage = multiply(multiply(matrix, [userBox.width, 0, 0, userBox.height, userBox.x, userBox.y]), gradientTransform)
+    }
+    if (!(r > 0) || node.width === 0 || node.height === 0) return last
+    const center = toNodeSpace(node, applyMatrix(toPage, c))
+    const alongX = toNodeSpace(node, applyMatrix(toPage, { x: c.x + r, y: c.y }))
+    const alongY = toNodeSpace(node, applyMatrix(toPage, { x: c.x, y: c.y + r }))
+    const tilt = Math.abs(alongX.y - center.y) + Math.abs(alongY.x - center.x)
+    if (tilt > 1e-6 * (node.width + node.height)) this.warn('回した・傾けた円形のグラデーション（向きをなくした）')
+    const rx = Math.hypot(alongX.x - center.x, alongX.y - center.y)
+    const ry = Math.hypot(alongY.x - center.x, alongY.y - center.y)
+    const values = [center.x / node.width, center.y / node.height, rx / node.width, ry / node.height].map(round4)
+    if (!values.every(Number.isFinite)) return last
+    const [cx, cy, rxRatio, ryRatio] = values
+    return { type: 'radial', cx, cy, rx: rxRatio, ry: ryRatio, stops }
   }
 
   // ── 長さ ──

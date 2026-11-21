@@ -1,29 +1,17 @@
+import { useState } from 'react'
 import { isInstance } from '../../document/component.ts'
-import { normalizeAngle } from '../../document/geometry.ts'
 import { IMAGE_MIME_TYPES } from '../../document/kdr.ts'
-import { paintColor } from '../../document/paint.ts'
-import type { Effect, Paint } from '../../document/types.ts'
+import { cornerRadii } from '../../document/paint.ts'
 import { OpenFileButton } from '../../ui/OpenFile.tsx'
 import { CAP_LABELS, FIT_LABELS, optionsOf } from '../../ui/labels.ts'
-import {
-  patchGradients,
-  patchShadows,
-  setFill,
-  setGradientEnabled,
-  setShadow,
-  setStroke,
-  withStopColor,
-} from '../operations/paints.ts'
-import { type PanelContext, linesIn, shapesIn, textsIn, common, mapValue } from './context.ts'
-import { CheckField, ColorField, NumberField, Section, SelectField } from './fields.tsx'
+import { setCornerRadius } from '../operations/paints.ts'
+import { type PanelContext, linesIn, shapesIn, textsIn, MIXED, common, mapValue } from './context.ts'
+import { CheckField, NumberField, Section, SelectField } from './fields.tsx'
+import { EffectListSection, PaintListSection } from './PaintSections.tsx'
+import { PathSection } from './PathSection.tsx'
+import { isMarkerCap } from '../../document/path.ts'
 
-const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
-
-/** いちばん上の塗りの代表の色。塗りがなければ null（パネルは、いちばん上の塗りだけを編集する） */
-function topColor(paints: readonly Paint[]): string | null {
-  const top = paints.at(-1)
-  return top ? paintColor(top) : null
-}
+const CORNERS = ['左上', '右上', '右下', '左下'] as const
 
 type Props = {
   ctx: PanelContext
@@ -35,7 +23,7 @@ type Props = {
 export function AppearanceSections({ ctx, onReplaceImage }: Props) {
   const { store, selection, nodes, apply, inner, hasInstance, overridden } = ctx
   // インスタンスとその中身（写し）の見た目は元に合わせて作り直されるので、変えられるのは上書きできる項目
-  // （塗り・線の色。文言はキャンバスで、表示はレイヤー一覧で変える）だけ
+  // （塗り・線。文言はキャンバスで、表示はレイヤー一覧で変える）だけ
   const limited = hasInstance || inner
   const plain = inner ? [] : nodes.filter((node) => !isInstance(node))
   const shapes = shapesIn(nodes)
@@ -49,66 +37,25 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
   const filled = [...shapes, ...texts]
   const stroked = [...shapes, ...lines]
   const onlyShapes = shapes.length === nodes.length
-
-  const gradients = shapes.flatMap((node) => {
-    const top = node.fills.at(-1)
-    return top?.type === 'linear' ? [top] : []
-  })
-  const gradientEnabled = common(shapes.map((node) => node.fills.at(-1)?.type === 'linear'))
-  const shadows = shapes.flatMap((node) => node.effects.slice(0, 1))
-  const shadowEnabled = common(shapes.map((node) => node.effects.length > 0))
+  const radii = rounded.map((node) => cornerRadii(node.cornerRadius))
+  const separate = rounded.some((node) => typeof node.cornerRadius !== 'number')
+  const [cornersOpen, setCornersOpen] = useState(false)
+  const fits = common(images.map((node) => node.fit))
 
   return (
     <>
       {filled.length === nodes.length && (
-        <Section title="塗り" overridden={overridden.has('fills')}>
-          <ColorField
-            label="塗り"
-            value={common(filled.map((n) => topColor(n.fills)))}
-            // テキストは塗りを消せない
-            nullable={onlyShapes}
-            fallback="#d9d9d9"
-            onPreview={(fill) => store.preview((base) => setFill(base, selection, fill))}
-            onCommit={store.commitPreview}
-            onSet={(fill) => store.apply((base) => setFill(base, selection, fill))}
-          />
-          {onlyShapes && shapes.every((node) => node.fills.length > 0) && (
-            <CheckField
-              label="グラデーション"
-              value={gradientEnabled}
-              onChange={(checked) => store.apply((base) => setGradientEnabled(base, selection, checked))}
-            />
-          )}
-          {gradients.length > 0 && (
-            <>
-              <span className="section-title">終わりの色</span>
-              <ColorField
-                label="グラデーションの終わり"
-                value={common(gradients.map((gradient) => gradient.stops.at(-1)!.color))}
-                nullable={false}
-                fallback="#ffffff"
-                onPreview={(color) =>
-                  store.preview((base) => patchGradients(base, selection, (g) => withStopColor(g, -1, color)))
-                }
-                onCommit={store.commitPreview}
-                onSet={(color) =>
-                  store.apply((base) =>
-                    patchGradients(base, selection, (g) => withStopColor(g, -1, color ?? '#ffffff')),
-                  )
-                }
-              />
-              <NumberField
-                label="角度"
-                value={common(gradients.map((gradient) => gradient.angle))}
-                onCommit={(angle) =>
-                  store.apply((base) =>
-                    patchGradients(base, selection, (g) => ({ ...g, angle: normalizeAngle(angle) })),
-                  )
-                }
-              />
-            </>
-          )}
-        </Section>
+        <PaintListSection
+          store={store}
+          selection={selection}
+          nodes={filled}
+          paintKey="fills"
+          title="塗り"
+          fallback="#d9d9d9"
+          // テキストは塗りを消せない
+          required={texts.length > 0}
+          overridden={overridden.has('fills')}
+        />
       )}
 
       {images.length === nodes.length && (
@@ -121,6 +68,24 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
               onChange={(fit) => apply({ fit })}
             />
           )}
+          {!inner && fits !== 'stretch' && (
+            <div className="field-grid">
+              <NumberField
+                label="横の位置 %"
+                value={mapValue(common(images.map((node) => node.positionX)), (v) => Math.round(v * 1000) / 10)}
+                min={0}
+                max={100}
+                onCommit={(percent) => apply({ positionX: percent / 100 })}
+              />
+              <NumberField
+                label="縦の位置 %"
+                value={mapValue(common(images.map((node) => node.positionY)), (v) => Math.round(v * 1000) / 10)}
+                min={0}
+                max={100}
+                onCommit={(percent) => apply({ positionY: percent / 100 })}
+              />
+            </div>
+          )}
           <OpenFileButton accept={IMAGE_MIME_TYPES.join(',')} onFiles={(files) => onReplaceImage(files[0])}>
             画像を差し替え
           </OpenFileButton>
@@ -128,17 +93,17 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
       )}
 
       {stroked.length === nodes.length && (
-        <Section title="線" overridden={overridden.has('strokes')}>
-          <ColorField
-            label="線"
-            value={common(stroked.map((n) => topColor(n.strokes)))}
-            // 直線は線を消せない
-            nullable={lines.length === 0}
-            fallback="#000000"
-            onPreview={(stroke) => store.preview((base) => setStroke(base, selection, stroke))}
-            onCommit={store.commitPreview}
-            onSet={(stroke) => store.apply((base) => setStroke(base, selection, stroke))}
-          />
+        <PaintListSection
+          store={store}
+          selection={selection}
+          nodes={stroked}
+          paintKey="strokes"
+          title="線"
+          fallback="#000000"
+          // 直線は線を消せない
+          required={lines.length > 0}
+          overridden={overridden.has('strokes')}
+        >
           {!limited && (
             <NumberField
               label="太さ"
@@ -147,7 +112,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
               onCommit={(strokeWidth) => apply({ strokeWidth })}
             />
           )}
-        </Section>
+        </PaintListSection>
       )}
 
       {!inner && capped.length > 0 && capped.length === nodes.length && (
@@ -164,83 +129,56 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
             value={common(capped.map((n) => n.endCap))}
             onChange={(endCap) => apply({ endCap })}
           />
+          {capped.some((node) => isMarkerCap(node.startCap) || isMarkerCap(node.endCap)) && (
+            <NumberField
+              label="印の大きさ"
+              // 0 は線の太さから決める（空欄で「自動」）
+              value={mapValue(common(capped.map((n) => n.capSize)), (size) => (size === 0 ? null : size))}
+              emptyLabel="自動"
+              min={0}
+              onCommit={(capSize) => apply({ capSize })}
+              onClear={() => apply({ capSize: 0 })}
+            />
+          )}
         </Section>
       )}
 
-      {!inner && paths.length === nodes.length && (
-        <Section title="パス">
-          <CheckField
-            label="最後の頂点を最初の頂点につなぐ"
-            value={common(paths.map((node) => node.closed))}
-            onChange={(checked) => apply({ closed: checked })}
-          />
-        </Section>
-      )}
+      <PathSection ctx={ctx} />
 
       {rounded.length === nodes.length && (
         <Section title="角丸">
           <NumberField
             label="半径"
-            value={common(rounded.map((n) => n.cornerRadius))}
+            value={separate ? MIXED : common(rounded.map((n) => n.cornerRadius as number))}
             min={0}
-            onCommit={(cornerRadius) => apply({ cornerRadius })}
+            onCommit={(radius) => store.apply((base) => setCornerRadius(base, selection, null, radius))}
           />
-        </Section>
-      )}
-
-      {onlyShapes && !limited && (
-        <Section title="影">
           <CheckField
-            label="影を付ける"
-            value={shadowEnabled}
-            onChange={(checked) => store.apply((base) => setShadow(base, selection, checked ? DEFAULT_SHADOW : null))}
+            label="角ごとに変える"
+            value={separate || cornersOpen}
+            onChange={(checked) => {
+              setCornersOpen(checked)
+              // やめるときは、左上の値に揃える
+              if (!checked && separate) store.apply((base) => setCornerRadius(base, selection, null, radii[0][0]))
+            }}
           />
-          {shadows.length > 0 && (
-            <>
-              <div className="field-grid">
+          {(separate || cornersOpen) && (
+            <div className="corner-grid">
+              {CORNERS.map((name, corner) => (
                 <NumberField
-                  label="横"
-                  value={common(shadows.map((shadow) => shadow.x))}
-                  onCommit={(x) => store.apply((base) => patchShadows(base, selection, { x }))}
-                />
-                <NumberField
-                  label="縦"
-                  value={common(shadows.map((shadow) => shadow.y))}
-                  onCommit={(y) => store.apply((base) => patchShadows(base, selection, { y }))}
-                />
-                <NumberField
-                  label="ぼかし"
-                  value={common(shadows.map((shadow) => shadow.blur))}
+                  key={name}
+                  label={name}
+                  value={common(radii.map((r) => r[corner]))}
                   min={0}
-                  onCommit={(blur) => store.apply((base) => patchShadows(base, selection, { blur }))}
+                  onCommit={(radius) => store.apply((base) => setCornerRadius(base, selection, corner, radius))}
                 />
-                <NumberField
-                  label="濃さ"
-                  value={mapValue(common(shadows.map((shadow) => shadow.opacity)), (opacity) =>
-                    Math.round(opacity * 100),
-                  )}
-                  min={0}
-                  max={100}
-                  onCommit={(percent) =>
-                    store.apply((base) => patchShadows(base, selection, { opacity: percent / 100 }))
-                  }
-                />
-              </div>
-              <ColorField
-                label="影"
-                value={common(shadows.map((shadow) => shadow.color))}
-                nullable={false}
-                fallback={DEFAULT_SHADOW.color}
-                onPreview={(color) => store.preview((base) => patchShadows(base, selection, { color }))}
-                onCommit={store.commitPreview}
-                onSet={(color) =>
-                  store.apply((base) => patchShadows(base, selection, { color: color ?? DEFAULT_SHADOW.color }))
-                }
-              />
-            </>
+              ))}
+            </div>
           )}
         </Section>
       )}
+
+      {onlyShapes && !limited && <EffectListSection store={store} selection={selection} nodes={shapes} />}
     </>
   )
 }

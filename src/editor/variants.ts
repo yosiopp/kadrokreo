@@ -6,6 +6,7 @@ import {
   parseVariantName,
   pickVariant,
   propValue,
+  variantProperties,
   variantSetOf,
   variantsIn,
 } from '../document/variants.ts'
@@ -72,7 +73,7 @@ export function addVariant(
     // 貼り付けた元はインスタンスになるので、新しいコンポーネントの元に戻す
     scene = updateNode(pasted.scene, copyId, {
       name: formatVariantName(nextVariantProps(scene, setId, props)),
-      component: { id: createId(), role: 'main' },
+      component: { id: createId(), role: 'main', description: '', properties: [] },
     })
     const set = scene.nodes[setId]
     if (set.type === 'frame') scene = moveNode(scene, copyId, setId, set.children.indexOf(mainId) + 1)
@@ -190,4 +191,96 @@ export function selectVariant(
   const current = parseVariantName(main.node.name) ?? []
   const next = pickVariant(variantsIn(main.page, set.id), current, key, value)
   return next ? swapComponent(doc, pageId, instanceId, next.component.id) : doc
+}
+
+/**
+ * まとまり setId のプロパティ key を、プロパティの並びの index 番目へ移す（すべてのバリアントの名前で、プロパティの順を並べ替える）。
+ * プロパティの並びは、まとまりの中で最初に出てきた順（variantProperties）
+ */
+export function moveVariantProperty<T extends Scene>(scene: T, setId: NodeId, key: string, index: number): T {
+  const order = variantProperties(scene, setId).map((property) => property.name)
+  const from = order.indexOf(key)
+  const to = Math.max(0, Math.min(order.length - 1, index))
+  if (from < 0 || from === to) return scene
+  order.splice(from, 1)
+  order.splice(to, 0, key)
+  return variantsIn(scene, setId).reduce((current, variant) => {
+    const props = parseVariantName(variant.name) ?? []
+    const sorted = [...props].sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
+    const name = formatVariantName(sorted)
+    return name === variant.name ? current : updateNode(current, variant.id, { name })
+  }, scene)
+}
+
+/**
+ * まとまり setId のプロパティ key の値 from を、すべてのバリアントで to に変える。
+ * to が使えない、またはすでにある値なら変えない（同じ組み合わせのバリアントができないように）
+ */
+export function renameVariantValue<T extends Scene>(scene: T, setId: NodeId, key: string, from: string, to: string): T {
+  const value = to.trim()
+  const property = variantProperties(scene, setId).find((candidate) => candidate.name === key)
+  if (!property || !property.values.includes(from) || !usable(value) || property.values.includes(value)) return scene
+  return variantsIn(scene, setId).reduce((current, variant) => {
+    const props = parseVariantName(variant.name) ?? []
+    if (propValue(props, key) !== from) return current
+    return updateNode(current, variant.id, {
+      name: formatVariantName(props.map(([other, current]) => [other, other === key ? value : current] as const)),
+    })
+  }, scene)
+}
+
+/**
+ * まとまり setId のプロパティ key の値 value を、値の並びの index 番目へ移す。
+ * 値の並びは、まとまりの中で最初に出てきた順なので、バリアントの並び（まとまりの子の順）を、その値の順に並べ替える。
+ * 同じ値のバリアントどうしの順と、プロパティを持たない子の位置は変えない
+ */
+export function moveVariantValue<T extends Scene>(scene: T, setId: NodeId, key: string, value: string, index: number): T {
+  const property = variantProperties(scene, setId).find((candidate) => candidate.name === key)
+  const set = scene.nodes[setId]
+  if (!property || set?.type !== 'frame') return scene
+  const order = [...property.values]
+  const from = order.indexOf(value)
+  const to = Math.max(0, Math.min(order.length - 1, index))
+  if (from < 0 || from === to) return scene
+  order.splice(from, 1)
+  order.splice(to, 0, value)
+  const variants = variantsIn(scene, setId)
+  const rank = (id: NodeId) => {
+    const variant = variants.find((candidate) => candidate.id === id)
+    const current = variant && propValue(parseVariantName(variant.name) ?? [], key)
+    return current === undefined ? order.length : order.indexOf(current)
+  }
+  // バリアントのいる位置だけを、値の順に並べ直したバリアントで埋める
+  const slots = set.children.filter((id) => variants.some((variant) => variant.id === id))
+  const sorted = [...slots].sort((a, b) => rank(a) - rank(b))
+  let next = 0
+  const children = set.children.map((id) => (slots.includes(id) ? sorted[next++] : id))
+  // 子の並べ替えだけで、親子のつながりは変わらない
+  return { ...scene, nodes: { ...scene.nodes, [setId]: { ...set, children } } }
+}
+
+/**
+ * まとまり setId のプロパティ key に値を 1 つ足す: いまのバリアント（mainId、省けば最初のバリアント）を複製し、key の値を value にする。
+ * value を省くと、まだない「値2」「値3」…。値が使えない、またはすでにあるなら変えない
+ */
+export function addVariantValue(
+  doc: DesignDocument,
+  pageId: PageId,
+  setId: NodeId,
+  key: string,
+  value?: string,
+): { document: DesignDocument; id: NodeId | null } {
+  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  if (!page) return { document: doc, id: null }
+  const property = variantProperties(page, setId).find((candidate) => candidate.name === key)
+  const source = variantsIn(page, setId)[0]
+  let text = value?.trim() ?? ''
+  if (value === undefined) {
+    for (let n = 2; text === '' || property?.values.includes(text); n++) text = `値${n}`
+  }
+  if (!property || !source || !usable(text) || property.values.includes(text)) return { document: doc, id: null }
+  const added = addVariant(doc, pageId, source.id)
+  if (added.id === null) return added
+  const id = added.id
+  return { document: updatePage(added.document, pageId, (base) => setVariantValue(base, id, key, text)), id }
 }

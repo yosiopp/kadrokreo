@@ -61,13 +61,20 @@ export type ColorStop = { offset: number; color: string }
 /**
  * 塗り（面・線・文字に使う）。色は #rrggbb。
  * linear は直線状のグラデーションで、angle は色が変わっていく向き（度）。0 が左から右、90 が上から下。
- * 種類を足すとき（円形のグラデーションなど）は type を増やす
+ * radial は円形（楕円）のグラデーションで、中心 cx / cy は枠の左上からの位置、半径 rx / ry は横・縦の半径で、
+ * どれも枠の幅・高さに対する割合（SVG の objectBoundingBox、CSS の radial-gradient の % と同じ）。
+ * 中心が最初の色、半径の楕円の上が最後の色で、その外は最後の色のまま。既定（枠に内接する楕円）は 0.5 が 4 つ。
+ * 種類を足すとき（角度のグラデーションなど）は type を増やす
  */
 export type Paint =
   | { type: 'solid'; color: string }
   | { type: 'linear'; angle: number; stops: ColorStop[] }
+  | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; stops: ColorStop[] }
 
 export type LinearGradient = Extract<Paint, { type: 'linear' }>
+export type RadialGradient = Extract<Paint, { type: 'radial' }>
+/** 色の位置を持つ塗り（グラデーション） */
+export type Gradient = LinearGradient | RadialGradient
 
 /** 落ち影などの効果。color は #rrggbb、濃さは opacity（0〜1）で持つ。種類を足すとき（内側の影など）は type を増やす */
 export type Effect = {
@@ -90,25 +97,37 @@ export type Style = {
   effects: Effect[]
 }
 
-export type RectNode = BaseNode & Style & { type: 'rect'; cornerRadius: number }
+/**
+ * 角丸の半径。数値なら 4 隅とも同じ。配列なら左上・右上・右下・左下の順（CSS の border-radius と同じ）。
+ * 4 隅が同じ値なら数値で持つ（editor の操作がそう揃える。読み込みは配列のままでも受け付ける）
+ */
+export type CornerRadius = number | [number, number, number, number]
+
+export type RectNode = BaseNode & Style & { type: 'rect'; cornerRadius: CornerRadius }
 
 export type EllipseNode = BaseNode & Style & { type: 'ellipse' }
 
-/** 線の端の形 */
-export type Cap = 'none' | 'arrow'
+/**
+ * 線の端の形。round / square は線の太さで決まる端（CSS・SVG の stroke-linecap と同じ形で、線の太さの半分だけ端の外へ出る）。
+ * arrow / circle / diamond は端に付ける印で、大きさは capSize。矢印は先が端に来るよう線を短くし、丸とひし形は端を中心に置く
+ */
+export type Cap = 'none' | 'round' | 'square' | 'arrow' | 'circle' | 'diamond'
 
 /**
  * パスの頂点。枠に対する割合（0〜1）で持つので、枠の大きさを変えれば形も一緒に伸縮する。
  * in / out は 3 次ベジェ曲線の制御点で、頂点からのずれ（同じく枠に対する割合）。in は前の頂点から来る辺、out は次の頂点へ向かう辺に効く。
  * 辺の両端の制御点がどちらもなければ、その辺は直線。片方だけなら、ないほうは頂点そのものを制御点とみなす（SVG の C と同じ）。
  * 枠は曲線そのものを囲む矩形なので、制御点は 0〜1 の外に出ることがある。
- * 省略できる項目で、kdr ファイルでもメモリ上でも、ないときは書かない（角の頂点）。頂点ごとの角の丸め（radius）も足すならここ
+ * 省略できる項目で、kdr ファイルでもメモリ上でも、ないときは書かない（角の頂点）。
+ * radius は角の丸めの半径（px。割合ではないので、枠の大きさを変えても丸めの大きさは変わらない）。0 より大きいときだけ書く。
+ * 効くのは制御点を持たない頂点で、両側の辺が直線のときだけ（開いたパスの両端には効かない）。両側の辺の半分の長さまでに抑えて描く
  */
 export type PathPoint = {
   x: number
   y: number
   in?: { x: number; y: number }
   out?: { x: number; y: number }
+  radius?: number
 }
 
 /**
@@ -123,6 +142,8 @@ export type PathNode = BaseNode &
     closed: boolean
     startCap: Cap
     endCap: Cap
+    /** 端の印（矢印・丸・ひし形）の大きさ（px、矢印なら長さ）。0 なら線の太さから決める（太さの 4 倍、最小 10） */
+    capSize: number
   }
 
 export type TextNode = BaseNode & {
@@ -146,8 +167,14 @@ export type TextNode = BaseNode & {
 export type ImageNode = BaseNode & {
   type: 'image'
   assetId: AssetId
-  cornerRadius: number
+  cornerRadius: CornerRadius
   fit: 'stretch' | 'cover' | 'contain'
+  /**
+   * 画像を枠のどこに寄せるか（0〜1。CSS の object-position の % と同じ）。0 は左（上）端、1 は右（下）端、0.5 は中央。
+   * cover では切り抜く位置（はみ出した分のどこを残すか）、contain では余白の配り方になる。stretch では意味はない
+   */
+  positionX: number
+  positionY: number
 }
 
 /**
@@ -189,7 +216,14 @@ export type AutoLayout = {
  */
 export type ComponentLink =
   /** id はドキュメントの中で一意。main と、その instance が同じ値を持つ */
-  | { id: string; role: 'main' }
+  | {
+      id: string
+      role: 'main'
+      /** コンポーネントの説明文（使い方など）。空ならなし */
+      description: string
+      /** コンポーネントのプロパティ。名前は main の中で一意 */
+      properties: ComponentProperty[]
+    }
   | {
       id: string
       role: 'instance'
@@ -199,6 +233,22 @@ export type ComponentLink =
        */
       overrides: Record<NodeId, Override>
     }
+
+/**
+ * コンポーネントのプロパティ（既存のデザインツールのコンポーネントプロパティ）。main の中のノードに結び、インスタンスごとに値を選べる。
+ * インスタンスでの値は、結んだノードへの上書き（Override）そのもので、別には持たない。既定値は main での値。
+ * バリアントのプロパティは名前（`プロパティ=値`）で表すので、ここには入れない。
+ */
+export type ComponentProperty = {
+  name: string
+  /**
+   * text: 結んだテキストの文言（上書きの text）、boolean: 結んだノードの表示（上書きの visible）、
+   * instance: 結んだ入れ子のインスタンスの元（上書きの componentId）。種類の合わないノードは無視する
+   */
+  type: 'text' | 'boolean' | 'instance'
+  /** 結んだノード。main の中のノード（上書きのキーと同じ、main の側の id）。main の外や、ないノードは無視する */
+  targets: NodeId[]
+}
 
 /**
  * main の値の代わりに使う値。指定した項目だけが変わる。
@@ -228,7 +278,7 @@ export type FrameNode = BaseNode &
     /** 先頭が最背面。自動で並べるときは、先頭から順に並ぶ */
     children: NodeId[]
     clipContent: boolean
-    cornerRadius: number
+    cornerRadius: CornerRadius
     layout: AutoLayout | null
     component: ComponentLink | null
   }

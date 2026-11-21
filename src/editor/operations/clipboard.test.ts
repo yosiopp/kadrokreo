@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { FrameNode } from '../../document/types.ts'
 import { createFrame, createRect } from '../nodes.ts'
-import { copyFragment, pasteFragment } from './clipboard.ts'
+import { copyFragment, duplicateNodes, pasteFragment } from './clipboard.ts'
 import { createPage } from './document.ts'
 import { insertNode, removeNodes } from './tree.ts'
 
@@ -43,5 +43,21 @@ describe('copyFragment / pasteFragment', () => {
     const { scene: next, ids } = pasteFragment(removeNodes(doc, [frame.id]), fragment)
     expect(next.nodes[ids[0]]).toMatchObject({ parentId: null, x: 125, y: 65 })
     expect(next.rootIds.at(-1)).toBe(ids[0])
+  })
+})
+
+describe('duplicateNodes', () => {
+  it('元の親の中で、元のすぐ上（重なり順で 1 つ前面）に置く', () => {
+    const { doc, frame, inner, loose } = fixture()
+    const second = createRect(bounds)
+    const withSecond = insertNode(doc, second, frame.id, 0)
+    // frame の子は [second, inner]。second を複製すると second と inner の間に入る
+    const { scene, ids } = duplicateNodes(withSecond, [second.id], 10)
+    expect((scene.nodes[frame.id] as FrameNode).children).toEqual([second.id, ids[0], inner.id])
+    expect(scene.nodes[ids[0]]).toMatchObject({ x: 10, y: 10 })
+
+    // ページ直下の 2 つをまとめて複製すると、それぞれの直上に入る
+    const both = duplicateNodes(doc, [frame.id, loose.id], 0)
+    expect(both.scene.rootIds).toEqual([frame.id, both.ids[0], loose.id, both.ids[1]])
   })
 })

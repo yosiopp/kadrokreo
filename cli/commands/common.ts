@@ -7,14 +7,18 @@ import type { Session } from '../session.ts'
  * edit: ドキュメントを変える（最後に kdr を書き出す）
  * query: 標準出力に文字を出す
  * nav: どちらでもない（いまのページを変えるなど）
+ * export: ファイルに書き出す（png。--to - なら標準出力なので query と同じ扱い）
  */
-export type Kind = 'source' | 'edit' | 'query' | 'nav'
+export type Kind = 'source' | 'edit' | 'query' | 'nav' | 'export'
 
 /** コマンドを実行するときに使えるもの */
 export type Context = {
   session: Session
   print: (text: string) => void
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
+  writeFile: (path: string, data: Uint8Array) => Promise<void>
+  /** バイト列を標準出力へ（png --to -）。文字の出力と一緒には使えない（checkPlan が止める） */
+  stdout: (data: Uint8Array) => void
   /** 標準エラーへの知らせ（kdr や query の出力を汚さない） */
   warn: (text: string) => void
 }
@@ -26,8 +30,8 @@ export type Command = {
   summary: string
   /** 値を取らない --オプション */
   flags?: readonly string[]
-  /** 「名前=値」を受け付ける */
-  assignments?: true
+  /** 「名前=値」を受け付ける。'any' なら名前に英字以外も使える（バリアントのプロパティ名） */
+  assignments?: true | 'any'
   run: (ctx: Context, step: Step) => void | Promise<void>
 }
 

@@ -21,14 +21,18 @@ function hasControls(point: PathPoint | Vertex): boolean {
  * 頂点と、その制御点。in / out は制御点の位置そのもの（kdr の PathPoint と違い、頂点からのずれではない）。
  * 座標系は使う所しだい（ノード・親・ページ）。位置で持つので、座標の変換は 3 つの点に同じ変換をかけるだけで済む
  */
-export type Vertex = Point & { in?: Point; out?: Point }
+export type Vertex = Point & { in?: Point; out?: Point; radius?: number }
 
-/** 頂点の 3 つの点に同じ変換をかける */
+/**
+ * 頂点の 3 つの点に同じ変換をかける。角の丸めの半径（px）はそのまま持ち越す
+ * （使う所の変換は回転と平行移動だけなので、長さは変わらない）
+ */
 export function mapVertices(vertices: readonly Vertex[], transform: (point: Point) => Point): Vertex[] {
   return vertices.map((vertex) => {
     const mapped: Vertex = transform({ x: vertex.x, y: vertex.y })
     if (vertex.in) mapped.in = transform(vertex.in)
     if (vertex.out) mapped.out = transform(vertex.out)
+    if (vertex.radius) mapped.radius = vertex.radius
     return mapped
   })
 }
@@ -40,16 +44,70 @@ export function pathPoints(path: Pick<PathNode, 'width' | 'height' | 'points'>):
     const vertex: Vertex = { x: point.x * width, y: point.y * height }
     if (point.in) vertex.in = { x: (point.x + point.in.x) * width, y: (point.y + point.in.y) * height }
     if (point.out) vertex.out = { x: (point.x + point.out.x) * width, y: (point.y + point.out.y) * height }
+    if (point.radius) vertex.radius = point.radius
     return vertex
   })
 }
 
+/** パスの描く形の頂点（ノードの座標系）。角の丸めを曲線に直したもの。描画・当たり判定・SVG の出力が使う */
+export function pathOutline(path: Pick<PathNode, 'width' | 'height' | 'points' | 'closed'>): Vertex[] {
+  return roundCorners(pathPoints(path), path.closed)
+}
+
+/**
+ * 角の丸め（radius）を持つ頂点を、丸めの始まりと終わりの 2 つの頂点と、円弧に近い 3 次ベジェ曲線に置き換える。
+ * 丸めるのは、制御点を持たず、両側の辺が直線の頂点だけ（開いたパスの両端は丸めない）。
+ * 丸めが辺から取る長さは、両側の辺のそれぞれ半分までに抑える（隣も丸めていてもぶつからない）。返す頂点は radius を持たない
+ */
+export function roundCorners(vertices: readonly Vertex[], closed: boolean): Vertex[] {
+  if (!vertices.some((vertex) => vertex.radius)) return [...vertices]
+  const count = vertices.length
+  const result: Vertex[] = []
+  vertices.forEach((vertex, i) => {
+    const { radius, ...plain } = vertex
+    const prev = i > 0 ? vertices[i - 1] : closed ? vertices[count - 1] : null
+    const next = i < count - 1 ? vertices[i + 1] : closed ? vertices[0] : null
+    const corner = roundCorner(vertex, prev, next, radius ?? 0)
+    if (corner) result.push(...corner)
+    else result.push(plain)
+  })
+  return result
+}
+
+/** 1 つの角を丸めた 2 つの頂点。丸められなければ null */
+function roundCorner(vertex: Vertex, prev: Vertex | null, next: Vertex | null, radius: number): [Vertex, Vertex] | null {
+  if (radius <= 0 || !prev || !next || hasControls(vertex) || prev.out || next.in) return null
+  const a = { x: prev.x - vertex.x, y: prev.y - vertex.y }
+  const b = { x: next.x - vertex.x, y: next.y - vertex.y }
+  const la = Math.hypot(a.x, a.y)
+  const lb = Math.hypot(b.x, b.y)
+  if (la === 0 || lb === 0) return null
+  const ua = { x: a.x / la, y: a.y / la }
+  const ub = { x: b.x / lb, y: b.y / lb }
+  // 2 つの辺のなす角。一直線（180°）や折り返し（0°）は丸めない
+  const angle = Math.acos(Math.max(-1, Math.min(1, ua.x * ub.x + ua.y * ub.y)))
+  if (angle < 1e-6 || Math.PI - angle < 1e-6) return null
+  const half = Math.tan(angle / 2)
+  // 頂点から丸めの始まりまでの長さ。両側の辺の半分までに抑え、その分だけ半径も小さくする
+  const along = Math.min(radius / half, la / 2, lb / 2)
+  const r = along * half
+  // 円弧を 1 本の 3 次ベジェで近似する。制御点の長さは 4/3 · tan(弧の角 / 4) · r
+  const handle = (4 / 3) * Math.tan((Math.PI - angle) / 4) * r
+  const start = { x: vertex.x + ua.x * along, y: vertex.y + ua.y * along }
+  const end = { x: vertex.x + ub.x * along, y: vertex.y + ub.y * along }
+  return [
+    { ...start, out: { x: start.x - ua.x * handle, y: start.y - ua.y * handle } },
+    { ...end, in: { x: end.x - ub.x * handle, y: end.y - ub.y * handle } },
+  ]
+}
+
 /**
  * 頂点の並びから、それを囲む枠と、枠に対する割合で表した頂点を作る。
- * 枠は曲線そのものを囲む矩形（制御点は含めない）。閉じた形は最後から最初へ戻る辺も囲むので closed が要る
+ * 枠は曲線そのもの（角の丸めを含む）を囲む矩形（制御点は含めない）。閉じた形は最後から最初へ戻る辺も囲むので closed が要る
  */
 export function pathFromPoints(vertices: readonly Vertex[], closed = false): Bounds & Pick<PathNode, 'points'> {
-  const box = pathBounds(vertices, closed)
+  // 枠は描く形（角を丸めたもの）を囲む
+  const box = pathBounds(roundCorners(vertices, closed), closed)
   const { x, y, width, height } = box
   const fx = (value: number) => (width === 0 ? 0 : value / width)
   const fy = (value: number) => (height === 0 ? 0 : value / height)
@@ -64,6 +122,7 @@ export function pathFromPoints(vertices: readonly Vertex[], closed = false): Bou
       const point: PathPoint = { x: fx(vertex.x - x), y: fy(vertex.y - y) }
       if (vertex.in) point.in = { x: fx(vertex.in.x - vertex.x), y: fy(vertex.in.y - vertex.y) }
       if (vertex.out) point.out = { x: fx(vertex.out.x - vertex.x), y: fy(vertex.out.y - vertex.y) }
+      if (vertex.radius) point.radius = vertex.radius
       return point
     }),
   }
@@ -216,29 +275,49 @@ export function pathData(vertices: readonly Vertex[], closed: boolean): string {
   return parts.join(' ')
 }
 
-/** 矢印の長さ。線が細くても見える大きさにする */
-export function arrowSize(strokeWidth: number): number {
-  return Math.max(strokeWidth * 4, 10)
+/** 端の印（矢印・丸・ひし形）の大きさ。capSize が 0 なら線の太さから決める（細い線でも見えるように太さの 4 倍、最小 10） */
+export function capMarkerSize(style: { strokeWidth: number; capSize: number }): number {
+  return style.capSize > 0 ? style.capSize : Math.max(style.strokeWidth * 4, 10)
 }
 
+/** 端の印か（大きさ capSize を持つもの） */
+export function isMarkerCap(cap: Cap): boolean {
+  return cap === 'arrow' || cap === 'circle' || cap === 'diamond'
+}
+
+/** 端の形が、線の端からどれだけ外へ張り出しうるか（描く範囲を見積もるのに使う） */
+export function capReach(style: { strokeWidth: number; capSize: number; startCap: Cap; endCap: Cap; closed: boolean }): number {
+  if (style.closed) return 0
+  const caps = [style.startCap, style.endCap]
+  if (caps.some(isMarkerCap)) return Math.max(capMarkerSize(style), style.strokeWidth / 2)
+  // 四角は対角の分だけ外へ出る
+  if (caps.includes('square')) return (style.strokeWidth / 2) * Math.SQRT2
+  return style.strokeWidth / 2
+}
+
+/** 端の形として塗る図形。polygon は頂点の並び、circle は中心と半径 */
+export type CapShape = { kind: 'polygon'; points: Point[] } | { kind: 'circle'; center: Point; radius: number }
+
 /**
- * 端に矢印を付けた線の形。line は線として引く頂点（矢印の根元の手前で止めたもの）、heads は矢印の三角形。
- * 矢印の先が端の位置にちょうど来るよう、線は矢印の分だけ短くする。端の辺が曲線なら、曲線のまま途中で切り、
- * 矢印は曲線の接線の向きに向ける。描画（canvas）と HTML の出力で同じ形にするためのもの。
+ * 端の形を付けた線の形。line は線として引く頂点（線の端は切りっぱなしで引く）、caps は端に塗る図形（線の色で塗る）。
+ * 矢印は先が端の位置にちょうど来るよう、線を矢印の分だけ短くする。端の辺が曲線なら、曲線のまま途中で切り、
+ * 矢印は曲線の接線の向きに向ける。丸・ひし形の印は端を中心に置き、丸・四角の端は線の太さの円・正方形を端に置く。
+ * 描画（canvas）と HTML の出力で同じ形にするためのもの。
  */
 export function cappedStroke(
   vertices: readonly Vertex[],
-  style: { strokeWidth: number; startCap: Cap; endCap: Cap },
-): { line: Vertex[]; heads: [Point, Point, Point][] } {
-  const size = arrowSize(style.strokeWidth)
+  style: { strokeWidth: number; startCap: Cap; endCap: Cap; capSize: number },
+): { line: Vertex[]; caps: CapShape[] } {
+  const size = capMarkerSize(style)
   const line: Vertex[] = vertices.map((vertex) => ({ ...vertex }))
-  const heads: [Point, Point, Point][] = []
-  const addHead = (atEnd: boolean) => {
+  const caps: CapShape[] = []
+  const addCap = (cap: Cap, atEnd: boolean) => {
+    if (cap === 'none') return
     const tipIndex = atEnd ? line.length - 1 : 0
     const neighborIndex = atEnd ? line.length - 2 : 1
     const tipVertex = line[tipIndex]
     const neighborVertex = line[neighborIndex]
-    // 先を終わりに置いた向きの辺（始点の矢印なら逆向きにたどる）
+    // 先を終わりに置いた向きの辺（始点なら逆向きにたどる）
     const tip = { x: tipVertex.x, y: tipVertex.y }
     const neighbor = { x: neighborVertex.x, y: neighborVertex.y }
     const segment: Segment = {
@@ -253,10 +332,40 @@ export function cappedStroke(
     const toward = [segment.c2, segment.c1, segment.from].find((p) => Math.hypot(tip.x - p.x, tip.y - p.y) > 1e-9)
     if (chord === 0 || !toward) return
     const length = Math.hypot(tip.x - toward.x, tip.y - toward.y)
-    const direction = { x: (tip.x - toward.x) / length, y: (tip.y - toward.y) / length }
+    const d = { x: (tip.x - toward.x) / length, y: (tip.y - toward.y) / length }
+    // 先から見た、向きに沿った位置 along と横の位置 side の点
+    const at = (along: number, side: number) => ({ x: tip.x + d.x * along - d.y * side, y: tip.y + d.y * along + d.x * side })
+    const half = size * 0.4
+    switch (cap) {
+      case 'round': {
+        // 線と重ならないよう、端より外側の半円だけ（不透明度が 1 未満でも重なった所が濃くならない）
+        const w = style.strokeWidth / 2
+        const steps = 24
+        const points: Point[] = []
+        for (let k = 0; k <= steps; k++) {
+          const theta = -Math.PI / 2 + (Math.PI * k) / steps
+          points.push(at(Math.cos(theta) * w, Math.sin(theta) * w))
+        }
+        caps.push({ kind: 'polygon', points })
+        return
+      }
+      case 'square': {
+        const w = style.strokeWidth / 2
+        caps.push({ kind: 'polygon', points: [at(0, -w), at(w, -w), at(w, w), at(0, w)] })
+        return
+      }
+      case 'circle':
+        caps.push({ kind: 'circle', center: tip, radius: half })
+        return
+      case 'diamond':
+        caps.push({ kind: 'polygon', points: [at(size / 2, 0), at(0, half), at(-size / 2, 0), at(0, -half)] })
+        return
+      case 'arrow':
+        break
+    }
     const inset = Math.min(size * 0.8, chord)
     if (!segment.curved) {
-      line[tipIndex] = { ...tipVertex, x: tip.x - direction.x * inset, y: tip.y - direction.y * inset }
+      line[tipIndex] = { ...tipVertex, x: tip.x - d.x * inset, y: tip.y - d.y * inset }
     } else {
       // 先から inset だけ離れた曲線上の点を探し、そこまでの曲線に切り詰める
       let lo = 0
@@ -271,18 +380,11 @@ export function cappedStroke(
       line[neighborIndex] = { ...neighborVertex, [atEnd ? 'out' : 'in']: kept.c1 }
       line[tipIndex] = { ...tipVertex, x: kept.to.x, y: kept.to.y, [atEnd ? 'in' : 'out']: kept.c2 }
     }
-    const baseX = tip.x - direction.x * size
-    const baseY = tip.y - direction.y * size
-    const half = size * 0.4
-    heads.push([
-      tip,
-      { x: baseX - direction.y * half, y: baseY + direction.x * half },
-      { x: baseX + direction.y * half, y: baseY - direction.x * half },
-    ])
+    caps.push({ kind: 'polygon', points: [tip, at(-size, half), at(-size, -half)] })
   }
   if (line.length >= 2) {
-    if (style.startCap === 'arrow') addHead(false)
-    if (style.endCap === 'arrow') addHead(true)
+    addCap(style.startCap, false)
+    addCap(style.endCap, true)
   }
-  return { line, heads }
+  return { line, caps }
 }

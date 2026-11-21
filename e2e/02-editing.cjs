@@ -90,7 +90,7 @@ function check(name, condition, detail = '') {
   await page.keyboard.press('Meta+Shift+z')
 
   // 線を有効にして太さを変える
-  await page.locator('[aria-label="線を有効にする"]').check()
+  await page.locator('[aria-label="線を有効にする"]').click()
   await field('太さ').fill('4')
   await field('太さ').press('Enter')
   await field('半径').fill('12')

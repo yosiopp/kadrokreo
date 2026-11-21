@@ -52,3 +52,17 @@ export function componentEntries(doc: DesignDocument, query: string, sort: Compo
   if (sort === 'name') entries.sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }))
   return entries
 }
+
+/** ページごとの見出しを付けるときの、ページと、そのページの行 */
+export type ComponentGroup = { page: Page; entries: ComponentEntry[] }
+
+/** 行をページごとにまとめる（行の順のまま。同じページの行が離れていれば、別のまとまりになる） */
+export function groupByPage(entries: readonly ComponentEntry[]): ComponentGroup[] {
+  const groups: ComponentGroup[] = []
+  for (const entry of entries) {
+    const last = groups.at(-1)
+    if (last && last.page.id === entry.page.id) last.entries.push(entry)
+    else groups.push({ page: entry.page, entries: [entry] })
+  }
+  return groups
+}

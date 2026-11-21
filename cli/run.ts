@@ -1,7 +1,7 @@
 import { KDR_VERSION, KdrError, decodeKdr } from '../src/document/kdr.ts'
 import { encodeKdr } from '../src/editor/exportKdr.ts'
 import { createDocument } from '../src/editor/operations/document.ts'
-import { UsageError, parseArgs } from './args.ts'
+import { type Step, UsageError, parseArgs } from './args.ts'
 import { COMMANDS, type Command } from './commands.ts'
 import { Session } from './session.ts'
 
@@ -44,7 +44,7 @@ export async function run(argv: readonly string[], io: IO): Promise<number> {
 async function execute(argv: readonly string[], io: IO): Promise<void> {
   const { global, steps } = parseArgs(argv, (name) => ({
     flags: new Set(COMMANDS.get(name)?.flags ?? []),
-    assignments: COMMANDS.get(name)?.assignments === true,
+    assignments: COMMANDS.get(name)?.assignments ?? false,
   }))
   if (global.version) {
     io.stdout(`kdr（kadrokreo のコマンドライン、kdr ファイル v${KDR_VERSION}）\n`)
@@ -62,7 +62,7 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
     if (!command) throw new UsageError(`不明なコマンドです: ${step.name}`)
     return command
   })
-  const plan = convert ? { source: false } : checkPlan(commands, global, io)
+  const plan = convert ? { source: false } : checkPlan(commands, steps, global, io)
 
   // new は、ここで作った空のドキュメントを置き換える
   const session = new Session(
@@ -74,6 +74,8 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
     session,
     print: (text: string) => output.push(text),
     readFile: io.readFile,
+    writeFile: io.writeFile,
+    stdout: (data: Uint8Array) => io.stdout(data),
     warn: (text: string) => io.stderr(`kdr: ${text}\n`),
   }
   for (const [i, step] of steps.entries()) {
@@ -96,7 +98,7 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
 }
 
 /** 実行する前に、入出力の組み合わせがおかしくないかを確かめる */
-function checkPlan(commands: readonly Command[], global: { file: string | null; out: string | null; write: boolean }, io: IO) {
+function checkPlan(commands: readonly Command[], steps: readonly Step[], global: { file: string | null; out: string | null; write: boolean }, io: IO) {
   const source = commands[0].kind === 'source'
   if (commands.slice(1).some((command) => command.kind === 'source')) {
     throw new UsageError('new はコマンドの先頭にだけ置けます')
@@ -110,8 +112,16 @@ function checkPlan(commands: readonly Command[], global: { file: string | null; 
     throw new UsageError('入力の kdr がありません。-f で指定するか、標準入力へ渡してください')
   }
   const edits = source || commands.some((command) => command.kind === 'edit')
-  const queries = commands.some((command) => command.kind === 'query')
+  // png --to - は標準出力へバイト列を出すので、文字の出力とも kdr とも、別の png とも一緒にできない
+  const pngToStdout = steps.filter((step, i) => commands[i].kind === 'export' && step.options.get('to') === '-').length
+  const queries = commands.some((command) => command.kind === 'query') || pngToStdout > 0
   const toStdout = global.out === '-' || (global.out === null && !global.write && edits)
+  if (pngToStdout > 1 || (pngToStdout > 0 && commands.some((command) => command.kind === 'query'))) {
+    throw new UsageError('標準出力（--to -）へ出す png は、ほかの標準出力への出力と一緒にできません')
+  }
+  if (pngToStdout > 0 && io.stdoutIsTTY) {
+    throw new UsageError('PNG を端末には出力しません。--to でファイルを指定するか、パイプでつないでください')
+  }
   if (toStdout && queries) {
     throw new UsageError('kdr と文字の出力が、どちらも標準出力になります。-o で kdr の出力先を指定してください')
   }
@@ -134,6 +144,7 @@ export function help(name?: string): string {
   const groups: [string, Command['kind'][]][] = [
     ['作る', ['source']],
     ['調べる（標準出力へ）', ['query']],
+    ['書き出す（ファイルへ）', ['export']],
     ['ページ', ['nav']],
     ['変える', ['edit']],
   ]

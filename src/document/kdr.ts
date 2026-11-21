@@ -4,11 +4,13 @@ import type {
   AutoLayout,
   ColorStop,
   ComponentLink,
+  ComponentProperty,
   DesignDocument,
   Effect,
   NodeId,
   Override,
   Page,
+  CornerRadius,
   Paint,
   PathPoint,
   Scene,
@@ -241,7 +243,7 @@ const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 export const MAX_DEPTH = 100
 
-const CAPS = ['none', 'arrow'] as const
+const CAPS = ['none', 'round', 'square', 'arrow', 'circle', 'diamond'] as const
 const SIZINGS = ['fixed', 'hug', 'fill'] as const
 const CONSTRAINTS = ['start', 'end', 'stretch', 'center', 'scale'] as const
 const MAX_PATH_POINTS = 10_000
@@ -270,10 +272,13 @@ const DEFAULTS = {
   closed: false,
   startCap: 'none',
   endCap: 'none',
+  capSize: 0,
   fontWeight: 400,
   textAlign: 'left',
   lineHeight: 1.2,
   fit: 'cover',
+  positionX: 0.5,
+  positionY: 0.5,
   clipContent: true,
   layout: null,
   component: null,
@@ -342,7 +347,7 @@ function parseNode(
     strokeWidth: optional('strokeWidth', size),
     effects: optional('effects', effects),
   })
-  const cornerRadius = () => optional('cornerRadius', size)
+  const cornerRadius = () => optional('cornerRadius', parseCornerRadius)
 
   switch (type) {
     case 'rect':
@@ -362,6 +367,7 @@ function parseNode(
         closed: optional('closed', boolean),
         startCap: optional('startCap', (v, p) => oneOf(v, CAPS, p)),
         endCap: optional('endCap', (v, p) => oneOf(v, CAPS, p)),
+        capSize: optional('capSize', size),
       }
     }
     case 'text':
@@ -385,6 +391,8 @@ function parseNode(
         assetId,
         cornerRadius: cornerRadius(),
         fit: optional('fit', (v, p) => oneOf(v, ['stretch', 'cover', 'contain'] as const, p)),
+        positionX: optional('positionX', ratio),
+        positionY: optional('positionY', ratio),
       }
     }
     case 'frame':
@@ -428,7 +436,7 @@ function parseConstraints(value: unknown, path: string): { horizontal: Constrain
   return { horizontal: axis('horizontal'), vertical: axis('vertical') }
 }
 
-/** パスの頂点。制御点 in / out（頂点からのずれ）は省略でき、なければ書かない（角の頂点） */
+/** パスの頂点。制御点 in / out（頂点からのずれ）と角の丸め radius は省略でき、なければ書かない（角の頂点） */
 function parsePoint(value: unknown, path: string): PathPoint {
   const raw = record(value, path)
   const point: PathPoint = { x: number(raw.x, `${path}.x`), y: number(raw.y, `${path}.y`) }
@@ -437,6 +445,11 @@ function parsePoint(value: unknown, path: string): PathPoint {
     const control = record(raw[key], `${path}.${key}`)
     point[key] = { x: number(control.x, `${path}.${key}.x`), y: number(control.y, `${path}.${key}.y`) }
   }
+  // 0 は「丸めない」なので持たない（書き出しでも省かれる）
+  if (raw.radius !== undefined) {
+    const radius = size(raw.radius, `${path}.radius`)
+    if (radius > 0) point.radius = radius
+  }
   return point
 }
 
@@ -444,9 +457,29 @@ function parseComponent(value: unknown, path: string, assets: Record<AssetId, As
   const link = record(value, path)
   const id = nodeId(link.id, `${path}.id`)
   const role = oneOf(link.role, ['main', 'instance'] as const, `${path}.role`)
-  if (role === 'main') return { id, role }
+  if (role === 'main') {
+    const description = link.description === undefined ? '' : string(link.description, `${path}.description`)
+    const properties =
+      link.properties === undefined ? [] : array(link.properties, `${path}.properties`).map((raw, i) => parseProperty(raw, `${path}.properties[${i}]`))
+    if (new Set(properties.map((property) => property.name)).size !== properties.length) {
+      throw new KdrError(`${path}.properties: プロパティの名前が重複しています`)
+    }
+    return { id, role, description, properties }
+  }
   const overrides = link.overrides === undefined ? {} : parseOverrides(link.overrides, `${path}.overrides`, assets)
   return { id, role, overrides }
+}
+
+/** コンポーネントのプロパティ。結んだノードがあるかは確かめない（ないノードは使うときに無視する） */
+function parseProperty(value: unknown, path: string): ComponentProperty {
+  const raw = record(value, path)
+  const name = string(raw.name, `${path}.name`)
+  if (name.trim() === '') throw new KdrError(`${path}.name: プロパティの名前が空です`)
+  return {
+    name,
+    type: oneOf(raw.type, ['text', 'boolean', 'instance'] as const, `${path}.type`),
+    targets: raw.targets === undefined ? [] : array(raw.targets, `${path}.targets`).map((id, i) => nodeId(id, `${path}.targets[${i}]`)),
+  }
 }
 
 /** インスタンスごとの上書き。どのノードに当たるかはここでは分からないので、値の形だけを確かめる */
@@ -500,9 +533,17 @@ function paints(value: unknown, path: string): Paint[] {
   return list.map((item, i) => parsePaint(item, `${path}[${i}]`))
 }
 
+/** 角丸。数値か、4 隅（左上・右上・右下・左下）の配列 */
+function parseCornerRadius(value: unknown, path: string): CornerRadius {
+  if (!Array.isArray(value)) return size(value, path)
+  if (value.length !== 4) throw new KdrError(`${path}: 4 隅の配列ではありません`)
+  const [a, b, c, d] = value.map((r, i) => size(r, `${path}[${i}]`))
+  return [a, b, c, d]
+}
+
 function parsePaint(value: unknown, path: string): Paint {
   const raw = record(value, path)
-  const type = oneOf(raw.type, ['solid', 'linear'] as const, `${path}.type`)
+  const type = oneOf(raw.type, ['solid', 'linear', 'radial'] as const, `${path}.type`)
   if (type === 'solid') return { type, color: color(raw.color, `${path}.color`) }
   const stops = array(raw.stops, `${path}.stops`).map((stop, i): ColorStop => {
     const rawStop = record(stop, `${path}.stops[${i}]`)
@@ -514,6 +555,16 @@ function parsePaint(value: unknown, path: string): Paint {
   if (stops.length < 2 || stops.length > 16) throw new KdrError(`${path}.stops: 色の数が不正です`)
   if (stops.some((stop, i) => i > 0 && stop.offset < stops[i - 1].offset)) {
     throw new KdrError(`${path}.stops: offset が小さい順に並んでいません`)
+  }
+  if (type === 'radial') {
+    return {
+      type,
+      cx: number(raw.cx, `${path}.cx`),
+      cy: number(raw.cy, `${path}.cy`),
+      rx: size(raw.rx, `${path}.rx`),
+      ry: size(raw.ry, `${path}.ry`),
+      stops,
+    }
   }
   return { type, angle: number(raw.angle, `${path}.angle`), stops }
 }
@@ -578,6 +629,15 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
     if (out.component && (out.component as ComponentLink).role === 'instance' && Object.keys((out.component as { overrides: object }).overrides).length === 0) {
       const { overrides: _overrides, ...link } = out.component as { overrides: object }
       out.component = link
+    }
+    // 元の説明文とプロパティは、空なら書かない
+    if (out.component && (out.component as ComponentLink).role === 'main') {
+      const { description, properties, ...link } = out.component as Extract<ComponentLink, { role: 'main' }>
+      out.component = {
+        ...link,
+        ...(description === '' ? {} : { description }),
+        ...(properties.length === 0 ? {} : { properties }),
+      }
     }
     if (node.children.length > 0) out.children = node.children.map((childId) => nodeFile(scene, childId))
   }

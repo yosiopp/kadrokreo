@@ -85,6 +85,7 @@ export function createPath(shape: Bounds & Pick<PathNode, 'points'>, closed: boo
     effects: [],
     startCap: 'none',
     endCap: 'none',
+    capSize: 0,
   }
 }
 
@@ -104,7 +105,7 @@ export function createText(bounds: Bounds, text = ''): TextNode {
 }
 
 export function createImage(bounds: Bounds, assetId: AssetId): ImageNode {
-  return { ...base('Image', bounds), type: 'image', assetId, cornerRadius: 0, fit: 'cover' }
+  return { ...base('Image', bounds), type: 'image', assetId, cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5 }
 }
 
 export function createFrame(bounds: Bounds): FrameNode {

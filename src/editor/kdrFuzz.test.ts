@@ -78,8 +78,25 @@ function fakeContext(): CanvasRenderingContext2D {
         },
       }
     },
-    roundRect: (_x: number, _y: number, _w: number, _h: number, radius: number) => {
-      if (radius < 0) throw new RangeError('roundRect: 負の半径')
+    createRadialGradient: (...args: number[]) => {
+      finite('createRadialGradient', ...args)
+      if (args[2] < 0 || args[5] < 0) throw new RangeError('createRadialGradient: 負の半径')
+      return {
+        addColorStop(offset: number, _color: string) {
+          finite('addColorStop', offset)
+          if (offset < 0 || offset > 1) throw new RangeError('addColorStop: 0〜1 の範囲ではありません')
+        },
+      }
+    },
+    createPattern: () => ({
+      setTransform(matrix: { values: number[] }) {
+        finite('pattern.setTransform', ...matrix.values)
+      },
+    }),
+    roundRect: (_x: number, _y: number, _w: number, _h: number, radius: number | number[]) => {
+      const radii = typeof radius === 'number' ? [radius] : radius
+      if (radii.length < 1 || radii.length > 4) throw new RangeError('roundRect: 半径の数')
+      if (radii.some((r) => !(r >= 0))) throw new RangeError('roundRect: 負の半径')
     },
     ellipse: (_x: number, _y: number, rx: number, ry: number) => {
       if (rx < 0 || ry < 0) throw new RangeError('ellipse: 負の半径')
@@ -104,6 +121,16 @@ function fakeContext(): CanvasRenderingContext2D {
 beforeAll(() => {
   // 半透明のフレームを合成するキャンバスを作るのに使う
   vi.stubGlobal('document', { createElement: () => ({ getContext: () => fakeContext() }) })
+  // 円形のグラデーションを線や文字に使うパターンの変換
+  vi.stubGlobal(
+    'DOMMatrix',
+    class {
+      values: number[]
+      constructor(values: number[]) {
+        this.values = values
+      }
+    },
+  )
 })
 afterAll(() => {
   vi.unstubAllGlobals()
@@ -164,7 +191,7 @@ const PNG = fromBase64('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4
 const EXTREMES: unknown[] = [
   0, -0, 1, -1, 0.5, 2, 100, 400, 900, 1e21, 1e308, -1e308, Number.MAX_SAFE_INTEGER, 5e-324, 2 ** 31, -(2 ** 53),
   '', 'x', '#ff0000', '#FFF', '#gggggg', 'rect', 'frame', 'text', 'path', 'image', 'ellipse', 'hug', 'fill', 'fixed',
-  'main', 'instance', 'linear', 'solid', 'drop-shadow', 'absolute', 'vertical', 'space-between', 'arrow', 'a\n'.repeat(50),
+  'main', 'instance', 'linear', 'radial', 'solid', 'drop-shadow', 'absolute', 'vertical', 'space-between', 'arrow', 'a\n'.repeat(50),
   '__proto__', 'constructor', 'toString', true, false, null, [], {}, [1, 2], [[]], { x: 1, y: 2 }, { type: 'solid', color: '#000000' },
 ]
 
@@ -177,6 +204,16 @@ function randomPaint(r: Random) {
   if (r.chance(0.6)) return { type: 'solid', color: r.pick(['#ff0000', '#00ff00', '#123456', '#abcdef']) }
   const count = r.int(2, 4)
   const stops = Array.from({ length: count }, (_, i) => ({ offset: i / (count - 1), color: r.pick(['#000000', '#ffffff', '#ff8800']) }))
+  if (r.chance(0.5)) {
+    return {
+      type: 'radial',
+      cx: randomNumber(r, -1, 2),
+      cy: randomNumber(r, -1, 2),
+      rx: randomNumber(r, 0, 2),
+      ry: randomNumber(r, 0, 2),
+      stops,
+    }
+  }
   return { type: 'linear', angle: randomNumber(r, -720, 720), stops }
 }
 
@@ -226,7 +263,13 @@ function randomNode(c: Context, depth: number): Record<string, unknown> {
     node.strokeWidth = randomNumber(r, 0, 20)
   }
   if (type !== 'image' && type !== 'text' && r.chance(0.3)) node.effects = Array.from({ length: r.int(0, 3) }, () => randomEffect(r))
-  if ((type === 'rect' || type === 'frame' || type === 'image') && r.chance(0.3)) node.cornerRadius = randomNumber(r, 0, 300)
+  if (type === 'image' && r.chance(0.3)) {
+    node.positionX = r.next()
+    node.positionY = r.next()
+  }
+  if ((type === 'rect' || type === 'frame' || type === 'image') && r.chance(0.3)) {
+    node.cornerRadius = r.chance(0.5) ? randomNumber(r, 0, 300) : Array.from({ length: 4 }, () => randomNumber(r, 0, 300))
+  }
 
   switch (type) {
     case 'path':
@@ -273,7 +316,7 @@ function randomNode(c: Context, depth: number): Record<string, unknown> {
         const id = r.chance(0.5) && c.components.length > 0 ? r.pick(c.components) : `c${c.counter++}`
         c.components.push(id)
         node.component = r.chance(0.5)
-          ? { id, role: 'main' }
+          ? { id, role: 'main', description: '', properties: [] }
           : { id, role: 'instance', ...(r.chance(0.5) ? { overrides: { [r.pick(ID_POOL)]: { text: 'x', visible: false, ...(r.chance(0.5) ? { componentId: r.pick(c.components) } : {}) } } } : {}) }
       }
       const count = r.int(0, 4)
@@ -584,7 +627,7 @@ describe('kdr の tar のファズテスト', () => {
 
   /** 正しい kdr の tar の最初の見出しを書き換え、チェックサムを合わせ直したもの */
   async function craftedHeader(patch: (header: Uint8Array) => void, fixChecksum = true): Promise<Blob> {
-    const { file } = randomFile(makeRandom(5))
+    const { file } = randomFile(makeRandom(3)) // 画像のないファイルになる種（kdrBlob に画像を渡さないため）
     const tar = new Uint8Array(await new Response((await kdrBlob(file)).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
     const header = tar.subarray(0, 512)
     patch(header)
@@ -708,7 +751,7 @@ describe('kdr の読み込みの極端な入力', () => {
   it('Object.prototype にある名前の id（constructor・toString など）でも読めて使える', () => {
     const ids = ['constructor', 'toString', 'hasOwnProperty', 'valueOf', 'isPrototypeOf']
     const children = [
-      { type: 'frame', id: 'constructor', name: 'Main', x: 0, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'main' }, children: [{ type: 'text', id: 'valueOf', name: 'T', x: 0, y: 0, width: 50, height: 20, text: 'x', fontSize: 12, fontFamily: 'sans-serif' }] },
+      { type: 'frame', id: 'constructor', name: 'Main', x: 0, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'main', description: '', properties: [] }, children: [{ type: 'text', id: 'valueOf', name: 'T', x: 0, y: 0, width: 50, height: 20, text: 'x', fontSize: 12, fontFamily: 'sans-serif' }] },
       { type: 'frame', id: 'hasOwnProperty', name: 'Inst', x: 200, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'instance', overrides: { isPrototypeOf: { text: 'y' } } } },
     ]
     const doc = parseKdr({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'valueOf', name: 'P', children }] } })

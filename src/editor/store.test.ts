@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRect } from './nodes.ts'
+import { pathFromPoints } from '../document/path.ts'
+import { createPath, createRect } from './nodes.ts'
 import { addPage, createDocument, createPage, removePage, renameDocument } from './operations/document.ts'
 import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
 import { createEditorStore } from './store.ts'
@@ -77,6 +78,21 @@ describe('createEditorStore', () => {
 
     store.apply((doc) => removeNodes(doc, [rect.id]))
     expect(store.getState().selection).toEqual([])
+  })
+
+  it('頂点の編集は、そのパスだけを選んでいる間だけ続き、なくなった頂点は選択から外れる', () => {
+    const { store, rect } = setup()
+    const path = createPath(pathFromPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], true), true)
+    store.apply((doc) => insertNode(doc, path))
+    store.select([path.id])
+    store.editVertices({ id: path.id, vertices: [3, 1, 1], segment: null })
+    expect(store.getState().vertexEdit).toEqual({ id: path.id, vertices: [1, 3], segment: null })
+    store.apply((doc) => updateNode(doc, path.id, { points: path.points.slice(0, 3) }))
+    expect(store.getState().vertexEdit?.vertices).toEqual([1])
+    store.select([rect.id])
+    expect(store.getState().vertexEdit).toBeNull()
+    store.select([path.id])
+    expect(store.getState().vertexEdit).toBeNull()
   })
 
   it('load で履歴と選択を捨てる', () => {

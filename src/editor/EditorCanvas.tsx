@@ -1,15 +1,16 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { type CanvasPointer, CanvasView } from '../canvas/CanvasView.tsx'
 import type { Camera } from '../canvas/camera.ts'
 import { hitTest } from '../canvas/hitTest.ts'
 import { HIT_TOLERANCE, pickNode } from '../canvas/pick.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import { isInstance, owningInstance } from '../document/component.ts'
-import { type Point, applyMatrix, getNodesBounds, toLocal } from '../document/geometry.ts'
+import { type Point, applyMatrix, getNodesBounds, invert, toLocal } from '../document/geometry.ts'
 import { type Vertex, isLine, mapVertices, pathFromPoints } from '../document/path.ts'
 import type { NodeId, PathNode, SceneNode } from '../document/types.ts'
+import { ContextMenu, type MenuItem } from './ContextMenu.tsx'
 import { TextEditor } from './TextEditor.tsx'
-import { withoutCopies } from './components.ts'
+import { makeComponent, withoutCopies } from './components.ts'
 import { type Gesture, createGesture, dragGesture, previewCreate, rotateGesture } from './editorCanvas/drag.ts'
 import {
   DRAG_THRESHOLD,
@@ -30,12 +31,27 @@ import { drawEditorOverlay } from './editorCanvas/overlay.ts'
 import { useShortcuts } from './editorCanvas/useShortcuts.ts'
 import { useTextEditing } from './editorCanvas/useTextEditing.ts'
 import { findFrameAt } from './hitTest.ts'
+import { isSelfOrAncestor } from './operations/tree.ts'
 import { createPath } from './nodes.ts'
 import { insertNode } from './operations/tree.ts'
-import { deleteVertex, insertVertex, nearestOnPath, reshapePath, toggleSmooth } from './pathEdit.ts'
+import {
+  deleteVertices,
+  insertVertex,
+  moveVertices,
+  nearestOnPath,
+  openAtSegment,
+  reshapePath,
+  toggleSmooth,
+} from './pathEdit.ts'
 import { handleCursor } from './resize.ts'
 import type { EditorState, EditorStore } from './store.ts'
 import type { Tool } from './tools.ts'
+
+// メニューに出すショートカットの表記。macOS は記号、ほかは Ctrl などの名前
+const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+const MOD = MAC ? '⌘' : 'Ctrl+'
+const SHIFT = MAC ? '⇧' : 'Shift+'
+const ALT = MAC ? '⌥' : 'Alt+'
 
 // 選択枠・ハンドルの計算、ドラッグ中のプレビュー、重ねて描く印、キーボード、テキストの編集は editorCanvas/ にある。
 // ここはポインタの押す・離すから、どのジェスチャーを始めるかを決める
@@ -59,31 +75,22 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   const penRef = useRef<{ points: Vertex[]; cursor: Point | null } | null>(null)
   // ペンツールで押している間の、押した位置（画面座標）。ドラッグすると最後の頂点の制御点を引き出す
   const penPressRef = useRef<Point | null>(null)
-  // 頂点を編集中のパス。ダブルクリックで入る
-  const vertexEditRef = useRef<NodeId | null>(null)
-  // 頂点の編集中に選んでいる頂点の番号。その頂点と両隣の制御点のハンドルを出す
-  const vertexSelRef = useRef<number | null>(null)
   const [hover, setHover] = useState<NodeId | null>(null)
   const [cursor, setCursor] = useState('default')
+  // 右クリックメニューを出している位置（キャンバスの画面座標）
+  const [menuAt, setMenuAt] = useState<Point | null>(null)
+  const closeMenu = useCallback(() => setMenuAt(null), [])
   const [, redraw] = useReducer((n: number) => n + 1, 0)
   const { editing, editingRef, editText, startNewText, onTextInput, finishEditing } = useTextEditing(
     store,
     onToolChange,
   )
 
-  // ツールを切り替えたら、描きかけのパスや頂点の編集は終える
+  // ツールを切り替えたら、描きかけのパスや頂点の編集は終える（別のものを選んだときは、ストアが頂点の編集を終える）
   useEffect(() => {
     if (tool !== 'pen') penRef.current = null
-    if (tool !== 'select') vertexEditRef.current = vertexSelRef.current = null
-  }, [tool])
-
-  // 別のものを選んだら、頂点の編集は終える
-  useEffect(() => {
-    const editing = vertexEditRef.current
-    if (editing && (state.selection.length !== 1 || state.selection[0] !== editing)) {
-      vertexEditRef.current = vertexSelRef.current = null
-    }
-  }, [state.selection])
+    if (tool !== 'select' && store.getState().vertexEdit) store.editVertices(null)
+  }, [tool, store])
 
   /** 選択中のうち、インスタンスの中身（写し）でないもの。動かす・消す・複製するといった操作の対象になる */
   function ownIds(): NodeId[] {
@@ -114,7 +121,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   /** 頂点を編集中のパス。そのパスだけを選んでいる間だけ有効 */
   function editedPath(): PathNode | null {
     const node = soleSelected()
-    return node?.type === 'path' && node.id === vertexEditRef.current && !node.locked ? node : null
+    return node?.type === 'path' && node.id === store.getState().vertexEdit?.id && !node.locked ? node : null
   }
 
   /** 点をつかんで形を変えられるノード。直線は選ぶだけで、パスは頂点の編集に入ると対象になる（直線も入れる） */
@@ -122,11 +129,20 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     return editedPath() ?? selectedLine()
   }
 
-  /** 頂点の編集中に選んでいる頂点（なければ null） */
-  function selectedVertex(): number | null {
+  /** 頂点の編集中に選んでいる頂点（なければ空） */
+  function selectedVertices(): number[] {
+    return editedPath() ? (store.getState().vertexEdit?.vertices ?? []) : []
+  }
+
+  /** 頂点の編集中に選んでいる辺（なければ null） */
+  function selectedSegment(): number | null {
+    return editedPath() ? (store.getState().vertexEdit?.segment ?? null) : null
+  }
+
+  /** 頂点の編集中の、選んでいる頂点・辺を変える */
+  function selectVertices(vertices: number[], segment: number | null = null) {
     const node = editedPath()
-    const index = vertexSelRef.current
-    return node && index !== null && index < node.points.length ? index : null
+    if (node) store.editVertices({ id: node.id, vertices, segment })
   }
 
   /** screen にある、つかめる点。制御点のハンドルを頂点より先に調べる（頂点の近くに出るため） */
@@ -136,7 +152,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const viewport = camera.getViewport()
     const near = (point: Point) => distance(worldToScreen(viewport, point), screen) <= HANDLE_SIZE
     const vertices = editablePoints(store.getState().page, node)
-    for (const control of visibleControls(vertices, selectedVertex(), node.closed)) {
+    for (const control of visibleControls(vertices, selectedVertices(), node.closed)) {
       if (near(control.point)) return { id: node.id, index: control.index, part: control.part }
     }
     for (const [index, vertex] of vertices.entries()) {
@@ -172,6 +188,20 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
   function pick(pointer: CanvasPointer): NodeId | null {
     return pickNode(store.getState().page, camera.getViewport(), pointer)
+  }
+
+  /**
+   * 選択枠の内側の、選んでいない所を押したか。図形のない所か、選んでいるものの親（フレーム）の上なら、
+   * 選んでいるもの全体をつかんだことにする（既存のデザインツールと同じく、離れた図形の間をつかんでまとめて動かせる）
+   */
+  function insideSelection(pointer: CanvasPointer, hit: NodeId | null): boolean {
+    const box = selectionBox()
+    if (!box) return false
+    const local = applyMatrix(invert(box.matrix), pointer.world)
+    if (local.x < 0 || local.y < 0 || local.x > box.size.width || local.y > box.size.height) return false
+    if (hit === null) return true
+    const page = store.getState().page
+    return !page.nodes[hit] || box.ids.every((id) => id !== hit && isSelfOrAncestor(page, hit, page.nodes[id].parentId))
   }
 
   /**
@@ -230,11 +260,47 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
     const grabbed = pointAt(pointer.screen)
     if (grabbed) {
-      // 頂点を押すと、その頂点を選ぶ（制御点のハンドルが出る）
-      if (grabbed.part === 'vertex' && editedPath()) vertexSelRef.current = grabbed.index
+      if (grabbed.part === 'vertex' && editedPath()) {
+        // 頂点を押すと、その頂点を選ぶ（制御点のハンドルが出る）。Shift で選ぶ頂点に足す・外す。
+        // 選んでいる頂点のどれかをつかんでドラッグすると、選んでいる頂点をまとめて動かす
+        const selected = selectedVertices()
+        const has = selected.includes(grabbed.index)
+        if (pointer.shiftKey) {
+          selectVertices(has ? selected.filter((index) => index !== grabbed.index) : [...selected, grabbed.index])
+          if (has) return
+        } else if (!has) {
+          selectVertices([grabbed.index])
+        }
+        const group = has || pointer.shiftKey ? selectedVertices() : [grabbed.index]
+        gestureRef.current = { kind: 'point', ...grabbed, group, collapse: has && !pointer.shiftKey, screen: pointer.screen }
+        return
+      }
       gestureRef.current = { kind: 'point', ...grabbed }
       redraw()
       return
+    }
+
+    // 頂点の編集中は、辺を押すとその辺を選び、空いた所や形の内側からのドラッグで頂点を範囲選択する
+    const edited = editedPath()
+    if (edited) {
+      const nearest = nearestOnPath(editablePoints(page, edited), edited.closed, pointer.world)
+      if (nearest && nearest.distance * camera.getViewport().zoom <= HANDLE_SIZE) {
+        selectVertices([], nearest.segment)
+        return
+      }
+      const hit = pick(pointer)
+      if (hit === null || hit === edited.id) {
+        gestureRef.current = {
+          kind: 'vertexMarquee',
+          id: edited.id,
+          screen: pointer.screen,
+          world: pointer.world,
+          current: pointer.world,
+          base: pointer.shiftKey ? selectedVertices() : [],
+          dragged: false,
+        }
+        return
+      }
     }
 
     const viewport = camera.getViewport()
@@ -270,6 +336,11 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     }
 
     const hit = pick(pointer)
+    if (!pointer.shiftKey && insideSelection(pointer, hit)) {
+      // 選択枠の内側の空いた所。ドラッグなら選んでいるもの全体を動かし、クリックだけなら押した所のものを選び直す
+      gestureRef.current = { kind: 'press', screen: pointer.screen, world: pointer.world, collapseTo: null, clickSelect: hit ? [hit] : [] }
+      return
+    }
     if (!hit) {
       if (!pointer.shiftKey) store.select([])
       gestureRef.current = {
@@ -343,12 +414,26 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     switch (gesture.kind) {
       case 'press':
         if (gesture.collapseTo) store.select([gesture.collapseTo])
+        else if (gesture.clickSelect) store.select(gesture.clickSelect)
+        break
+      case 'point':
+        // 選んでいる頂点の 1 つを押しただけなら、その頂点だけを選び直す
+        if (gesture.collapse && !gesture.moved) selectVertices([gesture.index])
+        store.commitPreview()
+        redraw()
+        break
+      case 'vertexMarquee':
+        if (!gesture.dragged) {
+          // クリックだけなら、形の内側では頂点の選択を外し、空いた所では頂点の編集を抜けて選択を外す（前からの動き）
+          if (pick(pointer) === gesture.id) selectVertices([])
+          else store.select([])
+        }
+        redraw()
         break
       case 'move':
       case 'resize':
       case 'reshape':
       case 'rotate':
-      case 'point':
         store.commitPreview()
         redraw()
         break
@@ -407,9 +492,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     } else if (page.nodes[hit].type === 'path') {
       // パスは頂点の編集に入る。別のものを選ぶか Esc で抜ける
       store.select([hit])
-      vertexEditRef.current = hit
-      vertexSelRef.current = null
-      redraw()
+      store.editVertices({ id: hit, vertices: [], segment: null })
     }
   }
 
@@ -423,8 +506,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const grabbed = pointAt(pointer.screen)
     if (grabbed?.part === 'vertex') {
       store.apply((base) => reshapePath(base, node.id, (vertices, closed) => toggleSmooth(vertices, grabbed.index, closed)))
-      vertexSelRef.current = grabbed.index
-      redraw()
+      selectVertices([grabbed.index])
       return true
     }
     if (grabbed) return true
@@ -435,19 +517,35 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     store.apply((base) =>
       reshapePath(base, node.id, (vertices, closed) => insertVertex(vertices, closed, nearest.segment, nearest.t)),
     )
-    vertexSelRef.current = nearest.segment + 1
-    redraw()
+    selectVertices([nearest.segment + 1])
     return true
   }
 
-  /** Delete / Backspace。頂点の編集中に頂点を選んでいれば、その頂点を消す。扱ったら true */
+  /**
+   * Delete / Backspace。頂点の編集中に頂点を選んでいれば、その頂点をまとめて消す。閉じた形の辺を選んでいれば、その辺を消して開く。
+   * 頂点の編集中は、消せなくてもノードは消さない。扱ったら true
+   */
   function onDeleteKey(): boolean {
     const node = editedPath()
-    const index = selectedVertex()
-    if (!node || index === null) return false
-    store.apply((base) => reshapePath(base, node.id, (vertices, closed) => deleteVertex(vertices, closed, index)))
-    vertexSelRef.current = null
-    redraw()
+    if (!node) return false
+    const indices = selectedVertices()
+    const segment = selectedSegment()
+    if (indices.length > 0) {
+      store.apply((base) => reshapePath(base, node.id, (vertices, closed) => deleteVertices(vertices, closed, indices)))
+      selectVertices([])
+    } else if (segment !== null) {
+      store.apply((base) => reshapePath(base, node.id, (vertices, closed) => openAtSegment(vertices, closed, segment)))
+      selectVertices([])
+    }
+    return true
+  }
+
+  /** 矢印キー。頂点の編集中に頂点を選んでいれば、その頂点をまとめて動かす。扱ったら true */
+  function onNudgeKey(dx: number, dy: number): boolean {
+    const node = editedPath()
+    const indices = selectedVertices()
+    if (!node || indices.length === 0) return false
+    store.apply((base) => reshapePath(base, node.id, (vertices) => moveVertices(vertices, indices, dx, dy)))
     return true
   }
 
@@ -457,19 +555,18 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (gestureRef.current) cancelGesture()
     else if (penRef.current) finishPen(false)
     else if (tool !== 'select') onToolChange('select')
-    else if (editedPath()) {
-      vertexEditRef.current = vertexSelRef.current = null
-      redraw()
-    } else store.select([])
+    else if (editedPath()) store.editVertices(null)
+    else store.select([])
     return true
   }
 
-  useShortcuts({
+  const commands = useShortcuts({
     store,
     camera,
     dragging: () => gestureRef.current !== null,
     onCancelKey,
     onDeleteKey,
+    onNudgeKey,
     ownIds,
     movableIds,
     onToolChange,
@@ -477,6 +574,62 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     onPasteImages,
     onPasteSvg,
   })
+
+  /** 右クリック。押した所のものを選んで（選択枠の内側なら選択はそのまま）、メニューを出す */
+  function onContextMenu(pointer: CanvasPointer) {
+    if (gestureRef.current) return
+    if (editingRef.current) finishEditing()
+    if (penRef.current) finishPen(false)
+    if (tool !== 'select') onToolChange('select')
+    const { selection } = store.getState()
+    const hit = pick(pointer)
+    if (hit ? !selection.includes(hit) && !insideSelection(pointer, hit) : !insideSelection(pointer, null)) {
+      store.select(hit ? [hit] : [])
+    }
+    setHover(null)
+    setMenuAt(pointer.screen)
+  }
+
+  function menuItems(): MenuItem[] {
+    const { document, page } = store.getState()
+    const own = ownIds()
+    const none = own.length === 0
+    const canPaste = commands.canPaste()
+    if (store.getState().selection.length === 0) {
+      return [
+        { label: '貼り付け', shortcut: `${MOD}V`, disabled: !canPaste, onSelect: commands.paste },
+        'separator',
+        { label: '全体を表示', shortcut: `${SHIFT}1`, onSelect: commands.zoomToFit },
+      ]
+    }
+    const otherPages = document.pages.filter((other) => other.id !== page.id)
+    return [
+      { label: 'コピー', shortcut: `${MOD}C`, disabled: none, onSelect: commands.copy },
+      { label: '貼り付け', shortcut: `${MOD}V`, disabled: !canPaste, onSelect: commands.paste },
+      { label: '複製', shortcut: `${MOD}D`, disabled: none, onSelect: commands.duplicate },
+      { label: '削除', shortcut: 'Delete', disabled: movableIds().length === 0, onSelect: commands.remove },
+      'separator',
+      { label: '最前面へ', shortcut: ']', disabled: none, onSelect: () => commands.reorder('front') },
+      { label: '前面へ', shortcut: `${MOD}]`, disabled: none, onSelect: () => commands.reorder('forward') },
+      { label: '背面へ', shortcut: `${MOD}[`, disabled: none, onSelect: () => commands.reorder('backward') },
+      { label: '最背面へ', shortcut: '[', disabled: none, onSelect: () => commands.reorder('back') },
+      'separator',
+      { label: 'フレームにまとめる（自動で並べる）', shortcut: `${SHIFT}A`, disabled: movableIds().length === 0, onSelect: commands.wrap },
+      {
+        label: 'コンポーネントにする',
+        shortcut: `${ALT}${MOD}K`,
+        disabled: !own.some((id) => makeComponent(page, id) !== page),
+        onSelect: commands.componentize,
+      },
+      'separator',
+      { label: '選択へズーム', shortcut: `${SHIFT}2`, onSelect: commands.zoomToSelection },
+      {
+        label: '別のページへ移す',
+        disabled: none || otherPages.length === 0,
+        submenu: otherPages.map((other) => ({ label: other.name, onSelect: () => commands.moveToPage(other.id) })),
+      },
+    ]
+  }
 
   function drawOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport) {
     drawEditorOverlay(ctx, viewport, {
@@ -486,7 +639,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       gesture: gestureRef.current,
       pointed: pointTarget(),
       editedId: editedPath()?.id,
-      selectedVertex: selectedVertex(),
+      selectedVertices: selectedVertices(),
+      selectedSegment: selectedSegment(),
       pen: penRef.current,
       box: selectionBox(),
       dropTarget,
@@ -506,7 +660,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       onPointerUp={onPointerUp}
       onPointerCancel={cancelGesture}
       onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
     >
+      {menuAt && <ContextMenu at={menuAt} area={camera.getSize()} items={menuItems()} onClose={closeMenu} />}
       {editing && (
         <TextEditor
           key={editing.id}

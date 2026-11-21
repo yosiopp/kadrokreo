@@ -113,6 +113,18 @@ describe('nodeCss', () => {
     expect(rowsOf(sceneWith('start', 'start'), 'rect', '位置とサイズ')?.join()).not.toContain('親の辺に固定')
   })
 
+  it('回した子の左右・拡大縮小は、大きさを書いたまま中心が追従する位置で書く', () => {
+    // 親は 100 × 50。子は x 10, y 5, 30 × 20 を 90° 回したもの（中心 25, 15）
+    const sceneWith = (horizontal: string, vertical: string) =>
+      sceneOf(
+        frame({ children: ['rect'] }),
+        rect({ parentId: 'frame', x: 10, y: 5, width: 30, height: 20, rotation: 90, constraints: { horizontal, vertical } as never }),
+      )
+    expect(css(sceneWith('stretch', 'scale'), 'rect').slice(0, 5)).toEqual([
+      'position: absolute;', 'left: calc(50% - 40px);', 'top: calc(30% - 10px);', 'width: 30px;', 'height: 20px;',
+    ])
+  })
+
   it('折り返した行を均等に配るなら align-content: space-between', () => {
     const layout = {
       direction: 'horizontal' as const, gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
@@ -218,6 +230,30 @@ describe('nodeCss', () => {
     expect(section?.rows.map((row) => row.value)).toEqual(['#00FF00', '0°', '#000000', '#FFFFFF', '#FF0000'])
   })
 
+  it('円形のグラデーションは、枠に対する % の楕円の radial-gradient にする', () => {
+    const stops = [
+      { offset: 0, color: '#ffffff' },
+      { offset: 0.5, color: '#ff0000' },
+      { offset: 1, color: '#000000' },
+    ]
+    const lines = css(sceneOf(rect({ fills: [{ type: 'radial', cx: 0.25, cy: 0.5, rx: 0.5, ry: 1, stops }] })), 'rect')
+    expect(lines).toContain('background: radial-gradient(50% 100% at 25% 50%, #ffffff 0%, #ff0000 50%, #000000 100%);')
+  })
+
+  it('4 隅の角丸は左上から時計回りに並べる', () => {
+    expect(css(sceneOf(rect({ cornerRadius: [0, 8, 16, 0] })), 'rect')).toContain('border-radius: 0 8px 16px 0;')
+    expect(rowsOf(sceneOf(rect({ cornerRadius: [0, 8, 16, 0] })), 'rect', '位置とサイズ')).toContain('角丸=0 8 16 0')
+  })
+
+  it('テキストに重ねた塗りも、背景を文字の形で切り抜いて表す', () => {
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }
+    const lines = css(sceneOf(text({ fills: [...solid('#00ff00'), radial] })), 'text')
+    expect(lines.slice(0, 2)).toEqual([
+      'background: radial-gradient(50% 50% at 50% 50%, #ff0000 0%, #0000ff 100%), #00ff00;',
+      'background-clip: text;',
+    ])
+  })
+
   it('テキストのグラデーションは、背景を文字の形で切り抜いて表す', () => {
     const stops = [
       { offset: 0, color: '#ff0000' },
@@ -247,6 +283,10 @@ describe('nodeCss', () => {
     expect(limited).toContain('width: max-content;')
     expect(limited).not.toContain('white-space: nowrap;')
     expect(rowsOf(sceneOf(text({ maxWidth: 240 })), 'text', 'テキスト')).toContain('折り返し=最大の幅（240）で')
+    // 高さはいつも中身で決まるので、下限・上限をいつも書く
+    const tall = sceneOf(text({ minHeight: 40, maxHeight: 80 }))
+    expect(css(tall, 'text')).toEqual(expect.arrayContaining(['min-height: 40px;', 'max-height: 80px;']))
+    expect(rowsOf(tall, 'text', '位置とサイズ')).toEqual(expect.arrayContaining(['最小の高さ=40', '最大の高さ=80']))
     const wrapped = text({ sizing: { width: 'fixed', height: 'hug' }, width: 200, fontWeight: 700, textAlign: 'center' })
     expect(css(sceneOf(wrapped), 'text')).toEqual([
       'width: 200px;',
@@ -269,9 +309,15 @@ describe('nodeCss', () => {
       type: 'image',
       assetId: 'a1',
       cornerRadius: 4,
-      fit: 'stretch',
+      fit: 'stretch', positionX: 0.5, positionY: 0.5,
     }
     expect(css(sceneOf(image), 'image').slice(2)).toEqual(['object-fit: fill;', 'border-radius: 4px;'])
+    // 切り抜く位置を寄せていれば object-position
+    expect(css(sceneOf({ ...image, fit: 'cover', positionX: 0, positionY: 0.25 }), 'image').slice(2)).toEqual([
+      'object-fit: cover;',
+      'object-position: 0% 25%;',
+      'border-radius: 4px;',
+    ])
 
     const line: PathNode = {
       ...base,
@@ -288,6 +334,7 @@ describe('nodeCss', () => {
       closed: false,
       startCap: 'none',
       endCap: 'arrow',
+      capSize: 0,
     }
     expect(css(sceneOf(line), 'line').slice(2)).toEqual(['stroke: #00ff00;', 'stroke-width: 3px;'])
 
@@ -306,6 +353,7 @@ describe('nodeCss', () => {
       closed: false,
       startCap: 'none',
       endCap: 'none',
+      capSize: 0,
       effects: [{ type: 'drop-shadow', x: 1, y: 2, blur: 0, color: '#000000', opacity: 1 }],
     }
     expect(css(sceneOf(path), 'path').slice(2)).toEqual([
@@ -372,6 +420,8 @@ describe('inspectNode', () => {
       { label: '100%', value: '#C026D3', color: '#c026d3' },
     ])
     expect(rowsOf(sceneOf(rect({ fills: [] })), 'rect', '塗り')).toBeUndefined()
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.75, stops }
+    expect(rowsOf(sceneOf(rect({ fills: [radial] })), 'rect', '塗り')?.[0]).toBe('円形のグラデーション=中心 50% 50%・半径 50% 75%')
   })
 
   it('線は、色があって太さが 0 でないときだけ出す。影は濃さも出す', () => {
@@ -398,7 +448,7 @@ describe('inspectNode', () => {
     const main = frame({
       id: 'main',
       name: 'ボタン',
-      component: { id: 'c1', role: 'main' },
+      component: { id: 'c1', role: 'main', description: '', properties: [] },
       sizing: { width: 'hug', height: 'fixed' },
       layout: {
         direction: 'horizontal',
@@ -430,11 +480,38 @@ describe('inspectNode', () => {
     expect(rowsOf(scene, 'orphan', 'コンポーネント')).toEqual(['種類=インスタンス'])
   })
 
+  it('コンポーネントの説明文とプロパティを、元とインスタンスに出す', () => {
+    const copy = derivedId('instance', 'label')
+    const scene = sceneOf(
+      frame({
+        id: 'main',
+        name: 'ボタン',
+        children: ['label'],
+        component: {
+          id: 'c1',
+          role: 'main',
+          description: '主な操作に使う',
+          properties: [
+            { name: '文言', type: 'text', targets: ['label'] },
+            { name: '印', type: 'boolean', targets: ['label', 'gone'] },
+          ],
+        },
+      }),
+      text({ id: 'label', parentId: 'main', text: 'OK' }),
+      frame({ id: 'instance', children: [copy], component: { id: 'c1', role: 'instance', overrides: { label: { text: '送信' } } } }),
+      text({ id: copy, parentId: 'instance', text: '送信' }),
+    )
+    expect(rowsOf(scene, 'main', 'コンポーネント')).toContain('説明=主な操作に使う')
+    expect(rowsOf(scene, 'main', 'プロパティ')).toEqual(['文言=文言（1 か所）', '印=表示の切り替え（1 か所）'])
+    expect(rowsOf(scene, 'instance', 'コンポーネント')).toContain('説明=主な操作に使う')
+    expect(rowsOf(scene, 'instance', 'プロパティ')).toEqual(['文言（上書き）=送信', '印=表示'])
+  })
+
   it('バリアントのまとまり・バリアント・そのインスタンスには、プロパティを出す', () => {
     const scene = sceneOf(
       frame({ id: 'set', name: 'ボタン', children: ['small', 'large'] }),
-      frame({ id: 'small', name: 'サイズ=小, 状態=標準', parentId: 'set', component: { id: 'c1', role: 'main' } }),
-      frame({ id: 'large', name: 'サイズ=大, 状態=標準', parentId: 'set', component: { id: 'c2', role: 'main' } }),
+      frame({ id: 'small', name: 'サイズ=小, 状態=標準', parentId: 'set', component: { id: 'c1', role: 'main', description: '', properties: [] } }),
+      frame({ id: 'large', name: 'サイズ=大, 状態=標準', parentId: 'set', component: { id: 'c2', role: 'main', description: '', properties: [] } }),
       frame({ id: 'instance', name: 'ボタン', component: { id: 'c2', role: 'instance', overrides: {} } }),
     )
     expect(rowsOf(scene, 'set', 'コンポーネント')).toEqual(['種類=バリアントのまとまり', 'サイズ=小 / 大', '状態=標準'])
@@ -448,7 +525,7 @@ describe('inspectNode', () => {
   })
 
   it('インスタンスには、元と違えている項目を、当たっているノードごとに出す', () => {
-    const main = frame({ id: 'main', name: 'ボタン', component: { id: 'c1', role: 'main' }, children: ['label', 'icon'] })
+    const main = frame({ id: 'main', name: 'ボタン', component: { id: 'c1', role: 'main', description: '', properties: [] }, children: ['label', 'icon'] })
     const label = text({ id: 'label', name: 'Label', parentId: 'main' })
     const icon = rect({ id: 'icon', name: 'Icon', parentId: 'main' })
     const labelCopy = derivedId('instance', 'label')
@@ -494,8 +571,8 @@ describe('inspectNode', () => {
   })
 
   it('入れ子のインスタンスを差し替えた写しには、差し替えた元を出す', () => {
-    const icon = frame({ id: 'icon', name: 'Icon', component: { id: 'c2', role: 'main' } })
-    const card = frame({ id: 'card', name: 'Card', component: { id: 'c1', role: 'main' }, children: ['nested'] })
+    const icon = frame({ id: 'icon', name: 'Icon', component: { id: 'c2', role: 'main', description: '', properties: [] } })
+    const card = frame({ id: 'card', name: 'Card', component: { id: 'c1', role: 'main', description: '', properties: [] }, children: ['nested'] })
     const nested = frame({ id: 'nested', name: 'Button', parentId: 'card', component: { id: 'c3', role: 'instance', overrides: {} } })
     const copy = derivedId('instance', 'nested')
     const instance = frame({
@@ -515,7 +592,7 @@ describe('inspectNode', () => {
   })
 
   it('画像は収め方と形式を出す', () => {
-    const image: ImageNode = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover' }
+    const image: ImageNode = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5 }
     expect(rowsOf(sceneOf(image), 'image', '画像')).toEqual(['収め方=枠を埋めて切り抜く', '形式=PNG'])
   })
 })

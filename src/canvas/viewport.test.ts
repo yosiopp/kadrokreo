@@ -48,6 +48,14 @@ describe('viewport', () => {
     expect(worldToScreen(small, { x: 20, y: 20 })).toEqual({ x: 500, y: 300 })
   })
 
+  it('拡大の上限を渡すと、小さいものを画面いっぱいまで拡大する（選択へのズーム）', () => {
+    const view = { width: 1000, height: 600 }
+    const small = fitBounds({ x: 10, y: 10, width: 20, height: 20 }, view, 50, 64)
+    expect(small.zoom).toBe(25)
+    expect(worldToScreen(small, { x: 20, y: 20 })).toEqual({ x: 500, y: 300 })
+    expect(fitBounds({ x: 0, y: 0, width: 1, height: 1 }, view, 50, 64).zoom).toBe(64)
+  })
+
   it('見えていないものは、倍率を変えずに中央へ寄せる', () => {
     const view = { width: 1000, height: 600 }
     const current = { x: 0, y: 0, zoom: 2 }

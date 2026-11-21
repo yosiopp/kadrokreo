@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'react'
 import type { Camera } from '../../canvas/camera.ts'
 import { isTextInput } from '../../canvas/dom.ts'
-import { getContentBounds } from '../../document/geometry.ts'
-import type { NodeId } from '../../document/types.ts'
+import { getContentBounds, getNodesBounds } from '../../document/geometry.ts'
+import type { NodeId, PageId } from '../../document/types.ts'
 import { makeComponent } from '../components.ts'
 import { flowParent, moveInLayout, wrapInAutoLayout } from '../layout.ts'
 import { type ReorderDirection, reorderNodes } from '../operations/arrange.ts'
-import { type Fragment, copyFragment } from '../operations/clipboard.ts'
-import { pasteIntoPage } from '../operations/document.ts'
+import { type Fragment, copyFragment, duplicateNodes } from '../operations/clipboard.ts'
+import { moveNodesToPage, pasteIntoPage } from '../operations/document.ts'
 import { translateNodes } from '../operations/transform.ts'
 import { removeNodes } from '../operations/tree.ts'
 import type { EditorStore } from '../store.ts'
@@ -24,6 +24,8 @@ type Options = {
   onCancelKey: (key: string) => boolean
   /** Delete / Backspace を押した。ノードの削除より先に呼ぶ（パスの頂点の削除など）。扱ったら true を返す */
   onDeleteKey: () => boolean
+  /** 矢印キーを押した。ノードを動かすより先に呼ぶ（パスの頂点を動かすなど）。扱ったら true を返す */
+  onNudgeKey: (dx: number, dy: number) => boolean
   /** 選択中のうち、インスタンスの中身（写し）でないもの */
   ownIds: () => NodeId[]
   /** 選択中のうち動かせるもの */
@@ -47,7 +49,13 @@ const TOOL_KEYS: Record<string, Tool> = {
   t: 'text',
 }
 
-/** キャンバスのキーボードショートカットと、コピー・切り取り・貼り付け */
+/** キーボードと右クリックメニューの両方から呼ぶ操作 */
+export type CanvasCommands = ReturnType<typeof useShortcuts>
+
+/**
+ * キャンバスのキーボードショートカットと、コピー・切り取り・貼り付け。
+ * 同じ操作を右クリックメニューからも呼べるよう、操作をまとめて返す
+ */
 export function useShortcuts(options: Options) {
   const clipboardRef = useRef<{ fragment: Fragment; pastes: number } | null>(null)
   const { store, camera, dragging, ownIds, movableIds } = options
@@ -70,6 +78,69 @@ export function useShortcuts(options: Options) {
     return copyFragment(page, document.assets, ownIds())
   }
 
+  const reorder = (direction: ReorderDirection) =>
+    store.apply((base) => reorderNodes(base, ownIds(), direction))
+  const remove = () => store.apply((base) => removeNodes(base, movableIds()))
+
+  /** 複製して、元のすぐ上（重なり順で 1 つ前面）に少しずらして置き、複製したものを選ぶ */
+  function duplicate() {
+    const targets = ownIds()
+    if (targets.length === 0) return
+    let ids: NodeId[] = []
+    store.apply((base) => {
+      const result = duplicateNodes(base, targets, 10)
+      ids = result.ids
+      return result.scene
+    })
+    store.select(ids)
+  }
+
+  /** 選んでいるフレームをコンポーネントにする */
+  const componentize = () => store.apply((base) => ownIds().reduce((next, id) => makeComponent(next, id), base))
+
+  /** 選んだものを、自動で並べるフレームにまとめる */
+  function wrap() {
+    let frameId: NodeId | null = null
+    store.apply((base) => {
+      const result = wrapInAutoLayout(base, movableIds(), nextName(base, 'frame'))
+      frameId = result.id
+      return result.scene
+    })
+    if (frameId) store.select([frameId])
+  }
+
+  /** 選んでいるものが画面いっぱいに映るようにする（何も選んでいなければ全体を表示） */
+  function zoomToSelection() {
+    const { page, selection } = store.getState()
+    const bounds = getNodesBounds(page, selection)
+    if (bounds) camera.zoomToBounds(bounds)
+    else camera.fit(getContentBounds(page))
+  }
+
+  /** 選んでいるものを別のページへ移す。表示しているページはそのまま（移したものは見えなくなる） */
+  function moveToPage(pageId: PageId) {
+    const ids = ownIds()
+    const from = store.getState().page.id
+    if (ids.length > 0) store.applyDocument((document) => moveNodesToPage(document, from, ids, pageId))
+  }
+
+  /** 右クリックメニューのコピー。OS のクリップボードにはレイヤー名を入れる（古い画像が貼り付けで優先されないように） */
+  function copy() {
+    if (ownIds().length === 0) return
+    clipboardRef.current = { fragment: copySelection(), pastes: 0 }
+    const { page } = store.getState()
+    const names = clipboardRef.current.fragment.rootIds.map((id) => page.nodes[id].name)
+    navigator.clipboard?.writeText(names.join('\n')).catch(() => {})
+  }
+
+  /** 右クリックメニューの貼り付け。この画面でコピーしたものだけを貼る */
+  function pasteCopied() {
+    const clipboard = clipboardRef.current
+    if (!clipboard) return
+    clipboard.pastes += 1
+    paste(clipboard.fragment, clipboard.pastes * 10)
+  }
+
   function onKeyDown(event: KeyboardEvent) {
     if (isTextInput(event.target) || event.isComposing) return
     const { page, selection } = store.getState()
@@ -78,14 +149,11 @@ export function useShortcuts(options: Options) {
     if ((key === 'escape' || key === 'enter') && options.onCancelKey(key)) return
     if (dragging()) return
 
-    const reorder = (direction: ReorderDirection) =>
-      store.apply((base) => reorderNodes(base, ownIds(), direction))
-    const remove = () => store.apply((base) => removeNodes(base, movableIds()))
     const zoom = camera.getViewport().zoom
 
     if ((event.metaKey || event.ctrlKey) && event.altKey && event.code === 'KeyK') {
       // 選んでいるフレームをコンポーネントにする（Alt を押すと key が記号になるので code で見る）
-      store.apply((base) => ownIds().reduce((next, id) => makeComponent(next, id), base))
+      componentize()
       event.preventDefault()
       return
     }
@@ -102,7 +170,7 @@ export function useShortcuts(options: Options) {
           store.select(page.rootIds.filter((id) => page.nodes[id].visible && !page.nodes[id].locked))
           break
         case 'd':
-          if (ownIds().length > 0) paste(copySelection(), 10)
+          duplicate()
           break
         case ']':
           reorder('forward')
@@ -131,6 +199,7 @@ export function useShortcuts(options: Options) {
 
     const step = event.shiftKey ? 10 : 1
     const nudge = (dx: number, dy: number) => {
+      if (options.onNudgeKey(dx, dy)) return
       const ids = movableIds()
       // 自動で並べるフレームの並びの中では、位置はフレームが決めるので、並べる向きの矢印で順番を入れ替える
       const parent = ids.length > 0 ? flowParent(page, ids[0]) : null
@@ -143,16 +212,9 @@ export function useShortcuts(options: Options) {
       store.apply((base) => translateNodes(base, ids, dx, dy))
     }
 
-    if (event.shiftKey && key === 'a') {
-      // 選んだものを、自動で並べるフレームにまとめる
-      let frameId: NodeId | null = null
-      store.apply((base) => {
-        const result = wrapInAutoLayout(base, movableIds(), nextName(base, 'frame'))
-        frameId = result.id
-        return result.scene
-      })
-      if (frameId) store.select([frameId])
-    } else if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
+    if (event.shiftKey && key === 'a') wrap()
+    else if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
+    else if (event.shiftKey && event.code === 'Digit2') zoomToSelection()
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)
     else if (Object.hasOwn(TOOL_KEYS, key)) options.onToolChange(TOOL_KEYS[key])
     else if (key === 'delete' || key === 'backspace') {
@@ -214,4 +276,18 @@ export function useShortcuts(options: Options) {
       window.removeEventListener('paste', onPaste)
     }
   })
+
+  return {
+    copy,
+    paste: pasteCopied,
+    canPaste: () => clipboardRef.current !== null,
+    duplicate,
+    remove,
+    reorder,
+    wrap,
+    componentize,
+    zoomToSelection,
+    zoomToFit: () => camera.fit(getContentBounds(store.getState().page)),
+    moveToPage,
+  }
 }

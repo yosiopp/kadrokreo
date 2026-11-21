@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { solid } from '../document/paint.ts'
 import type { PathNode } from '../document/types.ts'
-import { inspectPage, summarizePage } from './summary.ts'
+import { inspectPage, summarizePage, visiblePaints } from './summary.ts'
 import { base, frame, rect, sceneOf, text } from '../document/testNodes.ts'
 
 describe('summarizePage', () => {
@@ -41,8 +41,9 @@ describe('summarizePage', () => {
       closed: false,
       startCap: 'none',
       endCap: 'none',
+      capSize: 0,
     }
-    const image = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover' } as const
+    const image = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5 } as const
     expect(summarizePage(sceneOf(line, image)).colors).toEqual([{ color: '#abcdef', count: 1, nodes: ['line'] }])
   })
 
@@ -58,6 +59,50 @@ describe('summarizePage', () => {
       text({ visible: false }),
     )
     expect(summarizePage(scene)).toEqual({ colors: [], textStyles: [], shadows: [] })
+  })
+
+  it('不透明な塗りの下に重ねて隠れた色は数えない。線とテキストも同じ', () => {
+    const gradient = { type: 'linear' as const, angle: 0, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }] }
+    const scene = sceneOf(
+      // 塗りは下から順。いちばん上の #ff0000 が全体を覆う
+      rect({ id: 'a', fills: [...solid('#00ff00'), gradient, ...solid('#ff0000')], strokes: [...solid('#0000ff'), ...solid('#000000')], strokeWidth: 1 }),
+      // いちばん上がグラデーションでも、どの色も不透明なら下を隠す
+      rect({ id: 'b', fills: [...solid('#00ff00'), gradient] }),
+      text({ id: 't', fills: [...solid('#00ff00'), ...solid('#333333')] }),
+    )
+    expect(summarizePage(scene).colors).toEqual([
+      { color: '#000000', count: 1, nodes: ['a'] },
+      { color: '#111111', count: 1, nodes: ['b'] },
+      { color: '#222222', count: 1, nodes: ['b'] },
+      { color: '#333333', count: 1, nodes: ['t'] },
+      { color: '#ff0000', count: 1, nodes: ['a'] },
+    ])
+  })
+
+  it('半透明のノードは塗りを 1 枚ずつ透かして描くので、下の色も数える。中身のあるフレームは 1 枚にまとめて透かすので数えない', () => {
+    const scene = sceneOf(
+      rect({ id: 'r', opacity: 0.5, fills: [...solid('#00ff00'), ...solid('#ff0000')] }),
+      frame({ id: 'f', opacity: 0.5, fills: [...solid('#0000ff'), ...solid('#ffffff')], children: ['child'] }),
+      rect({ id: 'child', parentId: 'f', fills: solid('#ffffff') }),
+      frame({ id: 'empty', opacity: 0.5, fills: [...solid('#abcdef'), ...solid('#ffffff')] }),
+      // 不透明度 0 は描かれないので数えない
+      rect({ id: 'z', opacity: 0, fills: solid('#999999') }),
+    )
+    expect(summarizePage(scene).colors).toEqual([
+      { color: '#ffffff', count: 3, nodes: ['f', 'child', 'empty'] },
+      { color: '#00ff00', count: 1, nodes: ['r'] },
+      { color: '#abcdef', count: 1, nodes: ['empty'] },
+      { color: '#ff0000', count: 1, nodes: ['r'] },
+    ])
+  })
+
+  it('上の塗りが半透明（#rrggbbaa、グラデーションの止めに半透明）なら、その下も見える', () => {
+    const fade = { type: 'linear' as const, angle: 0, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#00000080' }] }
+    expect(visiblePaints([...solid('#111111'), ...solid('#222222'), ...solid('#33333380')])).toEqual([...solid('#222222'), ...solid('#33333380')])
+    expect(visiblePaints([...solid('#111111'), fade])).toEqual([...solid('#111111'), fade])
+    expect(visiblePaints([...solid('#11111180'), ...solid('#22222280')])).toHaveLength(2)
+    expect(visiblePaints([...solid('#111111'), ...solid('#222222')], true)).toHaveLength(2)
+    expect(visiblePaints([])).toEqual([])
   })
 
   it('文字の設定は、同じものをまとめて大きい順に並べる', () => {

@@ -49,10 +49,18 @@ export function LayersPanel({ store, state }: Props) {
   const held = new Set(selection.flatMap((id) => owningInstance(page, id)?.id ?? []))
   const folding = { toggled, held }
 
+  // 写し（インスタンスの中身）は、表示の切り替えのほかは、一覧からは触れない
+  const rows = layerRows(page, folding)
+  const selected = new Set(selection)
+
+  // Shift で範囲を選ぶときの起点。最後に Shift なしで押した行と、押した直後の選択。
+  // 選択がほか（キャンバスなど）で変わったら、起点は選択の最後のものにする
+  const anchorRef = useRef<{ id: NodeId; selection: readonly NodeId[] } | null>(null)
+
   // 操作は、いつも最新の値を見る（行に渡す関数の参照は変えない）。値は描き終えたあとに入れ替える
-  const latest = useRef({ store, selection, toggled, drop, folding })
+  const latest = useRef({ store, selection, toggled, drop, folding, rows })
   useLayoutEffect(() => {
-    latest.current = { store, selection, toggled, drop, folding }
+    latest.current = { store, selection, toggled, drop, folding, rows }
   })
 
   const actions = useMemo<RowActions>(() => {
@@ -60,11 +68,32 @@ export function LayersPanel({ store, state }: Props) {
     const toggleOpen = (id: NodeId) => setToggled(toggleFolding(now().toggled, id))
     return {
       click(event, id) {
-        const { store, selection } = now()
-        if (event.shiftKey || event.metaKey || event.ctrlKey) {
+        const { store, rows } = now()
+        const selection = store.getState().selection
+        const setAnchor = () => {
+          anchorRef.current = { id, selection: store.getState().selection }
+        }
+        if (event.metaKey || event.ctrlKey) {
+          // Cmd / Ctrl で 1 行ずつ足す・外す。外した行も、次の Shift の起点になる
           store.select(selection.includes(id) ? selection.filter((other) => other !== id) : [...selection, id])
+          setAnchor()
+        } else if (event.shiftKey) {
+          // Shift で、起点の行から押した行までを選ぶ（見えている行の並びで。写しの行は、押した行のほかは飛ばす）
+          const anchor = anchorRef.current?.selection === selection ? anchorRef.current.id : selection.at(-1)
+          const from = rows.findIndex((row) => row.node.id === anchor)
+          const to = rows.findIndex((row) => row.node.id === id)
+          if (from === -1 || to === -1) {
+            store.select([...selection.filter((other) => other !== id), id])
+            setAnchor()
+            return
+          }
+          const range = rows.slice(Math.min(from, to), Math.max(from, to) + 1)
+          store.select(range.filter((row) => !row.copy || row.node.id === id).map((row) => row.node.id))
+          // 続けて Shift で押したときも、同じ起点から選び直す
+          anchorRef.current = { id: rows[from].node.id, selection: store.getState().selection }
         } else {
           store.select([id])
+          setAnchor()
         }
       },
       toggleOpen,
@@ -112,10 +141,6 @@ export function LayersPanel({ store, state }: Props) {
       toggleVisible: (node) => now().store.apply((base) => updateNode(base, node.id, { visible: !node.visible })),
     }
   }, [])
-
-  // 写し（インスタンスの中身）は、表示の切り替えのほかは、一覧からは触れない
-  const rows = layerRows(page, folding)
-  const selected = new Set(selection)
 
   return (
     <section className="layers" aria-label="レイヤー">

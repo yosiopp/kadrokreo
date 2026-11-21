@@ -1,7 +1,10 @@
 import {
   type InstanceNode,
   OVERRIDE_KEYS,
+  type PropertyValue,
+  canBindProperty,
   derivedId,
+  instanceProperties,
   findMain,
   instanceOf,
   isMain,
@@ -12,10 +15,10 @@ import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
 import { followsConstraints, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf } from '../document/variants.ts'
-import type { AutoLayout, DesignDocument, Effect, LinearGradient, NodeId, Override, Paint, Scene, SceneNode } from '../document/types.ts'
-import { hasStroke, paintColor } from '../document/paint.ts'
-import { isLine } from '../document/path.ts'
-import { ALIGN_CONTENT_LABELS, CAP_LABELS, CONSTRAINT_LABELS, FIT_LABELS, OVERRIDE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
+import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Effect, Gradient, NodeId, Override, Paint, Scene, SceneNode } from '../document/types.ts'
+import { hasStroke, isGradient, isRounded, paintColor } from '../document/paint.ts'
+import { capMarkerSize, isLine, isMarkerCap } from '../document/path.ts'
+import { ALIGN_CONTENT_LABELS, CAP_LABELS, CONSTRAINT_LABELS, FIT_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
 
@@ -70,7 +73,7 @@ export function inspectNode(
     inFlexParent(scene, node.id) && node.layoutPositioning === 'absolute' && { label: '配置', value: '並びから外す' },
     ...constraintRows(scene, node),
     node.rotation !== 0 && { label: '回転', value: `${num(node.rotation)}°` },
-    'cornerRadius' in node && node.cornerRadius > 0 && { label: '角丸', value: num(node.cornerRadius) },
+    'cornerRadius' in node && isRounded(node.cornerRadius) && { label: '角丸', value: radiusText(node.cornerRadius, num) },
     node.opacity < 1 && { label: '不透明度', value: percent(node.opacity) },
   ])
 
@@ -114,7 +117,12 @@ export function inspectNode(
       paint.type === 'solid'
         ? [{ label: '色', value: hex(paint.color), color: paint.color }]
         : [
-            { label: 'グラデーション', value: `${num(paint.angle)}°` },
+            paint.type === 'linear'
+              ? { label: 'グラデーション', value: `${num(paint.angle)}°` }
+              : {
+                  label: '円形のグラデーション',
+                  value: `中心 ${percent(paint.cx)} ${percent(paint.cy)}・半径 ${percent(paint.rx)} ${percent(paint.ry)}`,
+                },
             ...paint.stops.map((stop) => ({ label: percent(stop.offset), value: hex(stop.color), color: stop.color })),
           ],
     )
@@ -126,6 +134,10 @@ export function inspectNode(
       { label: '太さ', value: num(node.strokeWidth) },
       'startCap' in node && node.startCap !== 'none' && { label: '始点', value: CAP_LABELS[node.startCap] },
       'endCap' in node && node.endCap !== 'none' && { label: '終点', value: CAP_LABELS[node.endCap] },
+      node.type === 'path' && !node.closed && (isMarkerCap(node.startCap) || isMarkerCap(node.endCap)) && {
+        label: '端の大きさ',
+        value: node.capSize > 0 ? num(node.capSize) : `自動（${num(capMarkerSize(node))}）`,
+      },
     ])
   }
 
@@ -163,7 +175,19 @@ export function inspectNode(
       { label: '種類', value: set ? 'バリアント' : '元' },
       set !== null && { label: 'まとまり', value: set.name },
       ...variantRows(node.name),
+      node.component.description !== '' && { label: '説明', value: node.component.description },
     ])
+    add(
+      'プロパティ',
+      node.component.properties.map((property) => {
+        const targets = property.targets.filter((target) => canBindProperty(scene, node.id, property.type, target))
+        return {
+          label: property.name,
+          value: `${PROPERTY_TYPE_LABELS[property.type]}（${targets.length} か所）`,
+          nodes: targets,
+        }
+      }),
+    )
   }
   if (isVariantSet(scene, node.id)) {
     add('コンポーネント', [
@@ -181,11 +205,22 @@ export function inspectNode(
       main !== null && variantSetOf(main.page, main.node.id) === null && { label: '元の名前', value: main.node.name },
       // バリアントのインスタンスは、まとまりの名前と、選んでいるプロパティの値
       ...(main === null ? [] : variantInstanceRows(main.page, main.node)),
+      own && main !== null && main.node.component.description !== '' && { label: '説明', value: main.node.component.description },
       // 中身は、そのノード自身が元と違えている項目だけを出す。インスタンス全体の分は、下の一覧で出す
       !own && overrideRow('上書き', overridesOn(scene, instance, main?.node.id).get(id)),
       // 入れ子のインスタンスを別のコンポーネントに差し替えていれば、差し替えた先
       !own && swappedRow(doc, overridesOn(scene, instance, main?.node.id).get(id)),
     ])
+    if (own && main !== null) {
+      add(
+        'プロパティ',
+        instanceProperties(doc, scene, instance).map(({ property, value, overridden }) => ({
+          label: overridden ? `${property.name}（上書き）` : property.name,
+          value: propertyText(doc, property.type, value),
+          nodes: property.targets.map((target) => derivedId(instance.id, target)).filter((target) => Object.hasOwn(scene.nodes, target)),
+        })),
+      )
+    }
     if (own) {
       add(
         '上書き',
@@ -210,6 +245,16 @@ function overridesOn(scene: Scene, instance: InstanceNode, mainId: NodeId | unde
     if (Object.hasOwn(scene.nodes, target)) found.set(target, override)
   }
   return found
+}
+
+/** プロパティの値の表し方。真偽値は表示・非表示、差し替えはコンポーネントの名前 */
+function propertyText(doc: DesignDocument, type: ComponentProperty['type'], value: PropertyValue): string {
+  if (type === 'boolean') return value ? '表示' : '非表示'
+  if (type === 'text') return String(value)
+  const main = findMain(doc, String(value))
+  if (!main) return '（なし）'
+  const set = variantSetOf(main.page, main.node.id)
+  return set ? `${set.name}（${main.node.name}）` : main.node.name
 }
 
 /** 入れ子のインスタンスの差し替え先の行。バリアントなら「まとまりの名前（バリアントの名前）」。差し替えていなければ null */
@@ -254,7 +299,16 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       const start = axis === 'horizontal' ? node.x : node.y
       const size = node[sizeProp]
       const whole = parent[sizeProp]
-      switch (node.constraints[axis]) {
+      // 回した子の左右・上下と拡大縮小は、editor では囲む矩形で伸縮する（constraints.ts の followRotated）。
+      // CSS では回した枠の大きさを親の大きさから決められないので、大きさは今のまま、中心が追従する位置だけを書く
+      const rotated = node.rotation !== 0
+      const constraint = rotated && node.constraints[axis] === 'stretch' ? 'center' : node.constraints[axis]
+      if (rotated && constraint === 'scale') {
+        const center = whole === 0 ? 0 : (start + size / 2) / whole
+        add(startProp, `calc(${percent(center)} - ${px(size / 2)})`)
+        continue
+      }
+      switch (constraint) {
         case 'start':
           add(startProp, px(start))
           break
@@ -340,12 +394,12 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
 
   if (node.type === 'text') {
     const top = node.fills.at(-1)
-    if (top?.type === 'linear') {
-      // 文字のグラデーションは、背景を文字の形で切り抜いて表す
-      add('background', gradientCss(top, style))
+    if (node.fills.some(isGradient)) {
+      // 文字のグラデーション（や重ねた塗り）は、背景を文字の形で切り抜いて表す
+      add('background', backgroundCss(node.fills, style)!)
       add('background-clip', 'text')
       add('color', 'transparent')
-    } else if (top) add('color', color(top.color))
+    } else if (top?.type === 'solid') add('color', color(top.color))
     add('font-family', node.fontFamily)
     add('font-size', px(node.fontSize))
     add('font-weight', String(node.fontWeight))
@@ -358,6 +412,9 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     }
   } else if (node.type === 'image') {
     add('object-fit', node.fit === 'stretch' ? 'fill' : node.fit)
+    if (node.fit !== 'stretch' && (node.positionX !== 0.5 || node.positionY !== 0.5)) {
+      add('object-position', `${percent(node.positionX)} ${percent(node.positionY)}`)
+    }
   } else if (node.type === 'path') {
     // SVG の fill や stroke にはグラデーションを直接書けないので、いちばん上の塗りの始まりの色で代える
     const fill = node.fills.at(-1)
@@ -379,7 +436,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   }
 
   if (node.type === 'ellipse') add('border-radius', '50%')
-  else if ('cornerRadius' in node && node.cornerRadius > 0) add('border-radius', px(node.cornerRadius))
+  else if ('cornerRadius' in node && isRounded(node.cornerRadius)) add('border-radius', radiusText(node.cornerRadius, px))
   if ('effects' in node && node.effects.length > 0) {
     // CSS は先に書いた影が手前。効果は先頭が奥なので、逆に並べる
     const shadows = node.effects.toReversed().map((shadow) => shadowCss(shadow, style))
@@ -396,9 +453,19 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
  * ドキュメントの角度は 0° が左から右、90° が上から下。CSS は 0deg が下から上、90deg が左から右なので、90° ずれる。
  * 色が変わる区間の長さは、描画（canvas/render.ts）も CSS も「枠の角がちょうど両端の色になる長さ」で同じ。
  */
-function gradientCss(gradient: LinearGradient, style: CodeStyle): string {
+function gradientCss(gradient: Gradient, style: CodeStyle): string {
   const stops = gradient.stops.map((stop) => `${formatColor(stop.color, style.color)} ${percent(stop.offset)}`)
+  if (gradient.type === 'radial') {
+    // 楕円の大きさの % は、CSS も枠の幅・高さに対する割合
+    const { cx, cy, rx, ry } = gradient
+    return `radial-gradient(${percent(rx)} ${percent(ry)} at ${percent(cx)} ${percent(cy)}, ${stops.join(', ')})`
+  }
   return `linear-gradient(${num((((gradient.angle + 90) % 360) + 360) % 360)}deg, ${stops.join(', ')})`
+}
+
+/** 角丸の値。4 隅が同じなら 1 つ、違えば左上・右上・右下・左下 */
+function radiusText(radius: CornerRadius, format: (value: number) => string): string {
+  return typeof radius === 'number' ? format(radius) : radius.map(format).join(' ')
 }
 
 /**
@@ -410,7 +477,7 @@ function backgroundCss(fills: readonly Paint[], style: CodeStyle): string | null
   return fills
     .toReversed()
     .map((paint, i, all) => {
-      if (paint.type === 'linear') return gradientCss(paint, style)
+      if (paint.type !== 'solid') return gradientCss(paint, style)
       const color = formatColor(paint.color, style.color)
       return i === all.length - 1 ? color : `linear-gradient(${color}, ${color})`
     })

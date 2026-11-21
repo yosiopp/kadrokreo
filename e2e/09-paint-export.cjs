@@ -56,10 +56,11 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   }
 
   // ── グラデーション ──
+  const typeSelect = (label) => page.locator(`.field:has(.field-label:text-is("${label}の種類")) select`)
   await page.keyboard.press('r'); await drag([100, 100], [300, 200])
-  await page.locator('.color-field input[type=color]').first().fill('#ff0000')
-  await page.locator('label:has-text("グラデーション") input').check()
-  await page.locator('[aria-label="グラデーションの終わりの色"]').fill('#0000ff')
+  await page.locator('[aria-label="塗りの色"]').fill('#ff0000')
+  await typeSelect('塗り').selectOption('linear')
+  await page.locator('[aria-label="塗りの2 番目の色"]').fill('#0000ff')
   await set('角度', 0)
   let rect = await byName('Rectangle 1')
   check('グラデーションが保存される', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }]), JSON.stringify(rect.fills))
@@ -73,12 +74,87 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const top = await pixel(200, 103), bottom = await pixel(200, 197)
   check('角度 90 で上から下へ変わる', reddish(top) && bluish(bottom), `${top} / ${bottom}`)
 
-  // 塗りの色を変えると、始まりの色も変わる
+  // 3 色目を足すと、間に入る。色を変えると真ん中の色が変わる
   await page.mouse.click(...at(200, 150))
-  await page.locator('.color-field input[type=color]').first().fill('#00ff00')
+  await page.locator('button:text-is("塗りに色を足す")').click()
+  await page.locator('[aria-label="塗りの2 番目の色"]').fill('#00ff00')
   rect = await byName('Rectangle 1')
-  check('塗りの色を変えると始まりの色も変わる', rect.fills[0].stops[0].color === '#00ff00' && rect.fills[0].stops[1].color === '#0000ff', JSON.stringify(rect.fills))
-  await page.keyboard.press('Meta+z')
+  check('3 色のグラデーションになる', rect.fills[0].stops.length === 3 && rect.fills[0].stops[1].offset === 0.5 && rect.fills[0].stops[1].color === '#00ff00', JSON.stringify(rect.fills))
+  await deselect()
+  const center = await pixel(200, 150)
+  check('3 色目が真ん中に描かれる', center[1] > 200 && center[0] < 90 && center[2] < 90, `${center}`)
+
+  // 円形にすると、中心が始まりの色、角が終わりの色
+  await page.mouse.click(...at(200, 150))
+  await typeSelect('塗り').selectOption('radial')
+  rect = await byName('Rectangle 1')
+  check('円形のグラデーションになる（色はそのまま）', rect.fills[0].type === 'radial' && rect.fills[0].rx === 0.5 && rect.fills[0].stops.length === 3, JSON.stringify(rect.fills))
+  await deselect()
+  const core = await pixel(200, 150), corner = await pixel(103, 103)
+  check('円形: 中心は始まりの色、角は終わりの色', reddish(core) && bluish(corner), `${core} / ${corner}`)
+
+  // 塗りを重ねる。上に足した単色が見え、外すと下が見える
+  await page.mouse.click(...at(200, 150))
+  await page.locator('[aria-label="塗りを足す"]').click()
+  rect = await byName('Rectangle 1')
+  check('塗りを上に重ねられる', rect.fills.length === 2 && rect.fills[1].type === 'solid' && rect.fills[0].type === 'radial', JSON.stringify(rect.fills.map((f) => f.type)))
+  await page.locator('[aria-label="塗りの色"]').fill('#ffffff')
+  await deselect()
+  check('上の塗りが見える', whitish(await pixel(200, 150)))
+  await page.mouse.click(...at(200, 150))
+  await page.locator('[aria-label="塗りを下へ"]').click()
+  await deselect()
+  check('並べ替えると下にあった塗りが見える', reddish(await pixel(200, 150)))
+  await page.mouse.click(...at(200, 150))
+  await page.locator('[aria-label="塗り 2を外す"]').click()
+  rect = await byName('Rectangle 1')
+  check('重ねた塗りを外せる', rect.fills.length === 1 && rect.fills[0].type === 'radial', JSON.stringify(rect.fills.map((f) => f.type)))
+
+  // 線もグラデーションにできる
+  await page.locator('[aria-label="線を有効にする"]').click()
+  await set('太さ', 10)
+  await typeSelect('線').selectOption('linear')
+  rect = await byName('Rectangle 1')
+  check('線をグラデーションにできる', rect.strokes[0].type === 'linear' && rect.strokes[0].stops[0].color === '#000000', JSON.stringify(rect.strokes))
+  await typeSelect('線').selectOption('radial')
+  await page.locator('[aria-label="線の1 番目の色"]').fill('#ff0000')
+  await page.locator('[aria-label="線の2 番目の色"]').fill('#0000ff')
+  await deselect()
+  check('線の円形のグラデーションも描かれる（角は終わりの色）', bluish(await pixel(100, 100)), `${await pixel(100, 100)}`)
+  await page.mouse.click(...at(200, 150))
+  await page.locator('[aria-label="線を外す"]').click()
+
+  // 角丸を 4 隅ばらばらに
+  await page.locator('label:has-text("角ごとに変える") input').check()
+  await set('右下', 40)
+  rect = await byName('Rectangle 1')
+  check('角丸を 4 隅ばらばらにできる', JSON.stringify(rect.cornerRadius) === '[0,0,40,0]', JSON.stringify(rect.cornerRadius))
+  await deselect()
+  check('丸めた右下の角だけが透ける', (await pixel(298, 198))[3] === 0 && (await pixel(102, 198))[3] === 255, `${await pixel(298, 198)}`)
+  await page.mouse.click(...at(200, 150))
+  await set('半径', 0)
+  rect = await byName('Rectangle 1')
+  check('半径で 4 隅を揃えると数値 1 つに戻る', rect.cornerRadius === 0, JSON.stringify(rect.cornerRadius))
+
+  // テキストの塗りもグラデーションにできる
+  await page.keyboard.press('t'); await drag([400, 280], [560, 320])
+  await page.keyboard.type('グラデーション'); await page.keyboard.press('Escape')
+  await typeSelect('塗り').selectOption('linear')
+  const label = Object.values((await (async () => { await page.waitForTimeout(700); return saved() })()).nodes).find((n) => n.type === 'text')
+  check('テキストの塗りをグラデーションにできる', label?.fills[0]?.type === 'linear', JSON.stringify(label?.fills))
+  await page.keyboard.press('Delete')
+  await page.mouse.click(...at(200, 150))
+
+  // 始まりの色を変える
+  await page.locator('[aria-label="塗りの1 番目の色"]').fill('#00ff00')
+  rect = await byName('Rectangle 1')
+  check('始まりの色を変えられる', rect.fills[0].stops[0].color === '#00ff00' && rect.fills[0].stops[2].color === '#0000ff', JSON.stringify(rect.fills))
+  // 書き出しの確認のため、上から下への赤から青に戻す
+  await typeSelect('塗り').selectOption('linear')
+  await page.locator('[aria-label="塗りの2 番目の色を消す"]').click()
+  await page.locator('[aria-label="塗りの1 番目の色"]').fill('#ff0000')
+  rect = await byName('Rectangle 1')
+  check('直線に戻して色を消せる', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', angle: 90, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }]), JSON.stringify(rect.fills))
   await page.screenshot({ path: path.join(OUT, '29-gradient.png') })
 
   // ── PNG 書き出し ──
@@ -136,6 +212,21 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await deselect()
   const margin = await pixel(550, 410)
   check('全体を収める: 上下に余白が空く', margin[3] === 0 && reddish(await pixel(505, 450)), `${margin}`)
+  // 寄せる位置: 全体を収めるなら余白の配り方、切り抜くなら残す場所
+  await page.mouse.click(...at(550, 450))
+  await set('縦の位置 %', 0)
+  await deselect()
+  check('収めた画像を上に寄せられる', reddish(await pixel(550, 410)) && (await pixel(550, 490))[3] === 0, `${await pixel(550, 410)} / ${await pixel(550, 490)}`)
+  await page.mouse.click(...at(550, 420))
+  await fitSelect.selectOption('cover')
+  await set('横の位置 %', 0)
+  await deselect()
+  image = await byName('fit-source')
+  check('切り抜く位置を左に寄せられる', image.positionX === 0 && image.positionY === 0 && reddish(await pixel(505, 450)) && whitish(await pixel(590, 450)), `${await pixel(505, 450)} / ${await pixel(590, 450)}`)
+  await page.mouse.click(...at(550, 450))
+  await fitSelect.selectOption('contain')
+  await set('横の位置 %', 50); await set('縦の位置 %', 50)
+  await deselect()
   await page.screenshot({ path: path.join(OUT, '30-image-fit.png') })
 
   // ── 書き出しと viewer ──

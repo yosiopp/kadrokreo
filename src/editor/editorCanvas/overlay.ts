@@ -9,9 +9,10 @@ import {
 import { type Viewport, worldToScreen } from '../../canvas/viewport.ts'
 import { type Point, applyMatrix, boundsFromPoints, getCorners, normalizeAngle } from '../../document/geometry.ts'
 import type { NodeId, PathNode, Scene } from '../../document/types.ts'
-import { type Vertex, isLine, mapVertices, tracePath } from '../../document/path.ts'
+import { type Vertex, isLine, mapVertices, pathSegments, roundCorners, tracePath } from '../../document/path.ts'
 import { isVariantSet } from '../../document/variants.ts'
 import { handlePoint } from '../resize.ts'
+import { drawConstraintMarks } from './constraintMarks.ts'
 import type { Gesture } from './drag.ts'
 import {
   HANDLE_SIZE,
@@ -36,7 +37,9 @@ export type OverlayState = {
   /** 頂点を編集中のパス */
   editedId: NodeId | undefined
   /** 頂点の編集中に選んでいる頂点の番号 */
-  selectedVertex: number | null
+  selectedVertices: readonly number[]
+  /** 頂点の編集中に選んでいる辺 */
+  selectedSegment: number | null
   /** ペンツールで描いている途中の頂点（ページ座標、制御点を含む）と、ポインタの位置 */
   pen: { points: Vertex[]; cursor: Point | null } | null
   /** リサイズと回転のハンドルを出す枠 */
@@ -47,7 +50,7 @@ export type OverlayState = {
 
 /** 選択の枠・ハンドル・ガイド・範囲選択の枠などを描く */
 export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport, overlay: OverlayState) {
-  const { page, selection, hover, gesture, pointed, editedId, selectedVertex, pen, box, dropTarget } = overlay
+  const { page, selection, hover, gesture, pointed, editedId, selectedVertices, selectedSegment, pen, box, dropTarget } = overlay
   // コンポーネントのもの（元・インスタンス・その中身）だけを選んでいれば、枠を紫にする
   const accent = overlayColor(page, selection)
   ctx.strokeStyle = accent
@@ -120,19 +123,34 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
   // 頂点を編集中のパスは、枠ではなく形そのものを後でなぞる
   for (const id of selection) if (id !== editedId) outlineNode(id)
 
+  // 親の辺への固定の向き
+  if (gesture?.kind !== 'marquee') drawConstraintMarks(ctx, viewport, page, selection)
+
   const current = pointed && page.nodes[pointed.id]
   if (current?.type === 'path') {
     const vertices = editablePoints(page, current)
-    // 頂点を編集中のパスは、形そのものをなぞって見せる
-    if (!isLine(current)) curve(vertices, current.closed)
+    // 頂点を編集中のパスは、形そのもの（角の丸めを含む）をなぞって見せる
+    if (!isLine(current)) curve(roundCorners(vertices, current.closed), current.closed)
+    const editing = current.id === editedId
+    // 選んでいる辺は太くなぞる
+    const segment = editing && selectedSegment !== null ? pathSegments(vertices, current.closed)[selectedSegment] : undefined
+    if (segment) {
+      ctx.save()
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      const s = mapVertices([{ ...segment.from, out: segment.c1 }, { ...segment.to, in: segment.c2 }], (point) => worldToScreen(viewport, point))
+      tracePath(ctx, s, false)
+      ctx.stroke()
+      ctx.restore()
+    }
     ctx.fillStyle = '#ffffff'
-    const selected = current.id === editedId ? selectedVertex : null
+    const selected = editing ? selectedVertices : []
     for (const control of visibleControls(vertices, selected, current.closed)) {
       drawControl(vertices[control.index], control.point)
     }
     vertices.forEach((vertex, index) => {
       // 選んでいる頂点は塗りつぶす
-      ctx.fillStyle = index === selected ? accent : '#ffffff'
+      ctx.fillStyle = selected.includes(index) ? accent : '#ffffff'
       drawHandle(worldToScreen(viewport, vertex))
     })
   }
@@ -193,7 +211,7 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
     ctx.strokeStyle = accent
   }
 
-  if (gesture?.kind === 'marquee') {
+  if (gesture?.kind === 'marquee' || (gesture?.kind === 'vertexMarquee' && gesture.dragged)) {
     const b = toScreenBounds(viewport, boundsFromPoints(gesture.world, gesture.current))
     ctx.fillStyle = 'rgba(13, 153, 255, 0.12)'
     ctx.fillRect(b.x, b.y, b.width, b.height)

@@ -13,7 +13,15 @@ export type EditorState = {
   selection: NodeId[]
   canUndo: boolean
   canRedo: boolean
+  /** 頂点を編集中のパスと、選んでいる頂点・辺。そのパスだけを選んでいる間だけ有効（選択が変わると null に戻る） */
+  vertexEdit: VertexEdit | null
 }
+
+/**
+ * パスの頂点の編集。vertices は選んでいる頂点の番号（昇順）、segment は選んでいる辺
+ * （その番号の頂点から次の頂点への辺。頂点と辺は同時には選ばない）
+ */
+export type VertexEdit = { id: NodeId; vertices: number[]; segment: number | null }
 
 type DocumentRecipe = (doc: DesignDocument) => DesignDocument
 type PageRecipe = (page: Page) => Page
@@ -27,6 +35,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   let preview: DesignDocument | null = null
   let pageId = initial.pages[0].id
   let selection: NodeId[] = []
+  let vertexEdit: VertexEdit | null = null
   let state = snapshot()
   const listeners = new Set<() => void>()
 
@@ -40,13 +49,27 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     }
     const alive = selection.filter((id) => Object.hasOwn(page.nodes, id))
     if (alive.length !== selection.length) selection = alive
+    vertexEdit = checkVertexEdit(page, vertexEdit)
     return {
       document,
       page,
       selection,
       canUndo: history.past.length > 0,
       canRedo: history.future.length > 0,
+      vertexEdit,
     }
+  }
+
+  /** 頂点の編集が今のページと選択に合っているか確かめ、合わなければ null、なくなった頂点・辺は外す */
+  function checkVertexEdit(page: Page, edit: VertexEdit | null): VertexEdit | null {
+    if (!edit) return null
+    const node = page.nodes[edit.id]
+    if (node?.type !== 'path' || selection.length !== 1 || selection[0] !== edit.id) return null
+    const count = node.points.length
+    const vertices = edit.vertices.filter((index) => index < count)
+    const segments = node.closed ? count : count - 1
+    const segment = edit.segment !== null && edit.segment < segments ? edit.segment : null
+    return vertices.length === edit.vertices.length && segment === edit.segment ? edit : { ...edit, vertices, segment }
   }
 
   function emit() {
@@ -182,6 +205,12 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
 
     select(ids: readonly NodeId[]) {
       selection = [...ids]
+      emit()
+    },
+
+    /** パスの頂点の編集に入る・選ぶ頂点や辺を変える（null で抜ける）。パスを 1 つだけ選んでいるときだけ有効 */
+    editVertices(edit: VertexEdit | null) {
+      vertexEdit = edit && { ...edit, vertices: [...new Set(edit.vertices)].sort((a, b) => a - b) }
       emit()
     },
 

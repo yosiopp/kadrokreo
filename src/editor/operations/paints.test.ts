@@ -3,13 +3,21 @@ import { solid } from '../../document/paint.ts'
 import { createLine, createRect, createText } from '../nodes.ts'
 import { createPage } from './document.ts'
 import {
-  patchGradients,
-  patchShadows,
+  convertPaint,
+  movePaint,
+  patchEffectAt,
+  patchGradientAt,
+  patchPaintAt,
+  setCornerRadius,
   setFill,
-  setGradientEnabled,
   setShadow,
   setStroke,
+  updateEffects,
+  updatePaints,
+  withStopAdded,
   withStopColor,
+  withStopOffset,
+  withStopRemoved,
 } from './paints.ts'
 import { insertNode, updateNode } from './tree.ts'
 
@@ -43,26 +51,64 @@ describe('塗り・グラデーション・影', () => {
     expect(gradient.stops[1].color).toBe('#ffffff')
   })
 
-  it('グラデーションを付けると、いまの色から白への上から下のグラデーションになる。外すと単色に戻る', () => {
-    const { page, rect, line } = shapes()
-    const on = setGradientEnabled(page, [rect.id, line.id], true)
-    expect(gradientOf(on, rect.id)).toEqual({
-      type: 'linear',
-      angle: 90,
-      stops: [{ offset: 0, color: '#d9d9d9' }, { offset: 1, color: '#ffffff' }],
-    })
-    // 塗りを持たないものは変えない
-    expect(on.nodes[line.id]).toBe(page.nodes[line.id])
-    // 付いているものに付け直しても変わらない
-    expect(setGradientEnabled(on, [rect.id], true)).toBe(on)
-    const off = setGradientEnabled(on, [rect.id], false)
-    expect(gradientOf(off, rect.id)).toBeNull()
-    expect(off.nodes[rect.id]).toMatchObject({ fills: solid('#d9d9d9') })
+  it('塗りの種類を変えると、色を受け継ぐ', () => {
+    const red = { type: 'solid' as const, color: '#ff0000' }
+    const linear = convertPaint(red, 'linear')
+    expect(linear).toEqual({ type: 'linear', angle: 90, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#ffffff' }] })
+    const radial = convertPaint(linear, 'radial')
+    expect(radial).toEqual({ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: linear.type === 'linear' ? linear.stops : [] })
+    expect(convertPaint(radial, 'solid')).toEqual(red)
+    expect(convertPaint(red, 'solid')).toBe(red)
+  })
+
+  it('グラデーションの色を足す・消す・位置を変える', () => {
+    const gradient = convertPaint({ type: 'solid', color: '#000000' }, 'linear') as Extract<ReturnType<typeof convertPaint>, { type: 'linear' }>
+    const three = withStopAdded(gradient)
+    expect(three.stops).toEqual([
+      { offset: 0, color: '#000000' },
+      { offset: 0.5, color: '#808080' },
+      { offset: 1, color: '#ffffff' },
+    ])
+    // いちばん離れた隣どうしの間に足す
+    expect(withStopAdded(three).stops.map((stop) => stop.offset)).toEqual([0, 0.25, 0.5, 1])
+    // 位置を変えると並べ直す
+    expect(withStopOffset(three, 0, 0.8).stops.map((stop) => stop.color)).toEqual(['#808080', '#000000', '#ffffff'])
+    expect(withStopOffset(three, 0, 2).stops).toContainEqual({ offset: 1, color: '#000000' })
+    expect(withStopRemoved(three, 1).stops).toEqual(gradient.stops)
+    // 2 色より減らさない
+    expect(withStopRemoved(gradient, 0)).toBe(gradient)
+  })
+
+  it('塗りを足す・消す・並べ替える。テキストの塗りと直線の線は空にしない', () => {
+    const { page, rect, text, line } = shapes()
+    const two = updatePaints(page, [rect.id, text.id], 'fills', (fills) => [...fills, ...solid('#ff0000')])
+    expect(two.nodes[rect.id]).toMatchObject({ fills: [...solid('#d9d9d9'), ...solid('#ff0000')] })
+    const swapped = updatePaints(two, [rect.id], 'fills', (fills) => movePaint(fills, 1, 0))
+    expect(swapped.nodes[rect.id]).toMatchObject({ fills: [...solid('#ff0000'), ...solid('#d9d9d9')] })
+    const emptied = updatePaints(page, [rect.id, text.id, line.id], 'fills', () => [])
+    expect(emptied.nodes[rect.id]).toMatchObject({ fills: [] })
+    expect(emptied.nodes[text.id]).toBe(page.nodes[text.id])
+    expect(updatePaints(page, [line.id], 'strokes', () => [])).toBe(page)
+    // 上限を超える数にはしない
+    const many = Array.from({ length: 17 }, () => solid('#000000')[0])
+    expect(updatePaints(page, [rect.id], 'fills', () => many)).toBe(page)
+  })
+
+  it('index 番目の塗りだけを書き換える。グラデーションの書き換えは単色に当てない', () => {
+    const { page, rect } = shapes()
+    const layered = updateNode(page, rect.id, { fills: [...solid('#000000'), convertPaint(solid('#ff0000')[0], 'radial')] })
+    const moved = patchGradientAt(layered, [rect.id], 'fills', 1, (g) => (g.type === 'radial' ? { ...g, cx: 0.2 } : g))
+    expect(moved.nodes[rect.id]).toMatchObject({ fills: [{ type: 'solid' }, { type: 'radial', cx: 0.2 }] })
+    expect(patchGradientAt(layered, [rect.id], 'fills', 0, (g) => ({ ...g, stops: [] }))).toEqual(layered)
+    const recolored = patchPaintAt(layered, [rect.id], 'fills', 0, () => solid('#00ff00')[0])
+    expect(recolored.nodes[rect.id]).toMatchObject({ fills: [...solid('#00ff00'), { type: 'radial' }] })
+    // その番目がないノードは変えない
+    expect(patchPaintAt(layered, [rect.id], 'fills', 5, () => solid('#00ff00')[0])).toBe(layered)
   })
 
   it('塗りの色を変えると、グラデーションの始まりの色も変わる。塗りをなくすとグラデーションもやめる', () => {
     const { page, rect } = shapes()
-    const on = setGradientEnabled(page, [rect.id], true)
+    const on = updatePaints(page, [rect.id], 'fills', (fills) => [convertPaint(fills[0], 'linear')])
     const red = setFill(on, [rect.id], '#ff0000')
     expect(gradientOf(red, rect.id)).toMatchObject({ stops: [{ color: '#ff0000' }, { color: '#ffffff' }] })
     const none = setFill(red, [rect.id], null)
@@ -112,19 +158,30 @@ describe('塗り・グラデーション・影', () => {
     expect(setShadow(page, [rect.id], null)).toBe(page)
   })
 
-  it('グラデーションと影は、付いているものだけを書き換える', () => {
+  it('影を足し、index 番目の影だけを書き換える', () => {
     const { page, rect } = shapes()
     const other = createRect({ x: 50, y: 0, width: 10, height: 10 })
     let next = insertNode(page, other)
-    next = setGradientEnabled(next, [rect.id], true)
-    const angled = patchGradients(next, [rect.id, other.id], (g) => ({ ...g, angle: 45 }))
-    expect(gradientOf(angled, rect.id)).toMatchObject({ angle: 45 })
-    expect(angled.nodes[other.id]).toBe(next.nodes[other.id])
-
     const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
-    next = updateNode(next, rect.id, { effects: [shadow] })
-    const moved = patchShadows(next, [rect.id, other.id], { blur: 20 })
-    expect(moved.nodes[rect.id]).toMatchObject({ effects: [{ ...shadow, blur: 20 }] })
+    next = updateEffects(next, [rect.id], (effects) => [...effects, shadow, { ...shadow, y: 8 }])
+    const moved = patchEffectAt(next, [rect.id, other.id], 1, { blur: 20 })
+    expect(moved.nodes[rect.id]).toMatchObject({ effects: [shadow, { ...shadow, y: 8, blur: 20 }] })
     expect(moved.nodes[other.id]).toBe(next.nodes[other.id])
+  })
+})
+
+describe('角丸', () => {
+  it('4 隅まとめてか 1 隅だけ変え、揃えば数値 1 つにまとめる', () => {
+    const rect = createRect({ x: 0, y: 0, width: 10, height: 10 })
+    const text = createText({ x: 0, y: 20, width: 10, height: 10 })
+    let page = createPage()
+    for (const node of [rect, text]) page = insertNode(page, node)
+    const one = setCornerRadius(page, [rect.id, text.id], 1, 8)
+    expect(one.nodes[rect.id]).toMatchObject({ cornerRadius: [0, 8, 0, 0] })
+    expect(one.nodes[text.id]).toBe(page.nodes[text.id])
+    let back = one
+    for (const corner of [0, 2, 3]) back = setCornerRadius(back, [rect.id], corner, 8)
+    expect(back.nodes[rect.id]).toMatchObject({ cornerRadius: 8 })
+    expect(setCornerRadius(one, [rect.id], null, 4).nodes[rect.id]).toMatchObject({ cornerRadius: 4 })
   })
 })

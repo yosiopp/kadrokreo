@@ -33,6 +33,19 @@ function labels(result: SvgImport): string[] {
 const close = (value: number, expected: number) => expect(value).toBeCloseTo(expected, 4)
 
 describe('根のフレーム', () => {
+  it('stroke-linecap の round / square は開いたパスの両端の形になる。閉じた形と butt はそのまま', () => {
+    const result = convert(
+      '<svg width="100" height="100"><g stroke="#000" stroke-linecap="round"><line x1="0" y1="0" x2="50" y2="0"/>' +
+        '<polyline points="0,10 20,30 40,10" stroke-linecap="square" fill="none"/><polygon points="0,50 20,50 10,60"/>' +
+        '<line x1="0" y1="90" x2="50" y2="90" stroke-linecap="butt"/></g></svg>',
+    )
+    const [line, polyline, polygon, butt] = children(result).flatMap((node) => (node.type === 'frame' ? children(result, node) : [node]))
+    expect(line).toMatchObject({ type: 'path', startCap: 'round', endCap: 'round' })
+    expect(polyline).toMatchObject({ startCap: 'square', endCap: 'square' })
+    expect(polygon).toMatchObject({ closed: true, startCap: 'none', endCap: 'none' })
+    expect(butt).toMatchObject({ startCap: 'none', endCap: 'none' })
+  })
+
   it('width / height と viewBox から大きさと縮尺を決める', () => {
     const result = convert('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 100 50"><rect x="10" y="10" width="20" height="10"/></svg>')
     const root = rootOf(result)
@@ -181,10 +194,21 @@ describe('塗りと線', () => {
     expect(c.fills).toEqual([{ type: 'linear', angle: 90, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }])
   })
 
-  it('円形のグラデーションは最初の色の単色に置き換えて知らせる', () => {
-    const result = convert('<svg><radialGradient id="r"><stop offset="0" stop-color="gold"/><stop offset="1" stop-color="black"/></radialGradient><circle r="5" fill="url(#r)"/></svg>')
-    expect(children(result)[0]).toMatchObject({ fills: [{ type: 'solid', color: '#ffd700' }] })
-    expect(labels(result)).toContain('円形のグラデーション（単色にした）')
+  it('円形のグラデーションは、中心と半径を枠に対する割合にする', () => {
+    const result = convert(`<svg>
+      <radialGradient id="r"><stop offset="0" stop-color="gold"/><stop offset="1" stop-color="black"/></radialGradient>
+      <radialGradient id="u" gradientUnits="userSpaceOnUse" cx="25" cy="10" r="20" href="#r"/>
+      <radialGradient id="f" fx="0.2" href="#r"/>
+      <circle r="5" fill="url(#r)"/>
+      <rect width="100" height="50" fill="url(#u)"/>
+      <rect width="100" height="50" fill="url(#f)"/>
+    </svg>`)
+    const [circle, rect, focal] = children(result) as Extract<SceneNode, { fills: unknown }>[]
+    const stops = [{ offset: 0, color: '#ffd700' }, { offset: 1, color: '#000000' }]
+    expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops }])
+    expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops }])
+    expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops }])
+    expect(labels(result)).toContain('円形のグラデーションの焦点（中心に寄せた）')
   })
 })
 

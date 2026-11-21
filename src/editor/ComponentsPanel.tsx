@@ -1,7 +1,7 @@
 import { type ReactNode, useState } from 'react'
 import type { Camera } from '../canvas/camera.ts'
-import { LayerIcon } from '../ui/LayerParts.tsx'
-import { type ComponentEntry, type ComponentSort, componentEntries } from './componentList.ts'
+import { NodeThumbnail } from '../ui/NodeThumbnail.tsx'
+import { type ComponentEntry, type ComponentSort, componentEntries, groupByPage } from './componentList.ts'
 import { COMPONENT_DRAG_TYPE, placeInstance, setDraggedComponent } from './placeInstance.ts'
 import type { EditorState, EditorStore } from './store.ts'
 
@@ -62,12 +62,15 @@ export function ComponentsPanel({ store, state, camera }: Props) {
         onDragEnd={() => setDraggedComponent(null)}
       >
         {extra}
-        <LayerIcon node={node} />
-        <span className="component-name">{name}</span>
+        {/* まとまりの行は、まとまり全体を見せる */}
+        <NodeThumbnail scene={page} assets={state.document.assets} nodeId={shownId} width={32} height={24} />
+        <span className="component-name" title={node.component.description || undefined}>
+          {name}
+        </span>
         {depth === 0 && entry.variants.length > 0 && (
           <span className="component-page">{entry.variants.length} 種類</span>
         )}
-        {depth === 0 && page.id !== state.page.id && <span className="component-page">{page.name}</span>}
+        {depth === 0 && !headed && page.id !== state.page.id && <span className="component-page">{page.name}</span>}
         <button
           type="button"
           className="row-action"
@@ -85,6 +88,31 @@ export function ComponentsPanel({ store, state, camera }: Props) {
   }
 
   const total = componentEntries(state.document, '', sort).length
+  // ページ順なら、ページが複数あるときにページごとの見出しを付ける（名前順では行にページ名を添える）
+  const headed = sort === 'document' && state.document.pages.length > 1
+
+  /** 1 つの元（まとまりなら、開いていればバリアントも）の行 */
+  function entryRows(entry: ComponentEntry): ReactNode[] {
+    if (entry.variants.length === 0) return [row(entry, 0)]
+    const key = `${entry.page.id}:${entry.shownId}`
+    // 検索しているときは、当てはまるバリアントを開いて見せる
+    const expanded = searching || open.has(key)
+    const toggleButton = (
+      <button
+        type="button"
+        className="component-toggle"
+        aria-expanded={expanded}
+        aria-label={`${entry.name} のバリアントを${expanded ? '閉じる' : '開く'}`}
+        onClick={(event) => {
+          event.stopPropagation()
+          toggle(key)
+        }}
+      >
+        {expanded ? '▾' : '▸'}
+      </button>
+    )
+    return [row(entry, 0, toggleButton), ...(expanded ? entry.variants.map((variant) => row(variant, 1)) : [])]
+  }
 
   return (
     <section className="components" aria-label="コンポーネント">
@@ -128,30 +156,14 @@ export function ComponentsPanel({ store, state, camera }: Props) {
             <p className="panel-hint">「{query.trim()}」に当てはまるコンポーネントはありません。</p>
           ) : (
             <ul className="component-list">
-              {entries.flatMap((entry) => {
-                if (entry.variants.length === 0) return [row(entry, 0)]
-                const key = `${entry.page.id}:${entry.shownId}`
-                // 検索しているときは、当てはまるバリアントを開いて見せる
-                const expanded = searching || open.has(key)
-                const toggleButton = (
-                  <button
-                    type="button"
-                    className="component-toggle"
-                    aria-expanded={expanded}
-                    aria-label={`${entry.name} のバリアントを${expanded ? '閉じる' : '開く'}`}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      toggle(key)
-                    }}
-                  >
-                    {expanded ? '▾' : '▸'}
-                  </button>
-                )
-                return [
-                  row(entry, 0, toggleButton),
-                  ...(expanded ? entry.variants.map((variant) => row(variant, 1)) : []),
-                ]
-              })}
+              {headed
+                ? groupByPage(entries).flatMap(({ page, entries: rows }) => [
+                    <li key={`page:${page.id}`} className="component-heading" role="presentation">
+                      {page.name}
+                    </li>,
+                    ...rows.flatMap(entryRows),
+                  ])
+                : entries.flatMap(entryRows)}
             </ul>
           )}
         </>

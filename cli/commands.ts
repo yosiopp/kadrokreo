@@ -1,9 +1,22 @@
 import { type Command } from './commands/common.ts'
-import { component, detach, instance } from './commands/components.ts'
+import { align, distribute, rotate } from './commands/arrange.ts'
+import {
+  component,
+  describe_,
+  detach,
+  instance,
+  overridePush,
+  overrideReset,
+  prop,
+  propAdd,
+  swap,
+  variant,
+  variantAdd,
+} from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
-import { css, html, json } from './commands/output.ts'
+import { css, html, json, png } from './commands/output.ts'
 import { docName, newDocument, page, pageAdd, pageRename, pageRm } from './commands/pages.ts'
 import { bounds, componentList, find, get, info, ls } from './commands/query.ts'
 
@@ -23,6 +36,8 @@ const commands: Command[] = [
   html,
   json,
   componentList,
+  // export
+  png,
   // nav
   page,
   // edit: ドキュメントとページ
@@ -38,6 +53,10 @@ const commands: Command[] = [
   mv,
   order,
   dup,
+  // edit: 並べる
+  align,
+  distribute,
+  rotate,
   // edit: オートレイアウト
   autoLayout,
   wrap,
@@ -46,6 +65,14 @@ const commands: Command[] = [
   component,
   detach,
   instance,
+  swap,
+  overridePush,
+  overrideReset,
+  variantAdd,
+  variant,
+  describe_,
+  propAdd,
+  prop,
 ]
 
 export const COMMANDS: ReadonlyMap<string, Command> = new Map(commands.map((command) => [command.name, command]))

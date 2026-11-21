@@ -239,6 +239,81 @@ input.document-name:focus {
   height: 100%;
 }
 
+/* キャンバスの右クリックメニュー */
+.context-menu {
+  position: absolute;
+  z-index: 20;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.18);
+}
+
+.context-menu-nested {
+  top: -5px;
+  left: 100%;
+}
+
+.context-menu-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.context-menu-entry {
+  position: relative;
+}
+
+.context-menu-item {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.context-menu-item:not(:disabled):hover,
+.context-menu-item:not(:disabled):focus-visible,
+.context-menu-item[aria-expanded='true'] {
+  outline: none;
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.context-menu-item:disabled {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.context-menu-label {
+  flex: 1;
+}
+
+.context-menu-shortcut {
+  color: var(--text-muted);
+}
+
+.context-menu-item:not(:disabled):hover .context-menu-shortcut,
+.context-menu-item:not(:disabled):focus-visible .context-menu-shortcut,
+.context-menu-item[aria-expanded='true'] .context-menu-shortcut {
+  color: inherit;
+}
+
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
 .text-editor {
   position: absolute;
   margin: 0;
@@ -364,6 +439,26 @@ input.document-name:focus {
   flex: 1;
 }
 
+.variant-property-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* プロパティの値の一覧。プロパティ名の下に字下げして並べる */
+.variant-values {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 4px;
+  padding: 0 0 0 12px;
+  list-style: none;
+}
+
+.variant-add-value {
+  align-self: flex-start;
+}
+
 .variant-actions {
   display: flex;
   flex-wrap: wrap;
@@ -476,6 +571,25 @@ input.document-name:focus {
 
 .component-tools select {
   flex: none;
+}
+
+/* ページ順で並べたときの、ページごとの見出し */
+.component-heading {
+  padding: 6px 12px 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 一覧のサムネイル。白地に枠で、透明な部分が分かるように */
+.node-thumbnail {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #fff;
 }
 
 /* バリアントの行は、まとまりの行より 1 段下げる */
@@ -895,6 +1009,43 @@ input.document-name:focus {
   background: var(--bg);
 }
 
+.field-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.field textarea {
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+
+/* 元のプロパティの一覧と、ノードを結んだプロパティの名前 */
+.component-properties {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.property-bound {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-description {
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
 .field input:disabled {
   opacity: 0.5;
 }
@@ -922,4 +1073,56 @@ input.document-name:focus {
 .color-value {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* プロパティパネルの節の見出しと、右のボタン（塗りを足すなど） */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px -4px -4px 0;
+}
+
+/* 重ねた塗り・線・影の 1 つ分 */
+.paint-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.paint-row + .paint-row {
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.paint-row-head,
+.stop-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.paint-row-head .field,
+.stop-row .field {
+  flex: 1;
+}
+
+.paint-row-head .section-title {
+  flex: 1;
+}
+
+.stop-row .color-field {
+  flex: none;
+  gap: 4px;
+}
+
+.stop-row .color-value {
+  display: none;
+}
+
+/* 角丸の 4 隅 */
+.corner-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
 }

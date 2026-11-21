@@ -1,5 +1,5 @@
 import type { Point, Size } from './geometry.ts'
-import type { LinearGradient, Paint, Style } from './types.ts'
+import type { CornerRadius, LinearGradient, Paint, Style } from './types.ts'
 
 // 塗り（Paint）の配列を読む関数。配列は先頭が一番下なので、いちばん上に見えるのは最後の要素
 
@@ -12,6 +12,11 @@ export function topPaint(paints: readonly Paint[]): Paint | null {
 export function solidColor(paints: readonly Paint[]): string | null {
   const paint = topPaint(paints)
   return paint?.type === 'solid' ? paint.color : null
+}
+
+/** グラデーションか（色の位置を持つか） */
+export function isGradient(paint: Paint): paint is Exclude<Paint, { type: 'solid' }> {
+  return paint.type !== 'solid'
 }
 
 /** 塗りの代表の色。単色ならその色、グラデーションなら最初の色 */
@@ -44,4 +49,19 @@ export function gradientLine(paint: LinearGradient, size: Size): [Point, Point] 
     { x: cx - dx * half, y: cy - dy * half },
     { x: cx + dx * half, y: cy + dy * half },
   ]
+}
+
+/** 角丸の 4 隅の半径（左上・右上・右下・左下） */
+export function cornerRadii(radius: CornerRadius): [number, number, number, number] {
+  return typeof radius === 'number' ? [radius, radius, radius, radius] : radius
+}
+
+/** 4 隅の半径を、揃っていれば数値 1 つにまとめる */
+export function compactRadius(radii: readonly [number, number, number, number]): CornerRadius {
+  return radii.every((r) => r === radii[0]) ? radii[0] : [...radii]
+}
+
+/** 角丸があるか（どれかの隅が 0 より大きい） */
+export function isRounded(radius: CornerRadius): boolean {
+  return cornerRadii(radius).some((r) => r > 0)
 }

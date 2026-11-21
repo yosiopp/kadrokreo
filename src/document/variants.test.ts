@@ -14,7 +14,7 @@ import {
 } from './variants.ts'
 
 const main = (id: string, name: string, componentId = id) =>
-  frame({ id, name, parentId: 'set', component: { id: componentId, role: 'main' } }) as MainNode
+  frame({ id, name, parentId: 'set', component: { id: componentId, role: 'main', description: '', properties: [] } }) as MainNode
 
 /** まとまり set の中に、サイズ（小・大）× 状態（標準・押下）のうち 3 つと、ふつうの長方形 */
 function fixture() {

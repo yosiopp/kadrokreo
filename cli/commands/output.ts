@@ -1,9 +1,15 @@
+import { join } from 'node:path'
+import { pngBaseName, pngFileName } from '../../src/canvas/exportPng.ts'
 import { kdrFile } from '../../src/document/kdr.ts'
 import { pruneAssets } from '../../src/editor/operations/document.ts'
+import { CODE_FORMAT_LABELS, type CodeFormat, componentName } from '../../src/viewer/codeFormat.ts'
 import { type ColorFormat } from '../../src/viewer/colors.ts'
-import { type Unit, nodeCss } from '../../src/viewer/inspect.ts'
-import { nodeMarkup, standaloneHtml } from '../../src/viewer/markup.ts'
+import { type Unit } from '../../src/viewer/inspect.ts'
+import { paintOrder } from '../../src/viewer/traverse.ts'
+import { safeFileName } from '../../src/ui/download.ts'
+import { nodeCode, nodeMarkup, slug, standaloneHtml } from '../../src/viewer/markup.ts'
 import { type Step, UsageError } from '../args.ts'
+import { encodePng } from '../png.ts'
 import { type Command, checkStep, flag, numberOption, option, positional } from './common.ts'
 
 // 書き出すコマンド（CSS・HTML・kdr の JSON を標準出力に出す）
@@ -11,35 +17,38 @@ import { type Command, checkStep, flag, numberOption, option, positional } from 
 export const css: Command = {
   name: 'css',
   kind: 'query',
-  usage: 'css ノード [--unit px|rem] [--rem-base 16] [--color hex|rgb|hsl]',
-  summary: 'viewer のインスペクトと同じ CSS を出す',
+  usage: 'css ノード [--format html|react|css-modules|tailwind|vue] [--unit px|rem] [--rem-base 16] [--color hex|rgb|hsl]',
+  summary: 'viewer のインスペクトと同じ CSS を出す。--format react なら style の値、tailwind ならクラス',
   run({ session, print }, step) {
-    checkStep(step, { options: ['unit', 'rem-base', 'color'], positionals: 1 })
+    checkStep(step, { options: ['format', 'unit', 'rem-base', 'color'], positionals: 1 })
     const id = session.resolveOne(positional(step, 0, 'ノード'))
-    print(nodeCss(session.page, id, codeStyle(step)))
+    print(nodeCode(session.page, id, codeStyle(step)).code)
   },
 }
 
 export const html: Command = {
   name: 'html',
   kind: 'query',
-  usage: 'html ノード [--standalone] [--unit px|rem] [--rem-base 16] [--color hex|rgb|hsl]',
-  summary: 'ノードと中身の HTML と CSS を出す。--standalone ならブラウザで開ける 1 つの HTML（画像は埋め込み）',
+  usage: 'html ノード [--standalone] [--format html|react|css-modules|tailwind|vue] [--unit px|rem] [--rem-base 16] [--color hex|rgb|hsl]',
+  summary:
+    'ノードと中身の HTML と CSS を出す。--format で React（JSX）・Tailwind・Vue（.vue）にもできる。--standalone ならブラウザで開ける 1 つの HTML（画像は埋め込み）',
   flags: ['standalone'],
   run({ session, print }, step) {
-    checkStep(step, { options: ['standalone', 'unit', 'rem-base', 'color'], positionals: 1 })
+    checkStep(step, { options: ['standalone', 'format', 'unit', 'rem-base', 'color'], positionals: 1 })
     const id = session.resolveOne(positional(step, 0, 'ノード'))
     const standalone = flag(step, 'standalone')
+    const style = codeStyle(step)
+    const format = style.format ?? 'html'
+    if (standalone && format !== 'html') throw new UsageError('html: --standalone は --format html のときだけ使えます')
     const markup = nodeMarkup(session.page, id, {
-      style: codeStyle(step),
+      style,
       assets: session.document.assets,
       images: standalone ? 'embed' : 'file',
     })
-    print(
-      standalone
-        ? standaloneHtml(session.page.nodes[id].name, markup).trimEnd()
-        : `<style>\n${markup.css}\n</style>\n${markup.html}`,
-    )
+    if (standalone) print(standaloneHtml(session.page.nodes[id].name, markup).trimEnd())
+    else if (format === 'html') print(`<style>\n${markup.css}\n</style>\n${markup.html}`)
+    // JSX や .vue はそのまま。CSS Modules など CSS が別のファイルになる形式は、ファイル名の見出しを付けて後ろに続ける
+    else print(markup.css === '' ? markup.html : `${markup.html}\n\n/* ${cssFileName(session.page.nodes[id].name)} */\n${markup.css}`)
   },
 }
 
@@ -56,7 +65,55 @@ export const json: Command = {
   },
 }
 
-function codeStyle(step: Step): { unit?: Unit; remBase?: number; color?: ColorFormat } {
+export const png: Command = {
+  name: 'png',
+  kind: 'export',
+  usage: 'png [ノード…] [--scale 2] [--to ファイル.png | - ] [--each]',
+  summary:
+    'viewer の PNG 書き出しと同じ絵の PNG を書き出す。ノードなしならページ全体、ノード（フレームなど、いくつでも）ならそれらを囲む範囲。' +
+    '--scale は倍率（既定 1。viewer は 1 / 2 / 3）。--to を省くと viewer と同じ名前で今のフォルダへ（- は標準出力）。' +
+    '--each はノードごとに別のファイルにする（--to はフォルダ）。@napi-rs/canvas が要る',
+  flags: ['each'],
+  async run(ctx, step) {
+    checkStep(step, { options: ['scale', 'to', 'each'] })
+    const { session } = ctx
+    const page = session.page
+    const scale = numberOption(step, 'scale') ?? 1
+    if (!(scale > 0)) throw new UsageError('png: --scale は正の数です')
+    const to = option(step, 'to')
+    const each = flag(step, 'each')
+    const whole = step.positionals.length === 0
+    // viewer と同じく、祖先と一緒に選んだものは除き、描く順（奥から手前）に並べる
+    const targets = whole ? page.rootIds : paintOrder(page, session.resolveAll(step.positionals))
+    if (targets.length === 0) throw new UsageError('png: 書き出すものがありません（ページが空です）')
+    if (each && whole) throw new UsageError('png: --each にはノードを指定してください')
+    if (each && to === '-') throw new UsageError('png: --each のときは --to に標準出力（-）を使えません')
+
+    const groups = each ? targets.map((id) => [id]) : [targets]
+    for (const group of groups) {
+      const bytes = await encodePng(page, session.document.assets, group, scale)
+      const name = pngFileName(safeFileName(pngBaseName(session.document, page, group, whole)), scale)
+      if (to === '-') {
+        ctx.stdout(bytes)
+        continue
+      }
+      const path = to === undefined ? name : each ? join(to, name) : to
+      await ctx.writeFile(path, bytes)
+      ctx.warn(`PNG を書き出しました: ${path}`)
+    }
+  },
+}
+
+/** markup.ts が JSX の先頭で import する CSS のファイル名に合わせる */
+function cssFileName(name: string): string {
+  return `${componentName(slug(name))}.module.css`
+}
+
+function codeStyle(step: Step): { unit?: Unit; remBase?: number; color?: ColorFormat; format?: CodeFormat } {
+  const format = option(step, 'format')
+  if (format !== undefined && !Object.hasOwn(CODE_FORMAT_LABELS, format)) {
+    throw new UsageError(`--format は ${Object.keys(CODE_FORMAT_LABELS).join(' / ')} です: ${format}`)
+  }
   const unit = option(step, 'unit')
   const color = option(step, 'color')
   if (unit !== undefined && unit !== 'px' && unit !== 'rem') throw new UsageError(`--unit は px か rem です: ${unit}`)
@@ -64,6 +121,7 @@ function codeStyle(step: Step): { unit?: Unit; remBase?: number; color?: ColorFo
   const remBase = numberOption(step, 'rem-base')
   if (remBase !== undefined && remBase <= 0) throw new UsageError('--rem-base は正の数です')
   return {
+    ...(format === undefined ? {} : { format: format as CodeFormat }),
     ...(unit === undefined ? {} : { unit }),
     ...(color === undefined ? {} : { color: color as ColorFormat }),
     ...(remBase === undefined ? {} : { remBase }),

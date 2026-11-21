@@ -1,5 +1,5 @@
 import { solid } from '../src/document/paint.ts'
-import type { Effect, SceneNode } from '../src/document/types.ts'
+import type { Effect, PathPoint, SceneNode } from '../src/document/types.ts'
 import type { NodePatch } from '../src/editor/operations/tree.ts'
 import { UsageError } from './args.ts'
 
@@ -7,7 +7,8 @@ import { UsageError } from './args.ts'
 // 値の型は、そのノードがいま持っている値の型に合わせる（text=123 は文字列のまま）。
 // 入れ子の項目は . でつなぐ（layout.gap=8、sizing.width=fill）。配列の要素は番号でつなぐ（effects.0.blur=4）。
 // よく使うものには略記がある: fill=色 / stroke=色（単色 1 つの塗り・線にする。null で外す）、
-// shadow.blur=4 など（最初の影。なければ既定の影を付けてから変える）、shadow=null（影を外す）。
+// shadow.blur=4 など（最初の影。なければ既定の影を付けてから変える）、shadow=null（影を外す）、
+// cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、radius=8（パスの頂点の角の丸め。頂点ごとならカンマで並べる）。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
 
 const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 }
@@ -20,6 +21,30 @@ function expandShorthand(node: SceneNode, path: string, raw: string, draft: Reco
     if (!Object.hasOwn(node, key)) return null
     const color = raw === 'null' ? null : raw
     return [key, solid(color)]
+  }
+  if (head === 'cornerRadius' && rest.length === 0 && Object.hasOwn(node, 'cornerRadius') && !raw.trim().startsWith('[')) {
+    // 4 隅ばらばらは「左上,右上,右下,左下」。いまが 4 隅の配列でも、数値 1 つで揃えられる
+    const values = raw.split(',').map((part) => parseValue(part, 0, path) as number)
+    if (values.length === 1) return [head, values[0]]
+    if (values.length !== 4) throw new UsageError(`${path}: 数値 1 つか、左上,右上,右下,左下 の 4 つを指定してください`)
+    return [head, values]
+  }
+  if (head === 'radius' && rest.length === 0 && node.type === 'path') {
+    // パスの頂点の角の丸め。数値 1 つなら全部の頂点、カンマで並べれば頂点ごと（0 は丸めない）
+    const current = (Object.hasOwn(draft, 'points') ? draft.points : node.points) as PathPoint[]
+    const values = raw.split(',').map((part) => parseValue(part, 0, path))
+    if (values.some((value) => typeof value !== 'number' || !(value >= 0))) throw new UsageError(`${path}: 0 以上の数を指定してください`)
+    if (values.length !== 1 && values.length !== current.length) {
+      throw new UsageError(`${path}: 数値 1 つか、頂点の数（${current.length}）だけ並べてください`)
+    }
+    return [
+      'points',
+      current.map((point, i) => {
+        const { radius: _, ...rest } = point
+        const radius = (values.length === 1 ? values[0] : values[i]) as number
+        return radius > 0 ? { ...rest, radius } : rest
+      }),
+    ]
   }
   if (head === 'shadow' && Object.hasOwn(node, 'effects')) {
     if (rest.length === 0) {

@@ -1,7 +1,7 @@
 import { getWorldCenter, getWorldRotation, poseInParent } from '../../document/geometry.ts'
 import type { Asset, AssetId, NodeId, Scene, SceneNode } from '../../document/types.ts'
 import { createId } from '../nodes.ts'
-import { collectSubtrees, insertNode, sortByDocumentOrder, topLevelIds } from './tree.ts'
+import { collectSubtrees, insertNode, siblingsOf, sortByDocumentOrder, topLevelIds } from './tree.ts'
 
 // コピーと貼り付け（複製もこれを使う）。ドキュメントへ貼るときは document.ts の pasteIntoPage
 
@@ -43,12 +43,14 @@ export function copyFragment(
 
 /**
  * id を振り直してノードを貼り付ける。コピー元の親が残っていればその中へ、なければページ直下へ置く。
+ * 重なり順は親の最前面。aboveSource なら、コピー元が同じ親に残っていれば、そのすぐ上（重なり順で 1 つ前面）に置く（複製）。
  * アセットは足さないので、ドキュメントへ貼るときは pasteIntoPage を使う。
  */
 export function pasteFragment<T extends Scene>(
   scene: T,
   fragment: Fragment,
   offset = 0,
+  { aboveSource = false }: { aboveSource?: boolean } = {},
 ): { scene: T; ids: NodeId[] } {
   const newIds = new Map(Object.keys(fragment.nodes).map((id) => [id, createId()]))
   const clones: Record<NodeId, SceneNode> = {}
@@ -69,17 +71,30 @@ export function pasteFragment<T extends Scene>(
 
   const ids = fragment.rootIds.map((id) => newIds.get(id)!)
   let next = scene
-  for (const id of ids) {
+  for (const [i, id] of ids.entries()) {
     const { [id]: root, ...rest } = clones
     const parent = root.parentId === null ? undefined : scene.nodes[root.parentId]
     const parentId = parent?.type === 'frame' ? parent.id : null
     const center = { x: root.x + root.width / 2 + offset, y: root.y + root.height / 2 + offset }
     const pose = poseInParent(scene, parentId, center, root.rotation, root)
     const placed = { ...root, x: pose.x, y: pose.y, rotation: pose.rotation }
+    const sourceId = fragment.rootIds[i]
+    const index = aboveSource && next.nodes[sourceId]?.parentId === parentId
+      ? siblingsOf(next, parentId).indexOf(sourceId) + 1
+      : undefined
     // 子孫は親より先に nodes へ入れておく（重複して入れても同じ値なので害はない）
-    next = insertNode({ ...next, nodes: { ...next.nodes, ...descendantsOf(rest, root) } }, placed, parentId)
+    next = insertNode({ ...next, nodes: { ...next.nodes, ...descendantsOf(rest, root) } }, placed, parentId, index)
   }
   return { scene: next, ids }
+}
+
+/** 複製（Cmd + D）。元の親の中で、元のすぐ上（重なり順で 1 つ前面）に置く。同じページの中なので画像は足さない */
+export function duplicateNodes<T extends Scene>(
+  scene: T,
+  ids: readonly NodeId[],
+  offset: number,
+): { scene: T; ids: NodeId[] } {
+  return pasteFragment(scene, copyFragment(scene, {}, ids), offset, { aboveSource: true })
 }
 
 function descendantsOf(pool: Record<NodeId, SceneNode>, root: SceneNode): Record<NodeId, SceneNode> {

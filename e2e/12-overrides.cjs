@@ -55,7 +55,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.keyboard.press('Escape')
   await page.keyboard.press('Shift+A')
   await set('上', 10); await set('右', 20); await set('下', 10); await set('左', 20)
-  await page.locator('[aria-label="塗りを有効にする"]').check()
+  await page.locator('[aria-label="塗りを有効にする"]').click()
   await button('コンポーネントにする').click()
   await button('インスタンスを作る').click()
   await set('X', 400); await set('Y', 300)

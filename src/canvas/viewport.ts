@@ -26,11 +26,12 @@ export function zoomAt(v: Viewport, anchor: Point, zoom: number): Viewport {
 }
 
 /** bounds 全体が余白つきで収まるビューポート。等倍より大きくはしない */
-export function fitBounds(bounds: Bounds, view: Size, padding = 48): Viewport {
+/** maxZoom は拡大の上限。全体表示は 100% まで、選択へのズームは MAX_ZOOM まで拡大する */
+export function fitBounds(bounds: Bounds, view: Size, padding = 48, maxZoom = 1): Viewport {
   const availableWidth = Math.max(1, view.width - padding * 2)
   const availableHeight = Math.max(1, view.height - padding * 2)
   const zoom = Math.min(
-    1,
+    maxZoom,
     Math.max(
       MIN_ZOOM,
       Math.min(

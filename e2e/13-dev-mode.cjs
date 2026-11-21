@@ -1,6 +1,7 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
+const { execFileSync } = require('child_process')
 
 const OUT = path.join(__dirname, 'out')
 fs.mkdirSync(OUT, { recursive: true })
@@ -348,6 +349,21 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await pickLayers(2, 0)
   const boxed = await rows('間隔')
   check('向きの違う 2 つは、回した図形を囲む矩形で測る', boxed.includes('測る向き=回した図形は囲む矩形で'), boxed.join())
+
+  // ── 色の一覧は見える色だけ数える（重ねた塗りを CLI で作る）──
+  // Cover は緑の上に赤を重ねる（緑は隠れる）。Glass は不透明度 0.5 なので、青の上に白を重ねても青が透けて見える
+  const layeredPath = path.join(OUT, 'dev-mode-layered.kdr')
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'cli', 'kadrokreo.ts'), 'new', 'Layered',
+    '+', 'add', 'rect', '--name', 'Cover', '--width', '80', '--height', '80', 'fills=[{"type":"solid","color":"#00ff00"},{"type":"solid","color":"#ff0000"}]',
+    '+', 'add', 'rect', '--name', 'Glass', '--x', '120', '--width', '80', '--height', '80', 'opacity=0.5', 'fills=[{"type":"solid","color":"#0000ff"},{"type":"solid","color":"#ffffff"}]',
+    '-o', layeredPath], { stdio: ['ignore', 'pipe', 'inherit'] })
+  await viewer.locator('input[type=file]').setInputFiles(layeredPath)
+  await viewer.waitForSelector('.inspect-layer:has(.layer-name:text-is("Glass"))')
+  const layeredColors = await rows('このページの色')
+  check('色の一覧は、不透明な塗りの下に隠れた色を数えず、半透明なら下も数える', layeredColors.slice().sort().join() === '1 か所=#0000FF,1 か所=#FF0000,1 か所=#FFFFFF', layeredColors.join())
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Cover"))').click()
+  const coverFills = await panel.locator('section[aria-label="塗り"]').textContent()
+  check('隠れた色は、図形を選べばインスペクトの塗りに出る', coverFills.includes('#00FF00') && coverFills.includes('#FF0000'), coverFills)
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

@@ -60,7 +60,7 @@ describe('コンポーネント', () => {
   it('フレームを元にする。フレーム以外や、すでにつながっているものは変えない', () => {
     const { doc, button, background, componentId } = fixture()
     const page = doc.pages[0]
-    expect(frameOf(page, button.id).component).toEqual({ id: componentId, role: 'main' })
+    expect(frameOf(page, button.id).component).toEqual({ id: componentId, role: 'main', description: '', properties: [] })
     expect(makeComponent(page, button.id)).toBe(page)
     expect(makeComponent(page, background.id)).toBe(page)
     expect(findMain(doc, componentId)?.node.id).toBe(button.id)
@@ -827,5 +827,91 @@ describe('ストア', () => {
     store.undo()
     expect(copyText()).toMatchObject({ text: 'OK' })
     expect(store.getState().canUndo).toBe(false)
+  })
+})
+
+describe('入れ子の中の入れ子の差し替え', () => {
+  /** ボタン ⊂ カード ⊂ パネル の元と、パネルのインスタンス。アイコンの元も持つ */
+  function deepFixture() {
+    const { doc, pageId, componentId, label } = fixture()
+    const card = { ...createFrame({ x: 400, y: 0, width: 300, height: 200 }), name: 'Card' }
+    const panel = { ...createFrame({ x: 800, y: 0, width: 400, height: 300 }), name: 'Panel' }
+    const icon = { ...createFrame({ x: 0, y: 400, width: 24, height: 24 }), name: 'Icon' }
+    const iconLabel = { ...createText({ x: 0, y: 0, width: 20, height: 20 }, '★'), name: label.name }
+    let next = updatePage(doc, pageId, (page) => {
+      let scene = makeComponent(insertNode(page, card), card.id)
+      scene = makeComponent(insertNode(scene, panel), panel.id)
+      scene = insertNode(scene, icon)
+      scene = insertNode(scene, iconLabel, icon.id)
+      return makeComponent(scene, icon.id)
+    })
+    const inner = createInstance(next, pageId, componentId, { center: { x: 460, y: 20 }, parentId: card.id })
+    const cardComponent = frameOf(inner.document.pages[0], card.id).component!.id
+    const mid = createInstance(syncComponents(inner.document), pageId, cardComponent, { center: { x: 950, y: 100 }, parentId: panel.id })
+    const panelComponent = frameOf(mid.document.pages[0], panel.id).component!.id
+    const outer = createInstance(syncComponents(mid.document), pageId, panelComponent)
+    next = syncComponents(outer.document)
+    const iconComponent = frameOf(next.pages[0], icon.id).component!.id
+    const key = derivedId(mid.id!, inner.id!)
+    return {
+      doc: next, pageId, componentId, cardComponent, panelComponent, iconComponent, label,
+      innerId: inner.id!, midId: mid.id!, outerId: outer.id!, key, copyId: derivedId(outer.id!, key),
+    }
+  }
+  const overridesOf = (doc: DesignDocument, instanceId: string) =>
+    (frameOf(doc.pages[0], instanceId).component as InstanceNode['component']).overrides
+
+  it('元の中のインスタンスの、そのまた中のインスタンスの写しも差し替えられる', () => {
+    const { doc, pageId, componentId, iconComponent, panelComponent, outerId, key, copyId, midId, innerId } = deepFixture()
+    const page = doc.pages[0]
+    const nested = nestedInstanceOf(doc, page, copyId)!
+    expect(nested).toMatchObject({ sourceId: key, originalId: componentId, componentId })
+    expect(nested.allowed(iconComponent)).toBe(true)
+    expect(nested.allowed(panelComponent)).toBe(false)
+
+    const next = syncComponents(swapNestedInstance(doc, pageId, copyId, iconComponent))
+    expect(overridesOf(next, outerId)).toEqual({ [key]: { componentId: iconComponent } })
+    const swapped = next.pages[0]
+    expect(frameOf(swapped, copyId)).toMatchObject({ name: 'Icon', width: 24, component: null })
+    expect(childrenOf(swapped, copyId).map((node) => node.type === 'text' && node.text)).toEqual(['★'])
+    expect(nestedInstanceOf(next, swapped, copyId)).toMatchObject({ componentId: iconComponent, originalId: componentId })
+    // 元のパネルの中のカードの中は変わらない
+    expect(childrenOf(swapped, key)).toHaveLength(2)
+    expect(childrenOf(swapped, derivedId(midId, innerId))).toHaveLength(2)
+    expect(syncComponents(next)).toBe(next)
+
+    // 元に戻すと上書きは消える
+    const back = syncComponents(swapNestedInstance(next, pageId, copyId, componentId))
+    expect(overridesOf(back, outerId)).toEqual({})
+    expect(childrenOf(back.pages[0], copyId)).toHaveLength(2)
+  })
+
+  it('元に反映すると、元の中のインスタンスの上書きになり、中身への上書きは名前のたどり方で残る', () => {
+    const { doc, pageId, iconComponent, outerId, midId, innerId, copyId } = deepFixture()
+    let next = syncComponents(swapNestedInstance(doc, pageId, copyId, iconComponent))
+    const iconText = childrenOf(next.pages[0], copyId)[0]
+    next = syncComponents(captureOverrides(next, updatePage(next, pageId, (page) => updateNode(page, iconText.id, { text: '☆' }))))
+    expect(childrenOf(next.pages[0], copyId)[0]).toMatchObject({ text: '☆' })
+
+    next = syncComponents(pushOverrides(next, pageId, [copyId]))
+    // パネルの中のカード（mid）が、ボタン（inner）をアイコンに差し替える
+    expect(overridesOf(next, midId)).toEqual({ [innerId]: { componentId: iconComponent } })
+    const page = next.pages[0]
+    expect(childrenOf(page, derivedId(midId, innerId)).map((node) => node.type === 'text' && node.text)).toEqual(['★'])
+    expect(Object.values(overridesOf(next, outerId))).toEqual([{ text: '☆' }])
+    expect(childrenOf(page, copyId).map((node) => node.type === 'text' && node.text)).toEqual(['☆'])
+    expect(syncComponents(next)).toBe(next)
+  })
+
+  it('差し替えた入れ子の中身の、さらに中のインスタンスも差し替えられる', () => {
+    const { doc, pageId, componentId, cardComponent, iconComponent, outerId, midId } = deepFixture()
+    // パネルの中のカードを、カードに差し替えたまま（id を確かめるため）別の差し替えを重ねる:
+    // パネルのインスタンスで、カード（mid）をカードのまま、中のボタンをアイコンに
+    const midCopy = derivedId(outerId, midId)
+    expect(nestedInstanceOf(doc, doc.pages[0], midCopy)).toMatchObject({ componentId: cardComponent })
+    const buttonCopy = childrenOf(doc.pages[0], midCopy).find((node) => node.type === 'frame')!
+    expect(nestedInstanceOf(doc, doc.pages[0], buttonCopy.id)).toMatchObject({ componentId })
+    const next = syncComponents(swapNestedInstance(doc, pageId, buttonCopy.id, iconComponent))
+    expect(frameOf(next.pages[0], buttonCopy.id).name).toBe('Icon')
   })
 })

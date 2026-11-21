@@ -35,3 +35,11 @@ function toHsl(r: number, g: number, b: number): [number, number, number] {
   else h = (rn - gn) / d + 4
   return [(Math.round(h * 60) + 360) % 360, Math.round(s * 100), Math.round(l * 100)]
 }
+
+/**
+ * 色の不透明度（0〜1）。ドキュメントの色はいまは #rrggbb だけなので 1 になるが、
+ * 透明度つきの #rrggbbaa を受け付けるようになっても、見える色の数え方（summary.ts）が正しく働くようにしておく
+ */
+export function colorAlpha(color: string): number {
+  return color.length === 9 ? parseInt(color.slice(7, 9), 16) / 255 : 1
+}

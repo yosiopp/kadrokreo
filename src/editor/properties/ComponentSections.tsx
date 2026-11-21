@@ -1,5 +1,16 @@
-import { type MainNode, findMain, isInstance, isMain } from '../../document/component.ts'
-import type { Page } from '../../document/types.ts'
+import { useState } from 'react'
+import {
+  type InstanceNode,
+  type MainNode,
+  canBindProperty,
+  derivedId,
+  enclosingMainNode,
+  findMain,
+  instanceProperties,
+  isInstance,
+  isMain,
+} from '../../document/component.ts'
+import type { ComponentProperty, Page } from '../../document/types.ts'
 import {
   type VariantProperty,
   isBooleanProperty,
@@ -10,7 +21,16 @@ import {
   variantSetOf,
   variantsIn,
 } from '../../document/variants.ts'
-import { OVERRIDE_LABELS } from '../../ui/labels.ts'
+import { OVERRIDE_LABELS, PROPERTY_TYPE_LABELS } from '../../ui/labels.ts'
+import {
+  addComponentProperty,
+  bindComponentProperty,
+  removeComponentProperty,
+  renameComponentProperty,
+  setComponentDescription,
+  setInstanceProperty,
+  unbindComponentProperty,
+} from '../componentProperties.ts'
 import {
   canHoldInstance,
   createInstance,
@@ -28,8 +48,12 @@ import { fitTextNodes } from '../measure.ts'
 import {
   addVariant,
   addVariantProperty,
+  addVariantValue,
+  moveVariantProperty,
+  moveVariantValue,
   removeVariantProperty,
   renameVariantProperty,
+  renameVariantValue,
   selectVariant,
   setVariantValue,
 } from '../variants.ts'
@@ -118,6 +142,16 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
     })
     if (id) store.select([id])
   }
+  /** まとまりのプロパティに値を足して、足したバリアントを選ぶ */
+  const addValueOf = (setId: string, key: string) => {
+    let id: string | null = null
+    store.applyDocument((doc) => {
+      const result = addVariantValue(doc, page.id, setId, key)
+      id = result.id
+      return result.document
+    })
+    if (id) store.select([id])
+  }
   /** 元のあるページへ移って、元を選ぶ */
   const selectMain = (componentId: string) => {
     const main = findMain(state.document, componentId)
@@ -137,27 +171,66 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
       {variantSet && (
         <Section title="バリアント">
           <p className="section-note">
-            中のコンポーネントを、名前の「プロパティ=値」で選び分けられます。プロパティ名を変えると、すべてのバリアントに反映されます。
+            中のコンポーネントを、名前の「プロパティ=値」で選び分けられます。プロパティ名・値の名前や順を変えると、すべてのバリアントに反映されます（値の順はバリアントの並び）。
           </p>
-          {variantProperties(page, variantSet.id).map((property, _, all) => (
-            <div key={property.name} className="variant-property">
-              <TextField
-                label={isBooleanProperty(property) ? '真偽' : `${property.values.length} 値`}
-                value={property.name}
-                onCommit={(next) =>
-                  store.apply((base) => renameVariantProperty(base, variantSet.id, property.name, next))
-                }
-              />
-              <button
-                type="button"
-                className="icon-button"
-                title={all.length > 1 ? 'このプロパティを消す（すべてのバリアントの名前から外す）' : '最後のプロパティは消せません'}
-                aria-label={`プロパティ ${property.name} を消す`}
-                disabled={all.length <= 1}
-                onClick={() => store.apply((base) => removeVariantProperty(base, variantSet.id, property.name))}
-              >
-                ×
-              </button>
+          {variantProperties(page, variantSet.id).map((property, index, all) => (
+            <div key={property.name} className="variant-property-block">
+              <div className="variant-property">
+                <TextField
+                  label={isBooleanProperty(property) ? '真偽' : `${property.values.length} 値`}
+                  value={property.name}
+                  onCommit={(next) =>
+                    store.apply((base) => renameVariantProperty(base, variantSet.id, property.name, next))
+                  }
+                />
+                <MoveButtons
+                  label={`プロパティ ${property.name}`}
+                  index={index}
+                  count={all.length}
+                  onMove={(to) => store.apply((base) => moveVariantProperty(base, variantSet.id, property.name, to))}
+                />
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={all.length > 1 ? 'このプロパティを消す（すべてのバリアントの名前から外す）' : '最後のプロパティは消せません'}
+                  aria-label={`プロパティ ${property.name} を消す`}
+                  disabled={all.length <= 1}
+                  onClick={() => store.apply((base) => removeVariantProperty(base, variantSet.id, property.name))}
+                >
+                  ×
+                </button>
+              </div>
+              <ul className="variant-values" aria-label={`${property.name} の値`}>
+                {property.values.map((value, valueIndex) => (
+                  <li key={value} className="variant-property">
+                    <TextField
+                      label="値"
+                      value={value}
+                      onCommit={(next) =>
+                        store.apply((base) => renameVariantValue(base, variantSet.id, property.name, value, next))
+                      }
+                    />
+                    <MoveButtons
+                      label={`値 ${value}`}
+                      index={valueIndex}
+                      count={property.values.length}
+                      onMove={(to) =>
+                        store.apply((base) => moveVariantValue(base, variantSet.id, property.name, value, to))
+                      }
+                    />
+                  </li>
+                ))}
+                <li>
+                  <button
+                    type="button"
+                    className="variant-add-value"
+                    title="最初のバリアントを複製して、このプロパティを新しい値にする"
+                    onClick={() => addValueOf(variantSet.id, property.name)}
+                  >
+                    値を追加
+                  </button>
+                </li>
+              </ul>
             </div>
           ))}
           <div className="variant-actions">
@@ -209,6 +282,11 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
                     />
                   ),
                 )}
+              <DescriptionField
+                value={single.component.description}
+                onCommit={(next) => store.apply((base) => setComponentDescription(base, single.id, next))}
+              />
+              <MainPropertiesList ctx={ctx} main={single as MainNode} />
               <button type="button" onClick={() => addInstance(single.component!.id)}>
                 インスタンスを作る
               </button>
@@ -229,6 +307,12 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
               <p className="section-note">
                 インスタンスです。中身は元に合わせて変わります。ダブルクリックで中身を選ぶと、文言や色をこのインスタンスだけ変えられます。
               </p>
+              {instanceMain && instanceMain.node.component.description !== '' && (
+                <p className="section-note component-description" aria-label="コンポーネントの説明">
+                  {instanceMain.node.component.description}
+                </p>
+              )}
+              <InstancePropertyFields ctx={ctx} instance={single as InstanceNode} />
               {instanceMain &&
                 instanceSet &&
                 variantProperties(instanceMain.page, instanceSet.id).map((property) => {
@@ -290,6 +374,226 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
           )}
         </Section>
       )}
+
+      {!inner && single && <PropertyBindingSection ctx={ctx} />}
+    </>
+  )
+}
+
+/** 元の説明文の欄。複数行で、フォーカスが外れたときに確定する */
+function DescriptionField({ value, onCommit }: { value: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  return (
+    <label className="field field-stacked">
+      <span className="field-label">説明</span>
+      <textarea
+        aria-label="コンポーネントの説明"
+        rows={2}
+        placeholder="使い方など"
+        value={draft ?? value}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          if (draft !== null && draft !== value) onCommit(draft)
+          setDraft(null)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            const input = event.currentTarget
+            setDraft(null)
+            requestAnimationFrame(() => input.blur())
+          }
+        }}
+      />
+    </label>
+  )
+}
+
+/** 元のプロパティの一覧（名前を変える・消す）。結ぶのは、元の中のノードを選んだときの節で */
+function MainPropertiesList({ ctx, main }: { ctx: PanelContext; main: MainNode }) {
+  const { store, page } = ctx
+  const { properties } = main.component
+  return (
+    <div className="component-properties" aria-label="コンポーネントのプロパティ">
+      <span className="field-label">プロパティ</span>
+      {properties.length === 0 && (
+        <p className="section-note">元の中のノードを選ぶと、文言・表示・入れ子のインスタンスの元をプロパティにできます。</p>
+      )}
+      {properties.map((property) => {
+        const targets = property.targets.filter((id) => canBindProperty(page, main.id, property.type, id))
+        return (
+          <div key={property.name} className="variant-property">
+            <TextField
+              label={PROPERTY_TYPE_LABELS[property.type]}
+              value={property.name}
+              onCommit={(next) => store.apply((base) => renameComponentProperty(base, main.id, property.name, next))}
+            />
+            <button
+              type="button"
+              className="icon-button"
+              title={`結んだノード（${targets.length} か所）を選ぶ`}
+              aria-label={`プロパティ ${property.name} を結んだノードを選ぶ`}
+              disabled={targets.length === 0}
+              onClick={() => store.select(targets)}
+            >
+              {targets.length}
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              title="このプロパティを消す（インスタンスの値は、ふつうの上書きとして残る）"
+              aria-label={`プロパティ ${property.name} を消す`}
+              onClick={() => store.apply((base) => removeComponentProperty(base, main.id, property.name))}
+            >
+              ×
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** インスタンスで、元のプロパティの値を選ぶ欄 */
+function InstancePropertyFields({ ctx, instance }: { ctx: PanelContext; instance: InstanceNode }) {
+  const { store, state, page } = ctx
+  const states = instanceProperties(state.document, page, instance)
+  if (states.length === 0) return null
+  const set = (name: string, value: string | boolean) =>
+    store.applyDocument((doc) => setInstanceProperty(doc, page.id, instance.id, name, value))
+  return (
+    <>
+      {states.map(({ property, value, overridden }) => {
+        if (property.type === 'boolean') {
+          return (
+            <CheckField
+              key={property.name}
+              label={property.name}
+              overridden={overridden}
+              value={value === true}
+              onChange={(checked) => set(property.name, checked)}
+            />
+          )
+        }
+        if (property.type === 'text') {
+          return (
+            <TextField
+              key={property.name}
+              label={property.name}
+              overridden={overridden}
+              value={String(value)}
+              onCommit={(next) => set(property.name, next)}
+            />
+          )
+        }
+        const main = findMain(state.document, instance.component.id)
+        const target = main ? property.targets.find((id) => canBindProperty(main.page, main.node.id, 'instance', id)) : undefined
+        const nested = target === undefined ? null : nestedInstanceOf(state.document, page, derivedId(instance.id, target))
+        return (
+          <ComponentSelect
+            key={property.name}
+            label={property.name}
+            ariaLabel={`プロパティ ${property.name}`}
+            ctx={ctx}
+            value={String(value)}
+            overridden={overridden}
+            allowed={(componentId) => nested?.allowed(componentId) ?? false}
+            onChange={(componentId) => set(property.name, componentId)}
+          />
+        )
+      })}
+    </>
+  )
+}
+
+/**
+ * 元の中のノード（元そのもの・写しを除く）を 1 つだけ選んでいるときの節。
+ * そのノードを、元のプロパティに結ぶ（新しく作るか、種類の合う既存のものに）・外す
+ */
+function PropertyBindingSection({ ctx }: { ctx: PanelContext }) {
+  const { store, page, nodes } = ctx
+  const node = nodes[0]
+  const main = node.parentId === null ? null : enclosingMainNode(page, node.parentId)
+  if (!main) return null
+  const types = (['text', 'boolean', 'instance'] as const).filter((type) => canBindProperty(page, main.id, type, node.id))
+  if (types.length === 0) return null
+  const { properties } = main.component
+  const bound = properties.filter((property) => property.targets.includes(node.id))
+  const bindable = properties.filter(
+    (property) => !property.targets.includes(node.id) && types.includes(property.type),
+  )
+  const create = (type: ComponentProperty['type']) => store.apply((base) => addComponentProperty(base, main.id, type, node.id).scene)
+  return (
+    <Section title="コンポーネントのプロパティ">
+      <p className="section-note">「{main.name}」のプロパティに結ぶと、インスタンスごとに値を選べます。</p>
+      {bound.map((property) => (
+        <div key={property.name} className="variant-property">
+          <span className="property-bound">
+            {property.name}
+            <span className="field-label">（{PROPERTY_TYPE_LABELS[property.type]}）</span>
+          </span>
+          <button
+            type="button"
+            className="icon-button"
+            title="このノードをプロパティから外す"
+            aria-label={`プロパティ ${property.name} から外す`}
+            onClick={() => store.apply((base) => unbindComponentProperty(base, main.id, property.name, node.id))}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <div className="variant-actions">
+        {types.map((type) => (
+          <button key={type} type="button" onClick={() => create(type)}>
+            {CREATE_LABELS[type]}
+          </button>
+        ))}
+      </div>
+      {bindable.length > 0 && (
+        <SelectField<string>
+          label="既存に結ぶ"
+          value=""
+          options={[['', '選ぶ…'], ...bindable.map((property) => [property.name, property.name] as const)]}
+          onChange={(name) => {
+            if (name !== '') store.apply((base) => bindComponentProperty(base, main.id, name, node.id))
+          }}
+        />
+      )}
+    </Section>
+  )
+}
+
+const CREATE_LABELS: Record<ComponentProperty['type'], string> = {
+  text: '文言をプロパティに',
+  boolean: '表示をプロパティに',
+  instance: '元をプロパティに',
+}
+
+/** 並びの中で 1 つ前・後ろへ移すボタン。前（上）が並びの先頭 */
+function MoveButtons({ label, index, count, onMove }: { label: string; index: number; count: number; onMove: (to: number) => void }) {
+  if (count <= 1) return null
+  return (
+    <>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${label}を上へ`}
+        title="1 つ前へ"
+        disabled={index === 0}
+        onClick={() => onMove(index - 1)}
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${label}を下へ`}
+        title="1 つ後ろへ"
+        disabled={index === count - 1}
+        onClick={() => onMove(index + 1)}
+      >
+        ↓
+      </button>
     </>
   )
 }

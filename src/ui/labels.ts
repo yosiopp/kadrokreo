@@ -1,5 +1,5 @@
 import type { NodeKind } from '../document/path.ts'
-import type { AutoLayout, Cap, Constraint, ImageNode, Override, Sizing } from '../document/types.ts'
+import type { AutoLayout, Cap, ComponentProperty, Constraint, ImageNode, Override, Paint, Sizing } from '../document/types.ts'
 
 // 設定の値の、画面での呼び名。editor のプロパティパネルと、viewer のインスペクトが同じ言葉で出す
 
@@ -19,7 +19,40 @@ export const FIT_LABELS: Record<ImageNode['fit'], string> = {
   stretch: '引き伸ばす',
 }
 
-export const CAP_LABELS: Record<Cap, string> = { none: 'なし', arrow: '矢印' }
+export const PAINT_TYPE_LABELS: Record<Paint['type'], string> = {
+  solid: '単色',
+  linear: '直線のグラデーション',
+  radial: '円形のグラデーション',
+}
+
+/** 文字の太さ（100〜900）の呼び名。CSS や書体の一般的な名前 */
+export const FONT_WEIGHT_LABELS: Record<string, string> = {
+  '100': '100 Thin',
+  '200': '200 ExtraLight',
+  '300': '300 Light',
+  '400': '400 Regular',
+  '500': '500 Medium',
+  '600': '600 SemiBold',
+  '700': '700 Bold',
+  '800': '800 ExtraBold',
+  '900': '900 Black',
+}
+
+export const CAP_LABELS: Record<Cap, string> = {
+  none: 'なし',
+  round: '丸',
+  square: '四角',
+  arrow: '矢印',
+  circle: '丸の印',
+  diamond: 'ひし形の印',
+}
+
+/** パスの頂点の種類（editor のパネル）。曲線は制御点が一直線でない頂点で、選んでは切り替えない */
+export const VERTEX_KIND_LABELS: Record<'corner' | 'smooth' | 'curve', string> = {
+  corner: '角',
+  smooth: 'なめらか',
+  curve: '折れた曲線',
+}
 
 export const SIZING_LABELS: Record<Sizing, string> = {
   hug: '中身に合わせる',
@@ -51,6 +84,13 @@ export function optionsOf<T extends string>(labels: Record<T, string>): [T, stri
 }
 
 /** インスタンスごとに上書きできる項目の名前 */
+/** コンポーネントのプロパティの種類の呼び名 */
+export const PROPERTY_TYPE_LABELS: Record<ComponentProperty['type'], string> = {
+  text: '文言',
+  boolean: '表示の切り替え',
+  instance: 'インスタンスの差し替え',
+}
+
 export const OVERRIDE_LABELS: Record<keyof Override, string> = {
   text: '文言',
   fills: '塗り',

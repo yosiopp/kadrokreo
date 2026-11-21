@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  capMarkerSize,
+  capReach,
   cappedStroke,
+  roundCorners,
   flattenPath,
   isLine,
   mapVertices,
@@ -70,11 +73,90 @@ describe('pathFromPoints / pathPoints', () => {
 
 describe('cappedStroke', () => {
   it('細い線でも矢印は長さ 10 にし、長さのない区間には矢印を付けない', () => {
-    const style = { strokeWidth: 1, startCap: 'arrow' as const, endCap: 'arrow' as const }
-    const { line, heads } = cappedStroke([{ x: 0, y: 0 }, { x: 0, y: 50 }], style)
+    const style = { strokeWidth: 1, startCap: 'arrow' as const, endCap: 'arrow' as const, capSize: 0 }
+    const { line, caps } = cappedStroke([{ x: 0, y: 0 }, { x: 0, y: 50 }], style)
     expect(line).toEqual([{ x: 0, y: 8 }, { x: 0, y: 42 }])
-    expect(heads[1]).toEqual([{ x: 0, y: 50 }, { x: -4, y: 40 }, { x: 4, y: 40 }])
-    expect(cappedStroke([{ x: 5, y: 5 }, { x: 5, y: 5 }], style).heads).toEqual([])
+    expect(caps[1]).toEqual({ kind: 'polygon', points: [{ x: 0, y: 50 }, { x: -4, y: 40 }, { x: 4, y: 40 }] })
+    expect(cappedStroke([{ x: 5, y: 5 }, { x: 5, y: 5 }], style).caps).toEqual([])
+  })
+
+  it('端の大きさ capSize を指定すると、矢印はその長さになる', () => {
+    const style = { strokeWidth: 1, startCap: 'none' as const, endCap: 'arrow' as const, capSize: 20 }
+    const { line, caps } = cappedStroke([{ x: 0, y: 0 }, { x: 0, y: 50 }], style)
+    expect(line).toEqual([{ x: 0, y: 0 }, { x: 0, y: 34 }])
+    expect(caps).toEqual([{ kind: 'polygon', points: [{ x: 0, y: 50 }, { x: -8, y: 30 }, { x: 8, y: 30 }] }])
+    expect(capMarkerSize({ strokeWidth: 4, capSize: 0 })).toBe(16)
+    expect(capMarkerSize({ strokeWidth: 4, capSize: 6 })).toBe(6)
+  })
+
+  it('丸・ひし形の印は端を中心に置き、線は短くしない', () => {
+    const style = { strokeWidth: 2, startCap: 'circle' as const, endCap: 'diamond' as const, capSize: 10 }
+    const { line, caps } = cappedStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }], style)
+    expect(line).toEqual([{ x: 0, y: 0 }, { x: 50, y: 0 }])
+    expect(caps[0]).toEqual({ kind: 'circle', center: { x: 0, y: 0 }, radius: 4 })
+    expect(caps[1].kind).toBe('polygon')
+    const diamond = caps[1].kind === 'polygon' ? caps[1].points : []
+    expect(diamond.map((p) => [p.x, p.y].map((v) => Math.round(v) + 0))).toEqual([[55, 0], [50, 4], [45, 0], [50, -4]])
+  })
+
+  it('丸・四角の端は線の太さの半分だけ端の外へ出る', () => {
+    const style = { strokeWidth: 4, startCap: 'square' as const, endCap: 'round' as const, capSize: 0 }
+    const { line, caps } = cappedStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }], style)
+    expect(line).toEqual([{ x: 0, y: 0 }, { x: 50, y: 0 }])
+    const square = caps[0].kind === 'polygon' ? caps[0].points : []
+    expect(Math.min(...square.map((p) => p.x))).toBeCloseTo(-2)
+    expect(Math.max(...square.map((p) => p.x))).toBeCloseTo(0)
+    expect(Math.max(...square.map((p) => p.y))).toBeCloseTo(2)
+    const round = caps[1].kind === 'polygon' ? caps[1].points : []
+    expect(Math.max(...round.map((p) => p.x))).toBeCloseTo(52)
+    expect(Math.min(...round.map((p) => p.x))).toBeCloseTo(50)
+    expect(capReach({ ...style, closed: false })).toBeCloseTo(2 * Math.SQRT2)
+    expect(capReach({ ...style, closed: true })).toBe(0)
+  })
+})
+
+describe('roundCorners', () => {
+  const square = [
+    { x: 0, y: 0, radius: 10 },
+    { x: 100, y: 0 },
+    { x: 100, y: 100, radius: 10 },
+    { x: 0, y: 100 },
+  ]
+
+  it('丸めた角は、辺の上の 2 つの頂点と円弧に近い曲線になる', () => {
+    const outline = roundCorners(square, true)
+    expect(outline).toHaveLength(6)
+    expect(outline[0].x).toBeCloseTo(0)
+    expect(outline[0].y).toBeCloseTo(10)
+    expect(outline[1].x).toBeCloseTo(10)
+    expect(outline[1].y).toBeCloseTo(0)
+    // 円弧の中ほど（45° の位置）を通る
+    const [segment] = pathSegments(outline, true)
+    const mid = segmentAt(segment, 0.5)
+    expect(Math.hypot(mid.x - 10, mid.y - 10)).toBeCloseTo(10, 1)
+    expect(outline.some((vertex) => 'radius' in vertex)).toBe(false)
+  })
+
+  it('辺の半分より大きくは丸めず、開いたパスの両端と曲線の頂点は丸めない', () => {
+    const outline = roundCorners([{ x: 0, y: 0 }, { x: 20, y: 0, radius: 100 }, { x: 20, y: 40 }], false)
+    expect(outline).toHaveLength(4)
+    expect(outline[1]).toMatchObject({ x: 10, y: 0 })
+    expect(outline[2].x).toBeCloseTo(20)
+    expect(outline[2].y).toBeCloseTo(10)
+    expect(roundCorners([{ x: 0, y: 0, radius: 5 }, { x: 20, y: 0 }], false)).toEqual([{ x: 0, y: 0 }, { x: 20, y: 0 }])
+    const curved = [{ x: 0, y: 0 }, { x: 20, y: 0, radius: 5, in: { x: 10, y: 5 } }, { x: 20, y: 40 }]
+    expect(roundCorners(curved, false)).toHaveLength(3)
+  })
+
+  it('枠は丸めた形を囲み、頂点の丸めは割合でなく px のまま持つ', () => {
+    const shape = pathFromPoints(square, true)
+    // 左上と右下を丸めたので、枠は丸めの分だけ縮まない（右上・左下の角が端に残る）
+    expect(shape).toMatchObject({ x: 0, y: 0, width: 100, height: 100 })
+    expect(shape.points[0]).toEqual({ x: 0, y: 0, radius: 10 })
+    const all = pathFromPoints([{ x: 0, y: 0, radius: 50 }, { x: 100, y: 0, radius: 50 }, { x: 50, y: 100, radius: 50 }], true)
+    expect(all.x).toBeGreaterThan(0)
+    expect(all.height).toBeLessThan(100)
+    expect(pathPoints({ ...shape, width: 200, height: 50 })[0]).toEqual({ x: 0, y: 0, radius: 10 })
   })
 })
 
@@ -155,8 +237,9 @@ describe('曲線（制御点 in / out）', () => {
   })
 
   it('端の矢印は曲線の接線の向きに付き、線は曲線のまま矢印の手前で止まる', () => {
-    const style = { strokeWidth: 1, startCap: 'arrow' as const, endCap: 'arrow' as const }
-    const { line, heads } = cappedStroke(arch, style)
+    const style = { strokeWidth: 1, startCap: 'arrow' as const, endCap: 'arrow' as const, capSize: 0 }
+    const { line, caps } = cappedStroke(arch, style)
+    const heads = caps.map((cap) => (cap.kind === 'polygon' ? cap.points : []))
     // 始点では真上へ出るので、矢印は真下を向く。終点では真下へ入るので、真下を向く
     expect(heads[0][0]).toEqual({ x: 0, y: 0 })
     expect(heads[0][1].y).toBeCloseTo(-10)

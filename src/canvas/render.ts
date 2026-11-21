@@ -8,16 +8,18 @@ import {
   nodeMatrix,
   transformRect,
 } from '../document/geometry.ts'
-import { type Vertex, arrowSize, cappedStroke, pathPoints, tracePath } from '../document/path.ts'
-import { gradientLine, hasStroke } from '../document/paint.ts'
+import { type Vertex, capMarkerSize, capReach, cappedStroke, pathOutline, tracePath } from '../document/path.ts'
+import { cornerRadii, gradientLine, hasStroke, isRounded } from '../document/paint.ts'
 import type {
   Asset,
   AssetId,
   Cap,
+  CornerRadius,
   Effect,
   ImageNode,
   NodeId,
   Paint,
+  RadialGradient,
   Scene,
   SceneNode,
   Style,
@@ -174,7 +176,7 @@ function drawContent(
       paint(ctx, pass, node)
       break
     case 'path': {
-      const points = pathPoints(node)
+      const points = pathOutline(node)
       const outline = () => {
         ctx.beginPath()
         tracePath(ctx, points, node.closed)
@@ -185,7 +187,7 @@ function drawContent(
         paint(ctx, pass, node)
         break
       }
-      // 端に矢印を付ける線は、線を矢印の分だけ短くするので、塗りと線を別々に描く
+      // 端の形を付ける線は、線を矢印の分だけ短くし、端の図形を足すので、塗りと線を別々に描く
       if (node.fills.length > 0) {
         outline()
         fillAll(ctx, pass, node, node.effects)
@@ -205,7 +207,8 @@ function drawContent(
         const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
         const lines = layoutText(ctx, node)
         for (const fill of node.fills) {
-          ctx.fillStyle = paintStyle(ctx, fill, node)
+          // 固定の幅からはみ出す行もあるので、文字の大きさの分だけ外まで覆う
+          ctx.fillStyle = paintStyle(ctx, fill, node, node.fontSize)
           lines.forEach((line, i) => {
             ctx.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline)
           })
@@ -216,7 +219,7 @@ function drawContent(
       const asset = pass.assets[node.assetId]
       const bitmap = asset ? getImage(asset) : null
       ctx.save()
-      if (node.cornerRadius > 0) {
+      if (isRounded(node.cornerRadius)) {
         ctx.beginPath()
         ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
         ctx.clip()
@@ -269,8 +272,11 @@ function fillAll(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Pick<St
   node.fills.forEach((fill, i) => {
     ctx.save()
     if (i === 0) applyEffects(ctx, pass, effects)
-    ctx.fillStyle = paintStyle(ctx, fill, node)
-    ctx.fill()
+    if (fill.type === 'radial') fillRadial(ctx, fill, node)
+    else {
+      ctx.fillStyle = paintStyle(ctx, fill, node)
+      ctx.fill()
+    }
     ctx.restore()
   })
 }
@@ -279,14 +285,18 @@ function fillAll(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Pick<St
 function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'strokes' | 'strokeWidth'>): void {
   ctx.lineWidth = node.strokeWidth
   for (const stroke of node.strokes) {
-    ctx.strokeStyle = paintStyle(ctx, stroke, node)
+    ctx.strokeStyle = paintStyle(ctx, stroke, node, node.strokeWidth)
     ctx.stroke()
   }
 }
 
-/** 塗りに使う色かグラデーション。グラデーションは枠（size）に合わせる */
-function paintStyle(ctx: CanvasRenderingContext2D, paint: Paint, size: Size): string | CanvasGradient {
+/**
+ * 塗りに使う色かグラデーション。グラデーションは枠（size）に合わせる。
+ * 円形のグラデーションは楕円にするため、線と文字では枠の大きさの絵のパターンにする（面の塗りは fillRadial で正確に描く）
+ */
+function paintStyle(ctx: CanvasRenderingContext2D, paint: Paint, size: Size, margin = 0): string | CanvasGradient | CanvasPattern {
   if (paint.type === 'solid') return paint.color
+  if (paint.type === 'radial') return radialPattern(ctx, paint, size, margin)
   // 枠の中心を通る、angle の向きの線に沿って色を変える
   const [from, to] = gradientLine(paint, size)
   // 枠が極端に大きいと端が Infinity になり、createLinearGradient が例外を投げる。そのときは最初の色で塗る
@@ -296,20 +306,82 @@ function paintStyle(ctx: CanvasRenderingContext2D, paint: Paint, size: Size): st
   return gradient
 }
 
+/** 円形のグラデーションの楕円を単位円に写す変換（ノードの座標系で）。楕円がつぶれていれば null */
+function radialMatrix(paint: RadialGradient, size: Size): Matrix | null {
+  const rx = paint.rx * size.width
+  const ry = paint.ry * size.height
+  const m: Matrix = [rx, 0, 0, ry, paint.cx * size.width, paint.cy * size.height]
+  return rx > 0 && ry > 0 && m.every(Number.isFinite) ? m : null
+}
+
+/** 中心から半径 1 の円で色を変える CanvasGradient。楕円にするのは変換行列の役目 */
+function unitRadial(ctx: CanvasRenderingContext2D, paint: RadialGradient): CanvasGradient {
+  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
+  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stop.color)
+  return gradient
+}
+
+/**
+ * いま組んであるパスを円形のグラデーションで塗る。パスは組んだときの座標で決まっているので、
+ * 変換行列を楕円に合わせてから塗れば、グラデーションだけが楕円になる（影は変換行列に従わない）
+ */
+function fillRadial(ctx: CanvasRenderingContext2D, paint: RadialGradient, size: Size): void {
+  const m = radialMatrix(paint, size)
+  if (!m) {
+    ctx.fillStyle = paint.stops[paint.stops.length - 1].color
+  } else {
+    ctx.transform(...m)
+    ctx.fillStyle = unitRadial(ctx, paint)
+  }
+  ctx.fill()
+}
+
+let patternCanvas: CanvasRenderingContext2D | null = null
+const PATTERN_SIZE = 256
+
+/**
+ * 円形のグラデーションを、枠（と margin だけ外側）を覆う絵にしたパターン。線や文字は変換行列をゆがめて描けないので使う。
+ * 絵の外は透明になるので、margin に線の太さなどのはみ出す分を渡す
+ */
+function radialPattern(ctx: CanvasRenderingContext2D, paint: RadialGradient, size: Size, margin: number): string | CanvasPattern {
+  const last = paint.stops[paint.stops.length - 1].color
+  const m = radialMatrix(paint, size)
+  const width = size.width + margin * 2
+  const height = size.height + margin * 2
+  if (!m || !(width > 0 && height > 0) || !Number.isFinite(width + height)) return last
+  const tile = (patternCanvas ??= document.createElement('canvas').getContext('2d')!)
+  tile.canvas.width = PATTERN_SIZE
+  tile.canvas.height = PATTERN_SIZE
+  tile.setTransform(1, 0, 0, 1, 0, 0)
+  tile.beginPath()
+  tile.rect(0, 0, PATTERN_SIZE, PATTERN_SIZE)
+  // 絵の 1 ピクセルをノードの座標に写し、そこから単位円へ
+  const sx = PATTERN_SIZE / width
+  const sy = PATTERN_SIZE / height
+  tile.setTransform(sx, 0, 0, sy, margin * sx, margin * sy)
+  tile.transform(...m)
+  tile.fillStyle = unitRadial(tile, paint)
+  tile.fill()
+  const pattern = ctx.createPattern(tile.canvas, 'no-repeat')
+  if (!pattern) return last
+  pattern.setTransform(new DOMMatrix([1 / sx, 0, 0, 1 / sy, -margin, -margin]))
+  return pattern
+}
+
 /** 画像を、枠への収め方（fit）に従って描く */
 function drawFitted(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, node: ImageNode): void {
-  const { width, height, fit } = node
+  const { width, height, fit, positionX, positionY } = node
   if (fit === 'stretch' || bitmap.width === 0 || bitmap.height === 0) {
     ctx.drawImage(bitmap, 0, 0, width, height)
   } else if (fit === 'cover') {
-    // 枠を埋める倍率で、画像の中央を切り出す
+    // 枠を埋める倍率で、画像の positionX / positionY の位置を切り出す
     const scale = Math.max(width / bitmap.width, height / bitmap.height)
     const sourceWidth = width / scale
     const sourceHeight = height / scale
     ctx.drawImage(
       bitmap,
-      (bitmap.width - sourceWidth) / 2,
-      (bitmap.height - sourceHeight) / 2,
+      (bitmap.width - sourceWidth) * positionX,
+      (bitmap.height - sourceHeight) * positionY,
       sourceWidth,
       sourceHeight,
       0,
@@ -318,11 +390,11 @@ function drawFitted(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, node: Im
       height,
     )
   } else {
-    // 全体が入る倍率で、枠の中央に置く
+    // 全体が入る倍率で、余白を positionX / positionY の割合で配って置く
     const scale = Math.min(width / bitmap.width, height / bitmap.height)
     const drawnWidth = bitmap.width * scale
     const drawnHeight = bitmap.height * scale
-    ctx.drawImage(bitmap, (width - drawnWidth) / 2, (height - drawnHeight) / 2, drawnWidth, drawnHeight)
+    ctx.drawImage(bitmap, (width - drawnWidth) * positionX, (height - drawnHeight) * positionY, drawnWidth, drawnHeight)
   }
 }
 
@@ -362,30 +434,38 @@ function drawShadowOnly(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Effec
 function strokeWithCaps(
   ctx: CanvasRenderingContext2D,
   points: readonly Vertex[],
-  style: Size & Pick<Style, 'strokes' | 'strokeWidth'> & { startCap: Cap; endCap: Cap },
+  style: Size & Pick<Style, 'strokes' | 'strokeWidth'> & { startCap: Cap; endCap: Cap; capSize: number },
 ): void {
   if (!hasStroke(style) || points.length < 2) return
-  const { line, heads } = cappedStroke(points, style)
+  const { line, caps } = cappedStroke(points, style)
   for (const stroke of style.strokes) {
-    const color = paintStyle(ctx, stroke, style)
+    const color = paintStyle(ctx, stroke, style, capMarkerSize(style) + style.strokeWidth)
     ctx.beginPath()
     tracePath(ctx, line, false)
     ctx.strokeStyle = color
     ctx.lineWidth = style.strokeWidth
     ctx.stroke()
 
+    // 端の図形はまとめて 1 回で塗る
     ctx.fillStyle = color
-    for (const head of heads) {
-      ctx.beginPath()
-      head.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
-      ctx.closePath()
-      ctx.fill()
+    ctx.beginPath()
+    for (const cap of caps) {
+      if (cap.kind === 'circle') {
+        ctx.moveTo(cap.center.x + cap.radius, cap.center.y)
+        ctx.arc(cap.center.x, cap.center.y, cap.radius, 0, Math.PI * 2)
+      } else {
+        cap.points.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
+        ctx.closePath()
+      }
     }
+    if (caps.length > 0) ctx.fill()
   }
 }
 
-function clampRadius(radius: number, size: Size): number {
-  return Math.max(0, Math.min(radius, size.width / 2, size.height / 2))
+/** roundRect に渡す 4 隅の半径。どの隅も枠の短い辺の半分までにする */
+function clampRadius(radius: CornerRadius, size: Size): number[] {
+  const limit = Math.min(size.width / 2, size.height / 2)
+  return cornerRadii(radius).map((r) => Math.max(0, Math.min(r, limit)))
 }
 
 /** 線の太さや影も含めて、ノードが描かれうる範囲（ノードの座標系） */
@@ -394,12 +474,9 @@ function paintedRect(node: SceneNode): Bounds {
   const effects = 'effects' in node ? node.effects : []
   // ぼかしは指定した長さより少し外まで広がる。影のずれは回転に従わないので、どの向きにも余裕を取る
   const spread = Math.max(0, ...effects.map((shadow) => shadow.blur * 2 + Math.max(Math.abs(shadow.x), Math.abs(shadow.y))))
-  // 矢印は線より外へ張り出す
-  const arrow =
-    'startCap' in node && (node.startCap !== 'none' || node.endCap !== 'none')
-      ? arrowSize(node.strokeWidth)
-      : 0
-  const outset = Math.max(stroke, arrow) + spread
+  // 端の形（矢印などの印、四角の端）は線より外へ張り出す
+  const cap = node.type === 'path' && node.strokes.length > 0 ? capReach(node) : 0
+  const outset = Math.max(stroke, cap) + spread
   return {
     x: -outset,
     y: -outset,

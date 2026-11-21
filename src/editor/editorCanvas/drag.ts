@@ -12,7 +12,7 @@ import {
   toLocal,
 } from '../../document/geometry.ts'
 import { isLine, pathFromPoints } from '../../document/path.ts'
-import { isSmooth, moveControl, moveVertex, reshapePath } from '../pathEdit.ts'
+import { isSmooth, moveControl, moveVertex, moveVertices, reshapePath } from '../pathEdit.ts'
 import type { NodeId, PathNode, Scene, SceneNode } from '../../document/types.ts'
 import { findFrameAt, nodesInMarquee } from '../hitTest.ts'
 import { placeInLayout } from '../layout.ts'
@@ -30,6 +30,7 @@ import {
   angleFrom,
   constrainAngle,
   distance,
+  editablePoints,
   nextName,
   roundBox,
   roundPoint,
@@ -38,8 +39,9 @@ import {
 // キャンバスでポインタを押してから離すまでの操作（ジェスチャー）と、ドラッグ中のプレビュー
 
 export type Gesture =
-  // ノードの上で押しただけの状態。少し動かすと move になる
-  | { kind: 'press'; screen: Point; world: Point; collapseTo: NodeId | null }
+  // ノードの上（または選択枠の内側）で押しただけの状態。少し動かすと move になる。
+  // 動かさずに離したら、collapseTo があればそれ 1 つに絞り、clickSelect があればそれを選び直す
+  | { kind: 'press'; screen: Point; world: Point; collapseTo: NodeId | null; clickSelect?: NodeId[] }
   | { kind: 'move'; world: Point; ids: NodeId[]; from: Bounds; guides: Guide[] }
   | { kind: 'resize'; world: Point; handle: Handle; from: Bounds; ids: NodeId[]; guides: Guide[] }
   // 回転したノード 1 つを、その向きに沿ってリサイズする。size はつかんだ時点の大きさ
@@ -49,8 +51,11 @@ export type Gesture =
   | { kind: 'marquee'; world: Point; current: Point; base: NodeId[] }
   | CreateGesture
   | { kind: 'text'; screen: Point; world: Point }
-  // 直線の端（0 が始点、1 が終点）やパスの頂点（vertex）、頂点の制御点（in / out）をつかんでいる
-  | { kind: 'point'; id: NodeId; index: number; part: PointPart }
+  // 直線の端（0 が始点、1 が終点）やパスの頂点（vertex）、頂点の制御点（in / out）をつかんでいる。
+  // group は一緒に動かす頂点（つかんだ頂点を含む、選んでいる頂点）。collapse なら、動かさずに離したとき、つかんだ頂点だけを選び直す
+  | { kind: 'point'; id: NodeId; index: number; part: PointPart; group?: number[]; collapse?: boolean; screen?: Point; moved?: boolean }
+  // 頂点の編集中の範囲選択。base は Shift で押したときに元から選んでいた頂点
+  | { kind: 'vertexMarquee'; id: NodeId; screen: Point; world: Point; current: Point; base: number[]; dragged: boolean }
 
 type CreateGesture = {
   kind: 'create'
@@ -158,13 +163,23 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
       return
     }
     case 'point': {
-      const { id, index, part } = gesture
+      const { id, index, part, group } = gesture
+      if (gesture.screen && !gesture.moved) {
+        // 押しただけの間は動かさない（クリックで選び直すため）
+        if (distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return
+        gesture.moved = true
+      }
       store.preview((base) => {
         const node = base.nodes[id]
         if (node?.type !== 'path') return base
         // 親の座標系で形を作り直す。ノード自体が回っていた場合、その向きは点の位置に織り込まれる
         const target = toLocal(base, node.parentId, pointer.world)
         return reshapePath(base, id, (vertices) => {
+          if (part === 'vertex' && group && group.length > 1) {
+            // 選んでいる頂点をまとめて、つかんだ頂点と同じだけ動かす
+            const to = roundPoint(target)
+            return moveVertices(vertices, group, to.x - vertices[index].x, to.y - vertices[index].y)
+          }
           if (part === 'vertex') {
             // Shift で、隣の点から見て水平・垂直・45° に揃える
             const neighbor = vertices[index === 0 ? 1 : index - 1]
@@ -240,6 +255,20 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
       store.preview((base) => fitTextNodes(resizeNodes(base, ids, from, target), ids))
       const resized = getNodesBounds(store.getState().page, ids)
       gesture.guides = resized ? findGuides(resized, targets, handle) : []
+      return
+    }
+    case 'vertexMarquee': {
+      gesture.current = pointer.world
+      if (!gesture.dragged && distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return
+      gesture.dragged = true
+      const node = store.getState().page.nodes[gesture.id]
+      if (node?.type !== 'path') return
+      const area = boundsFromPoints(gesture.world, gesture.current)
+      const contains = (p: Point) => p.x >= area.x && p.x <= area.x + area.width && p.y >= area.y && p.y <= area.y + area.height
+      const inside = editablePoints(store.getState().page, node)
+        .map((vertex, i) => (contains(vertex) ? i : -1))
+        .filter((i) => i >= 0)
+      store.editVertices({ id: gesture.id, vertices: [...gesture.base, ...inside], segment: null })
       return
     }
     case 'marquee': {

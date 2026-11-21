@@ -45,6 +45,8 @@ type Props = {
   /** ポインタがキャンバスの外へ出た */
   onPointerLeave?: () => void
   onDoubleClick?: (pointer: CanvasPointer) => void
+  /** 右クリック。渡したときだけ、ブラウザのメニューを出さない */
+  onContextMenu?: (pointer: CanvasPointer) => void
   children?: ReactNode
 }
 
@@ -224,6 +226,11 @@ export function CanvasView(props: Props) {
       // 左ボタンで画面を動かす viewer でも、動かさずに 2 回押せばダブルクリック。Space を押している間は画面の移動だけ
       onDoubleClick={(event) => {
         if (event.target === canvasRef.current && !spaceHeld) props.onDoubleClick?.(toPointer(event))
+      }}
+      onContextMenu={(event) => {
+        if (event.target !== canvasRef.current || !props.onContextMenu || dragRef.current) return
+        event.preventDefault()
+        props.onContextMenu(toPointer(event))
       }}
     >
       <canvas ref={canvasRef} />

@@ -40,6 +40,16 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
       request.onsuccess = () => resolve(request.result.document.pages[0])
     }
   }))
+  // 描画は requestAnimationFrame でまとめられるので、2 フレーム待ってから読む。y の高さで x0〜x1 を見て、印の青（#0d99ff）の画素を数える
+  const bluePixels = (x0, x1, y) => page.evaluate(async ([x0, x1, y]) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const canvas = document.querySelector('.canvas-view canvas')
+    const ratio = canvas.width / canvas.clientWidth
+    const data = canvas.getContext('2d').getImageData(Math.round(x0 * ratio), Math.round(y * ratio), Math.round((x1 - x0) * ratio), 1).data
+    let count = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i] < 80 && data[i + 1] > 120 && data[i + 2] > 200) count++
+    return count
+  }, [x0, x1, y])
   const nodesByName = async () => { await page.waitForTimeout(700); return Object.fromEntries(Object.values((await saved()).nodes).map((n) => [n.name, n])) }
 
   // ── 既存のフレームを自動で並べる ──
@@ -226,6 +236,13 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
     n['Text 1'].maxWidth === 60 && n['Text 1'].width <= 60 && n['Text 1'].height > oneLine.height && n['Text 1'].sizing.width === 'hug' && n['Frame 2'].height === n['Text 1'].height + 16,
     `${n['Text 1'].width}x${n['Text 1'].height} / ${n['Frame 2'].height}`)
 
+  // ── テキストの高さの下限・上限（高さはいつも中身で決まる） ──
+  check('テキストには高さの下限・上限の欄も出す', (await field('最小 H').count()) === 1 && (await field('最大 H').count()) === 1)
+  await set('最小 H', 100)
+  n = await nodesByName()
+  check('テキストの高さの下限で、テキストもフレームも高くなる',
+    n['Text 1'].minHeight === 100 && n['Text 1'].height === 100 && n['Frame 2'].height === 116, `${n['Text 1'].height} / ${n['Frame 2'].height}`)
+
   // ── 並べないフレームの子を、親の右・下の辺に固定する ──
   await deselect()
   await page.keyboard.press('f'); await drag([380, 470], [620, 580])
@@ -246,6 +263,12 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   n = await nodesByName()
   check('undo で子も戻る', n['Rectangle 4'].y === pinned.y && n['Rectangle 4'].x === pinned.x + 100, `${n['Rectangle 4'].x},${n['Rectangle 4'].y}`)
   await page.keyboard.press('Meta+Shift+z')
+  // 固定した子を選ぶと、キャンバスに親の右辺・下辺への破線が出る（子は x 660〜700・y 640〜670、親の右辺は 720）
+  await row('Frame 3').click()
+  const unmarked = await bluePixels(702, 718, 655)
+  await row('Rectangle 4').click()
+  const marked = await bluePixels(702, 718, 655)
+  check('固定した子を選ぶと、キャンバスに固定の向きの印が出る', unmarked === 0 && marked >= 6, `${unmarked} -> ${marked}`)
   // 自動で並べるフレームでは、並びに加わっている子には出さない
   await row('Rectangle 1').click()
   check('並びに加わっている子には「親の辺に固定」を出さない', (await page.locator('.section-title:text-is("親の辺に固定")').count()) === 0)
@@ -277,7 +300,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('viewer の CSS に親の辺への固定が right / bottom で出る', pinnedText.includes('right: ') && pinnedText.includes('bottom: ') && pinnedText.includes('横 右・縦 下'), pinnedText.slice(0, 300))
   await viewer.locator('.layer-row:has(.layer-name:text-is("Text 1"))').click()
   const labelText = await viewer.locator('.inspect-panel').innerText()
-  check('viewer の CSS で、テキストの幅の上限が max-width になる', labelText.includes('max-width: 60px;') && !labelText.includes('white-space: nowrap;'), labelText.slice(0, 300))
+  check('viewer の CSS で、テキストの幅の上限が max-width、高さの下限が min-height になる', labelText.includes('max-width: 60px;') && labelText.includes('min-height: 100px;') && !labelText.includes('white-space: nowrap;'), labelText.slice(0, 300))
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

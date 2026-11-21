@@ -1,4 +1,5 @@
 import type { TextNode } from '../../document/types.ts'
+import { FONT_WEIGHT_LABELS, optionsOf } from '../../ui/labels.ts'
 import { TextAlignIcon } from '../icons.tsx'
 import { type PanelContext, textsIn, MIXED, common, mapValue } from './context.ts'
 import { NumberField, OverrideMark, Section, SelectField } from './fields.tsx'
@@ -72,6 +73,13 @@ export function TextSection({ ctx }: { ctx: PanelContext }) {
           </button>
         ))}
       </div>
+      <SelectField
+        label="太さ"
+        overridden={overridden.has('fontWeight')}
+        value={mapValue(fontWeight, String)}
+        options={optionsOf(FONT_WEIGHT_LABELS)}
+        onChange={(weight) => apply({ fontWeight: Number(weight) })}
+      />
       {!inner && (
         <SelectField
           label="折り返し"

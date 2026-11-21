@@ -156,6 +156,33 @@ describe('kadrokreo CLI', () => {
     expect(nodeByName(again, 'Again')).toMatchObject({ type: 'image', assetId: image.type === 'image' ? image.assetId : '' })
   })
 
+  it('パスの頂点の角の丸め（radius=）と端の形・印の大きさを set で変える', async () => {
+    const h = harness()
+    const code = await h.run([
+      'new', '+', 'add', 'path', '--name', 'Tri', '--points', '0,0 100,0 50,80', '--closed',
+      '+', 'add', 'path', '--name', 'Open', '--points', '0,0 50,40 100,0', 'endCap=circle', 'startCap=round', 'capSize=14', '-o', 'a.kdr',
+    ])
+    expect(h.stderr).toBe('')
+    expect(code).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', '-w', 'set', 'Tri', 'radius=10'])).toBe(0)
+    const doc = await h.doc('a.kdr')
+    const tri = nodeByName(doc, 'Tri')
+    expect(tri.type === 'path' && tri.points.map((point) => point.radius)).toEqual([10, 10, 10])
+    // 枠は丸めた形に合わせ直す（下の頂点を丸めたので、高さが縮む）
+    expect(tri.height).toBeLessThan(80)
+    expect(nodeByName(doc, 'Open')).toMatchObject({ startCap: 'round', endCap: 'circle', capSize: 14 })
+
+    expect(await h.run(['-f', 'a.kdr', '-w', 'set', 'Tri', 'radius=0,4,0'])).toBe(0)
+    const again = nodeByName(await h.doc('a.kdr'), 'Tri')
+    expect(again.type === 'path' && again.points.map((point) => point.radius)).toEqual([undefined, 4, undefined])
+
+    const bad = harness()
+    expect(await bad.run(['new', '+', 'add', 'path', '--points', '0,0 10,0 5,8', 'radius=1,2'])).not.toBe(0)
+    expect(bad.stderr).toContain('radius')
+    const bad2 = harness()
+    expect(await bad2.run(['new', '+', 'add', 'line', '--from', '0,0', '--to', '10,0', 'endCap=dot'])).not.toBe(0)
+  })
+
   it('曲線のパスを SVG の path の d で作り、d で読み出す。制御点は set でも書ける', async () => {
     const h = harness()
     const code = await h.run(['new', '+', 'add', 'path', '--name', 'Arch', '--d', 'M10 110 C10 10 110 10 110 110', '-o', 'a.kdr'])
@@ -245,6 +272,162 @@ describe('kadrokreo CLI', () => {
     expect(Object.values(instance.component?.role === 'instance' ? instance.component.overrides : {})).toEqual([{ text: 'Cancel' }])
   })
 
+  it('css・html の --format で React・CSS Modules・Tailwind・Vue の形にする', async () => {
+    const h = harness()
+    await h.run(argv('new + add frame --id f --name Card --width 40 --height 30 + add rect --parent f --name Box --width 10 --height 10 -o a.kdr'))
+    const out = async (line: string) => {
+      const run = harness(Object.fromEntries(h.fs))
+      expect(await run.run(argv(`-f a.kdr ${line}`))).toBe(0)
+      return run.stdout
+    }
+    expect(await out('css Box --format react')).toContain('width: 10,')
+    expect(await out('css Box --format tailwind')).toContain('w-[10px]')
+    const modules = await out('html Card --format css-modules')
+    expect(modules).toContain("import styles from './Card.module.css'")
+    expect(modules).toContain('className={styles.box}')
+    expect(modules).toContain('/* Card.module.css */\n.card {')
+    expect(await out('html Card --format tailwind')).toContain('className="relative w-[40px]')
+    const vue = await out('html Card --format vue')
+    expect(vue).toMatch(/^<template>/)
+    expect(vue).toContain('<style scoped>')
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr html Card --format swift'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr html Card --format vue --standalone'))).toBe(2)
+  })
+
+  it('align・distribute・rotate は editor の整列・回転と同じく動かす', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add rect --id a --x 0 --y 0 --width 10 --height 10 + add rect --id b --x 50 --y 30 --width 20 --height 10' +
+        ' + add rect --id c --x 200 --y 5 --width 10 --height 40 + align top a b c + distribute horizontal a b c' +
+        ' + add frame --id f --width 100 --height 100 --x 500 + add rect --id d --parent f --width 20 --height 20 + align center d' +
+        ' + rotate 90 c --each + add rect --id e --x 0 --y 100 --width 20 --height 10 + rotate 90 e --pivot 0,100 -o a.kdr',
+    ))
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    expect([nodes.a.y, nodes.b.y, nodes.c.y]).toEqual([0, 0, 0])
+    // 間隔は (210 - 40) / 2 = 85
+    expect(nodes.b.x).toBe(95)
+    expect(nodes.d.x).toBe(40)
+    expect(nodes.c).toMatchObject({ rotation: 90, x: 200 })
+    // 左上の角を軸に 90 度回すと、枠の中心 (10, 105) は (-5, 110) に来る
+    expect(nodes.e.rotation).toBe(90)
+    expect(nodes.e.x + 10).toBeCloseTo(-5)
+    expect(nodes.e.y + 5).toBeCloseTo(110)
+
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr align middle a'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr distribute vertical a b'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr rotate x a'))).toBe(2)
+  })
+
+  it('上書きを元に反映・元に戻す、インスタンスの元の差し替え', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add frame --name Button --id btn + add text --parent btn --name Label --text OK + component btn' +
+        ' + add frame --name Chip --id chip --x 300 + add text --parent chip --name Label --text Tag + component chip' +
+        ' + instance Button --id i1 --y 200 + instance Button --id i2 --x 200 --y 200' +
+        ' + set i1/Label text=Push + override-push i1/Label + set i2/Label text=Mine fill=#ff0000 + override-reset i2/Label' +
+        ' + set i1/Label text=Moved + swap i1 Chip -o a.kdr',
+    ))
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    const label = (id: string) => nodes[(nodes[id] as FrameNode).children[0]] as TextNode
+    // 元に書き込んだので、元ともう 1 つのインスタンスも Push になり、上書きは外れる
+    expect(label('btn').text).toBe('Push')
+    expect(label('i2').text).toBe('Push')
+    expect((nodes.i2 as FrameNode).component).toMatchObject({ overrides: {} })
+    // 差し替えると元は Chip になり、上書きはレイヤー名が同じ Label へ移る
+    const i1 = nodes.i1 as FrameNode
+    expect(i1.component).toMatchObject({ role: 'instance', id: (nodes.chip as FrameNode).component!.id })
+    expect(i1.name).toBe('Chip')
+    expect(label('i1').text).toBe('Moved')
+
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr override-push i2'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr swap btn Chip'))).toBe(2)
+  })
+
+  it('swap で入れ子の中の入れ子のインスタンスも差し替えられる', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add frame --name Button --id btn + add text --parent btn --name Label --text OK + component btn' +
+        ' + add frame --name Icon --id icon --y 200 + component icon' +
+        ' + add frame --name Card --id card --x 200 + component card + instance Button --parent card --id b1' +
+        ' + add frame --name Panel --id panel --x 500 + component panel + instance Card --parent panel --id c1' +
+        ' + instance Panel --id outer --y 400 + swap outer/Card/Button Icon -o a.kdr',
+    ))
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    const children = (id: string) => (nodes[id] as FrameNode).children.map((child) => nodes[child])
+    expect(children(children('outer')[0].id)[0].name).toBe('Icon')
+    // 元のパネルの中は変わらない
+    expect(children(children('panel')[0].id)[0].name).toBe('Button')
+  })
+
+  it('describe で説明文、prop-add でプロパティを作り、prop でインスタンスの値を決める', async () => {
+    const h = harness()
+    await h.run([
+      ...argv(
+        'new + add frame --name Button --id btn + add text --parent btn --name Label --id label --text OK' +
+          ' + add rect --parent btn --name Mark --id mark + component btn + describe btn',
+      ),
+      '主な操作に使う',
+      ...argv('+ prop-add btn text label --name 文言 + prop-add btn boolean mark + instance Button --id i1 --y 200 + prop i1 文言=送信 Mark=false -o a.kdr'),
+    ])
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    expect((nodes.btn as FrameNode).component).toEqual({
+      id: expect.any(String),
+      role: 'main',
+      description: '主な操作に使う',
+      properties: [
+        { name: '文言', type: 'text', targets: ['label'] },
+        { name: 'Mark', type: 'boolean', targets: ['mark'] },
+      ],
+    })
+    expect((nodes.i1 as FrameNode).component).toMatchObject({ overrides: { label: { text: '送信' }, mark: { visible: false } } })
+
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr prop-add btn text mark'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr prop-add btn color label'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr prop i1 ない=1'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr prop i1 Mark=yes'))).toBe(2)
+  })
+
+  it('variant-add でバリアントを増やし、variant でインスタンスのバリアントを選ぶ', async () => {
+    const h = harness()
+    await h.run([
+      ...argv('new + add frame --name Button --id btn + component btn + variant-add btn --id big'),
+      'サイズ=大',
+      ...argv('+ instance big --id i1 --y 300 + variant i1'),
+      '種類=標準',
+      '-o',
+      'a.kdr',
+    ])
+    // 元の名前は「種類=標準」になり、増やしたバリアントは最後のプロパティの値を変えたもの
+    expect(h.stderr).toContain('サイズ')
+    const fixed = harness()
+    await fixed.run([
+      ...argv('new + add frame --name Button --id btn + component btn + variant-add btn --id big'),
+      '種類=大',
+      ...argv('+ instance big --id i1 --y 300 + variant i1'),
+      '種類=標準',
+      '-o',
+      'a.kdr',
+    ])
+    expect(fixed.stderr).toBe('')
+    const { nodes } = (await fixed.doc('a.kdr')).pages[0]
+    expect(nodes.btn.name).toBe('種類=標準')
+    expect(nodes.big.name).toBe('種類=大')
+    expect(nodes.btn.parentId).toBe(nodes.big.parentId)
+    expect((nodes.i1 as FrameNode).component?.id).toBe((nodes.btn as FrameNode).component?.id)
+
+    const bad = harness(Object.fromEntries(fixed.fs))
+    expect(await bad.run(['-f', 'a.kdr', 'variant', 'i1', '種類=ない'])).toBe(2)
+    expect(await bad.run(['-f', 'a.kdr', 'variant-add', 'i1'])).toBe(2)
+  })
+
   it('dup・mv・order・rm と「@」', async () => {
     const h = harness()
     await h.run(argv(
@@ -305,6 +488,11 @@ describe('kadrokreo CLI', () => {
     const label = (await h.doc('a.kdr')).pages[0].nodes.label
     expect(label.width).toBeLessThanOrEqual(60)
     expect(label.height).toBeGreaterThan(30)
+    // テキストの高さの下限・上限で、測り直した高さを収める
+    await h.run(argv('-f a.kdr -w set label minHeight=200'))
+    expect((await h.doc('a.kdr')).pages[0].nodes.label).toMatchObject({ height: 200, minHeight: 200 })
+    await h.run(argv('-f a.kdr -w set label minHeight=null maxHeight=20'))
+    expect((await h.doc('a.kdr')).pages[0].nodes.label).toMatchObject({ height: 20, maxHeight: 20 })
   })
 
   it('壊れた値は書き出さず、どのコマンドかを添えてエラーにする', async () => {
@@ -384,6 +572,25 @@ describe('kadrokreo CLI', () => {
     expect(box).not.toHaveProperty('fills')
     expect(box).not.toHaveProperty('rotation')
     expect(box).not.toHaveProperty('parentId')
+  })
+
+  it('角丸は 4 隅ばらばらにも書ける。円形のグラデーションや文字の太さも JSON や数値で書ける', async () => {
+    const h = harness()
+    await h.run([
+      'new', '+', 'add', 'rect', '--name', 'Tab', 'cornerRadius=8,8,0,0',
+      'fills=[{"type":"radial","cx":0.5,"cy":0.5,"rx":0.5,"ry":0.5,"stops":[{"offset":0,"color":"#ffffff"},{"offset":1,"color":"#000000"}]}]',
+      '+', 'add', 'text', '--text', 'Hi', '--name', 'Label', 'fontWeight=300',
+      '-o', 'a.kdr',
+    ])
+    expect(h.stderr).toBe('')
+    const doc = await h.doc('a.kdr')
+    expect(nodeByName(doc, 'Tab')).toMatchObject({ cornerRadius: [8, 8, 0, 0], fills: [{ type: 'radial', rx: 0.5 }] })
+    expect(nodeByName(doc, 'Label')).toMatchObject({ fontWeight: 300 })
+    await h.run(argv('-f a.kdr -w set Tab cornerRadius=4'))
+    expect(nodeByName(await h.doc('a.kdr'), 'Tab')).toMatchObject({ cornerRadius: 4 })
+    expect(await h.run(argv('-f a.kdr -w set Tab cornerRadius=1,2,3'))).toBe(2)
+    expect(h.stderr).toMatch(/左上,右上,右下,左下/)
+    expect(await h.run(argv('-f a.kdr -w set Label fontWeight=350'))).toBe(1)
   })
 
   it('--help と help コマンド', async () => {

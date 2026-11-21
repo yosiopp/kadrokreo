@@ -11,13 +11,31 @@ export function OverrideMark({ show = false }: { show?: boolean }) {
   return <span className="override-mark" role="img" aria-label="上書き" title="このインスタンスだけ元と違う値にしています" />
 }
 
-export function Section({ title, overridden, children }: { title: string; overridden?: boolean; children: ReactNode }) {
+type SectionProps = {
+  title: string
+  overridden?: boolean
+  /** 見出しの右に置くボタンなど */
+  action?: ReactNode
+  children: ReactNode
+}
+
+export function Section({ title, overridden, action, children }: SectionProps) {
+  const heading = (
+    <h3 className="section-title">
+      {title}
+      <OverrideMark show={overridden} />
+    </h3>
+  )
   return (
     <section className="panel-section">
-      <h3 className="section-title">
-        {title}
-        <OverrideMark show={overridden} />
-      </h3>
+      {action ? (
+        <div className="section-head">
+          {heading}
+          {action}
+        </div>
+      ) : (
+        heading
+      )}
       {children}
     </section>
   )
@@ -36,12 +54,14 @@ export function ExportSection({ label, onExport }: { label: string; onExport: (s
 
 type TextFieldProps = {
   label: string
+  /** インスタンスで元と違う値にしている */
+  overridden?: boolean
   value: string
   onCommit: (value: string) => void
 }
 
 /** 文字の欄。NumberField と同じく、Enter かフォーカスが外れたときに確定し、Esc で打ち直しを捨てる */
-export function TextField({ label, value, onCommit }: TextFieldProps) {
+export function TextField({ label, overridden, value, onCommit }: TextFieldProps) {
   const [draft, setDraft] = useState<string | null>(null)
   function commit() {
     if (draft !== null && draft !== value) onCommit(draft)
@@ -49,7 +69,10 @@ export function TextField({ label, value, onCommit }: TextFieldProps) {
   }
   return (
     <label className="field">
-      <span className="field-label">{label}</span>
+      <span className="field-label">
+        {label}
+        <OverrideMark show={overridden} />
+      </span>
       <input
         type="text"
         value={draft ?? value}
@@ -106,12 +129,14 @@ export function SelectField<T extends string>({ label, overridden, value, option
 
 type CheckFieldProps = {
   label: string
+  /** インスタンスで元と違う値にしている */
+  overridden?: boolean
   value: boolean | Mixed
   onChange: (checked: boolean) => void
 }
 
 /** 選んでいるもので値が揃っていなければ、どちらでもない印にする */
-export function CheckField({ label, value, onChange }: CheckFieldProps) {
+export function CheckField({ label, overridden, value, onChange }: CheckFieldProps) {
   return (
     <label className="check-field">
       <input
@@ -123,6 +148,7 @@ export function CheckField({ label, value, onChange }: CheckFieldProps) {
         onChange={(event) => onChange(event.target.checked)}
       />
       {label}
+      <OverrideMark show={overridden} />
     </label>
   )
 }
@@ -140,6 +166,8 @@ type NumberFieldProps = {
   overridden?: boolean
   onCommit: (value: number) => void
   onClear?: () => void
+  /** value が null のときに空欄に出す言葉（既定は「なし」） */
+  emptyLabel?: string
 }
 
 /** 入力中は下書きとして持ち、Enter かフォーカスが外れたときに確定する */
@@ -153,6 +181,7 @@ export function NumberField({
   overridden,
   onCommit,
   onClear,
+  emptyLabel = 'なし',
 }: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null)
   const shown = draft ?? (value === MIXED || value === null ? '' : String(tidy(value)))
@@ -180,7 +209,7 @@ export function NumberField({
         type="text"
         inputMode="decimal"
         value={shown}
-        placeholder={value === MIXED ? '混在' : value === null ? 'なし' : undefined}
+        placeholder={value === MIXED ? '混在' : value === null ? emptyLabel : undefined}
         disabled={disabled}
         onFocus={(event) => event.target.select()}
         onChange={(event) => setDraft(event.target.value)}

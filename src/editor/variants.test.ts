@@ -11,8 +11,15 @@ import { insertNode, updateNode } from './operations/tree.ts'
 import {
   addVariant,
   addVariantProperty,
+  addVariantValue,
+  moveVariantProperty,
+  moveVariantValue,
   removeVariantProperty,
-  renameVariantProperty, selectVariant, setVariantValue } from './variants.ts'
+  renameVariantProperty,
+  renameVariantValue,
+  selectVariant,
+  setVariantValue,
+} from './variants.ts'
 
 /** ボタン（背景とラベル）の元が 1 つあるドキュメント */
 function fixture() {
@@ -97,6 +104,57 @@ describe('プロパティの編集', () => {
     // 最後の 1 つは消せない（名前がバリアントの形でなくなる）
     expect(removeVariantProperty(page, set.id, '押下')).toBe(page)
     expect(removeVariantProperty(page, set.id, 'ない')).toBe(page)
+  })
+})
+
+describe('プロパティと値の並べ替え・値の一覧', () => {
+  /** 種類=標準 / 種類=2 の 2 つに、サイズ=小 を足したまとまり */
+  function setFixture() {
+    const { doc, pageId, button } = fixture()
+    const { document, id } = addVariant(doc, pageId, button.id)
+    const page = document.pages[0]
+    const set = variantSetOf(page, button.id)!
+    const document2 = updatePage(document, pageId, (base) => addVariantProperty(base, set.id, 'サイズ', '小').scene)
+    return { doc: document2, pageId, setId: set.id, firstId: button.id, secondId: id! }
+  }
+
+  it('プロパティの順を変えると、すべてのバリアントの名前の順が変わる', () => {
+    const { doc, setId } = setFixture()
+    const page = moveVariantProperty(doc.pages[0], setId, 'サイズ', 0)
+    expect(variantsIn(page, setId).map((node) => node.name)).toEqual(['サイズ=小, 種類=標準', 'サイズ=小, 種類=2'])
+    expect(variantProperties(page, setId).map((property) => property.name)).toEqual(['サイズ', '種類'])
+    expect(moveVariantProperty(page, setId, 'サイズ', 0)).toBe(page)
+    expect(moveVariantProperty(page, setId, 'ない', 1)).toBe(page)
+  })
+
+  it('値の名前を変えると、その値のバリアントすべてが変わる。すでにある値には変えない', () => {
+    const { doc, setId } = setFixture()
+    let page = renameVariantValue(doc.pages[0], setId, '種類', '2', '押下')
+    expect(variantProperties(page, setId)[0]).toEqual({ name: '種類', values: ['標準', '押下'] })
+    expect(renameVariantValue(page, setId, '種類', '押下', '標準')).toBe(page)
+    expect(renameVariantValue(page, setId, '種類', '押下', 'a=b')).toBe(page)
+    page = renameVariantValue(page, setId, 'サイズ', '小', '大')
+    expect(variantsIn(page, setId).map((node) => node.name)).toEqual(['種類=標準, サイズ=大', '種類=押下, サイズ=大'])
+  })
+
+  it('値の順を変えると、バリアントの並びを値の順に並べ替える', () => {
+    const { doc, setId, firstId, secondId } = setFixture()
+    const page = moveVariantValue(doc.pages[0], setId, '種類', '2', 0)
+    expect((page.nodes[setId] as FrameNode).children).toEqual([secondId, firstId])
+    expect(variantProperties(page, setId)[0].values).toEqual(['2', '標準'])
+    expect(moveVariantValue(page, setId, '種類', '2', 0)).toBe(page)
+  })
+
+  it('値を足すと、最初のバリアントを複製してその値にする', () => {
+    const { doc, pageId, setId } = setFixture()
+    const added = addVariantValue(doc, pageId, setId, 'サイズ')
+    const page = added.document.pages[0]
+    expect(page.nodes[added.id!].name).toBe('種類=標準, サイズ=値2')
+    expect(variantProperties(page, setId)[1]).toEqual({ name: 'サイズ', values: ['小', '値2'] })
+    const named = addVariantValue(added.document, pageId, setId, 'サイズ', '大')
+    expect(named.document.pages[0].nodes[named.id!].name).toBe('種類=標準, サイズ=大')
+    // すでにある値は足さない
+    expect(addVariantValue(doc, pageId, setId, 'サイズ', '小').id).toBeNull()
   })
 })
 

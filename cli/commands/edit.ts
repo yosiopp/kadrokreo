@@ -1,5 +1,6 @@
 import { type ReorderDirection, reorderNodes } from '../../src/editor/operations/arrange.ts'
 import { moveNode, patchNodes, removeNodes } from '../../src/editor/operations/tree.ts'
+import { refitPath } from '../../src/editor/pathEdit.ts'
 import { UsageError } from '../args.ts'
 import { estimateTextSize } from '../textMeasure.ts'
 import { buildPatch } from '../values.ts'
@@ -7,14 +8,14 @@ import { type Command, checkStep, flag, numberOption, option, positional } from 
 
 // ノードを変えるコマンド（設定・削除・親の付け替え・重なり順）
 
-const TEXT_KEYS = new Set(['text', 'fontSize', 'fontFamily', 'fontWeight', 'lineHeight', 'sizing', 'width', 'minWidth', 'maxWidth'])
+const TEXT_KEYS = new Set(['text', 'fontSize', 'fontFamily', 'fontWeight', 'lineHeight', 'sizing', 'width', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'])
 
 export const set: Command = {
   name: 'set',
   kind: 'edit',
   assignments: true,
   usage: 'set ノード… 名前=値…',
-  summary: '設定を変える（例: fill=#ff0000 cornerRadius=8 shadow.blur=4 text=こんにちは constraints.horizontal=end）。null で塗りなどを外す。fill・stroke・shadow は、いちばん上の塗り・線と最初の影の略記',
+  summary: '設定を変える（例: fill=#ff0000 cornerRadius=8 shadow.blur=4 text=こんにちは constraints.horizontal=end）。null で塗りなどを外す。fill・stroke・shadow は、いちばん上の塗り・線と最初の影の略記。cornerRadius=8,8,0,0 で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは radius=8 で頂点の角を丸める（頂点ごとなら 8,0,8）。端の形は startCap / endCap=none|round|square|arrow|circle|diamond、印の大きさは capSize=16',
   run({ session }, step) {
     checkStep(step, { assignments: true })
     if (step.assignments.length === 0) throw new UsageError('set: 「名前=値」を指定してください')
@@ -22,12 +23,18 @@ export const set: Command = {
     const page = session.page
     const patches = new Map(ids.map((id) => [id, buildPatch(page.nodes[id], step.assignments)]))
     const refit = step.assignments.some(([key]) => TEXT_KEYS.has(key.split('.')[0]))
+    // 角の丸め（radius=）を変えたら、枠を描く形に合わせ直す。points を直接書いたときは書いた値のまま（割合を直接指定できるように）
+    const rounding = step.assignments.some(([key]) => key === 'radius')
+    const reshaped = rounding ? ids.filter((id) => page.nodes[id].type === 'path') : []
     session.apply((base) =>
-      patchNodes(base, ids, (node) => {
-        const patch = patches.get(node.id)!
-        if (!refit || node.type !== 'text') return patch
-        return { ...patch, ...estimateTextSize({ ...node, ...patch } as typeof node) }
-      }),
+      reshaped.reduce(
+        (scene, id) => refitPath(scene, id),
+        patchNodes(base, ids, (node) => {
+          const patch = patches.get(node.id)!
+          if (!refit || node.type !== 'text') return patch
+          return { ...patch, ...estimateTextSize({ ...node, ...patch } as typeof node) }
+        }),
+      ),
     )
   },
 }

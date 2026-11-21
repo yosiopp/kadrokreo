@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createRect, createText } from '../src/editor/nodes.ts'
 import { UsageError, parseArgs } from './args.ts'
 import { readImageInfo } from './image.ts'
-import { estimateTextSize } from './textMeasure.ts'
+import { estimateTextSize, estimateTextWidth } from './textMeasure.ts'
 import { buildPatch, parseValue } from './values.ts'
 
 const noFlags = () => ({ flags: new Set<string>(), assignments: false })
@@ -78,5 +78,12 @@ describe('estimateTextSize', () => {
   it('全角は 1 文字 1em、複数行は行数ぶんの高さ', () => {
     const text = { ...createText({ x: 0, y: 0, width: 0, height: 0 }, 'あい\nう'), fontSize: 10 }
     expect(estimateTextSize(text)).toEqual({ width: 20, height: 24 })
+  })
+
+  it('英数字は sans-serif の字幅の表で見積もる（ブラウザで測った値とほぼ同じ）', () => {
+    // Chrome（macOS）で測ると 91.30 と 316.60
+    expect(estimateTextWidth('Hello, World!', 16, 400)).toBeCloseTo(91.3, 0)
+    expect(estimateTextWidth('The quick brown fox jumps over the lazy dog', 16, 400)).toBeCloseTo(316.6, 0)
+    expect(estimateTextWidth('abc', 10, 400, 'monospace')).toBeCloseTo(18)
   })
 })

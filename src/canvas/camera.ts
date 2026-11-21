@@ -1,5 +1,5 @@
 import type { Bounds, Point, Size } from '../document/geometry.ts'
-import { type Viewport, fitBounds, panBy, revealBounds, zoomAt } from './viewport.ts'
+import { MAX_ZOOM, type Viewport, fitBounds, panBy, revealBounds, zoomAt } from './viewport.ts'
 
 export type Camera = ReturnType<typeof createCamera>
 
@@ -66,6 +66,12 @@ export function createCamera() {
       } else {
         set(fitBounds(bounds, size))
       }
+    },
+
+    /** bounds が画面いっぱいに映るようにする。fit と違い、小さいものは 100% を超えて拡大する（選択へのズーム） */
+    zoomToBounds(bounds: Bounds) {
+      if (size.width === 0 || size.height === 0) return
+      set(fitBounds(bounds, size, 48, MAX_ZOOM))
     },
 
     /** bounds が画面に入っていなければ、見える位置へ動かす */

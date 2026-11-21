@@ -1,4 +1,4 @@
-import { type Vertex, cappedStroke, isLine, pathData, pathPoints } from '../document/path.ts'
+import { type Vertex, cappedStroke, isLine, pathData, pathOutline } from '../document/path.ts'
 import { gradientLine, paintColor } from '../document/paint.ts'
 import { type Point, tidy } from '../document/geometry.ts'
 import type { Asset, AssetId, NodeId, Paint, PathNode, Scene, SceneNode } from '../document/types.ts'
@@ -157,22 +157,30 @@ export function nodeMarkup(
 
 /**
  * 直線とパスの SVG の中身。色や太さはクラスの CSS で付ける。直線は line、それ以外は path の d（曲線は C）で書く。
- * 端に矢印があれば、描画と同じく線を矢印の分だけ短くし、矢印は線の色で塗った三角形にする。
+ * 角の丸めは曲線に直して書く。端の形があれば、描画と同じく線を矢印の分だけ短くし、端の図形は線の色で塗った多角形・円にする。
  * グラデーションの塗り・線は CSS の fill / stroke に書けない（CSS は始まりの色で代えている）ので、
- * linearGradient を defs に置き、要素の fill / stroke 属性で指す。CSS は外側の svg に付くので、中の要素の属性のほうが勝つ
+ * linearGradient / radialGradient を defs に置き、要素の fill / stroke 属性で指す。CSS は外側の svg に付くので、中の要素の属性のほうが勝つ
  * （受け継いだ値より、要素自身の指定が優先）。id はクラス名から作る。jsx なら属性名を React の書き方（stopColor）にする
  */
 function svgShapes(node: PathNode, name: string, style: Partial<CodeStyle>, jsx = false): string {
-  const points = pathPoints(node)
+  const points = pathOutline(node)
   const colorStyle = style.color ?? DEFAULT_CODE_STYLE.color
   const defs: string[] = []
   const gradient = (paint: Paint | undefined, role: 'fill' | 'stroke'): string | null => {
-    if (paint?.type !== 'linear') return null
+    if (paint === undefined || paint.type === 'solid') return null
     const id = `${name}-${role}`
-    const [from, to] = gradientLine(paint, node)
     const stops = paint.stops
       .map((stop) => `<stop offset="${tidy(stop.offset)}" ${jsx ? 'stopColor' : 'stop-color'}="${escapeHtml(formatColor(stop.color, colorStyle))}"/>`)
       .join('')
+    if (paint.type === 'radial') {
+      // 半径 1 の円を、変換で枠に対する割合の楕円にする（描画と同じ）
+      const matrix = [paint.rx * node.width, 0, 0, paint.ry * node.height, paint.cx * node.width, paint.cy * node.height]
+      defs.push(
+        `<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(${matrix.map(tidy).join(' ')})">${stops}</radialGradient>`,
+      )
+      return `url(#${id})`
+    }
+    const [from, to] = gradientLine(paint, node)
     defs.push(
       `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${tidy(from.x)}" y1="${tidy(from.y)}" x2="${tidy(to.x)}" y2="${tidy(to.y)}">${stops}</linearGradient>`,
     )
@@ -206,7 +214,13 @@ function svgShapes(node: PathNode, name: string, style: Partial<CodeStyle>, jsx 
         : pathElement(shortened.line, false, ` fill="none"${inline([strokeDecl])}`),
     )
     const color = strokeUrl ?? escapeHtml(formatColor(paintColor(stroke), colorStyle))
-    for (const head of shortened.heads) parts.push(`<polygon points="${list(head)}" fill="${color}" stroke="none"/>`)
+    for (const cap of shortened.caps) {
+      parts.push(
+        cap.kind === 'circle'
+          ? `<circle cx="${tidy(cap.center.x)}" cy="${tidy(cap.center.y)}" r="${tidy(cap.radius)}" fill="${color}" stroke="none"/>`
+          : `<polygon points="${list(cap.points)}" fill="${color}" stroke="none"/>`,
+      )
+    }
   }
   return (defs.length > 0 ? `<defs>${defs.join('')}</defs>` : '') + parts.join('')
 }

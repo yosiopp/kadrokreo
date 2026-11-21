@@ -170,6 +170,65 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.keyboard.press('Escape')
   await deselect()
 
+  // ── 頂点の複数選択・角の丸め・辺から開く・端の形（Path 2 は 300,300 / 400,300 / 350,380 の三角形） ──
+  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`)
+  await page.mouse.dblclick(...at(350, 330))
+  // 空いた所からドラッグで囲むと、囲んだ頂点を選ぶ。選んだ頂点の 1 つをつかむと、まとめて動く
+  await drag([290, 290], [410, 310])
+  await drag([400, 300], [400, 280])
+  let tri = await byName('Path 2')
+  check(
+    '範囲選択した頂点をまとめて動かせる',
+    tri.y === 280 && tri.height === 100 && tri.points.length === 3 && tri.points[0].y === 0 && tri.points[1].y === 0 && tri.points[2].y === 1,
+    JSON.stringify(tri),
+  )
+  await page.keyboard.press('Shift+ArrowDown')
+  tri = await byName('Path 2')
+  check('矢印キーで選んだ頂点だけを動かす', tri.y === 290 && tri.height === 90, `${tri.y} ${tri.height}`)
+  check('頂点を選ぶとパネルに頂点の種類の欄が出る', (await select('頂点の種類').inputValue()) === 'corner')
+  await field('角の丸め').fill('10')
+  await field('角の丸め').press('Enter')
+  tri = await byName('Path 2')
+  check('選んだ頂点だけ角を丸める', tri.points[0].radius === 10 && tri.points[1].radius === 10 && tri.points[2].radius === undefined, JSON.stringify(tri.points))
+  await page.screenshot({ path: path.join(OUT, '30-vertex-multi.png') })
+  await select('頂点の種類').selectOption('smooth')
+  tri = await byName('Path 2')
+  check('頂点の種類をなめらかに切り替えられる', tri.points[0].in && tri.points[0].out && tri.points[1].in && !tri.points[2].in, JSON.stringify(tri.points))
+  await page.keyboard.press('Meta+z')
+  await page.keyboard.press('Escape')
+  await deselect()
+  // 角を丸めると、とがった角の内側（左上の頂点 300,290 から内へ 3px）は塗られない。丸めない下の角の近くは塗られる
+  check('丸めた角は描画でも丸い', (await alpha(302.6, 291.6)) === 0 && (await alpha(350, 376)) > 200, `${await alpha(302.6, 291.6)} / ${await alpha(350, 376)}`)
+
+  // 辺を押して選び、「この辺で開く」で閉じた形を開く。消した辺の次の頂点が始点になる
+  await page.mouse.dblclick(...at(350, 330))
+  await click(375, 335)
+  await page.locator('button:text-is("この辺で開く")').click()
+  tri = await byName('Path 2')
+  check(
+    '辺から開くと、その辺だけがなくなった開いた線になる',
+    tri.closed === false && tri.points.length === 3 && Math.abs(tri.x + tri.points[0].x * tri.width - 350) < 0.01 && tri.points[0].y === 1 && tri.points[1].radius === 10 && tri.points[2].radius === undefined,
+    JSON.stringify(tri),
+  )
+  await page.keyboard.press('Meta+z')
+  check('元に戻すと閉じた形に戻る', (await byName('Path 2')).closed === true)
+  await click(375, 335)
+  await page.keyboard.press('Delete')
+  tri = await byName('Path 2')
+  check('辺を選んで Delete でも開き、ノードは消えない', tri && tri.closed === false && tri.points.length === 3, JSON.stringify(tri))
+
+  // 端の形: 丸・丸の印と、印の大きさ
+  await select('始点').selectOption('round')
+  await select('終点').selectOption('circle')
+  await field('印の大きさ').fill('20')
+  await field('印の大きさ').press('Enter')
+  tri = await byName('Path 2')
+  check('端の形（丸・丸の印）と印の大きさを指定できる', tri.startCap === 'round' && tri.endCap === 'circle' && tri.capSize === 20, JSON.stringify(tri))
+  await page.keyboard.press('Escape')
+  await deselect()
+  // 終点（右上 400,290）に半径 8 の丸の印。線や塗りのない、端の 7px 下も塗られる
+  check('丸の印が終点に描かれる', (await alpha(400, 297)) > 200, String(await alpha(400, 297)))
+
   // ── 書き出しと viewer ──
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'pen.kdr')

@@ -25,8 +25,11 @@ export type Step = {
   assignments: [string, string][]
 }
 
-/** コマンドごとの引数の読み方。flags は値を取らない --オプション、assignments は「名前=値」を受け付けるか */
-export type Spec = { flags: ReadonlySet<string>; assignments: boolean }
+/**
+ * コマンドごとの引数の読み方。flags は値を取らない --オプション、assignments は「名前=値」を受け付けるか。
+ * 'any' なら名前に英字以外（バリアントのプロパティ名の日本語など）も使える
+ */
+export type Spec = { flags: ReadonlySet<string>; assignments: boolean | 'any' }
 
 export function parseArgs(argv: readonly string[], spec: (command: string) => Spec): {
   global: Global
@@ -74,8 +77,9 @@ function parseStep(tokens: readonly string[], spec: (command: string) => Spec): 
       continue
     }
     const eq = token.indexOf('=')
-    // 「名前=値」。名前は英字で始まり、英数字と . だけ。受け付けないコマンドでは、ただの引数
-    if (assignments && eq > 0 && /^[A-Za-z][A-Za-z0-9.]*$/.test(token.slice(0, eq))) {
+    // 「名前=値」。名前は英字で始まり、英数字と . だけ（'any' なら , を含まない何でも）。受け付けないコマンドでは、ただの引数
+    const key = token.slice(0, eq)
+    if (assignments && eq > 0 && (assignments === 'any' ? !key.includes(',') : /^[A-Za-z][A-Za-z0-9.]*$/.test(key))) {
       step.assignments.push([token.slice(0, eq), token.slice(eq + 1)])
       continue
     }

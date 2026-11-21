@@ -1,9 +1,31 @@
+import { canBindProperty, findMain, isInstance, isMain } from '../../src/document/component.ts'
 import { getWorldCenter } from '../../src/document/geometry.ts'
-import type { DesignDocument, NodeId } from '../../src/document/types.ts'
-import { createInstance, detachComponent, listComponents, makeComponent } from '../../src/editor/components.ts'
+import type { ComponentProperty, DesignDocument, NodeId, Scene } from '../../src/document/types.ts'
+import { parseVariantName, propValue } from '../../src/document/variants.ts'
+import {
+  createInstance,
+  detachComponent,
+  hasOverrides,
+  listComponents,
+  makeComponent,
+  nestedInstanceOf,
+  pushOverrides,
+  resetOverrides,
+  swapComponent,
+  swapNestedInstance,
+} from '../../src/editor/components.ts'
+import {
+  addComponentProperty,
+  bindComponentProperty,
+  setComponentDescription,
+  setInstanceProperty,
+} from '../../src/editor/componentProperties.ts'
+import { updatePage } from '../../src/editor/operations/document.ts'
 import { updateNode } from '../../src/editor/operations/tree.ts'
+import { addVariant, selectVariant, setVariantValue } from '../../src/editor/variants.ts'
 import { UsageError } from '../args.ts'
 import { checkNewId, renameNodeId } from '../session.ts'
+import { fitTextEstimated } from '../textMeasure.ts'
 import { type Command, checkStep, numberOption, option, positional } from './common.ts'
 
 // コンポーネントのコマンド
@@ -82,4 +104,235 @@ function findComponent(doc: DesignDocument, selector: string): string {
     throw new UsageError(`${selector}: 同じ名前の元が ${found.length} 個あります。id で指定してください（${found.map(({ node }) => node.id).join(', ')}）`)
   }
   return found[0].node.component.id
+}
+
+export const overridePush: Command = {
+  name: 'override-push',
+  kind: 'edit',
+  usage: 'override-push ノード…',
+  summary: 'インスタンス（またはその中身）の上書きを元に書き込み、上書きを外す。元を使うほかのインスタンスにも反映される',
+  run({ session }, step) {
+    checkStep(step, {})
+    const ids = session.resolveAll(step.positionals)
+    const pageId = session.page.id
+    requireOverrides(session.document, session.page, ids, 'override-push')
+    session.applyDocument((doc) => pushOverrides(doc, pageId, ids, fitTextEstimated))
+  },
+}
+
+export const overrideReset: Command = {
+  name: 'override-reset',
+  kind: 'edit',
+  usage: 'override-reset ノード…',
+  summary: 'インスタンス（またはその中身）の上書きを捨てて、元と同じ見た目に戻す',
+  run({ session }, step) {
+    checkStep(step, {})
+    const ids = session.resolveAll(step.positionals)
+    const pageId = session.page.id
+    requireOverrides(session.document, session.page, ids, 'override-reset')
+    session.applyDocument((doc) => resetOverrides(doc, pageId, ids))
+  },
+}
+
+export const swap: Command = {
+  name: 'swap',
+  kind: 'edit',
+  usage: 'swap インスタンス 元',
+  summary:
+    'インスタンスの元を別のコンポーネントに差し替える。上書きはレイヤー名のたどり方が同じノードへ移す。インスタンスの中の入れ子のインスタンスも差し替えられる',
+  run({ session }, step) {
+    checkStep(step, { positionals: 2 })
+    const id = session.resolveOne(positional(step, 0, 'インスタンス'))
+    const componentId = findComponent(session.document, positional(step, 1, '元'))
+    const page = session.page
+    const nested = nestedInstanceOf(session.document, page, id)
+    const current = nested ? nested.componentId : isInstance(page.nodes[id]) ? page.nodes[id].component.id : null
+    if (current === null) throw new UsageError(`swap: ${step.positionals[0]} はインスタンスではありません`)
+    if (current === componentId) return
+    const before = session.document
+    session.applyDocument((doc) =>
+      nested ? swapNestedInstance(doc, page.id, id, componentId) : swapComponent(doc, page.id, id, componentId),
+    )
+    if (session.document === before) {
+      throw new UsageError('swap: 差し替えられません（元が自分自身を含むことになるか、インスタンスの中身のインスタンスでないものです）')
+    }
+  },
+}
+
+export const variantAdd: Command = {
+  name: 'variant-add',
+  kind: 'edit',
+  assignments: 'any',
+  usage: 'variant-add 元 [--id ID] [プロパティ=値…]',
+  summary:
+    '元を複製してバリアントを 1 つ増やす（まとまりがなければ作り、元に「種類=標準」を付ける）。プロパティ=値 で新しいバリアントの値を決める。増やしたものは「@」で指せる',
+  run({ session }, step) {
+    checkStep(step, { options: ['id'], positionals: 1, assignments: true })
+    const mainId = session.resolveOne(positional(step, 0, '元'))
+    if (!isMain(session.page.nodes[mainId])) throw new UsageError(`variant-add: ${step.positionals[0]} はコンポーネントの元ではありません`)
+    const wanted = option(step, 'id')
+    if (wanted !== undefined) checkNewId(session.page, wanted)
+    const pageId = session.page.id
+    let created: NodeId | null = null
+    session.applyDocument((doc) => {
+      const result = addVariant(doc, pageId, mainId)
+      if (result.id === null) throw new UsageError('variant-add: バリアントを増やせません（インスタンスの中の元です）')
+      const id = wanted ?? result.id
+      created = id
+      return updatePage(result.document, pageId, (page) => {
+        let next = renameNodeId(page, result.id!, id)
+        for (const [key, value] of step.assignments) {
+          const props = parseVariantName(next.nodes[id].name) ?? []
+          if (propValue(props, key) === undefined) {
+            throw new UsageError(`variant-add: プロパティ ${key} がありません（あるもの: ${props.map(([name]) => name).join(', ')}）`)
+          }
+          const changed = setVariantValue(next, id, key, value)
+          if (changed === next && propValue(props, key) !== value.trim()) {
+            throw new UsageError(`variant-add: 値に使えない文字（, =）を含むか空です: ${value}`)
+          }
+          next = changed
+        }
+        return next
+      })
+    })
+    session.last = created === null ? [] : [created]
+  },
+}
+
+export const variant: Command = {
+  name: 'variant',
+  kind: 'edit',
+  assignments: 'any',
+  usage: 'variant インスタンス… プロパティ=値…',
+  summary: 'インスタンスのバリアントを選ぶ（元のまとまりから、そのプロパティの値を持ち、ほかのプロパティがいちばん合うものに差し替える）',
+  run({ session }, step) {
+    checkStep(step, { assignments: true })
+    if (step.assignments.length === 0) throw new UsageError('variant: 「プロパティ=値」を指定してください')
+    const ids = session.resolveAll(step.positionals)
+    const pageId = session.page.id
+    for (const id of ids) {
+      if (!isInstance(session.page.nodes[id])) throw new UsageError(`variant: ${id} はインスタンスではありません`)
+    }
+    session.applyDocument((doc) =>
+      ids.reduce(
+        (current, id) =>
+          step.assignments.reduce((next, [key, value]) => {
+            const chosen = selectVariant(next, pageId, id, key, value)
+            if (chosen === next && currentValue(next, pageId, id, key) !== value) {
+              throw new UsageError(`variant: ${id} の元のまとまりに ${key}=${value} のバリアントがありません`)
+            }
+            return chosen
+          }, current),
+        doc,
+      ),
+    )
+  },
+}
+
+/** インスタンスの元のバリアントの、プロパティ key の値 */
+function currentValue(doc: DesignDocument, pageId: string, id: NodeId, key: string): string | undefined {
+  const node = doc.pages.find((page) => page.id === pageId)?.nodes[id]
+  if (!isInstance(node)) return undefined
+  const main = findMain(doc, node.component.id)
+  return main ? propValue(parseVariantName(main.node.name) ?? [], key) : undefined
+}
+
+function requireOverrides(doc: DesignDocument, scene: Scene, ids: readonly NodeId[], name: string): void {
+  for (const id of ids) {
+    if (!hasOverrides(doc, scene, id)) throw new UsageError(`${name}: ${id} には上書きがありません（インスタンスかその中身を指定してください）`)
+  }
+}
+
+export const describe_: Command = {
+  name: 'describe',
+  kind: 'edit',
+  usage: 'describe 元 説明文',
+  summary: 'コンポーネントの元に説明文を付ける（空文字 "" で外す）',
+  run({ session }, step) {
+    checkStep(step, { positionals: 2 })
+    const mainId = session.resolveOne(positional(step, 0, '元'))
+    if (!isMain(session.page.nodes[mainId])) throw new UsageError(`describe: ${step.positionals[0]} はコンポーネントの元ではありません`)
+    const text = step.positionals[1]
+    session.apply((page) => setComponentDescription(page, mainId, text))
+  },
+}
+
+const PROPERTY_TYPES = ['text', 'boolean', 'instance'] as const
+
+export const propAdd: Command = {
+  name: 'prop-add',
+  kind: 'edit',
+  usage: 'prop-add 元 text|boolean|instance ノード… [--name 名前]',
+  summary:
+    '元のプロパティを作り、元の中のノードに結ぶ。text は文言、boolean は表示、instance は入れ子のインスタンスの元。同じ名前のプロパティがあれば、そこへノードを結び足す',
+  run({ session }, step) {
+    checkStep(step, { options: ['name'] })
+    const mainId = session.resolveOne(positional(step, 0, '元'))
+    const main = session.page.nodes[mainId]
+    if (!isMain(main)) throw new UsageError(`prop-add: ${step.positionals[0]} はコンポーネントの元ではありません`)
+    const type = positional(step, 1, '種類')
+    if (!(PROPERTY_TYPES as readonly string[]).includes(type)) {
+      throw new UsageError(`prop-add: 種類は ${PROPERTY_TYPES.join(' / ')} のどれかです: ${type}`)
+    }
+    const targets = session.resolveAll(step.positionals.slice(2))
+    if (targets.length === 0) throw new UsageError('prop-add: 結ぶノードを指定してください')
+    const name = option(step, 'name')
+    session.apply((page) => {
+      let next = page
+      let key = name
+      for (const target of targets) {
+        if (!canBindProperty(next, mainId, type as ComponentProperty['type'], target)) {
+          throw new UsageError(`prop-add: ${target} は ${type} のプロパティに結べません（元の中の、種類の合うノードを指定してください）`)
+        }
+        const current = next.nodes[mainId]
+        const existing = key !== undefined && isMain(current) && current.component.properties.find((property) => property.name === key)
+        if (existing) {
+          if (existing.type !== type) throw new UsageError(`prop-add: プロパティ ${key} は ${existing.type} です`)
+          next = bindComponentProperty(next, mainId, existing.name, target)
+        } else {
+          const added = addComponentProperty(next, mainId, type as ComponentProperty['type'], target, key)
+          if (added.name === null) throw new UsageError(`prop-add: プロパティの名前が空です`)
+          next = added.scene
+          key = added.name
+        }
+      }
+      return next
+    })
+  },
+}
+
+export const prop: Command = {
+  name: 'prop',
+  kind: 'edit',
+  assignments: 'any',
+  usage: 'prop インスタンス… 名前=値…',
+  summary: 'インスタンスのプロパティの値を決める（text は文字、boolean は true / false、instance は元の id か名前）',
+  run({ session }, step) {
+    checkStep(step, { assignments: true })
+    if (step.assignments.length === 0) throw new UsageError('prop: 「名前=値」を指定してください')
+    const ids = session.resolveAll(step.positionals)
+    const pageId = session.page.id
+    session.applyDocument((doc) =>
+      ids.reduce((current, id) => {
+        const node = current.pages.find((page) => page.id === pageId)!.nodes[id]
+        if (!isInstance(node)) throw new UsageError(`prop: ${id} はインスタンスではありません`)
+        const main = findMain(current, node.component.id)
+        return step.assignments.reduce((next, [key, raw]) => {
+          const property = main?.node.component.properties.find((candidate) => candidate.name === key)
+          if (!property) {
+            const names = main?.node.component.properties.map((candidate) => candidate.name) ?? []
+            throw new UsageError(`prop: プロパティ ${key} がありません（あるもの: ${names.join(', ')}）`)
+          }
+          let value: string | boolean = raw
+          if (property.type === 'boolean') {
+            if (raw !== 'true' && raw !== 'false') throw new UsageError(`prop: ${key} は true か false です: ${raw}`)
+            value = raw === 'true'
+          } else if (property.type === 'instance') {
+            value = findComponent(next, raw)
+          }
+          return setInstanceProperty(next, pageId, id, key, value)
+        }, current)
+      }, doc),
+    )
+  },
 }

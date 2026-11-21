@@ -8,12 +8,17 @@ import {
   segmentAt,
   splitSegment,
 } from '../document/path.ts'
-import type { NodeId, Scene } from '../document/types.ts'
+import type { NodeId, PathNode, Scene } from '../document/types.ts'
 import { updateNode } from './operations/tree.ts'
 
 // パスの頂点と制御点の編集。頂点は親の座標系の Vertex（制御点は位置）で扱い、
 // reshapePath が形（枠と割合の頂点）を作り直す。回転は 0 に戻して頂点に織り込む（直線の端と同じ）。
 // ポインタの位置は toLocal で親の座標に直してから渡す（親が回っていても合う）
+
+/** パスの頂点と制御点（ノードの座標系）。種類を見るなど、位置の座標系を問わない所で使う */
+export function pathVertices(node: PathNode): Vertex[] {
+  return pathPoints(node)
+}
 
 /** パスの頂点と制御点（親の座標系。ノードの回転を織り込んだもの） */
 export function parentVertices(scene: Scene, id: NodeId): Vertex[] {
@@ -40,6 +45,11 @@ export function reshapePath<T extends Scene>(
   return updateNode(scene, id, { ...pathFromPoints(vertices, closed), closed, rotation: 0 })
 }
 
+/** 枠を、いまの頂点が描く形（角の丸めを含む）に合わせ直す。頂点の位置は変わらない（回転は頂点に織り込む） */
+export function refitPath<T extends Scene>(scene: T, id: NodeId): T {
+  return reshapePath(scene, id, (vertices) => vertices)
+}
+
 /** 頂点を to へ動かす。制御点も一緒に動く */
 export function moveVertex(vertices: readonly Vertex[], index: number, to: Point): Vertex[] {
   const vertex = vertices[index]
@@ -47,6 +57,95 @@ export function moveVertex(vertices: readonly Vertex[], index: number, to: Point
   const dy = to.y - vertex.y
   const [moved] = mapVertices([vertex], (point) => ({ x: point.x + dx, y: point.y + dy }))
   return vertices.with(index, moved)
+}
+
+/** indices の頂点を（制御点ごと）dx, dy だけ動かす */
+export function moveVertices(vertices: readonly Vertex[], indices: readonly number[], dx: number, dy: number): Vertex[] {
+  const moving = new Set(indices)
+  return vertices.map((vertex, i) =>
+    moving.has(i) ? mapVertices([vertex], (point) => ({ x: point.x + dx, y: point.y + dy }))[0] : vertex,
+  )
+}
+
+/** 頂点の種類。角は制御点なし、なめらかは 2 つの制御点が一直線、曲線は制御点があるが一直線でない（折れた曲線） */
+export type VertexKind = 'corner' | 'smooth' | 'curve'
+
+export function vertexKind(vertex: Vertex): VertexKind {
+  if (!vertex.in && !vertex.out) return 'corner'
+  return isSmooth(vertex) ? 'smooth' : 'curve'
+}
+
+/**
+ * indices の頂点を角かなめらかにする。角にするなら制御点を消し、なめらかにするなら、
+ * 角の頂点は隣を結ぶ向きの制御点を付け（toggleSmooth と同じ）、折れた曲線は out の向きに in を揃える（長さは保つ）
+ */
+export function setVertexKind(
+  vertices: readonly Vertex[],
+  indices: readonly number[],
+  closed: boolean,
+  kind: 'corner' | 'smooth',
+): Vertex[] {
+  let result = [...vertices]
+  for (const index of indices) {
+    const vertex = result[index]
+    if (!vertex) continue
+    const current = vertexKind(vertex)
+    if (current === kind) continue
+    if (kind === 'corner') {
+      result = result.with(index, vertex.radius ? { x: vertex.x, y: vertex.y, radius: vertex.radius } : { x: vertex.x, y: vertex.y })
+    } else if (current === 'corner') {
+      const smooth = toggleSmooth(result, index, closed)[index]
+      result = result.with(index, smooth)
+    } else {
+      // 折れた曲線（片側だけの制御点を含む）。ある側の制御点の向きに、反対側を揃える
+      const reference = vertex.out ?? vertex.in!
+      const side = vertex.out ? 'out' : 'in'
+      const other = side === 'out' ? 'in' : 'out'
+      const count = result.length
+      const neighbor = other === 'in' ? (index > 0 ? result[index - 1] : closed ? result[count - 1] : null) : (index < count - 1 ? result[index + 1] : closed ? result[0] : null)
+      const length = vertex[other]
+        ? Math.hypot(vertex[other]!.x - vertex.x, vertex[other]!.y - vertex.y)
+        : neighbor
+          ? Math.hypot(neighbor.x - vertex.x, neighbor.y - vertex.y) / 3
+          : 0
+      const dx = reference.x - vertex.x
+      const dy = reference.y - vertex.y
+      const d = Math.hypot(dx, dy)
+      if (d === 0 || length === 0) continue
+      result = result.with(index, { ...vertex, [other]: { x: vertex.x - (dx / d) * length, y: vertex.y - (dy / d) * length } })
+    }
+  }
+  return result
+}
+
+/** indices の頂点の角の丸めを radius（px）にする。0 なら丸めを外す */
+export function setVertexRadius(vertices: readonly Vertex[], indices: readonly number[], radius: number): Vertex[] {
+  const targets = new Set(indices)
+  return vertices.map((vertex, i) => {
+    if (!targets.has(i)) return vertex
+    const { radius: _, ...rest } = vertex
+    return radius > 0 ? { ...rest, radius } : rest
+  })
+}
+
+/**
+ * 閉じた形を、辺 segment（index の頂点から次の頂点への辺）を消して開く。消した辺の次の頂点が始点、辺の手前の頂点が終点になる。
+ * 消した辺の制御点も消す。開いたパスなら null
+ */
+export function openAtSegment(
+  vertices: readonly Vertex[],
+  closed: boolean,
+  segment: number,
+): { vertices: Vertex[]; closed: false } | null {
+  if (!closed || segment < 0 || segment >= vertices.length) return null
+  const start = (segment + 1) % vertices.length
+  const rotated = [...vertices.slice(start), ...vertices.slice(0, start)]
+  const { in: _in, ...first } = rotated[0]
+  const { out: _out, ...last } = rotated[rotated.length - 1]
+  // 端になった頂点は丸めない（丸めは両側に辺があるときだけ効く）。持ったままでも描画は同じだが、残すと紛らわしい
+  delete first.radius
+  delete last.radius
+  return { vertices: [first, ...rotated.slice(1, -1), last], closed: false }
 }
 
 /**
@@ -151,8 +250,14 @@ export function insertVertex(vertices: readonly Vertex[], closed: boolean, segme
  * 両隣を結ぶ辺は、両隣の外側の制御点をそのまま使う
  */
 export function deleteVertex(vertices: readonly Vertex[], closed: boolean, index: number): Vertex[] | null {
-  if (vertices.length <= (closed ? 3 : 2)) return null
-  return vertices.toSpliced(index, 1)
+  return deleteVertices(vertices, closed, [index])
+}
+
+/** indices の頂点をまとめて消す。残りが開いたパスで 2 つ、閉じた形で 3 つより少なくなるなら null */
+export function deleteVertices(vertices: readonly Vertex[], closed: boolean, indices: readonly number[]): Vertex[] | null {
+  const removing = new Set(indices.filter((index) => index >= 0 && index < vertices.length))
+  if (removing.size === 0 || vertices.length - removing.size < (closed ? 3 : 2)) return null
+  return vertices.filter((_, i) => !removing.has(i))
 }
 
 /** point にいちばん近い辺と、その上の位置 t、距離。曲線は細かく区切って探してから詰める */
