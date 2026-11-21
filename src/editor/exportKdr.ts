@@ -10,7 +10,7 @@ import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { pruneAssets } from './operations.ts'
 
 /** kdr ファイルの中身（圧縮前の JSON）。削除済みの画像のデータは含めない */
-export function serializeKdr(doc: DesignDocument): string {
+function serializeKdr(doc: DesignDocument): string {
   return JSON.stringify({ format: KDR_FORMAT, version: KDR_VERSION, document: pruneAssets(doc) })
 }
 
@@ -23,7 +23,7 @@ export async function encodeKdr(doc: DesignDocument): Promise<Blob> {
   return new Response(json.stream().pipeThrough(new CompressionStream('gzip'))).blob()
 }
 
-export function kdrFileName(name: string): string {
+function kdrFileName(name: string): string {
   return safeFileName(name) + KDR_EXTENSION
 }
 

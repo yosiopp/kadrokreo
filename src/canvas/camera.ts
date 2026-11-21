@@ -1,5 +1,5 @@
 import type { Bounds, Point, Size } from '../document/geometry.ts'
-import { type Viewport, fitBounds, panBy, zoomAt } from './viewport.ts'
+import { type Viewport, fitBounds, panBy, revealBounds, zoomAt } from './viewport.ts'
 
 export type Camera = ReturnType<typeof createCamera>
 
@@ -66,6 +66,13 @@ export function createCamera() {
       } else {
         set(fitBounds(bounds, size))
       }
+    },
+
+    /** bounds が画面に入っていなければ、見える位置へ動かす */
+    reveal(bounds: Bounds) {
+      if (size.width === 0 || size.height === 0) return
+      const next = revealBounds(viewport, bounds, size)
+      if (next !== viewport) set(next)
     },
   }
 }

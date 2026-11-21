@@ -1,4 +1,4 @@
-import type { Bounds, Point } from '../document/geometry.ts'
+import { type Bounds, type Point, tidy } from '../document/geometry.ts'
 
 /** 2 つの矩形の間隔を表す、水平か垂直の線 */
 export type Distance = {
@@ -61,9 +61,4 @@ function guideTo(
 ): Distance['guide'] {
   if (at >= low && at <= high) return null
   return { from: point(at), to: point(at < low ? low : high) }
-}
-
-/** 計算で出る細かい端数を落とす */
-function tidy(value: number): number {
-  return Math.round(value * 100) / 100
 }

@@ -2,7 +2,12 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import { type CanvasPointer, CanvasView } from '../canvas/CanvasView.tsx'
 import type { Camera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
+import { hitTest } from '../canvas/hitTest.ts'
+import { measureTextNode } from '../canvas/measure.ts'
+import { OVERLAY_ACCENT, OVERLAY_GUIDE, drawBadge, strokePolyline } from '../canvas/overlay.ts'
+import { HIT_TOLERANCE, pickNode } from '../canvas/pick.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
+import { isInstance, owningInstance } from '../document/component.ts'
 import {
   type Bounds,
   type Matrix,
@@ -23,10 +28,10 @@ import {
 import { lineBetween, lineEndpoints, pathFromPoints, pathPoints } from '../document/path.ts'
 import type { LineNode, NodeId, PathNode, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { TextEditor } from './TextEditor.tsx'
-import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
-import { isInstance, makeComponent, owningInstance } from './components.ts'
+import { findFrameAt, nodesInMarquee } from './hitTest.ts'
+import { makeComponent, withoutCopies } from './components.ts'
 import { placeInLayout, wrapInAutoLayout } from './layout.ts'
-import { fitTextNodes, measureFrameLabel, measureTextNode } from './measure.ts'
+import { fitTextNodes } from './measure.ts'
 import {
   createEllipse,
   createFrame,
@@ -91,8 +96,6 @@ type Gesture =
 /** draft は新規作成中のテキスト。確定するまでドキュメントには入れない */
 type Editing = { id: NodeId; draft: { node: TextNode; parentId: NodeId | null } | null }
 
-const ACCENT = '#0d99ff'
-const GUIDE = '#f24822'
 const SNAP_DISTANCE = 6
 const DRAG_THRESHOLD = 4
 const HANDLE_SIZE = 8
@@ -134,7 +137,7 @@ function toScreenBounds(viewport: Viewport, bounds: Bounds): Bounds {
 }
 
 /** 小さく映っているときは辺のハンドルを出さない。角と重なってつかめなくなるため */
-function visibleHandles(screen: Bounds): Handle[] {
+function visibleHandles(screen: Size): Handle[] {
   return HANDLES.filter((handle) => {
     if (handle.length === 2) return true
     return handle === 'n' || handle === 's' ? screen.width >= 24 : screen.height >= 24
@@ -149,17 +152,11 @@ function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
-/** 直線の両端（ページ座標） */
-function lineEnds(page: Scene, line: LineNode): Point[] {
-  const matrix = getWorldMatrix(page, line.id)
-  return lineEndpoints(line).map((end) => applyMatrix(matrix, end))
-}
-
 /** 直線の両端（始点・終点の順）またはパスの頂点（ページ座標） */
 function editablePoints(page: Scene, node: LineNode | PathNode): Point[] {
-  if (node.type === 'line') return lineEnds(page, node)
   const matrix = getWorldMatrix(page, node.id)
-  return pathPoints(node).map((point) => applyMatrix(matrix, point))
+  const points = node.type === 'line' ? lineEndpoints(node) : pathPoints(node)
+  return points.map((point) => applyMatrix(matrix, point))
 }
 
 /** ハンドルを引いた後の枠の大きさを整数にする。つかんでいない側の辺は動かさない */
@@ -224,13 +221,10 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     setEditing(next)
   }
 
-  /**
-   * 選択中のうち、インスタンスの中身（写し）でないもの。
-   * 写しは色や文言を上書きできるだけで、動かす・消す・複製するといった操作の対象にはしない。
-   */
+  /** 選択中のうち、インスタンスの中身（写し）でないもの。動かす・消す・複製するといった操作の対象になる */
   function ownIds(): NodeId[] {
     const { page, selection } = store.getState()
-    return selection.filter((id) => !owningInstance(page, id))
+    return withoutCopies(page, selection)
   }
 
   /** 選択中のうち動かせるもの */
@@ -239,19 +233,23 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     return ownIds().filter((id) => !page.nodes[id].locked)
   }
 
-  /** 直線を 1 本だけ選んでいるとき。枠のハンドルの代わりに、両端をつかんで動かせる */
-  function selectedLine(): LineNode | null {
+  /** 選択ツールで、文字を編集中でなく、1 つだけ選んでいるときの、そのノード */
+  function soleSelected(): SceneNode | null {
     if (tool !== 'select' || editingRef.current) return null
     const { page, selection } = store.getState()
-    const node = selection.length === 1 ? page.nodes[selection[0]] : null
-    return node?.type === 'line' && !node.locked && !owningInstance(page, node.id) ? node : null
+    return selection.length === 1 ? (page.nodes[selection[0]] ?? null) : null
+  }
+
+  /** 直線を 1 本だけ選んでいるとき。枠のハンドルの代わりに、両端をつかんで動かせる */
+  function selectedLine(): LineNode | null {
+    const node = soleSelected()
+    if (node?.type !== 'line' || node.locked) return null
+    return owningInstance(store.getState().page, node.id) ? null : node
   }
 
   /** 頂点を編集中のパス。そのパスだけを選んでいる間だけ有効 */
   function editedPath(): PathNode | null {
-    if (tool !== 'select' || editingRef.current) return null
-    const { page, selection } = store.getState()
-    const node = selection.length === 1 ? page.nodes[selection[0]] : null
+    const node = soleSelected()
     return node?.type === 'path' && node.id === vertexEditRef.current && !node.locked ? node : null
   }
 
@@ -319,9 +317,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   }
 
   /** 画面に映っている枠の大きさ。どのハンドルを出すかを決めるのに使う */
-  function screenSize(box: SelectionBox): Bounds {
+  function screenSize(box: SelectionBox): Size {
     const zoom = camera.getViewport().zoom
-    return { x: 0, y: 0, width: box.size.width * zoom, height: box.size.height * zoom }
+    return { width: box.size.width * zoom, height: box.size.height * zoom }
   }
 
   /** 回転ハンドルの位置（画面座標）。枠の上辺の中央から少し離す */
@@ -345,8 +343,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     return targets
   }
 
-  function handleAt(screen: Point): Handle | null {
-    const box = selectionBox()
+  function handleAt(box: SelectionBox | null, screen: Point): Handle | null {
     if (!box) return null
     // 角を先に調べる
     const handles = visibleHandles(screenSize(box)).toSorted((a, b) => b.length - a.length)
@@ -359,18 +356,12 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     return null
   }
 
-  function rotateHandleAt(screen: Point): boolean {
-    const box = selectionBox()
+  function rotateHandleAt(box: SelectionBox | null, screen: Point): boolean {
     return box !== null && distance(rotateHandlePoint(box), screen) <= HANDLE_SIZE
   }
 
   function pick(pointer: CanvasPointer): NodeId | null {
-    const page = store.getState().page
-    const viewport = camera.getViewport()
-    return (
-      hitTestFrameLabel(page, viewport, pointer.screen, measureFrameLabel) ??
-      hitTest(page, pointer.world, { tolerance: 3 / viewport.zoom })
-    )
+    return pickNode(store.getState().page, camera.getViewport(), pointer)
   }
 
   /** shape は親の座標系での枠。直線なら向きも含む */
@@ -507,7 +498,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     }
 
     const box = selectionBox()
-    if (box && rotateHandleAt(pointer.screen)) {
+    if (box && rotateHandleAt(box, pointer.screen)) {
       const pivot = applyMatrix(box.matrix, { x: box.size.width / 2, y: box.size.height / 2 })
       gestureRef.current = {
         kind: 'rotate',
@@ -521,7 +512,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       return
     }
 
-    const handle = handleAt(pointer.screen)
+    const handle = handleAt(box, pointer.screen)
     if (handle && box?.oriented) {
       gestureRef.current = {
         kind: 'reshape',
@@ -580,10 +571,11 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         return
       }
       if (tool !== 'select' || editingRef.current) return
-      const handle = handleAt(pointer.screen)
+      const box = selectionBox()
+      const handle = handleAt(box, pointer.screen)
       const endpoint = pointAt(pointer.screen)
-      const rotating = rotateHandleAt(pointer.screen)
-      const rotation = selectionBox()?.rotation ?? 0
+      const rotating = rotateHandleAt(box, pointer.screen)
+      const rotation = box?.rotation ?? 0
       setCursor(
         rotating ? 'grab' : handle ? handleCursor(handle, rotation) : endpoint ? 'crosshair' : 'default',
       )
@@ -793,7 +785,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (tool === 'pen') return finishPen(false)
     if (tool !== 'select' || editingRef.current) return
     const page = store.getState().page
-    const tolerance = 3 / camera.getViewport().zoom
+    const tolerance = HIT_TOLERANCE / camera.getViewport().zoom
     const top = hitTest(page, pointer.world, { tolerance })
     if (!top) return
     // インスタンスは、ダブルクリックで中身を選べる（文言や色を、そのインスタンスだけ変えられる）
@@ -981,23 +973,12 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   function drawOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport) {
     const { page, selection } = state
     const gesture = gestureRef.current
-    ctx.strokeStyle = ACCENT
+    ctx.strokeStyle = OVERLAY_ACCENT
     ctx.lineWidth = 1
 
     /** ページ座標の点をつないだ線を引く */
-    const polyline = (points: Point[], close: boolean) => {
-      ctx.beginPath()
-      for (const [index, point] of points.entries()) {
-        const p = worldToScreen(viewport, point)
-        // 回っていない枠の線がにじまないよう、ピクセルの中心に合わせる
-        const x = Math.round(p.x) + 0.5
-        const y = Math.round(p.y) + 0.5
-        if (index === 0) ctx.moveTo(x, y)
-        else ctx.lineTo(x, y)
-      }
-      if (close) ctx.closePath()
-      ctx.stroke()
-    }
+    const polyline = (points: Point[], close: boolean) =>
+      strokePolyline(ctx, points.map((point) => worldToScreen(viewport, point)), close)
 
     const drawHandle = (p: Point) => {
       const x = Math.round(p.x - HANDLE_SIZE / 2) + 0.5
@@ -1009,7 +990,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     // 回っていればその向きのまま枠をなぞる。直線は枠ではなく線そのものをなぞる
     const outlineNode = (id: NodeId) => {
       const node = page.nodes[id]
-      if (node.type === 'line') polyline(lineEnds(page, node), false)
+      if (node.type === 'line') polyline(editablePoints(page, node), false)
       else polyline(getCorners(page, id), true)
     }
 
@@ -1069,22 +1050,12 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
           ? `${normalizeAngle(gesture.baseRotation + gesture.delta)}°`
           : `${Math.round(w)} × ${Math.round(h)}`
       const screen = toScreenBounds(viewport, box.bounds)
-      ctx.font = '11px system-ui, sans-serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      const width = ctx.measureText(label).width + 10
-      const centerX = screen.x + screen.width / 2
-      const top = screen.y + screen.height + 8
-      ctx.fillStyle = ACCENT
-      ctx.beginPath()
-      ctx.roundRect(centerX - width / 2, top, width, 18, 4)
-      ctx.fill()
-      ctx.fillStyle = '#ffffff'
-      ctx.fillText(label, centerX, top + 9.5)
+      const below = { x: screen.x + screen.width / 2, y: screen.y + screen.height + 17 }
+      drawBadge(ctx, label, below, OVERLAY_ACCENT)
     }
 
     if (gesture?.kind === 'move' || gesture?.kind === 'resize') {
-      ctx.strokeStyle = GUIDE
+      ctx.strokeStyle = OVERLAY_GUIDE
       ctx.beginPath()
       for (const guide of gesture.guides) {
         const along = guide.axis === 'x' ? 'y' : 'x'
@@ -1094,7 +1065,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         ctx.lineTo(Math.round(to.x) + 0.5, Math.round(to.y) + 0.5)
       }
       ctx.stroke()
-      ctx.strokeStyle = ACCENT
+      ctx.strokeStyle = OVERLAY_ACCENT
     }
 
     if (gesture?.kind === 'marquee') {

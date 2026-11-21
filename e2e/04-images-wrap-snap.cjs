@@ -208,6 +208,16 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(600)
   await viewer.screenshot({ path: path.join(OUT, '13-viewer-image.png') })
+  // 画像を選ぶと、埋め込んである元のファイルを、そのまま保存できる
+  await viewer.locator('.inspect-layer[title="画像"]').first().click()
+  const imageName = await viewer.locator('.inspect-panel .panel-title').textContent()
+  const picked = Object.values(json.document.pages[0].nodes).find((n) => n.type === 'image' && n.name === imageName)
+  const [original] = await Promise.all([viewer.waitForEvent('download'), viewer.locator('button:text-is("元の画像を保存")').click()])
+  const originalPath = path.join(OUT, 'original-image.bin')
+  await original.saveAs(originalPath)
+  check('viewer で、画像の元のファイルを保存できる', original.suggestedFilename() === `${imageName}.png` && fs.readFileSync(originalPath).equals(Buffer.from(json.document.assets[picked.assetId].data, 'base64')), original.suggestedFilename())
+  await viewer.keyboard.press('Escape')
+  check('画像でないものには、元の画像を保存するボタンは出ない', (await viewer.locator('button:text-is("元の画像を保存")').count()) === 0)
   // viewer に画像を落としても何も起きない（kdr として開こうとしてエラー表示）
   await viewer.locator('input[type=file]').setInputFiles(photo)
   await viewer.waitForSelector('.app-message')

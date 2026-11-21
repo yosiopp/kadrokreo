@@ -1,45 +1,17 @@
 import { type DragEvent, type MouseEvent, useState } from 'react'
-import type { NodeId, Scene, SceneNode } from '../document/types.ts'
-import { isInstance, owningInstance } from './components.ts'
-import { EyeIcon, LockIcon, TypeIcon } from './icons.tsx'
+import { isInstance, owningInstance } from '../document/component.ts'
+import { type LayerRow, isOpen, layerRows, toggleFolding } from '../document/layers.ts'
+import type { NodeId, Scene } from '../document/types.ts'
+import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'
+import { RenameInput } from './RenameInput.tsx'
+import { withoutCopies } from './components.ts'
+import { EyeIcon, LockIcon } from './icons.tsx'
 import { type Placement, placeNodes, updateNode } from './operations.ts'
 import type { EditorState, EditorStore } from './store.ts'
 
 type Props = {
   store: EditorStore
   state: EditorState
-}
-
-/** copy は、インスタンスの中身（元の写し）。表示の切り替えのほかは、一覧からは触れない */
-type Row = { node: SceneNode; depth: number; copy: boolean }
-
-/**
- * フレームの中身を一覧に出すか。ふつうのフレームは開いた状態、インスタンスは閉じた状態から始まり、
- * toggled に入っているものは、その逆になる。中身を選んでいるインスタンス（held）は、選んでいる間は開く。
- */
-type Folding = { toggled: ReadonlySet<NodeId>; held: ReadonlySet<NodeId> }
-
-function isOpen(node: SceneNode, { toggled, held }: Folding): boolean {
-  return held.has(node.id) || isInstance(node) === toggled.has(node.id)
-}
-
-/**
- * 手前にあるものほど上に並べる。
- * 自動で並べるフレームの中だけは、キャンバスでの並び順（先頭が上）のまま出す。
- */
-function buildRows(scene: Scene, folding: Folding): Row[] {
-  const rows: Row[] = []
-  function visit(ids: readonly NodeId[], depth: number, inLayout: boolean, copy: boolean) {
-    for (const id of inLayout ? ids : ids.toReversed()) {
-      const node = scene.nodes[id]
-      rows.push({ node, depth, copy })
-      if (node.type === 'frame' && isOpen(node, folding)) {
-        visit(node.children, depth + 1, node.layout !== null, copy || isInstance(node))
-      }
-    }
-  }
-  visit(scene.rootIds, 0, false, false)
-  return rows
 }
 
 /** 自動で並べるフレームの子か。一覧での上下が、重なり順と逆になる */
@@ -64,9 +36,7 @@ export function LayersPanel({ store, state }: Props) {
   }
 
   function toggleOpen(id: NodeId) {
-    const next = new Set(toggled)
-    if (!next.delete(id)) next.add(id)
-    setToggled(next)
+    setToggled(toggleFolding(toggled, id))
   }
 
   function commitRename(id: NodeId, name: string) {
@@ -80,7 +50,7 @@ export function LayersPanel({ store, state }: Props) {
     event.dataTransfer.setData('text/plain', id)
   }
 
-  function onDragOver(event: DragEvent, { node, copy }: Row) {
+  function onDragOver(event: DragEvent, { node, copy }: LayerRow) {
     // ファイルなど、レイヤー以外のドラッグは受けない。インスタンスの中へも入れられない
     if (!event.dataTransfer.types.includes('text/plain') || copy) return
     event.preventDefault()
@@ -103,8 +73,7 @@ export function LayersPanel({ store, state }: Props) {
       const flipped = target.placement !== 'inside' && isInLayout(base, target.id)
       const placement = !flipped ? target.placement : target.placement === 'above' ? 'below' : 'above'
       // インスタンスの中身は、外へ出せない
-      const movable = ids.filter((id) => !owningInstance(base, id))
-      return placeNodes(base, movable, target.id, placement)
+      return placeNodes(base, withoutCopies(base, ids), target.id, placement)
     })
     const frame = store.getState().page.nodes[target.id]
     if (target.placement === 'inside' && frame && !isOpen(frame, folding)) toggleOpen(target.id)
@@ -113,18 +82,22 @@ export function LayersPanel({ store, state }: Props) {
   // キャンバスでインスタンスの中身を選んだとき、何を選んでいるのかが一覧でも分かるようにする
   const held = new Set(selection.flatMap((id) => owningInstance(page, id)?.id ?? []))
   const folding = { toggled, held }
-  const rows = buildRows(page, folding)
+  // 写し（インスタンスの中身）は、表示の切り替えのほかは、一覧からは触れない
+  const rows = layerRows(page, folding)
+  const selected = new Set(selection)
 
   return (
     <section className="layers" aria-label="レイヤー">
       <h2 className="panel-title">レイヤー</h2>
       {rows.length === 0 && <p className="panel-hint">ツールを選んでキャンバスに図形を描くと、ここに並びます。</p>}
       <ul className="layer-list" onDragLeave={() => setDrop(null)}>
-        {rows.map(({ node, depth, copy }) => (
+        {rows.map((row) => {
+          const { node, depth, copy } = row
+          return (
           <li
             key={node.id}
             className="layer-row"
-            data-selected={selection.includes(node.id)}
+            data-selected={selected.has(node.id)}
             data-hidden={!node.visible}
             data-copy={copy}
             data-drop={drop?.id === node.id ? drop.placement : undefined}
@@ -132,46 +105,14 @@ export function LayersPanel({ store, state }: Props) {
             draggable={!copy && renaming !== node.id}
             onClick={(event) => onRowClick(event, node.id)}
             onDragStart={(event) => onDragStart(event, node.id)}
-            onDragOver={(event) => onDragOver(event, { node, depth, copy })}
+            onDragOver={(event) => onDragOver(event, row)}
             onDrop={onDrop}
             onDragEnd={() => setDrop(null)}
           >
-            {node.type === 'frame' && node.children.length > 0 ? (
-              <button
-                type="button"
-                className="layer-caret"
-                aria-label={isOpen(node, folding) ? '閉じる' : '開く'}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  toggleOpen(node.id)
-                }}
-              >
-                {isOpen(node, folding) ? '▾' : '▸'}
-              </button>
-            ) : (
-              <span className="layer-caret" />
-            )}
-            <span className="layer-icon">
-              <TypeIcon type={node.type} role={node.type === 'frame' ? node.component?.role : undefined} />
-            </span>
+            <LayerCaret node={node} open={isOpen(node, folding)} onToggle={() => toggleOpen(node.id)} />
+            <LayerIcon node={node} />
             {renaming === node.id ? (
-              <input
-                className="layer-name-input"
-                defaultValue={node.name}
-                autoFocus
-                onFocus={(event) => event.target.select()}
-                onClick={(event) => event.stopPropagation()}
-                onBlur={(event) => commitRename(node.id, event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.nativeEvent.isComposing) return
-                  if (event.key === 'Enter') event.currentTarget.blur()
-                  if (event.key === 'Escape') {
-                    // 元の名前に戻してから確定すれば、何も変わらない
-                    event.currentTarget.value = node.name
-                    event.currentTarget.blur()
-                  }
-                }}
-              />
+              <RenameInput name={node.name} onCommit={(name) => commitRename(node.id, name)} />
             ) : (
               // 写しの名前は元と同じ。変えられない
               <span className="layer-name" onDoubleClick={() => !copy && setRenaming(node.id)}>
@@ -207,7 +148,8 @@ export function LayersPanel({ store, state }: Props) {
               <EyeIcon off={!node.visible} />
             </button>
           </li>
-        ))}
+          )
+        })}
       </ul>
     </section>
   )

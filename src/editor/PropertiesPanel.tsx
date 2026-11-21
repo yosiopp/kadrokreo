@@ -1,10 +1,9 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { normalizeAngle } from '../document/geometry.ts'
+import { findMain, isInstance, owningInstance } from '../document/component.ts'
+import { normalizeAngle, tidy } from '../document/geometry.ts'
 import type {
   AutoLayout,
-  Cap,
   Gradient,
-  ImageNode,
   Page,
   SceneNode,
   Shadow,
@@ -12,13 +11,18 @@ import type {
 } from '../document/types.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
 import {
+  CAP_LABELS,
+  FIT_LABELS,
+  SIZE_MODE_LABELS,
+  TYPE_LABELS,
+  alignLabels,
+  optionsOf,
+} from '../ui/labels.ts'
+import {
   createInstance,
   detachComponent,
-  findMain,
   hasOverrides,
-  isInstance,
   makeComponent,
-  owningInstance,
   resetOverrides,
 } from './components.ts'
 import { enableAutoLayout } from './layout.ts'
@@ -29,6 +33,7 @@ import {
   type NodePatch,
   alignNodes,
   distributeNodes,
+  patchNodes,
   setSize,
   updateNode,
   updateNodes,
@@ -48,16 +53,6 @@ type Mixed = typeof MIXED
 
 function common<T>(values: readonly T[]): T | Mixed {
   return values.every((value) => Object.is(value, values[0])) ? values[0] : MIXED
-}
-
-const TYPE_LABELS: Record<SceneNode['type'], string> = {
-  frame: 'フレーム',
-  rect: '長方形',
-  ellipse: '楕円',
-  line: '直線',
-  path: 'パス',
-  text: 'テキスト',
-  image: '画像',
 }
 
 const FONT_FAMILIES = [
@@ -155,15 +150,17 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const textAlign = common(texts.map((node) => node.textAlign))
   const clipContent = common(frames.map((node) => node.clipContent))
 
+  /** 選んでいるノードごとに patch を決めて当てる、ページへの変更。null を返したノードは変えない */
+  const patchSelected = (patchFor: (node: SceneNode) => NodePatch | null) => (base: Page) =>
+    patchNodes(base, selection, patchFor)
+
   const layouts = frames.flatMap((node) => (node.layout ? [node.layout] : []))
   const layoutEnabled = common(frames.map((node) => node.layout !== null))
   /** 自動で並べているフレームだけ、設定の一部を書き換える */
-  const patchLayouts = (patch: Partial<AutoLayout>) => (base: Page) =>
-    selection.reduce((next, id) => {
-      const node = next.nodes[id]
-      if (node.type !== 'frame' || !node.layout) return next
-      return updateNode(next, id, { layout: { ...node.layout, ...patch } })
-    }, base)
+  const patchLayouts = (patch: Partial<AutoLayout>) =>
+    patchSelected((node) =>
+      node.type === 'frame' && node.layout ? { layout: { ...node.layout, ...patch } } : null,
+    )
   const toggleLayout = (enabled: boolean) => (base: Page) =>
     selection.reduce(
       (next, id) => (enabled ? enableAutoLayout(next, id) : updateNode(next, id, { layout: null })),
@@ -176,35 +173,31 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const gradients = shapes.flatMap((node) => (node.fillGradient ? [node.fillGradient] : []))
   const gradientEnabled = common(shapes.map((node) => node.fillGradient !== null))
   /** 塗りの色を変える。グラデーションにしている図形は、始まりの色も一緒に変える */
-  const fillRecipe = (fill: string | null) => (base: Page) =>
-    selection.reduce((next, id) => {
-      const node = next.nodes[id]
-      if (!('fill' in node)) return next
-      if (node.type === 'text') return fill === null ? next : updateNode(next, id, { fill })
+  const fillRecipe = (fill: string | null) =>
+    patchSelected((node) => {
+      if (!('fill' in node)) return null
+      if (node.type === 'text') return fill === null ? null : { fill }
       const fillGradient =
         fill !== null && node.fillGradient ? withStopColor(node.fillGradient, 0, fill) : null
-      return updateNode(next, id, { fill, fillGradient })
-    }, base)
+      return { fill, fillGradient }
+    })
   /** グラデーションにしている図形だけ、グラデーションを書き換える */
-  const patchGradients = (change: (gradient: Gradient) => Gradient) => (base: Page) =>
-    selection.reduce((next, id) => {
-      const node = next.nodes[id]
-      if (!('fillGradient' in node) || !node.fillGradient) return next
-      return updateNode(next, id, { fillGradient: change(node.fillGradient) })
-    }, base)
-  const toggleGradient = (enabled: boolean) => (base: Page) =>
-    selection.reduce((next, id) => {
-      const node = next.nodes[id]
-      if (!('fillGradient' in node) || node.fill === null) return next
-      if (!enabled) return updateNode(next, id, { fillGradient: null })
-      if (node.fillGradient) return next
+  const patchGradients = (change: (gradient: Gradient) => Gradient) =>
+    patchSelected((node) =>
+      'fillGradient' in node && node.fillGradient ? { fillGradient: change(node.fillGradient) } : null,
+    )
+  const toggleGradient = (enabled: boolean) =>
+    patchSelected((node) => {
+      if (!('fillGradient' in node) || node.fill === null) return null
+      if (!enabled) return { fillGradient: null }
+      if (node.fillGradient) return null
       // 上から下へ、いまの色から白へ
       const stops = [
         { offset: 0, color: node.fill },
         { offset: 1, color: '#ffffff' },
       ]
-      return updateNode(next, id, { fillGradient: { angle: 90, stops } })
-    }, base)
+      return { fillGradient: { angle: 90, stops } }
+    })
 
   const single = nodes.length === 1 ? nodes[0] : null
   const overridden = selection.some((id) => hasOverrides(state.document, page, id))
@@ -231,12 +224,8 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const shadows = shapes.flatMap((node) => (node.shadow ? [node.shadow] : []))
   const shadowEnabled = common(shapes.map((node) => node.shadow !== null))
   /** 影のある図形だけ、影の一部を書き換える */
-  const patchShadows = (patch: Partial<Shadow>) => (base: Page) =>
-    selection.reduce((next, id) => {
-      const node = next.nodes[id]
-      if (!('shadow' in node) || !node.shadow) return next
-      return updateNode(next, id, { shadow: { ...node.shadow, ...patch } })
-    }, base)
+  const patchShadows = (patch: Partial<Shadow>) =>
+    patchSelected((node) => ('shadow' in node && node.shadow ? { shadow: { ...node.shadow, ...patch } } : null))
   // 1 つだけのときは親フレームに揃えるので、ページ直下では揃える先がない
   const canAlign = nodes.length > 1 || nodes[0].parentId !== null
 
@@ -390,17 +379,11 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
             onSet={(fill) => store.apply(fillRecipe(fill))}
           />
           {onlyShapes && shapes.every((node) => node.fill !== null) && (
-            <label className="check-field">
-              <input
-                type="checkbox"
-                checked={gradientEnabled === true}
-                ref={(input) => {
-                  if (input) input.indeterminate = gradientEnabled === MIXED
-                }}
-                onChange={(event) => store.apply(toggleGradient(event.target.checked))}
-              />
-              グラデーション
-            </label>
+            <CheckField
+              label="グラデーション"
+              value={gradientEnabled}
+              onChange={(checked) => store.apply(toggleGradient(checked))}
+            />
           )}
           {gradients.length > 0 && (
             <>
@@ -430,21 +413,12 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
 
       {!inner && images.length === nodes.length && (
         <Section title="画像">
-          <label className="field">
-            <span className="field-label">収め方</span>
-            <select
-              value={images.every((n) => n.fit === images[0].fit) ? images[0].fit : ''}
-              onChange={(event) => {
-                apply({ fit: event.target.value as ImageNode['fit'] })
-                event.target.blur()
-              }}
-            >
-              {images.some((n) => n.fit !== images[0].fit) && <option value="">混在</option>}
-              <option value="cover">枠を埋めて切り抜く</option>
-              <option value="contain">全体を収める</option>
-              <option value="stretch">引き伸ばす</option>
-            </select>
-          </label>
+          <SelectField
+            label="収め方"
+            value={common(images.map((node) => node.fit))}
+            options={optionsOf(FIT_LABELS)}
+            onChange={(fit) => apply({ fit })}
+          />
         </Section>
       )}
 
@@ -473,13 +447,15 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
 
       {!inner && capped.length > 0 && capped.length === nodes.length && (
         <Section title="端の形">
-          <CapField
+          <SelectField
             label="始点"
+            options={optionsOf(CAP_LABELS)}
             value={common(capped.map((n) => n.startCap))}
             onChange={(startCap) => apply({ startCap })}
           />
-          <CapField
+          <SelectField
             label="終点"
+            options={optionsOf(CAP_LABELS)}
             value={common(capped.map((n) => n.endCap))}
             onChange={(endCap) => apply({ endCap })}
           />
@@ -488,17 +464,11 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
 
       {!inner && paths.length === nodes.length && (
         <Section title="パス">
-          <label className="check-field">
-            <input
-              type="checkbox"
-              checked={closed === true}
-              ref={(input) => {
-                if (input) input.indeterminate = closed === MIXED
-              }}
-              onChange={(event) => apply({ closed: event.target.checked })}
-            />
-            最後の頂点を最初の頂点につなぐ
-          </label>
+          <CheckField
+            label="最後の頂点を最初の頂点につなぐ"
+            value={closed}
+            onChange={(checked) => apply({ closed: checked })}
+          />
         </Section>
       )}
 
@@ -515,17 +485,11 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
 
       {onlyShapes && !limited && (
         <Section title="影">
-          <label className="check-field">
-            <input
-              type="checkbox"
-              checked={shadowEnabled === true}
-              ref={(input) => {
-                if (input) input.indeterminate = shadowEnabled === MIXED
-              }}
-              onChange={(event) => apply({ shadow: event.target.checked ? DEFAULT_SHADOW : null })}
-            />
-            影を付ける
-          </label>
+          <CheckField
+            label="影を付ける"
+            value={shadowEnabled}
+            onChange={(checked) => apply({ shadow: checked ? DEFAULT_SHADOW : null })}
+          />
           {shadows.length > 0 && (
             <>
               <div className="field-grid">
@@ -571,33 +535,21 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
 
       {frames.length === nodes.length && (
         <Section title="フレーム">
-          <label className="check-field">
-            <input
-              type="checkbox"
-              checked={clipContent === true}
-              ref={(input) => {
-                if (input) input.indeterminate = clipContent === MIXED
-              }}
-              onChange={(event) => apply({ clipContent: event.target.checked })}
-            />
-            はみ出した中身を隠す
-          </label>
+          <CheckField
+            label="はみ出した中身を隠す"
+            value={clipContent}
+            onChange={(checked) => apply({ clipContent: checked })}
+          />
         </Section>
       )}
 
       {frames.length === nodes.length && (
         <Section title="オートレイアウト">
-          <label className="check-field">
-            <input
-              type="checkbox"
-              checked={layoutEnabled === true}
-              ref={(input) => {
-                if (input) input.indeterminate = layoutEnabled === MIXED
-              }}
-              onChange={(event) => store.apply(toggleLayout(event.target.checked))}
-            />
-            中身を自動で並べる
-          </label>
+          <CheckField
+            label="中身を自動で並べる"
+            value={layoutEnabled}
+            onChange={(checked) => store.apply(toggleLayout(checked))}
+          />
           {layouts.length > 0 && (
             <>
               <SelectField
@@ -631,11 +583,10 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
               <SelectField
                 label="揃え"
                 value={layoutValue('align')}
-                options={[
-                  ['start', layoutValue('direction') === 'vertical' ? '左' : '上'],
-                  ['center', '中央'],
-                  ['end', layoutValue('direction') === 'vertical' ? '右' : '下'],
-                ]}
+                // 向きが混ざっているときは、横に並べるときの呼び名で出す
+                options={optionsOf(
+                  alignLabels(layoutValue('direction') === 'vertical' ? 'vertical' : 'horizontal'),
+                )}
                 onChange={(align) => store.apply(patchLayouts({ align }))}
               />
               <SelectField
@@ -652,19 +603,13 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
               <SelectField
                 label="幅"
                 value={layoutValue('widthMode')}
-                options={[
-                  ['hug', '中身に合わせる'],
-                  ['fixed', '固定'],
-                ]}
+                options={optionsOf(SIZE_MODE_LABELS)}
                 onChange={(widthMode) => store.apply(patchLayouts({ widthMode }))}
               />
               <SelectField
                 label="高さ"
                 value={layoutValue('heightMode')}
-                options={[
-                  ['hug', '中身に合わせる'],
-                  ['fixed', '固定'],
-                ]}
+                options={optionsOf(SIZE_MODE_LABELS)}
                 onChange={(heightMode) => store.apply(patchLayouts({ heightMode }))}
               />
             </>
@@ -714,20 +659,15 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
               </button>
             ))}
           </div>
-          <label className="field">
-            <span className="field-label">折り返し</span>
-            <select
-              value={autoWidth === MIXED ? '' : autoWidth ? 'auto' : 'fixed'}
-              onChange={(event) => {
-                apply({ autoWidth: event.target.value === 'auto' })
-                event.target.blur()
-              }}
-            >
-              {autoWidth === MIXED && <option value="">混在</option>}
-              <option value="auto">しない（幅は自動）</option>
-              <option value="fixed">幅に合わせる</option>
-            </select>
-          </label>
+          <SelectField
+            label="折り返し"
+            value={mapValue(autoWidth, (auto) => (auto ? 'auto' : 'fixed'))}
+            options={[
+              ['auto', 'しない（幅は自動）'],
+              ['fixed', '幅に合わせる'],
+            ]}
+            onChange={(wrap) => apply({ autoWidth: wrap === 'auto' })}
+          />
           <label className="field">
             <span className="field-label">書体</span>
             <select
@@ -804,23 +744,25 @@ function SelectField<T extends string>({ label, value, options, onChange }: Sele
   )
 }
 
-function CapField(props: { label: string; value: Cap | Mixed; onChange: (cap: Cap) => void }) {
-  const { label, value, onChange } = props
+type CheckFieldProps = {
+  label: string
+  value: boolean | Mixed
+  onChange: (checked: boolean) => void
+}
+
+/** 選んでいるもので値が揃っていなければ、どちらでもない印にする */
+function CheckField({ label, value, onChange }: CheckFieldProps) {
   return (
-    <label className="field">
-      <span className="field-label">{label}</span>
-      <select
-        value={value === MIXED ? '' : value}
-        onChange={(event) => {
-          onChange(event.target.value as Cap)
-          // フォーカスを残すとキーボードショートカットが効かなくなる
-          event.target.blur()
+    <label className="check-field">
+      <input
+        type="checkbox"
+        checked={value === true}
+        ref={(input) => {
+          if (input) input.indeterminate = value === MIXED
         }}
-      >
-        {value === MIXED && <option value="">混在</option>}
-        <option value="none">なし</option>
-        <option value="arrow">矢印</option>
-      </select>
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
     </label>
   )
 }
@@ -860,7 +802,7 @@ function NumberField({
   onCommit,
 }: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null)
-  const shown = draft ?? (value === MIXED ? '' : String(Math.round(value * 100) / 100))
+  const shown = draft ?? (value === MIXED ? '' : String(tidy(value)))
 
   function commit(text: string | null) {
     setDraft(null)
@@ -868,7 +810,7 @@ function NumberField({
     const parsed = Number(text)
     if (!Number.isFinite(parsed)) return
     // 0.1 刻みの足し算で出る端数を落とす
-    onCommit(Math.round(Math.min(max, Math.max(min, parsed)) * 100) / 100)
+    onCommit(tidy(Math.min(max, Math.max(min, parsed))))
   }
 
   return (

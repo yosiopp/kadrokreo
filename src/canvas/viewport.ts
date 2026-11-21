@@ -45,3 +45,24 @@ export function fitBounds(bounds: Bounds, view: Size, padding = 48): Viewport {
     zoom,
   }
 }
+
+/**
+ * bounds が見える位置へ動かしたビューポート。全体がもう画面に入っていれば、そのまま返す。
+ * いまの倍率で収まるなら倍率は変えずに中央へ寄せ、収まらなければ全体が入るまで引く。
+ */
+export function revealBounds(v: Viewport, bounds: Bounds, view: Size, padding = 48): Viewport {
+  const origin = worldToScreen(v, bounds)
+  const width = bounds.width * v.zoom
+  const height = bounds.height * v.zoom
+  if (origin.x >= 0 && origin.y >= 0 && origin.x + width <= view.width && origin.y + height <= view.height) {
+    return v
+  }
+  if (width > view.width - padding * 2 || height > view.height - padding * 2) {
+    return fitBounds(bounds, view, padding)
+  }
+  return {
+    ...v,
+    x: bounds.x + bounds.width / 2 - view.width / 2 / v.zoom,
+    y: bounds.y + bounds.height / 2 - view.height / 2 / v.zoom,
+  }
+}

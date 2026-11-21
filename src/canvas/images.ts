@@ -47,9 +47,15 @@ export function onImageLoad(listener: () => void): () => void {
   }
 }
 
-async function decode(asset: Asset): Promise<ImageBitmap> {
+/** 埋め込んである画像の、元のファイルの中身 */
+export function assetBlob(asset: Asset): Blob {
   const binary = atob(asset.data)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return createImageBitmap(new Blob([bytes], { type: asset.mime }))
+  return new Blob([bytes], { type: asset.mime })
+}
+
+// async にしてあるので、base64 が壊れていても例外ではなく失敗した Promise になる
+async function decode(asset: Asset): Promise<ImageBitmap> {
+  return createImageBitmap(assetBlob(asset))
 }

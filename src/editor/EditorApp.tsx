@@ -5,8 +5,11 @@ import type { Viewport } from '../canvas/viewport.ts'
 import { getContentBounds } from '../document/geometry.ts'
 import { IMAGE_MIME_TYPES, decodeKdr } from '../document/kdr.ts'
 import type { DesignDocument, PageId } from '../document/types.ts'
+import { Message } from '../ui/Message.tsx'
+import { Logo } from '../ui/Logo.tsx'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
 import { downloadBlob, safeFileName } from '../ui/download.ts'
+import { TypeIcon } from '../ui/icons.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
 import { useFileDrop } from '../ui/useFileDrop.ts'
 import { EditorCanvas, type Tool } from './EditorCanvas.tsx'
@@ -15,7 +18,7 @@ import { PagesPanel } from './PagesPanel.tsx'
 import { PropertiesPanel } from './PropertiesPanel.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
-import { RedoIcon, TypeIcon, UndoIcon } from './icons.tsx'
+import { RedoIcon, UndoIcon } from './icons.tsx'
 import { placeImage, readImageFile } from './importImage.ts'
 import { fitTextNodes } from './measure.ts'
 import {
@@ -85,10 +88,14 @@ function Editor({ store }: { store: EditorStore }) {
   useEffect(() => {
     let timer = 0
     let warned = false
+    // 最後に保存できたドキュメント。失敗したときは進めないので、次の変更でもう一度試す
+    let lastSaved: DesignDocument | null = null
     const save = () => {
       clearTimeout(timer)
       timer = 0
-      saveDocument(store.getState().document).then((saved) => {
+      const document = store.getState().document
+      saveDocument(document).then((saved) => {
+        if (saved) lastSaved = document
         // 保存できない環境では変更のたびに失敗するので、知らせるのは一度だけにする
         if (saved || warned) return
         warned = true
@@ -96,6 +103,8 @@ function Editor({ store }: { store: EditorStore }) {
       })
     }
     const unsubscribe = store.subscribe(() => {
+      // 選択やページの切り替えだけなら、保存するものは変わっていない
+      if (store.getState().document === lastSaved) return
       clearTimeout(timer)
       timer = window.setTimeout(save, SAVE_DELAY)
     })
@@ -185,7 +194,7 @@ function Editor({ store }: { store: EditorStore }) {
   return (
     <div className="app" data-mode="editor">
       <header className="app-header">
-        <span className="app-title">kadrokreo</span>
+        <Logo className="app-logo" />
         <span className="app-mode">editor</span>
         <NameField
           value={state.document.name}
@@ -234,14 +243,7 @@ function Editor({ store }: { store: EditorStore }) {
           kdr に書き出し
         </button>
       </header>
-      {message && (
-        <div className="app-message" role="alert">
-          {message}
-          <button type="button" aria-label="閉じる" onClick={() => setMessage(null)}>
-            ×
-          </button>
-        </div>
-      )}
+      <Message text={message} onClose={() => setMessage(null)} />
       <div className="editor-body">
         <aside className="panel layers-panel">
           <PagesPanel store={store} state={state} />

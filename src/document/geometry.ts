@@ -186,10 +186,6 @@ export function getContentBounds(scene: Scene): Bounds | null {
   return getNodesBounds(scene, scene.rootIds)
 }
 
-export function containsPoint(b: Bounds, p: Point): boolean {
-  return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height
-}
-
 export function intersects(a: Bounds, b: Bounds): boolean {
   return (
     a.x <= b.x + b.width && b.x <= a.x + a.width && a.y <= b.y + b.height && b.y <= a.y + a.height

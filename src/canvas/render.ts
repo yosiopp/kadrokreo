@@ -9,7 +9,7 @@ import {
   nodeMatrix,
   transformRect,
 } from '../document/geometry.ts'
-import { lineEndpoints, pathPoints } from '../document/path.ts'
+import { arrowSize, cappedStroke, lineEndpoints, pathPoints } from '../document/path.ts'
 import type {
   Asset,
   AssetId,
@@ -356,11 +356,6 @@ function applyShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow |
   ctx.shadowOffsetY = shadow.y * pass.scale
 }
 
-/** 矢印の長さ。線が細くても見える大きさにする */
-export function arrowSize(strokeWidth: number): number {
-  return Math.max(strokeWidth * 4, 10)
-}
-
 /** points を順につないだ線を引き、両端に端の形を描く */
 function strokeWithCaps(
   ctx: CanvasRenderingContext2D,
@@ -368,39 +363,17 @@ function strokeWithCaps(
   style: { stroke: string; strokeWidth: number; startCap: Cap; endCap: Cap },
 ): void {
   if (style.strokeWidth <= 0 || points.length < 2) return
-  const size = arrowSize(style.strokeWidth)
-  const trimmed = [...points]
-  const heads: { tip: Point; direction: Point }[] = []
-
-  // 矢印の先が端の位置にちょうど来るよう、線は矢印の根元の手前で止める
-  const addHead = (tipIndex: number, neighborIndex: number) => {
-    const tip = points[tipIndex]
-    const neighbor = points[neighborIndex]
-    const length = Math.hypot(tip.x - neighbor.x, tip.y - neighbor.y)
-    if (length === 0) return
-    const direction = { x: (tip.x - neighbor.x) / length, y: (tip.y - neighbor.y) / length }
-    const inset = Math.min(size * 0.8, length)
-    trimmed[tipIndex] = { x: tip.x - direction.x * inset, y: tip.y - direction.y * inset }
-    heads.push({ tip, direction })
-  }
-  if (style.startCap === 'arrow') addHead(0, 1)
-  if (style.endCap === 'arrow') addHead(points.length - 1, points.length - 2)
-
+  const { line, heads } = cappedStroke(points, style)
   ctx.beginPath()
-  trimmed.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
+  line.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
   ctx.strokeStyle = style.stroke
   ctx.lineWidth = style.strokeWidth
   ctx.stroke()
 
   ctx.fillStyle = style.stroke
-  for (const { tip, direction } of heads) {
-    const baseX = tip.x - direction.x * size
-    const baseY = tip.y - direction.y * size
-    const half = size * 0.4
+  for (const head of heads) {
     ctx.beginPath()
-    ctx.moveTo(tip.x, tip.y)
-    ctx.lineTo(baseX - direction.y * half, baseY + direction.x * half)
-    ctx.lineTo(baseX + direction.y * half, baseY - direction.x * half)
+    head.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
     ctx.closePath()
     ctx.fill()
   }

@@ -79,6 +79,21 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await fit()
   check('開くと、インスペクトのパネルとレイヤー一覧が出る', (await title()) === 'インスペクト' && (await tree()).join() === 'Frame 1,Text 1,Rectangle 2,Rectangle 1' && (await viewer.locator('button:text-is("Dev モード")').count()) === 0, (await tree()).join())
 
+  // ── 何も選んでいないときは、ページで使われている色と文字が出る ──
+  const rows = (section) => panel.locator(`section[aria-label="${section}"] .inspect-row`).evaluateAll((list) => list.map((r) => `${r.querySelector('dt').textContent}=${r.querySelector('.inspect-value').textContent}`))
+  const pageColors = await rows('このページの色')
+  const pageTexts = await rows('このページの文字')
+  check('ページで使われている色の一覧が出る', pageColors.slice().sort().join() === '1 か所=#000000,1 か所=#4F46E5,1 か所=#D9D9D9,1 か所=#FFFFFF', pageColors.join())
+  check('ページで使われている文字の設定が、CSS の font の形で出る', pageTexts.length === 1 && /^1 か所=400 16px\/[\d.]+ .+$/.test(pageTexts[0]), pageTexts.join())
+  await panel.locator('section[aria-label="このページの色"] .inspect-value:has-text("#4F46E5")').click()
+  check('一覧の色も、押すとコピーできる', (await clipboard()) === '#4F46E5', await clipboard())
+  await panel.locator('section[aria-label="このページの色"] .inspect-row:has-text("#4F46E5") .inspect-pick').click()
+  check('色の一覧から、その色を使っている図形を選べる', (await title()) === 'Rectangle 1', await title())
+  await viewer.keyboard.press('Escape')
+  await panel.locator('section[aria-label="このページの文字"] .inspect-pick').click()
+  check('文字の一覧から、その設定を使っている図形を選べる', (await title()) === 'Text 1', await title())
+  await viewer.keyboard.press('Escape')
+
   // ── クリックで選ぶ ──
   await viewer.mouse.click(...at(160, 170))
   check('クリックした図形が選ばれ、一覧でも選ばれる', (await title()) === 'Rectangle 1' && (await treeSelected()).join() === 'Rectangle 1' && (await panel.locator('.inspect-type').textContent()) === '長方形', await title())
@@ -94,6 +109,28 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('値を押すとコピーできる', (await clipboard()) === '#4F46E5' && (await value('塗り', '色').textContent()) === 'コピーしました', await clipboard())
   await panel.locator('button:text-is("CSS をコピー")').click()
   check('CSS をコピーできる', (await clipboard()) === css)
+  // 単位を rem にすると、長さが 16px = 1rem で換算される。選び直しても単位はそのまま
+  await panel.locator('select[aria-label="長さの単位"]').selectOption('rem')
+  const rem = await panel.locator('.inspect-code').textContent()
+  check('CSS の長さの単位を rem にできる', rem === ['position: absolute;', 'left: 1.875rem;', 'top: 2.5rem;', 'width: 3.75rem;', 'height: 3.75rem;', 'background: #4f46e5;', 'border-radius: 0.5rem;'].join('\n'), JSON.stringify(rem))
+  // rem の基準を変えられる。px に戻しても、基準は覚えている
+  const remBase = panel.locator('input[aria-label="1rem の大きさ（px）"]')
+  await remBase.fill('10')
+  check('rem の基準を変えられる', (await panel.locator('.inspect-code').textContent()).includes('width: 6rem;'), await panel.locator('.inspect-code').textContent())
+  await remBase.fill('16')
+  await remBase.evaluate((input) => input.blur())
+  await panel.locator('select[aria-label="長さの単位"]').selectOption('px')
+  check('px のときは rem の基準の欄を出さない', (await remBase.count()) === 0)
+
+  // ── 色の書き方を切り替える ──
+  await panel.locator('select[aria-label="色の書き方"]').selectOption('rgb')
+  check('色を RGB で出せる（設定の一覧と CSS の両方）', (await value('塗り', '色').textContent()) === 'rgb(79, 70, 229)' && (await panel.locator('.inspect-code').textContent()).includes('background: rgb(79, 70, 229);'), await value('塗り', '色').textContent())
+  await panel.locator('select[aria-label="色の書き方"]').selectOption('hsl')
+  check('色を HSL で出せる', (await value('塗り', '色').textContent()) === 'hsl(243, 75%, 59%)', await value('塗り', '色').textContent())
+  await viewer.keyboard.press('Escape')
+  check('選択を外しても書き方はそのままで、ページの色の一覧も従う', (await rows('このページの色')).includes('1 か所=hsl(243, 75%, 59%)'), (await rows('このページの色')).join())
+  await panel.locator('select[aria-label="色の書き方"]').selectOption('hex')
+  await viewer.mouse.click(...at(160, 170))
 
   // ── 間隔を測る ──
   await viewer.mouse.move(...at(290, 170))
@@ -106,6 +143,25 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const left = await pixelAt(105, 170)
   const top = await pixelAt(160, 110)
   check('親のフレームに重ねると、辺までの余白の線が出る', isRed(left) && isRed(top), `${left.join()} / ${top.join()}`)
+
+  // ── Shift を押しながら押して、2 つ選ぶ ──
+  const shiftClick = async (x, y) => { await viewer.keyboard.down('Shift'); await viewer.mouse.click(...at(x, y)); await viewer.keyboard.up('Shift') }
+  await shiftClick(290, 170)
+  const between = await pixelAt(220, 170)
+  const noFrameGap = await pixelAt(160, 110)
+  check('Shift を押しながら押すと、2 つ選べて、その間隔が出る', (await title()) === '2 個を選択' && (await rows('間隔')).join() === '横=60' && (await treeSelected()).join() === 'Rectangle 2,Rectangle 1' && isRed(between) && !isRed(noFrameGap), `${await title()} ${(await rows('間隔')).join()} ${between.join()}`)
+  check('いくつも選ぶと、全体を囲む矩形が出る', (await rows('全体')).join() === 'X=130,Y=140,幅=200,高さ=60', (await rows('全体')).join())
+  await viewer.screenshot({ path: path.join(OUT, '44-dev-mode-two.png') })
+  const [both] = await Promise.all([viewer.waitForEvent('download'), panel.locator('button:text-is("まとめて PNG に")').click()])
+  check('選んだものをまとめて PNG に書き出せる', both.suggestedFilename() === 'Rectangle 1 ほか 1 個.png', both.suggestedFilename())
+  await shiftClick(290, 170)
+  check('もう一度 Shift を押しながら押すと、選択から外れる', (await title()) === 'Rectangle 1', await title())
+  await viewer.keyboard.down('Shift')
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Text 1"))').click()
+  await viewer.keyboard.up('Shift')
+  check('レイヤー一覧でも、Shift を押しながら選べる', (await title()) === '2 個を選択' && (await treeSelected()).join() === 'Text 1,Rectangle 1', (await treeSelected()).join())
+  await panel.locator('.inspect-selection button:text-is("Text 1")').click()
+  check('選んでいるものの一覧から 1 つに絞れる', (await title()) === 'Text 1', await title())
 
   // ── ロック中のもの、テキスト ──
   await viewer.mouse.click(...at(290, 170))
@@ -125,9 +181,75 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   // ── 一覧から選ぶ、書き出す ──
   await viewer.locator('.inspect-layer:has(.layer-name:text-is("Frame 1"))').click()
-  check('一覧から選べる', (await title()) === 'Frame 1' && (await value('位置とサイズ', '幅').textContent()) === '400' && (await panel.locator('.inspect-code').textContent()).startsWith('position: relative;'))
+  check('一覧から選べる', (await title()) === 'Frame 1' && (await value('位置とサイズ', '幅').textContent()) === '400' && (await panel.locator('.inspect-code').first().textContent()).startsWith('position: relative;'))
   const [png] = await Promise.all([viewer.waitForEvent('download'), panel.locator('button:text-is("PNG に書き出し")').click()])
   check('選んだものを PNG に書き出せる', png.suggestedFilename() === 'Frame 1.png', png.suggestedFilename())
+
+  // ── 中身のあるフレームは、子孫までまとめた HTML と CSS が出る ──
+  const htmlSection = panel.locator('section[aria-label="HTML"]')
+  const markupHtml = await htmlSection.locator('.inspect-code').nth(0).textContent()
+  const markupCss = await htmlSection.locator('.inspect-code').nth(1).textContent()
+  check('子孫までまとめた HTML が出る', markupHtml === ['<div class="frame-1">', '  <div class="rectangle-1"></div>', '  <div class="rectangle-2"></div>', '  <div class="text-1">Hello</div>', '</div>'].join('\n'), JSON.stringify(markupHtml))
+  check('子孫までまとめた CSS が出る', markupCss.startsWith('.frame-1 {\n  position: relative;') && markupCss.includes('.rectangle-2 {\n  position: absolute;\n  left: 150px;'), JSON.stringify(markupCss.slice(0, 120)))
+  await htmlSection.locator('button:text-is("HTML をコピー")').click()
+  check('HTML をコピーできる', (await clipboard()) === markupHtml)
+  const [htmlFile] = await Promise.all([viewer.waitForEvent('download'), htmlSection.locator('button:text-is("HTML ファイルを保存")').click()])
+  const htmlPath = path.join(OUT, 'dev-mode.html')
+  await htmlFile.saveAs(htmlPath)
+  const saved = fs.readFileSync(htmlPath, 'utf8')
+  check('HTML ファイルとして保存できる', htmlFile.suggestedFilename() === 'Frame 1.html' && saved.startsWith('<!doctype html>') && saved.includes(markupHtml) && saved.includes('.text-1 {'), htmlFile.suggestedFilename())
+  // 保存したファイルを開くと、デザインと同じ位置に要素が並ぶ
+  const opened = await context.newPage()
+  await opened.goto('file://' + htmlPath)
+  const placed = await opened.evaluate(() => { const r = document.querySelector('.rectangle-2').getBoundingClientRect(); return [r.x, r.y, r.width, r.height] })
+  check('保存した HTML を開くと、デザインどおりの位置と大きさになる', placed.join() === '150,40,80,60', placed.join())
+  await opened.close()
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Rectangle 1"))').click()
+  check('中身のない図形には HTML の欄を出さない', (await htmlSection.count()) === 0)
+
+  // ── フレームの名前のラベルで選ぶ ──
+  await viewer.mouse.click(...at(700, 250))
+  await viewer.mouse.click(...at(112, 92))
+  check('フレームの名前のラベルを押しても選べる', (await title()) === 'Frame 1', await title())
+
+  // ── キーボードで、レイヤーの木に沿って選択を動かす ──
+  const walk = async (key) => { await viewer.keyboard.press(key); return title() }
+  const walked = [await walk('Enter'), await walk('Tab'), await walk('Shift+Tab'), await walk('Shift+Tab'), await walk('Enter'), await walk('Shift+Enter')]
+  check('Enter で子へ、Tab で隣へ、Shift + Enter で親へ動く', walked.join() === 'Text 1,Rectangle 2,Text 1,Rectangle 1,Rectangle 1,Frame 1', walked.join())
+
+  // ── 一覧の種類アイコンと検索 ──
+  check('一覧に種類のアイコンが出る', (await viewer.locator('.inspect-layer .layer-icon svg').count()) === 4)
+  const search = viewer.locator('.layer-search')
+  await search.fill('rect')
+  check('名前で探せる', (await tree()).join() === 'Rectangle 2,Rectangle 1', (await tree()).join())
+  await search.fill('hello')
+  check('テキストの内容でも探せる', (await tree()).join() === 'Text 1', (await tree()).join())
+  await viewer.locator('.inspect-layer').first().click()
+  check('見つけたものを選べる', (await title()) === 'Text 1', await title())
+  await search.fill('zzz')
+  check('見つからなければ、そう出る', (await tree()).length === 0 && (await viewer.locator('.viewer-sidebar .panel-hint').textContent()) === '見つかりません。')
+  await search.press('Escape')
+  check('検索欄の Esc で、元の一覧に戻る（選択はそのまま）', (await tree()).length === 4 && (await search.inputValue()) === '' && (await title()) === 'Text 1', (await tree()).join())
+
+  // ── 一覧から選ぶと、画面に入っていないものは見える位置へ寄る ──
+  const zoomText = () => viewer.locator('.zoom-value').textContent()
+  for (let i = 0; i < 5; i++) await viewer.locator('button[title="拡大"]').click()
+  const zoomed = await zoomText()
+  const center = () => pixel(box.width / 2, box.height / 2)
+  const isIndigo = (p) => p[0] === 0x4f && p[1] === 0x46 && p[2] === 0xe5
+  const beforeReveal = await center()
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Rectangle 1"))').click()
+  check('画面の外のものを一覧から選ぶと、倍率はそのままで中央へ寄る', !isIndigo(beforeReveal) && isIndigo(await center()) && (await zoomText()) === zoomed, `${beforeReveal.join()} → ${(await center()).join()} ${await zoomText()}`)
+  await viewer.screenshot({ path: path.join(OUT, '43-dev-mode-reveal.png') })
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Frame 1"))').click()
+  check('いまの倍率で収まらないものは、全体が入るまで引く', (await zoomText()) === '100%', await zoomText())
+  await fit()
+
+  // ── ダブルクリックで、そのフレームを画面いっぱいに表示する ──
+  for (let i = 0; i < 5; i++) await viewer.locator('button[title="拡大"]').click()
+  await viewer.mouse.dblclick(box.x + box.width / 2 + 10, box.y + box.height / 2 + 10)
+  check('ダブルクリックでフレーム全体を表示する', (await zoomText()) === '100%' && (await title()) === 'Frame 1', `${await zoomText()} ${await title()}`)
+  await fit()
 
   // ── 選択を外す ──
   await viewer.mouse.click(...at(700, 250))
@@ -135,6 +257,25 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.mouse.click(...at(160, 170))
   await viewer.keyboard.press('Escape')
   check('Esc でも選択が外れる', (await title()) === 'インスペクト')
+
+  // ── 見ている場所（ページと選択）を URL で共有する ──
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Rectangle 2"))').click()
+  const linked = await viewer.evaluate(() => location.href)
+  check('選ぶと、アドレスのハッシュにページと選択が入る', /#page=.+&select=.+/.test(linked), linked)
+  await viewer.locator('button:text-is("リンクをコピー")').click()
+  check('リンクをコピーできる', (await clipboard()) === linked, await clipboard())
+  const receiver = await context.newPage()
+  receiver.on('pageerror', (e) => errors.push('receiver: ' + String(e)))
+  receiver.on('console', (m) => m.type() === 'error' && errors.push('receiver: ' + m.text()))
+  await receiver.goto(linked)
+  await receiver.locator('input[type=file]').setInputFiles(kdrPath)
+  await receiver.waitForSelector('.inspect-panel')
+  check('リンクを開いてから同じ kdr を開くと、その選択から始まる', (await receiver.locator('.inspect-panel .panel-title').textContent()) === 'Rectangle 2', await receiver.locator('.inspect-panel .panel-title').textContent())
+  await receiver.evaluate(() => { location.hash = location.hash.replace(/select=[^&]+/, 'select=nothing') })
+  await receiver.waitForTimeout(100)
+  check('ドキュメントにないものを指すリンクは無視する', (await receiver.locator('.inspect-panel .panel-title').textContent()) === 'インスペクト')
+  await receiver.close()
+  await viewer.keyboard.press('Escape')
 
   // ── http で配信しているとき（Clipboard API が使えない）もコピーできる ──
   await viewer.evaluate(() => navigator.clipboard.writeText('前の内容'))

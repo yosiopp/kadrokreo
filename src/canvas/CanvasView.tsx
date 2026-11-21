@@ -212,10 +212,8 @@ export function CanvasView(props: Props) {
     <div
       ref={containerRef}
       className="canvas-view"
-      // cursor を指定すれば、左ドラッグでパンする場合でも、ふだんはそのカーソルを出す
-      style={{
-        cursor: panning ? 'grabbing' : spaceHeld ? 'grab' : (props.cursor ?? (panMode ? 'grab' : undefined)),
-      }}
+      // 画面を動かしている間と、Space を押している間のほかは、指定されたカーソルを出す
+      style={{ cursor: panning ? 'grabbing' : spaceHeld ? 'grab' : props.cursor }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={(event) => endDrag(event, false)}
@@ -223,8 +221,9 @@ export function CanvasView(props: Props) {
       onPointerLeave={() => props.onPointerLeave?.()}
       // 中ボタンのオートスクロールを止める
       onMouseDown={(event) => event.button === 1 && event.preventDefault()}
+      // 左ボタンで画面を動かす viewer でも、動かさずに 2 回押せばダブルクリック。Space を押している間は画面の移動だけ
       onDoubleClick={(event) => {
-        if (event.target === canvasRef.current && !panMode) props.onDoubleClick?.(toPointer(event))
+        if (event.target === canvasRef.current && !spaceHeld) props.onDoubleClick?.(toPointer(event))
       }}
     >
       <canvas ref={canvasRef} />

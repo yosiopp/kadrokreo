@@ -1,3 +1,4 @@
+import { isInstance } from '../document/component.ts'
 import { type Point, getAbsoluteBounds, toNodeSpace } from '../document/geometry.ts'
 import { lineEndpoints, pathPoints } from '../document/path.ts'
 import type { NodeId, Scene } from '../document/types.ts'
@@ -40,7 +41,7 @@ function hitSiblings(
       local.y <= node.height + tolerance
 
     if (node.type === 'frame') {
-      const whole = node.component?.role === 'instance' && !deep
+      const whole = isInstance(node) && !deep
       if (!whole && (inside || !node.clipContent)) {
         const child = hitSiblings(scene, node.children, local, options)
         if (child) return child
@@ -104,10 +105,11 @@ export function hitTestFrameLabel(
   viewport: Viewport,
   screen: Point,
   measureLabel: (text: string) => number,
+  options: Pick<HitOptions, 'locked'> = {},
 ): NodeId | null {
   for (let i = scene.rootIds.length - 1; i >= 0; i--) {
     const node = scene.nodes[scene.rootIds[i]]
-    if (node.type !== 'frame' || !node.visible || node.locked) continue
+    if (node.type !== 'frame' || !node.visible || (node.locked && !options.locked)) continue
     // ラベルは、フレームを囲む矩形の左上に出している
     const origin = worldToScreen(viewport, getAbsoluteBounds(scene, node.id))
     if (

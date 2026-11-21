@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_ZOOM, MIN_ZOOM, fitBounds, panBy, screenToWorld, worldToScreen, zoomAt } from './viewport.ts'
+import {
+  MAX_ZOOM,
+  MIN_ZOOM,
+  fitBounds,
+  panBy,
+  revealBounds,
+  screenToWorld,
+  worldToScreen,
+  zoomAt,
+} from './viewport.ts'
 
 describe('viewport', () => {
   const viewport = { x: 100, y: -50, zoom: 2 }
@@ -37,5 +46,30 @@ describe('viewport', () => {
     const small = fitBounds({ x: 10, y: 10, width: 20, height: 20 }, view)
     expect(small.zoom).toBe(1)
     expect(worldToScreen(small, { x: 20, y: 20 })).toEqual({ x: 500, y: 300 })
+  })
+
+  it('見えていないものは、倍率を変えずに中央へ寄せる', () => {
+    const view = { width: 1000, height: 600 }
+    const current = { x: 0, y: 0, zoom: 2 }
+    // 画面に映っているのは (0,0)〜(500,300)
+    const visible = { x: 100, y: 100, width: 50, height: 50 }
+    expect(revealBounds(current, visible, view)).toBe(current)
+
+    const outside = { x: 900, y: 400, width: 100, height: 50 }
+    const moved = revealBounds(current, outside, view)
+    expect(moved.zoom).toBe(2)
+    expect(worldToScreen(moved, { x: 950, y: 425 })).toEqual({ x: 500, y: 300 })
+
+    // 一部だけ見えているものも寄せる
+    const partly = { x: 480, y: 100, width: 100, height: 50 }
+    expect(worldToScreen(revealBounds(current, partly, view), { x: 530, y: 125 })).toEqual({ x: 500, y: 300 })
+  })
+
+  it('いまの倍率で収まらないものは、全体が入るまで引く', () => {
+    const view = { width: 1000, height: 600 }
+    const large = { x: 0, y: 0, width: 2000, height: 400 }
+    const next = revealBounds({ x: 0, y: 0, zoom: 2 }, large, view, 50)
+    expect(next.zoom).toBeCloseTo(900 / 2000)
+    expect(worldToScreen(next, { x: 1000, y: 200 })).toEqual({ x: 500, y: 300 })
   })
 })

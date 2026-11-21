@@ -1,5 +1,6 @@
 import { type DragEvent, useState } from 'react'
 import type { PageId } from '../document/types.ts'
+import { RenameInput } from './RenameInput.tsx'
 import { DuplicateIcon, TrashIcon } from './icons.tsx'
 import {
   addPage,
@@ -93,23 +94,7 @@ export function PagesPanel({ store, state }: Props) {
             onDragEnd={() => setDrop(null)}
           >
             {renaming === page.id ? (
-              <input
-                className="layer-name-input"
-                defaultValue={page.name}
-                autoFocus
-                onFocus={(event) => event.target.select()}
-                onClick={(event) => event.stopPropagation()}
-                onBlur={(event) => commitRename(page.id, event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.nativeEvent.isComposing) return
-                  if (event.key === 'Enter') event.currentTarget.blur()
-                  if (event.key === 'Escape') {
-                    // 元の名前に戻してから確定すれば、何も変わらない
-                    event.currentTarget.value = page.name
-                    event.currentTarget.blur()
-                  }
-                }}
-              />
+              <RenameInput name={page.name} onCommit={(name) => commitRename(page.id, name)} />
             ) : (
               <span className="page-name" onDoubleClick={() => setRenaming(page.id)}>
                 {page.name}

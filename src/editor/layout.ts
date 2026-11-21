@@ -9,7 +9,15 @@ import {
 } from '../document/geometry.ts'
 import type { AutoLayout, FrameNode, NodeId, Scene, SceneNode } from '../document/types.ts'
 import { createFrame } from './nodes.ts'
-import { insertNode, moveNode, sortByDocumentOrder, topLevelIds, updateNode } from './operations.ts'
+import {
+  type NodePatch,
+  insertNode,
+  moveNode,
+  patchNodes,
+  sortByDocumentOrder,
+  topLevelIds,
+  updateNode,
+} from './operations.ts'
 
 // オートレイアウト。フレームの子を children の順に並べ、必要ならフレームの大きさを中身に合わせる。
 // 並べた結果は各ノードの x / y / width / height に書き込むので、描画や viewer はこの設定を知らなくてよい。
@@ -36,6 +44,14 @@ function boxOf(node: SceneNode): Bounds {
   return transformRect(nodeMatrix(node), { x: 0, y: 0, width: node.width, height: node.height })
 }
 
+/** フレームの子のうち、並べる対象になるもの。非表示の子は場所を取らない */
+function visibleItems(scene: Scene, frame: FrameNode): { node: SceneNode; box: Bounds }[] {
+  return frame.children
+    .map((childId) => scene.nodes[childId])
+    .filter((node) => node.visible)
+    .map((node) => ({ node, box: boxOf(node) }))
+}
+
 function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
   const frame = scene.nodes[id]
   if (frame.type !== 'frame' || !frame.layout) return scene
@@ -49,11 +65,7 @@ function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
   const hugMain = (horizontal ? widthMode : heightMode) === 'hug'
   const hugCross = (horizontal ? heightMode : widthMode) === 'hug'
 
-  // 非表示の子は場所を取らない
-  const items = frame.children
-    .map((childId) => scene.nodes[childId])
-    .filter((node) => node.visible)
-    .map((node) => ({ node, box: boxOf(node) }))
+  const items = visibleItems(scene, frame)
   const occupied = items.reduce((sum, item) => sum + main(item.box), 0)
   const contentMain = occupied + gap * Math.max(0, items.length - 1)
   const contentCross = Math.max(0, ...items.map((item) => cross(item.box)))
@@ -72,7 +84,7 @@ function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
     }
   }
 
-  let next = scene
+  const patches = new Map<NodeId, NodePatch>()
   for (const { node, box } of items) {
     const crossAt =
       align === 'start'
@@ -81,17 +93,17 @@ function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
           ? (frameCross - cross(box)) / 2
           : frameCross - padCross - cross(box)
     const target = horizontal ? { x: cursor, y: crossAt } : { x: crossAt, y: cursor }
-    next = updateNode(next, node.id, {
+    patches.set(node.id, {
       x: tidy(node.x + target.x - box.x),
       y: tidy(node.y + target.y - box.y),
     })
     cursor += main(box) + step
   }
-
-  return updateNode(next, id, {
+  patches.set(id, {
     width: Math.max(1, tidy(horizontal ? frameMain : frameCross)),
     height: Math.max(1, tidy(horizontal ? frameCross : frameMain)),
   })
+  return patchNodes(scene, patches.keys(), (node) => patches.get(node.id) ?? null)
 }
 
 const DEFAULT_LAYOUT: AutoLayout = {
@@ -113,10 +125,7 @@ export function enableAutoLayout<T extends Scene>(scene: T, id: NodeId): T {
   const frame = scene.nodes[id]
   if (frame?.type !== 'frame' || frame.layout) return scene
 
-  const items = frame.children
-    .map((childId) => scene.nodes[childId])
-    .filter((node) => node.visible)
-    .map((node) => ({ node, box: boxOf(node) }))
+  const items = visibleItems(scene, frame)
   if (items.length === 0) return updateNode(scene, id, { layout: DEFAULT_LAYOUT })
 
   // 子の中心が、横と縦のどちらに広がっているかで向きを決める

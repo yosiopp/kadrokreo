@@ -1,44 +1,59 @@
-import type { DesignDocument, Gradient, NodeId, Scene, SceneNode, Shadow } from '../document/types.ts'
+import {
+  type InstanceNode,
+  OVERRIDE_KEYS,
+  derivedId,
+  findMain,
+  instanceOf,
+  isMain,
+} from '../document/component.ts'
+import { getAbsoluteBounds, getNodesBounds, tidy } from '../document/geometry.ts'
+import { type ColorFormat, formatColor } from './colors.ts'
+import { type Distance, measureBetween } from './distances.ts'
+import type { DesignDocument, Gradient, NodeId, Override, Scene, Shadow } from '../document/types.ts'
+import { CAP_LABELS, FIT_LABELS, SIZE_MODE_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
 
-/** color を付けると、値の横に色見本を出す */
-export type InspectRow = { label: string; value: string; color?: string }
+/** color を付けると、値の横に色見本を出す。nodes を付けると、それらのノードを選ぶボタンを出す */
+export type InspectRow = { label: string; value: string; color?: string; nodes?: NodeId[] }
 export type InspectSection = { title: string; rows: InspectRow[] }
-
-export const TYPE_LABELS: Record<SceneNode['type'], string> = {
-  frame: 'フレーム',
-  rect: '長方形',
-  ellipse: '楕円',
-  line: '直線',
-  path: 'パス',
-  text: 'テキスト',
-  image: '画像',
-}
 
 const DIRECTIONS = { horizontal: '横', vertical: '縦' }
 const JUSTIFY = { start: '先頭', center: '中央', end: '末尾', 'space-between': '均等' }
-const MODES = { hug: '中身に合わせる', fixed: '固定' }
 const TEXT_ALIGN = { left: '左', center: '中央', right: '右' }
-const FIT = { cover: '枠を埋めて切り抜く', contain: '全体を収める', stretch: '引き伸ばす' }
-const CAPS = { none: 'なし', arrow: '矢印' }
+const OVERRIDE_LABELS: Record<keyof Override, string> = {
+  text: '文言',
+  fill: '塗り',
+  fillGradient: 'グラデーション',
+  stroke: '線の色',
+  visible: '表示',
+}
+
+/** CSS の長さの単位 */
+export type Unit = 'px' | 'rem'
+
+/** CSS の書き方。remBase は 1rem が何 px か */
+export type CodeStyle = { unit: Unit; remBase: number; color: ColorFormat }
+export const DEFAULT_CODE_STYLE: CodeStyle = { unit: 'px', remBase: 16, color: 'hex' }
 
 /** 小数 2 桁まで。計算で出る細かい端数は見せない */
 function num(value: number): string {
-  return String(Math.round(value * 100) / 100)
+  return String(tidy(value))
 }
 
 function percent(ratio: number): string {
   return `${num(ratio * 100)}%`
 }
 
-function hex(color: string): string {
-  return color.toUpperCase()
-}
-
 /** ノードの設定を、見出しごとにまとめる。その種類のノードにない項目や、既定のままで意味のない項目は出さない */
-export function inspectNode(doc: DesignDocument, scene: Scene, id: NodeId): InspectSection[] {
+export function inspectNode(
+  doc: DesignDocument,
+  scene: Scene,
+  id: NodeId,
+  format: ColorFormat = 'hex',
+): InspectSection[] {
   const node = scene.nodes[id]
+  const hex = (color: string) => formatColor(color, format, { upper: true })
   const sections: InspectSection[] = []
   const add = (title: string, rows: (InspectRow | false | null)[]) => {
     const shown = rows.filter((row) => row !== false && row !== null)
@@ -57,17 +72,15 @@ export function inspectNode(doc: DesignDocument, scene: Scene, id: NodeId): Insp
 
   if (node.type === 'frame' && node.layout) {
     const { layout } = node
-    const vertical = layout.direction === 'vertical'
-    const align = { start: vertical ? '左' : '上', center: '中央', end: vertical ? '右' : '下' }
     add('オートレイアウト', [
       { label: '向き', value: DIRECTIONS[layout.direction] },
       { label: '間隔', value: num(layout.gap) },
       { label: '余白（左右）', value: num(layout.paddingX) },
       { label: '余白（上下）', value: num(layout.paddingY) },
-      { label: '揃え', value: align[layout.align] },
+      { label: '揃え', value: alignLabels(layout.direction)[layout.align] },
       { label: '寄せ', value: JUSTIFY[layout.justify] },
-      { label: '幅', value: MODES[layout.widthMode] },
-      { label: '高さ', value: MODES[layout.heightMode] },
+      { label: '幅', value: SIZE_MODE_LABELS[layout.widthMode] },
+      { label: '高さ', value: SIZE_MODE_LABELS[layout.heightMode] },
     ])
   }
 
@@ -103,8 +116,8 @@ export function inspectNode(doc: DesignDocument, scene: Scene, id: NodeId): Insp
     add('線', [
       { label: '色', value: hex(node.stroke), color: node.stroke },
       { label: '太さ', value: num(node.strokeWidth) },
-      'startCap' in node && node.startCap !== 'none' && { label: '始点', value: CAPS[node.startCap] },
-      'endCap' in node && node.endCap !== 'none' && { label: '終点', value: CAPS[node.endCap] },
+      'startCap' in node && node.startCap !== 'none' && { label: '始点', value: CAP_LABELS[node.startCap] },
+      'endCap' in node && node.endCap !== 'none' && { label: '終点', value: CAP_LABELS[node.endCap] },
     ])
   }
 
@@ -114,51 +127,84 @@ export function inspectNode(doc: DesignDocument, scene: Scene, id: NodeId): Insp
       { label: '横', value: num(shadow.x) },
       { label: '縦', value: num(shadow.y) },
       { label: 'ぼかし', value: num(shadow.blur) },
-      { label: '色', value: `${hex(shadow.color)} ${percent(shadow.opacity)}`, color: shadow.color },
+      {
+        label: '色',
+        // HEX のときは、色と濃さを分けて出す（濃さは別の値として持っている）
+        value:
+          format === 'hex'
+            ? `${hex(shadow.color)} ${percent(shadow.opacity)}`
+            : formatColor(shadow.color, format, { alpha: shadow.opacity }),
+        color: shadow.color,
+      },
     ])
   }
 
   if (node.type === 'image') {
     const asset = doc.assets[node.assetId]
     add('画像', [
-      { label: '収め方', value: FIT[node.fit] },
+      { label: '収め方', value: FIT_LABELS[node.fit] },
       asset !== undefined && { label: '形式', value: asset.mime.replace('image/', '').toUpperCase() },
     ])
   }
 
-  if (node.type === 'frame' && node.component) {
-    const link = node.component
-    const main = link.role === 'instance' ? findMainName(doc, link.id) : null
+  if (isMain(node)) {
+    add('コンポーネント', [{ label: '種類', value: '元' }])
+  }
+  const instance = instanceOf(scene, id)
+  if (instance) {
+    const main = findMain(doc, instance.component.id)
+    const own = instance.id === id
     add('コンポーネント', [
-      { label: '種類', value: link.role === 'main' ? '元' : 'インスタンス' },
-      main !== null && { label: '元の名前', value: main },
+      { label: '種類', value: own ? 'インスタンス' : 'インスタンスの中身' },
+      !own && { label: 'インスタンス', value: instance.name },
+      main !== null && { label: '元の名前', value: main.node.name },
+      // 中身は、そのノード自身が元と違えている項目だけを出す。インスタンス全体の分は、下の一覧で出す
+      !own && overrideRow('上書き', overridesOn(scene, instance, main?.node.id).get(id)),
     ])
+    if (own) {
+      add(
+        '上書き',
+        [...overridesOn(scene, instance, main?.node.id)].map(([target, override]) =>
+          overrideRow(scene.nodes[target].name, override),
+        ),
+      )
+    }
   }
 
   return sections
 }
 
-function findMainName(doc: DesignDocument, componentId: string): string | null {
-  for (const page of doc.pages) {
-    for (const node of Object.values(page.nodes)) {
-      if (node.type === 'frame' && node.component?.role === 'main' && node.component.id === componentId) {
-        return node.name
-      }
-    }
+/**
+ * インスタンスの上書きを、当たっているノード（インスタンス自身か、その中身）の id ごとにまとめる。
+ * 上書きは元の側の id で持っているので、写しの id に直す。当たる先がないものは捨てる。
+ */
+function overridesOn(scene: Scene, instance: InstanceNode, mainId: NodeId | undefined): Map<NodeId, Override> {
+  const found = new Map<NodeId, Override>()
+  for (const [sourceId, override] of Object.entries(instance.component.overrides)) {
+    const target = sourceId === mainId ? instance.id : derivedId(instance.id, sourceId)
+    if (Object.hasOwn(scene.nodes, target)) found.set(target, override)
   }
-  return null
+  return found
+}
+
+/** 元と違えている項目の名前を並べた行。何も違えていなければ null */
+function overrideRow(label: string, override: Override | undefined): InspectRow | null {
+  const keys = OVERRIDE_KEYS.filter((key) => override?.[key] !== undefined)
+  return keys.length === 0 ? null : { label, value: keys.map((key) => OVERRIDE_LABELS[key]).join('・') }
 }
 
 /**
  * ノードの見た目を CSS で表す。実装するときの手がかりにするためのもので、
  * 直線とパスは CSS で形を描けないので、SVG に指定するプロパティ（stroke など）で表す。
  */
-export function nodeCss(scene: Scene, id: NodeId): string {
+export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = {}): string {
+  const style = { ...DEFAULT_CODE_STYLE, ...options }
+  const color = (value: string) => formatColor(value, style.color)
   const node = scene.nodes[id]
   const parent = node.parentId === null ? null : scene.nodes[node.parentId]
   const lines: string[] = []
   const add = (property: string, value: string) => lines.push(`${property}: ${value};`)
-  const px = (value: number) => (value === 0 ? '0' : `${num(value)}px`)
+  const px = (value: number) => length(value, style)
 
   // 自動で並べるフレームの子は、親が位置を決める。ページ直下のものは、置き場所を決めない
   const absolute = parent?.type === 'frame' && !parent.layout
@@ -199,7 +245,7 @@ export function nodeCss(scene: Scene, id: NodeId): string {
   if (node.opacity < 1) add('opacity', num(node.opacity))
 
   if (node.type === 'text') {
-    add('color', node.fill)
+    add('color', color(node.fill))
     add('font-family', node.fontFamily)
     add('font-size', px(node.fontSize))
     add('font-weight', String(node.fontWeight))
@@ -210,14 +256,17 @@ export function nodeCss(scene: Scene, id: NodeId): string {
     add('object-fit', node.fit === 'stretch' ? 'fill' : node.fit)
   } else if (node.type === 'line' || node.type === 'path') {
     // SVG の fill にはグラデーションを直接書けないので、始まりの色で代える
-    if (node.type === 'path') add('fill', node.fill ?? 'none')
-    add('stroke', node.stroke ?? 'none')
+    if (node.type === 'path') add('fill', node.fill === null ? 'none' : color(node.fill))
+    add('stroke', node.stroke === null ? 'none' : color(node.stroke))
     if (node.stroke !== null) add('stroke-width', px(node.strokeWidth))
   } else {
-    if (node.fillGradient) add('background', gradientCss(node.fillGradient))
-    else if (node.fill !== null) add('background', node.fill)
+    if (node.fillGradient) add('background', gradientCss(node.fillGradient, style))
+    else if (node.fill !== null) add('background', color(node.fill))
     if (node.stroke !== null && node.strokeWidth > 0) {
-      add('border', `${px(node.strokeWidth)} solid ${node.stroke}`)
+      // 線は枠の辺の上に、内と外へ半分ずつ引く（描画と同じ）。border だと box-sizing しだいで内か外に寄り、
+      // 中身の置き場所も狭まるので、場所を取らない outline を、太さの半分だけ内側へずらして使う
+      add('outline', `${px(node.strokeWidth)} solid ${color(node.stroke)}`)
+      add('outline-offset', px(-node.strokeWidth / 2))
     }
   }
 
@@ -225,8 +274,8 @@ export function nodeCss(scene: Scene, id: NodeId): string {
   else if ('cornerRadius' in node && node.cornerRadius > 0) add('border-radius', px(node.cornerRadius))
   if ('shadow' in node && node.shadow) {
     // パスの影は、枠ではなく形に沿って落ちる
-    if (node.type === 'path') add('filter', `drop-shadow(${shadowCss(node.shadow)})`)
-    else add('box-shadow', shadowCss(node.shadow))
+    if (node.type === 'path') add('filter', `drop-shadow(${shadowCss(node.shadow, style)})`)
+    else add('box-shadow', shadowCss(node.shadow, style))
   }
   if (node.type === 'frame' && node.clipContent && node.children.length > 0) add('overflow', 'hidden')
 
@@ -237,14 +286,53 @@ export function nodeCss(scene: Scene, id: NodeId): string {
  * ドキュメントの角度は 0° が左から右、90° が上から下。CSS は 0deg が下から上、90deg が左から右なので、90° ずれる。
  * 色が変わる区間の長さは、描画（canvas/render.ts）も CSS も「枠の角がちょうど両端の色になる長さ」で同じ。
  */
-function gradientCss(gradient: Gradient): string {
-  const stops = gradient.stops.map((stop) => `${stop.color} ${percent(stop.offset)}`)
+function gradientCss(gradient: Gradient, style: CodeStyle): string {
+  const stops = gradient.stops.map((stop) => `${formatColor(stop.color, style.color)} ${percent(stop.offset)}`)
   return `linear-gradient(${num((((gradient.angle + 90) % 360) + 360) % 360)}deg, ${stops.join(', ')})`
 }
 
-function shadowCss(shadow: Shadow): string {
-  const channel = (start: number) => parseInt(shadow.color.slice(start, start + 2), 16)
-  const color = `rgba(${channel(1)}, ${channel(3)}, ${channel(5)}, ${num(shadow.opacity)})`
-  const length = (value: number) => (value === 0 ? '0' : `${num(value)}px`)
-  return `${length(shadow.x)} ${length(shadow.y)} ${length(shadow.blur)} ${color}`
+/** CSS の box-shadow の値 */
+export function shadowCss(shadow: Shadow, style: CodeStyle = DEFAULT_CODE_STYLE): string {
+  const color = formatColor(shadow.color, style.color, { alpha: shadow.opacity })
+  return `${length(shadow.x, style)} ${length(shadow.y, style)} ${length(shadow.blur, style)} ${color}`
+}
+
+/** rem は、基準が 16px なら 1px = 0.0625rem なので、小数 4 桁まで出す */
+function length(value: number, style: Pick<CodeStyle, 'unit' | 'remBase'>): string {
+  if (value === 0) return '0'
+  return style.unit === 'rem' ? `${Math.round((value / style.remBase) * 10000) / 10000}rem` : `${num(value)}px`
+}
+
+/**
+ * いくつも選んでいるときの一覧: 全体を囲む矩形と、2 つなら、その間隔（1 つめから 2 つめまで）。
+ * 間隔は、キャンバスに引く線と同じもの（measureBetween）。
+ */
+export function inspectSelection(scene: Scene, ids: readonly NodeId[]): InspectSection[] {
+  const bounds = getNodesBounds(scene, ids)
+  if (!bounds) return []
+  const sections: InspectSection[] = [
+    {
+      title: '全体',
+      rows: [
+        { label: 'X', value: num(bounds.x) },
+        { label: 'Y', value: num(bounds.y) },
+        { label: '幅', value: num(bounds.width) },
+        { label: '高さ', value: num(bounds.height) },
+      ],
+    },
+  ]
+  if (ids.length === 2) {
+    const distances = measureBetween(getAbsoluteBounds(scene, ids[0]), getAbsoluteBounds(scene, ids[1]))
+    const horizontal = distances.filter((distance) => distance.from.y === distance.to.y)
+    const vertical = distances.filter((distance) => distance.from.y !== distance.to.y)
+    // 重なっていれば、同じ向きに 2 本（左右の辺どうし、上下の辺どうし）出る
+    const rows = (list: Distance[], label: string, sides: [string, string]) =>
+      list.map((distance, index) => ({
+        label: list.length === 2 ? `${label}（${sides[index]}）` : label,
+        value: num(distance.distance),
+      }))
+    const all = [...rows(horizontal, '横', ['左', '右']), ...rows(vertical, '縦', ['上', '下'])]
+    sections.push({ title: '間隔', rows: all.length > 0 ? all : [{ label: '横・縦', value: '0' }] })
+  }
+  return sections
 }

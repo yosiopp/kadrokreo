@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lineBetween, lineEndpoints, pathFromPoints, pathPoints } from './path.ts'
+import { cappedStroke, lineBetween, lineEndpoints, pathFromPoints, pathPoints } from './path.ts'
 
 describe('lineBetween / lineEndpoints', () => {
   const cases = [
@@ -47,5 +47,15 @@ describe('pathFromPoints / pathPoints', () => {
     const shape = pathFromPoints([{ x: 0, y: 5 }, { x: 30, y: 5 }])
     expect(shape).toMatchObject({ x: 0, y: 5, width: 30, height: 1 })
     expect(pathPoints(shape)).toEqual([{ x: 0, y: 0 }, { x: 30, y: 0 }])
+  })
+})
+
+describe('cappedStroke', () => {
+  it('細い線でも矢印は長さ 10 にし、長さのない区間には矢印を付けない', () => {
+    const style = { strokeWidth: 1, startCap: 'arrow' as const, endCap: 'arrow' as const }
+    const { line, heads } = cappedStroke([{ x: 0, y: 0 }, { x: 0, y: 50 }], style)
+    expect(line).toEqual([{ x: 0, y: 8 }, { x: 0, y: 42 }])
+    expect(heads[1]).toEqual([{ x: 0, y: 50 }, { x: -4, y: 40 }, { x: 4, y: 40 }])
+    expect(cappedStroke([{ x: 5, y: 5 }, { x: 5, y: 5 }], style).heads).toEqual([])
   })
 })

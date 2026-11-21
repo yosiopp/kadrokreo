@@ -246,6 +246,11 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await viewer.mouse.move(canvas.x + canvas.width / 2 + 260 - 450, canvas.y + canvas.height / 2 + 455 - 346)
   await shot(viewer, '10-viewer-inspect.png')
 
+  // フレームの外に置いたインスタンス（一覧では上）を選ぶ。元と違えている項目が出る
+  await viewer.mouse.move(canvas.x + canvas.width / 2, canvas.y + 4)
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("ボタン"))').first().click()
+  await shot(viewer, '11-viewer-instance.png')
+
   await browser.close()
 })().catch((e) => {
   console.error('CRASHED', e)

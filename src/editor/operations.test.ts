@@ -21,6 +21,7 @@ import {
   movePage,
   pasteFragment,
   pasteIntoPage,
+  patchNodes,
   placeNodes,
   pruneAssets,
   removePage,
@@ -102,6 +103,32 @@ describe('updateNode', () => {
     const { doc, rect } = fixture()
     const patch = { parentId: null, id: 'other', text: 'hello' } as object
     expect(updateNode(doc, rect.id, patch)).toBe(doc)
+  })
+})
+
+describe('patchNodes', () => {
+  it('ノードごとに決めた patch をまとめて当てる。ノードの表を写すのは 1 回', () => {
+    const { doc, frame, rect, loose } = fixture()
+    const next = patchNodes(doc, [frame.id, rect.id, loose.id], (node) =>
+      node.type === 'rect' ? { x: node.x + 1 } : null,
+    )
+    expect(next.nodes[rect.id].x).toBe(6)
+    expect(next.nodes[loose.id].x).toBe(901)
+    // null を返したノードは、同じ参照のまま
+    expect(next.nodes[frame.id]).toBe(doc.nodes[frame.id])
+    expect(doc.nodes[rect.id].x).toBe(5)
+  })
+
+  it('何も変わらなければ、同じ参照を返す。存在しない id は飛ばす', () => {
+    const { doc, rect } = fixture()
+    expect(patchNodes(doc, [rect.id, 'missing'], (node) => ({ x: node.x }))).toBe(doc)
+    expect(patchNodes(doc, [rect.id], () => null)).toBe(doc)
+  })
+
+  it('同じ id が 2 回あれば、2 回目は 1 回目の結果を受け取る', () => {
+    const { doc, rect } = fixture()
+    const next = patchNodes(doc, [rect.id, rect.id], (node) => ({ x: node.x + 1 }))
+    expect(next.nodes[rect.id].x).toBe(7)
   })
 })
 

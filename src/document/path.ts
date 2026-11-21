@@ -1,5 +1,5 @@
 import type { Bounds, Point } from './geometry.ts'
-import type { LineNode, PathNode } from './types.ts'
+import type { Cap, LineNode, PathNode } from './types.ts'
 
 /** 直線の始点と終点（ノードの座標系） */
 export function lineEndpoints(
@@ -54,4 +54,44 @@ export function pathFromPoints(points: readonly Point[]): Bounds & Pick<PathNode
       y: height === 0 ? 0 : (point.y - y) / height,
     })),
   }
+}
+
+/** 矢印の長さ。線が細くても見える大きさにする */
+export function arrowSize(strokeWidth: number): number {
+  return Math.max(strokeWidth * 4, 10)
+}
+
+/**
+ * 端に矢印を付けた線の形。line は線として引く頂点（矢印の根元の手前で止めたもの）、heads は矢印の三角形。
+ * 矢印の先が端の位置にちょうど来るよう、線は矢印の分だけ短くする。描画（canvas）と HTML の出力で同じ形にするためのもの。
+ */
+export function cappedStroke(
+  points: readonly Point[],
+  style: { strokeWidth: number; startCap: Cap; endCap: Cap },
+): { line: Point[]; heads: [Point, Point, Point][] } {
+  const size = arrowSize(style.strokeWidth)
+  const line = [...points]
+  const heads: [Point, Point, Point][] = []
+  const addHead = (tipIndex: number, neighborIndex: number) => {
+    const tip = points[tipIndex]
+    const neighbor = points[neighborIndex]
+    const length = Math.hypot(tip.x - neighbor.x, tip.y - neighbor.y)
+    if (length === 0) return
+    const direction = { x: (tip.x - neighbor.x) / length, y: (tip.y - neighbor.y) / length }
+    const inset = Math.min(size * 0.8, length)
+    line[tipIndex] = { x: tip.x - direction.x * inset, y: tip.y - direction.y * inset }
+    const baseX = tip.x - direction.x * size
+    const baseY = tip.y - direction.y * size
+    const half = size * 0.4
+    heads.push([
+      tip,
+      { x: baseX - direction.y * half, y: baseY + direction.x * half },
+      { x: baseX + direction.y * half, y: baseY - direction.x * half },
+    ])
+  }
+  if (points.length >= 2) {
+    if (style.startCap === 'arrow') addHead(0, 1)
+    if (style.endCap === 'arrow') addHead(points.length - 1, points.length - 2)
+  }
+  return { line, heads }
 }

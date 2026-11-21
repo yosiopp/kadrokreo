@@ -1,82 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type {
-  DesignDocument,
-  EllipseNode,
-  FrameNode,
-  ImageNode,
-  LineNode,
-  PathNode,
-  RectNode,
-  Scene,
-  SceneNode,
-  TextNode,
-} from '../document/types.ts'
-import { inspectNode, nodeCss } from './inspect.ts'
-
-// editor の側にあるノードの生成（nodes.ts）は使えないので、ここで組み立てる
-const base = {
-  name: 'Node',
-  parentId: null,
-  x: 0,
-  y: 0,
-  width: 100,
-  height: 50,
-  rotation: 0,
-  visible: true,
-  locked: false,
-  opacity: 1,
-}
-const paint = { fill: '#ff0000', fillGradient: null, stroke: null, strokeWidth: 1, shadow: null }
-
-const rect = (patch: Partial<RectNode> = {}): RectNode => ({
-  ...base,
-  ...paint,
-  id: 'rect',
-  type: 'rect',
-  cornerRadius: 0,
-  ...patch,
-})
-const frame = (patch: Partial<FrameNode> = {}): FrameNode => ({
-  ...base,
-  ...paint,
-  id: 'frame',
-  type: 'frame',
-  children: [],
-  clipContent: true,
-  cornerRadius: 0,
-  layout: null,
-  component: null,
-  ...patch,
-})
-const text = (patch: Partial<TextNode> = {}): TextNode => ({
-  ...base,
-  id: 'text',
-  type: 'text',
-  text: 'こんにちは',
-  fontSize: 16,
-  fontFamily: 'sans-serif',
-  fill: '#111111',
-  autoWidth: true,
-  fontWeight: 400,
-  textAlign: 'left',
-  lineHeight: 1.5,
-  ...patch,
-})
-
-function sceneOf(...nodes: SceneNode[]): Scene {
-  return {
-    nodes: Object.fromEntries(nodes.map((node) => [node.id, node])),
-    rootIds: nodes.filter((node) => node.parentId === null).map((node) => node.id),
-  }
-}
-
-function docOf(scene: Scene): DesignDocument {
-  return {
-    name: 'x',
-    pages: [{ id: 'p1', name: 'Page 1', ...scene }],
-    assets: { a1: { mime: 'image/png', data: '' } },
-  }
-}
+import { derivedId } from '../document/component.ts'
+import type { EllipseNode, ImageNode, LineNode, PathNode, Scene } from '../document/types.ts'
+import { inspectNode, inspectSelection, nodeCss } from './inspect.ts'
+import { base, docOf, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
 
 const css = (scene: Scene, id: string) => nodeCss(scene, id).split('\n')
 const rowsOf = (scene: Scene, id: string, title: string) =>
@@ -145,7 +71,8 @@ describe('nodeCss', () => {
       'transform: rotate(-30deg);',
       'opacity: 0.5;',
       'background: #ff0000;',
-      'border: 2px solid #000000;',
+      'outline: 2px solid #000000;',
+      'outline-offset: -1px;',
       'border-radius: 8px;',
       'box-shadow: 0 4px 12px rgba(16, 32, 48, 0.25);',
     ])
@@ -232,6 +159,38 @@ describe('nodeCss', () => {
       'filter: drop-shadow(1px 2px 0 rgba(0, 0, 0, 1));',
     ])
   })
+
+  it('単位を rem にすると、長さを 16px = 1rem で換算する', () => {
+    const parent = frame({ children: ['rect', 'text'] })
+    const child = rect({
+      parentId: 'frame',
+      x: 24,
+      y: 0,
+      width: 100,
+      height: 50,
+      cornerRadius: 6,
+      stroke: '#000000',
+      strokeWidth: 1,
+      shadow: { x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 },
+    })
+    const label = text({ parentId: 'frame', fontSize: 14 })
+    const scene = sceneOf(parent, child, label)
+    expect(nodeCss(scene, 'rect', { unit: 'rem' }).split('\n')).toEqual([
+      'position: absolute;',
+      'left: 1.5rem;',
+      'top: 0;',
+      'width: 6.25rem;',
+      'height: 3.125rem;',
+      'background: #ff0000;',
+      'outline: 0.0625rem solid #000000;',
+      'outline-offset: -0.0312rem;',
+      'border-radius: 0.375rem;',
+      'box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.25);',
+    ])
+    expect(nodeCss(scene, 'text', { unit: 'rem' })).toContain('font-size: 0.875rem;')
+    // 行の高さは倍率なので変わらない
+    expect(nodeCss(scene, 'text', { unit: 'rem' })).toContain('line-height: 1.5;')
+  })
 })
 
 describe('inspectNode', () => {
@@ -314,8 +273,111 @@ describe('inspectNode', () => {
     expect(rowsOf(scene, 'orphan', 'コンポーネント')).toEqual(['種類=インスタンス'])
   })
 
+  it('インスタンスには、元と違えている項目を、当たっているノードごとに出す', () => {
+    const main = frame({ id: 'main', name: 'ボタン', component: { id: 'c1', role: 'main' }, children: ['label', 'icon'] })
+    const label = text({ id: 'label', name: 'Label', parentId: 'main' })
+    const icon = rect({ id: 'icon', name: 'Icon', parentId: 'main' })
+    const labelCopy = derivedId('instance', 'label')
+    const iconCopy = derivedId('instance', 'icon')
+    const instance = frame({
+      id: 'instance',
+      name: '保存ボタン',
+      children: [labelCopy, iconCopy],
+      component: {
+        id: 'c1',
+        role: 'instance',
+        overrides: {
+          main: { fill: '#000000' },
+          label: { text: '保存', fill: '#ffffff' },
+          // 元から消えたノードへの上書きは出さない
+          gone: { visible: false },
+        },
+      },
+    })
+    const scene = sceneOf(
+      main,
+      label,
+      icon,
+      instance,
+      text({ id: labelCopy, name: 'Label', parentId: 'instance', text: '保存' }),
+      rect({ id: iconCopy, name: 'Icon', parentId: 'instance' }),
+    )
+    expect(rowsOf(scene, 'instance', '上書き')).toEqual(['保存ボタン=塗り', 'Label=文言・塗り'])
+    expect(rowsOf(scene, labelCopy, 'コンポーネント')).toEqual([
+      '種類=インスタンスの中身',
+      'インスタンス=保存ボタン',
+      '元の名前=ボタン',
+      '上書き=文言・塗り',
+    ])
+    expect(rowsOf(scene, iconCopy, 'コンポーネント')).toEqual([
+      '種類=インスタンスの中身',
+      'インスタンス=保存ボタン',
+      '元の名前=ボタン',
+    ])
+    // 元の側には、上書きの話は出ない
+    expect(rowsOf(scene, 'label', 'コンポーネント')).toBeUndefined()
+    expect(rowsOf(scene, 'main', '上書き')).toBeUndefined()
+  })
+
   it('画像は収め方と形式を出す', () => {
     const image: ImageNode = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover' }
     expect(rowsOf(sceneOf(image), 'image', '画像')).toEqual(['収め方=枠を埋めて切り抜く', '形式=PNG'])
+  })
+})
+
+describe('inspectSelection', () => {
+  const rowsOfSelection = (scene: Scene, ids: string[]) =>
+    inspectSelection(scene, ids).map((section) => `${section.title}:${section.rows.map((row) => `${row.label}=${row.value}`).join(',')}`)
+
+  it('離れた 2 つは、全体の矩形と、向かい合う辺の間隔', () => {
+    const scene = sceneOf(rect({ id: 'a' }), rect({ id: 'b', x: 130, y: 0 }))
+    expect(rowsOfSelection(scene, ['a', 'b'])).toEqual(['全体:X=0,Y=0,幅=230,高さ=50', '間隔:横=30'])
+  })
+
+  it('重なっていれば、同じ側の辺どうしの間隔を出す', () => {
+    const scene = sceneOf(rect({ id: 'outer', width: 200, height: 100 }), rect({ id: 'inner', x: 10, y: 20, width: 100, height: 50 }))
+    expect(rowsOfSelection(scene, ['inner', 'outer'])[1]).toBe('間隔:横（左）=10,横（右）=90,縦（上）=20,縦（下）=30')
+  })
+
+  it('3 つ以上なら、全体の矩形だけ', () => {
+    const scene = sceneOf(rect({ id: 'a' }), rect({ id: 'b', x: 200 }), rect({ id: 'c', y: 100 }))
+    expect(rowsOfSelection(scene, ['a', 'b', 'c'])).toEqual(['全体:X=0,Y=0,幅=300,高さ=150'])
+  })
+})
+
+describe('色の書き方と rem の基準', () => {
+  const shadow = { x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25 }
+  const gradient = { angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }
+
+  it('CSS の色を RGB や HSL で書ける。影は透明度つき', () => {
+    const scene = sceneOf(rect({ fill: '#4f46e5', stroke: '#ffffff', strokeWidth: 2, shadow }))
+    expect(nodeCss(scene, 'rect', { color: 'rgb' })).toContain('background: rgb(79, 70, 229);')
+    expect(nodeCss(scene, 'rect', { color: 'rgb' })).toContain('outline: 2px solid rgb(255, 255, 255);')
+    expect(nodeCss(scene, 'rect', { color: 'hsl' })).toContain('box-shadow: 0 2px 4px hsla(0, 0%, 0%, 0.25);')
+    expect(nodeCss(scene, 'rect')).toContain('box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);')
+  })
+
+  it('グラデーションとテキストの色も書き方に従う', () => {
+    const scene = sceneOf(rect({ fillGradient: gradient }), text({ fill: '#ff0000' }))
+    expect(nodeCss(scene, 'rect', { color: 'hsl' })).toContain(
+      'background: linear-gradient(90deg, hsl(0, 100%, 50%) 0%, hsl(240, 100%, 50%) 100%);',
+    )
+    expect(nodeCss(scene, 'text', { color: 'rgb' })).toContain('color: rgb(255, 0, 0);')
+  })
+
+  it('rem の基準を変えられる', () => {
+    const scene = sceneOf(rect())
+    expect(nodeCss(scene, 'rect', { unit: 'rem', remBase: 10 })).toContain('width: 10rem;')
+  })
+
+  it('設定の一覧の色も書き方に従う。影は、HEX なら色と濃さを分け、それ以外は透明度つき', () => {
+    const scene = sceneOf(rect({ fill: '#4f46e5', shadow }))
+    const doc = docOf(scene)
+    const color = (format: 'hex' | 'rgb' | 'hsl', title: string) =>
+      inspectNode(doc, scene, 'rect', format).find((section) => section.title === title)?.rows.at(-1)?.value
+    expect(color('hex', '塗り')).toBe('#4F46E5')
+    expect(color('rgb', '塗り')).toBe('rgb(79, 70, 229)')
+    expect(color('hex', '影')).toBe('#000000 25%')
+    expect(color('rgb', '影')).toBe('rgba(0, 0, 0, 0.25)')
   })
 })

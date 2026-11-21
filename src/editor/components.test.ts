@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import { hitTest } from '../canvas/hitTest.ts'
+import { findMain, owningInstance } from '../document/component.ts'
 import type { AutoLayout, DesignDocument, FrameNode, Page, Scene } from '../document/types.ts'
 import {
   type FitText,
   captureOverrides,
   createInstance,
   detachComponent,
-  findMain,
   hasOverrides,
   makeComponent,
-  owningInstance,
   resetOverrides,
   syncComponents,
 } from './components.ts'
-import { hitTest, nodesInMarquee } from './hitTest.ts'
+import { nodesInMarquee } from './hitTest.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
 import {
   addPage,

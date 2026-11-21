@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { findFrameAt, hitTest, hitTestFrameLabel, nodesInMarquee } from './hitTest.ts'
+import { hitTest, hitTestFrameLabel } from '../canvas/hitTest.ts'
+import { findFrameAt, nodesInMarquee } from './hitTest.ts'
 import { pathFromPoints } from '../document/path.ts'
 import { createEllipse, createFrame, createLine, createPath, createRect } from './nodes.ts'
 import { createPage, insertNode, updateNode } from './operations.ts'

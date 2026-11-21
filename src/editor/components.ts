@@ -1,6 +1,17 @@
+import {
+  type InstanceNode,
+  type MainNode,
+  OVERRIDE_KEYS,
+  derivedId,
+  findMain,
+  instanceOf,
+  isInstance,
+  isMain,
+  mainsOf,
+  owningInstance,
+} from '../document/component.ts'
 import { getAbsoluteBounds } from '../document/geometry.ts'
 import type {
-  ComponentLink,
   DesignDocument,
   FrameNode,
   NodeId,
@@ -25,14 +36,8 @@ import { insertNode, removeNodes, updateNode, updatePage } from './operations.ts
 // captureOverrides がその変更を上書きとして覚える（これもストアが変更のたびにかける）。
 // それ以外の変更は覚えないので、次の同期で元に戻る。形や並びまで変えたければ切り離す。
 
-type InstanceLink = Extract<ComponentLink, { role: 'instance' }>
-export type InstanceNode = FrameNode & { component: InstanceLink }
-
 /** テキストノードの大きさを中身に合わせ直す関数。文字の幅を測れる環境（ブラウザ）でだけ渡せる */
 export type FitText = <T extends Scene>(scene: T, ids: readonly NodeId[]) => T
-
-/** インスタンスごとに上書きできる項目 */
-const OVERRIDE_KEYS = ['text', 'fill', 'fillGradient', 'stroke', 'visible'] as const
 
 /** フレームをコンポーネントの元にする */
 export function makeComponent<T extends Scene>(scene: T, id: NodeId): T {
@@ -49,21 +54,6 @@ export function detachComponent<T extends Scene>(scene: T, id: NodeId): T {
   const node = scene.nodes[id]
   if (node?.type !== 'frame' || !node.component) return scene
   return updateNode(scene, id, { component: null })
-}
-
-/** ドキュメントの中から、コンポーネントの元を探す */
-export function findMain(
-  doc: DesignDocument,
-  componentId: string,
-): { page: Page; node: FrameNode } | null {
-  for (const page of doc.pages) {
-    for (const node of Object.values(page.nodes)) {
-      if (node.type === 'frame' && node.component?.role === 'main' && node.component.id === componentId) {
-        return { page, node }
-      }
-    }
-  }
-  return null
 }
 
 /**
@@ -94,30 +84,19 @@ export function createInstance(
   }
 }
 
-/** インスタンスか（中へ入れたり、中身を動かしたりできない） */
-export function isInstance(node: SceneNode | undefined): node is InstanceNode {
-  return node?.type === 'frame' && node.component?.role === 'instance'
+/**
+ * ids のうち、インスタンスの中身（写し）でないもの。
+ * 写しは色や文言を上書きできるだけで、動かす・消す・複製するといった操作の対象にはしない。
+ */
+export function withoutCopies(scene: Scene, ids: readonly NodeId[]): NodeId[] {
+  return ids.filter((id) => !owningInstance(scene, id))
 }
 
-/** id がインスタンスの中身（写し）なら、そのインスタンス。インスタンス自身や、ふつうのノードなら null */
-export function owningInstance(scene: Scene, id: NodeId): InstanceNode | null {
-  let current = scene.nodes[id]?.parentId ?? null
-  while (current !== null) {
-    const node = scene.nodes[current]
-    if (isInstance(node)) return node
-    current = node.parentId
-  }
-  return null
-}
+type Source = { instance: InstanceNode; source: SceneNode }
 
 /** インスタンス（の根）か、その中身が、元のどのノードに当たるか */
-function sourceOf(
-  doc: DesignDocument,
-  scene: Scene,
-  id: NodeId,
-): { instance: InstanceNode; source: SceneNode } | null {
-  const node = scene.nodes[id]
-  const instance = isInstance(node) ? node : owningInstance(scene, id)
+function sourceOf(doc: DesignDocument, scene: Scene, id: NodeId): Source | null {
+  const instance = instanceOf(scene, id)
   if (!instance) return null
   const main = findMain(doc, instance.component.id)
   if (!main) return null
@@ -173,9 +152,12 @@ export function captureOverrides(before: DesignDocument, after: DesignDocument):
 /** 上書きがあるか。id がインスタンスならどこか 1 つでも、その中身ならそのノードについて */
 export function hasOverrides(doc: DesignDocument, scene: Scene, id: NodeId): boolean {
   const found = sourceOf(doc, scene, id)
-  if (!found) return false
-  const { overrides } = found.instance.component
-  return found.instance.id === id ? Object.keys(overrides).length > 0 : Object.hasOwn(overrides, found.source.id)
+  return found !== null && overridden(found, id)
+}
+
+function overridden({ instance, source }: Source, id: NodeId): boolean {
+  const { overrides } = instance.component
+  return instance.id === id ? Object.keys(overrides).length > 0 : Object.hasOwn(overrides, source.id)
 }
 
 /**
@@ -189,8 +171,9 @@ export function resetOverrides(
 ): DesignDocument {
   return updatePage(doc, pageId, (page) =>
     ids.reduce((next, id) => {
-      if (!hasOverrides(doc, next, id)) return next
-      const { instance, source } = sourceOf(doc, next, id)!
+      const found = sourceOf(doc, next, id)
+      if (!found || !overridden(found, id)) return next
+      const { instance, source } = found
       const overrides = instance.id === id ? {} : { ...instance.component.overrides }
       delete overrides[source.id]
       return updateNode(next, instance.id, { component: { ...instance.component, overrides } })
@@ -218,12 +201,10 @@ export function syncComponents(doc: DesignDocument, fitText?: FitText): DesignDo
 const MAX_PASSES = 8
 
 function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocument {
-  const mains = new Map<string, { page: Page; node: FrameNode }>()
+  const mains = new Map<string, { page: Page; node: MainNode }>()
   for (const page of doc.pages) {
-    for (const node of Object.values(page.nodes)) {
-      if (node.type === 'frame' && node.component?.role === 'main' && !mains.has(node.component.id)) {
-        mains.set(node.component.id, { page, node })
-      }
+    for (const [id, node] of mainsOf(page)) {
+      if (!mains.has(id)) mains.set(id, { page, node })
     }
   }
 
@@ -233,8 +214,7 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
     const used = new Set<string>()
     for (const nodeId of subtreeIds(main.page, main.node.id)) {
       const node = main.page.nodes[nodeId]
-      if (nodeId === main.node.id || node.type !== 'frame') continue
-      if (node.component?.role === 'instance') used.add(node.component.id)
+      if (nodeId !== main.node.id && isInstance(node)) used.add(node.component.id)
     }
     uses.set(id, used)
   }
@@ -255,7 +235,7 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
       const main = mains.get(instance.component.id)
       // 元がない、または自分自身を含むことになる（循環する）なら、ただのフレームにする
       const enclosing = enclosingMain(next, instance.id)
-      if (!main || (enclosing !== null && reaches(main.node.component!.id, enclosing))) {
+      if (!main || (enclosing !== null && reaches(instance.component.id, enclosing))) {
         next = updateNode(next, instance.id, { component: null })
         continue
       }
@@ -271,7 +251,7 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
 function enclosingMain(scene: Scene, id: NodeId): string | null {
   for (let current = scene.nodes[id].parentId; current !== null; current = scene.nodes[current].parentId) {
     const node = scene.nodes[current]
-    if (node.type === 'frame' && node.component?.role === 'main') return node.component.id
+    if (isMain(node)) return node.component.id
   }
   return null
 }
@@ -296,19 +276,49 @@ function rebuild(
   main: FrameNode,
   fitText: FitText | undefined,
 ): Page {
+  const expected = expectedCopies(page, instance, source, main, fitText)
+  const currentIds = subtreeIds(page, instance.id)
+  const same =
+    currentIds.length === Object.keys(expected).length &&
+    currentIds.every((id) => sameNode(page.nodes[id], expected[id]))
+  if (same) return page
+
+  // 写しと同じ id のノードがインスタンスの外にあれば（写しを外へ出してしまったとき）、二重にならないよう消す
+  const inside = new Set(currentIds)
+  const strays = Object.keys(expected).filter((id) => Object.hasOwn(page.nodes, id) && !inside.has(id))
+  const cleaned = strays.length > 0 ? removeNodes(page, strays) : page
+
+  const nodes = { ...cleaned.nodes }
+  for (const id of currentIds) delete nodes[id]
+  Object.assign(nodes, expected)
+  return { ...cleaned, nodes }
+}
+
+/**
+ * インスタンスと、その中身のあるべき姿。元の写しに、そのインスタンスの上書きを当てたもの。
+ * page は、いまの写しが持っている「測ってある大きさ」を引き継ぐためにだけ見る。
+ */
+function expectedCopies(
+  page: Page,
+  instance: InstanceNode,
+  source: Scene,
+  main: FrameNode,
+  fitText: FitText | undefined,
+): Record<NodeId, SceneNode> {
   // 写しの id は「インスタンスの id + 元のノードの id」から決める。同じ元からは毎回同じ id になるので、
   // 元が変わっていなければ、作り直しても何も変わらない
-  const idFor = (sourceId: NodeId) => derivedId(instance.id, sourceId)
+  const sourceIds = subtreeIds(source, main.id)
+  const copyIds = new Map(sourceIds.map((sourceId) => [sourceId, derivedId(instance.id, sourceId)]))
+  const idFor = (sourceId: NodeId) => copyIds.get(sourceId) ?? derivedId(instance.id, sourceId)
 
   // 元から消えたノードへの上書きは捨てる
-  const sourceIds = subtreeIds(source, main.id)
   const overrides: Record<NodeId, Override> = {}
   for (const sourceId of sourceIds) {
     const override = instance.component.overrides[sourceId]
     if (override) overrides[sourceId] = override
   }
 
-  let expected: Record<NodeId, SceneNode> = {}
+  const expected: Record<NodeId, SceneNode> = {}
   const root: FrameNode = {
     ...main,
     // 置き場所と表示の設定は、インスタンスごとに持つ
@@ -356,26 +366,10 @@ function rebuild(
     }
     expected[copy.id] = copy
   }
-  if (Object.keys(overrides).length > 0) {
-    // 上書きで大きさや表示が変わると、自動で並べるフレームの並びも元とは変わる
-    const scene: Scene = { nodes: expected, rootIds: [instance.id] }
-    expected = relayout(fitText ? fitText(scene, stale) : scene).nodes
-  }
-
-  const currentIds = subtreeIds(page, instance.id)
-  const same =
-    currentIds.length === Object.keys(expected).length &&
-    currentIds.every((id) => sameNode(page.nodes[id], expected[id]))
-  if (same) return page
-
-  // 写しと同じ id のノードがインスタンスの外にあれば（写しを外へ出してしまったとき）、二重にならないよう消す
-  const inside = new Set(currentIds)
-  const strays = Object.keys(expected).filter((id) => Object.hasOwn(page.nodes, id) && !inside.has(id))
-  const cleaned = strays.length > 0 ? removeNodes(page, strays) : page
-
-  const nodes = { ...cleaned.nodes }
-  for (const id of currentIds) delete nodes[id]
-  return { ...cleaned, nodes: { ...nodes, ...expected } }
+  if (Object.keys(overrides).length === 0) return expected
+  // 上書きで大きさや表示が変わると、自動で並べるフレームの並びも元とは変わる
+  const scene: Scene = { nodes: expected, rootIds: [instance.id] }
+  return relayout(fitText ? fitText(scene, stale) : scene).nodes
 }
 
 /** 上書きのうち、このノードに当てられるものを当てる。root はインスタンスの根 */
@@ -427,19 +421,4 @@ function sameNode(a: SceneNode, b: SceneNode | undefined): boolean {
     keys.length === Object.keys(right).length &&
     keys.every((key) => sameValue(left[key], right[key]))
   )
-}
-
-/** 2 つの id から決まる id。文字列のハッシュ（cyrb53）を 36 進数にしたもの */
-function derivedId(instanceId: NodeId, sourceId: NodeId): NodeId {
-  const text = `${instanceId}:${sourceId}`
-  let h1 = 0xdeadbeef
-  let h2 = 0x41c6ce57
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i)
-    h1 = Math.imul(h1 ^ code, 2654435761)
-    h2 = Math.imul(h2 ^ code, 1597334677)
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
-  return `i${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`
 }

@@ -1,3 +1,4 @@
+import { isInstance } from '../document/component.ts'
 import {
   type Bounds,
   type Point,
@@ -7,10 +8,8 @@ import {
 } from '../document/geometry.ts'
 import { MAX_DEPTH } from '../document/kdr.ts'
 import type { NodeId, Scene } from '../document/types.ts'
-import { isInstance } from './components.ts'
 
-// ポインタの下のノードを探す処理は、viewer も使うので共通側にある
-export { hitTest, hitTestFrameLabel } from '../canvas/hitTest.ts'
+// 編集でしか使わない当たり判定。ポインタの下のノードを探す処理は、viewer も使うので共通側（canvas/hitTest.ts）にある
 
 /**
  * point を含む最も深いフレーム。ドラッグ中のノードの入れ先を決めるのに使う。

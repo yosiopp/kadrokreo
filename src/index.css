@@ -12,6 +12,7 @@
   --accent-text: #ffffff;
   --danger-bg: #fdecec;
   --danger-text: #a4262c;
+  --logo-accent: #5b4cf5;
 
   font: 12px/1.4 system-ui, 'Segoe UI', Roboto, 'Hiragino Sans', sans-serif;
   color-scheme: light dark;
@@ -30,6 +31,7 @@
     --border: #3d3f47;
     --danger-bg: #4a2326;
     --danger-text: #ffb3b3;
+    --logo-accent: #a99fff;
   }
 }
 
@@ -104,9 +106,10 @@ button.primary:hover:not(:disabled) {
   border-bottom: 1px solid var(--border);
 }
 
-.app-title {
-  font-weight: 600;
-  font-size: 13px;
+.app-logo {
+  flex: none;
+  height: 15px;
+  width: auto;
 }
 
 .app-mode {
@@ -380,26 +383,42 @@ input.document-name:focus {
   list-style: none;
 }
 
-.page-row {
+/* 一覧の行。ページの一覧とレイヤーの一覧で、見た目は同じ（クラスは分けてある。e2e がそれぞれを数える） */
+
+.page-row,
+.layer-row {
   position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
   height: 28px;
-  padding: 0 6px 0 12px;
   cursor: default;
   user-select: none;
 }
 
-.page-row:hover {
+.page-row {
+  padding: 0 6px 0 12px;
+}
+
+/* 左の余白は、深さに応じて行ごとに決める */
+.layer-row {
+  padding-right: 6px;
+}
+
+.page-row:hover,
+.layer-row:hover {
   background: var(--bg-hover);
 }
 
-.page-row[data-selected='true'] {
+.page-row[data-selected='true'],
+.layer-row[data-selected='true'] {
   background: var(--bg-selected);
 }
 
-.page-row[data-drop]::before {
+/* ドラッグ中に、入る位置を線で示す */
+.page-row[data-drop]::before,
+.layer-row[data-drop='above']::before,
+.layer-row[data-drop='below']::before {
   content: '';
   position: absolute;
   right: 0;
@@ -408,15 +427,18 @@ input.document-name:focus {
   background: var(--accent);
 }
 
-.page-row[data-drop='above']::before {
+.page-row[data-drop='above']::before,
+.layer-row[data-drop='above']::before {
   top: -1px;
 }
 
-.page-row[data-drop='below']::before {
+.page-row[data-drop='below']::before,
+.layer-row[data-drop='below']::before {
   bottom: -1px;
 }
 
-.page-name {
+.page-name,
+.layer-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -424,7 +446,9 @@ input.document-name:focus {
   white-space: nowrap;
 }
 
-.row-action {
+/* 行の右端の小さなボタン。ふだんは隠しておき、行にポインタを重ねたときに出す */
+.row-action,
+.layer-toggle {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -513,13 +537,31 @@ input.document-name:focus {
 .inspect-row dt {
   flex: none;
   width: 84px;
+  overflow-wrap: anywhere;
   color: var(--text-muted);
 }
 
 .inspect-row dd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: 1;
   min-width: 0;
   margin: 0;
+}
+
+/* 色や文字の一覧で、それを使っている図形を選ぶ */
+.inspect-pick {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.inspect-selection {
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 /* 値は、押すとコピーできる */
@@ -551,6 +593,39 @@ input.document-name:focus {
   border-radius: 3px;
 }
 
+/* 見出しの右に、小さな選択欄を置く */
+/* 色の書き方と長さの単位。パネルの上に出す */
+.inspect-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 0 12px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.inspect-settings label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.inspect-settings select,
+.inspect-settings input {
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.inspect-settings input {
+  width: 44px;
+  padding: 0 4px;
+}
+
 .inspect-code {
   margin: 0;
   padding: 8px;
@@ -564,8 +639,34 @@ input.document-name:focus {
   user-select: text;
 }
 
+/* 子孫までまとめた HTML や CSS は長くなるので、パネルの中でスクロールさせる */
+.inspect-code-long {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.inspect-action {
+  margin: 8px 12px 0;
+}
+
 .inspect-layer {
   cursor: pointer;
+}
+
+.layer-search {
+  display: block;
+  width: calc(100% - 16px);
+  height: 26px;
+  margin: 0 8px 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.layer-search:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 
 /* レイヤー */
@@ -574,25 +675,6 @@ input.document-name:focus {
   margin: 0;
   padding: 0 0 12px;
   list-style: none;
-}
-
-.layer-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 28px;
-  padding-right: 6px;
-  cursor: default;
-  user-select: none;
-}
-
-.layer-row:hover {
-  background: var(--bg-hover);
-}
-
-.layer-row[data-selected='true'] {
-  background: var(--bg-selected);
 }
 
 .layer-row[data-hidden='true'] .layer-name,
@@ -608,24 +690,6 @@ input.document-name:focus {
 .layer-row[data-drop='inside'] {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-
-.layer-row[data-drop='above']::before,
-.layer-row[data-drop='below']::before {
-  content: '';
-  position: absolute;
-  right: 0;
-  left: 0;
-  height: 2px;
-  background: var(--accent);
-}
-
-.layer-row[data-drop='above']::before {
-  top: -1px;
-}
-
-.layer-row[data-drop='below']::before {
-  bottom: -1px;
 }
 
 .layer-caret {
@@ -646,14 +710,6 @@ input.document-name:focus {
   color: var(--text-muted);
 }
 
-.layer-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .layer-name-input {
   flex: 1;
   min-width: 0;
@@ -662,20 +718,6 @@ input.document-name:focus {
   border: 1px solid var(--accent);
   border-radius: 3px;
   background: var(--bg);
-}
-
-.layer-toggle {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  opacity: 0;
 }
 
 .layer-row:hover .layer-toggle,

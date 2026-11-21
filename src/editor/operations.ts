@@ -131,20 +131,44 @@ export function insertNode<T extends Scene>(
   return updateSiblings(withNode, parentId, (ids) => insertAt(ids, node.id, index))
 }
 
-export function updateNode<T extends Scene>(scene: T, id: NodeId, patch: NodePatch): T {
-  const node: Record<string, unknown> | undefined = scene.nodes[id]
-  if (!node) return scene
-
-  let next = node
+/** patch を当てたノード。何も変わらなければ、同じ参照を返す */
+function patched(node: SceneNode, patch: NodePatch): SceneNode {
+  const current: Record<string, unknown> = node
+  let next = current
   for (const [key, value] of Object.entries(patch)) {
     // そのノード種別が持たないフィールドは無視する（rect に text を生やさない）
-    if (STRUCTURAL_KEYS.has(key) || !Object.hasOwn(node, key)) continue
-    if (Object.is(node[key], value)) continue
-    if (next === node) next = { ...node }
+    if (STRUCTURAL_KEYS.has(key) || !Object.hasOwn(current, key)) continue
+    if (Object.is(current[key], value)) continue
+    if (next === current) next = { ...current }
     next[key] = value
   }
-  if (next === node) return scene
-  return { ...scene, nodes: { ...scene.nodes, [id]: next as SceneNode } }
+  return next as SceneNode
+}
+
+/**
+ * ノードごとに決めた patch を、まとめて当てる。patchFor が null を返したノードと、存在しない id は飛ばす。
+ * ノードの表を写すのは全体で 1 回なので、たくさんのノードを一度に変えるときは、updateNode を重ねずにこれを使う。
+ */
+export function patchNodes<T extends Scene>(
+  scene: T,
+  ids: Iterable<NodeId>,
+  patchFor: (node: SceneNode) => NodePatch | null,
+): T {
+  let nodes: Record<NodeId, SceneNode> | null = null
+  for (const id of ids) {
+    const node = (nodes ?? scene.nodes)[id]
+    if (!node) continue
+    const patch = patchFor(node)
+    const next = patch ? patched(node, patch) : node
+    if (next === node) continue
+    nodes ??= { ...scene.nodes }
+    nodes[id] = next
+  }
+  return nodes ? { ...scene, nodes } : scene
+}
+
+export function updateNode<T extends Scene>(scene: T, id: NodeId, patch: NodePatch): T {
+  return patchNodes(scene, [id], () => patch)
 }
 
 export function updateNodes<T extends Scene>(
@@ -152,7 +176,7 @@ export function updateNodes<T extends Scene>(
   ids: readonly NodeId[],
   patch: NodePatch,
 ): T {
-  return ids.reduce((next, id) => updateNode(next, id, patch), scene)
+  return patchNodes(scene, ids, () => patch)
 }
 
 /** 指定ノードを子孫ごと削除する */
@@ -236,10 +260,7 @@ export function translateNodes<T extends Scene>(
   dy: number,
 ): T {
   if (dx === 0 && dy === 0) return scene
-  return topLevelIds(scene, ids).reduce(
-    (next, id) => updateNode(next, id, shifted(scene, id, dx, dy)),
-    scene,
-  )
+  return patchNodes(scene, topLevelIds(scene, ids), (node) => shifted(scene, node.id, dx, dy))
 }
 
 /** ページ上で (dx, dy) だけ動かしたときの x, y。親が回っていれば、親の向きに合わせて移動量を直す */
@@ -257,19 +278,18 @@ export function rotateNodes<T extends Scene>(
   delta: number,
 ): T {
   if (delta === 0) return scene
-  return topLevelIds(scene, ids).reduce((next, id) => {
-    const node = scene.nodes[id]
-    const center = getWorldCenter(scene, id)
+  return patchNodes(scene, topLevelIds(scene, ids), (node) => {
+    const center = getWorldCenter(scene, node.id)
     const arm = rotateVector({ x: center.x - pivot.x, y: center.y - pivot.y }, delta)
     const pose = poseInParent(
       scene,
       node.parentId,
       { x: pivot.x + arm.x, y: pivot.y + arm.y },
-      getWorldRotation(scene, id) + delta,
+      getWorldRotation(scene, node.id) + delta,
       node,
     )
-    return updateNode(next, id, { x: pose.x, y: pose.y, rotation: pose.rotation })
-  }, scene)
+    return { x: pose.x, y: pose.y, rotation: pose.rotation }
+  })
 }
 
 /**
@@ -312,11 +332,9 @@ export function setSize<T extends Scene>(
   ids: readonly NodeId[],
   size: { width?: number; height?: number },
 ): T {
-  return ids.reduce((next, id) => {
-    const node = next.nodes[id]
-    if (!node) return next
-    return updateNode(next, id, sizePatch(node, size.width ?? node.width, size.height ?? node.height))
-  }, scene)
+  return patchNodes(scene, ids, (node) =>
+    sizePatch(node, size.width ?? node.width, size.height ?? node.height),
+  )
 }
 
 /**
@@ -333,8 +351,10 @@ export function resizeNodes<T extends Scene>(
 ): T {
   const scaleX = from.width === 0 ? 1 : to.width / from.width
   const scaleY = from.height === 0 ? 1 : to.height / from.height
-  return topLevelIds(scene, ids).reduce((next, id) => {
-    const node = scene.nodes[id]
+  return patchNodes(scene, topLevelIds(scene, ids), (node) => {
+    const { id } = node
+    // 直線は水平・垂直にできるよう、幅や高さが 0 になってよい
+    const minSize = node.type === 'line' ? 0 : 1
     const rotation = normalizeAngle(getWorldRotation(scene, id))
     // ページ上では回っていなくても、親と逆向きに回して打ち消しているノードはこちらで扱う
     if (rotation !== 0 || node.rotation !== 0) {
@@ -351,13 +371,12 @@ export function resizeNodes<T extends Scene>(
           : Math.abs(rotation) === 90
             ? [Math.abs(scaleY), Math.abs(scaleX)]
             : [uniform, uniform]
-      const minSize = node.type === 'line' ? 0 : 1
       const size = {
         width: Math.max(minSize, Math.round(node.width * scaleW)),
         height: node.type === 'text' ? node.height : Math.max(minSize, Math.round(node.height * scaleH)),
       }
       const pose = poseInParent(scene, node.parentId, moved, getWorldRotation(scene, id), size)
-      return updateNode(next, id, { x: pose.x, y: pose.y, ...sizePatch(node, size.width, size.height) })
+      return { x: pose.x, y: pose.y, ...sizePatch(node, size.width, size.height) }
     }
 
     const abs = getAbsoluteBounds(scene, id)
@@ -366,12 +385,10 @@ export function resizeNodes<T extends Scene>(
     const position = { x: node.x + left - abs.x, y: node.y + top - abs.y }
     const right = Math.round(to.x + (abs.x + abs.width - from.x) * scaleX)
     const bottom = Math.round(to.y + (abs.y + abs.height - from.y) * scaleY)
-    // 直線は水平・垂直にできるよう、幅や高さが 0 になってよい
-    const minSize = node.type === 'line' ? 0 : 1
     const width = Math.max(minSize, right - left)
     const height = Math.max(minSize, bottom - top)
-    return updateNode(next, id, { ...position, ...sizePatch(node, width, height) })
-  }, scene)
+    return { ...position, ...sizePatch(node, width, height) }
+  })
 }
 
 /** 親が違うノードだけを parentId の最前面へ移す */
@@ -403,7 +420,7 @@ export function alignNodes<T extends Scene>(
     : unionBounds(targets.map((id) => getAbsoluteBounds(scene, id)))
   if (!reference) return scene
 
-  return targets.reduce((next, id) => {
+  return patchNodes(scene, targets, ({ id }) => {
     const abs = getAbsoluteBounds(scene, id)
     const offsets: Record<Alignment, [number, number]> = {
       left: [reference.x - abs.x, 0],
@@ -416,9 +433,9 @@ export function alignNodes<T extends Scene>(
     const [dx, dy] = offsets[alignment]
     const position = shifted(scene, id, dx, dy)
     // 回っていなければ、これまでどおり整数の位置に置く
-    if (getWorldRotation(scene, id) !== 0) return updateNode(next, id, position)
-    return updateNode(next, id, { x: Math.round(position.x), y: Math.round(position.y) })
-  }, scene)
+    if (getWorldRotation(scene, id) !== 0) return position
+    return { x: Math.round(position.x), y: Math.round(position.y) }
+  })
 }
 
 /** 両端の位置は変えずに、間隔が等しくなるよう並べ直す。3 つ以上で意味がある */
@@ -439,11 +456,13 @@ export function distributeNodes<T extends Scene>(
   const gap = (last[axis] + last[size] - first[axis] - occupied) / (items.length - 1)
 
   let position = first[axis]
-  return items.reduce((next, { id, bounds }) => {
+  const patches = new Map<NodeId, NodePatch>()
+  for (const { id, bounds } of items) {
     const delta = Math.round(position - bounds[axis])
     position += bounds[size] + gap
-    return updateNode(next, id, shifted(scene, id, axis === 'x' ? delta : 0, axis === 'y' ? delta : 0))
-  }, scene)
+    patches.set(id, shifted(scene, id, axis === 'x' ? delta : 0, axis === 'y' ? delta : 0))
+  }
+  return patchNodes(scene, patches.keys(), (node) => patches.get(node.id) ?? null)
 }
 
 export type Placement = 'above' | 'below' | 'inside'
@@ -635,7 +654,7 @@ function isSelfOrAncestor(scene: Scene, id: NodeId, target: NodeId | null): bool
 }
 
 /** ページ直下のノードを 1 とした入れ子の深さ。ページ自体（null）は 0 */
-export function getDepth(scene: Scene, id: NodeId | null): number {
+function getDepth(scene: Scene, id: NodeId | null): number {
   let depth = 0
   for (let current = id; current !== null; current = scene.nodes[current].parentId) depth++
   return depth
