@@ -1,10 +1,20 @@
+import { isComponentPart } from '../document/component.ts'
 import type { Point } from '../document/geometry.ts'
+import type { NodeId, Scene } from '../document/types.ts'
 
 // ドキュメントの上に重ねて描くもの（選択枠、大きさの札など）の部品。座標はどれも画面ピクセル。
 // editor の選択枠と、viewer のインスペクトが同じ見た目になるよう、ここにまとめてある。
 
 /** 選択枠の色 */
 export const OVERLAY_ACCENT = '#0d99ff'
+/** コンポーネント（元・インスタンス・その中身）の選択枠やフレームの名前の色 */
+export const OVERLAY_COMPONENT = '#9747ff'
+
+/** ids の枠を描く色。どれもコンポーネントのものなら紫、そうでなければ青 */
+export function overlayColor(scene: Scene, ids: readonly NodeId[]): string {
+  return ids.length > 0 && ids.every((id) => isComponentPart(scene, id)) ? OVERLAY_COMPONENT : OVERLAY_ACCENT
+}
+
 /** スナップのガイドや、間隔の計測の色 */
 export const OVERLAY_GUIDE = '#f24822'
 

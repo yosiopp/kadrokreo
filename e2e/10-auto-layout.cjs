@@ -134,7 +134,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const frames = Object.values(json.document.pages[0].nodes).filter((node) => node.type === 'frame')
-  check('kdr に設定が入る', json.version === 10 && frames.every((frame) => frame.layout), JSON.stringify(frames.map((f) => f.layout && f.layout.direction)))
+  check('kdr に設定が入る', json.version === 11 && frames.every((frame) => frame.layout), JSON.stringify(frames.map((f) => f.layout && f.layout.direction)))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

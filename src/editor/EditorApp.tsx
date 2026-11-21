@@ -13,8 +13,10 @@ import { TypeIcon } from '../ui/icons.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
 import { useFileDrop } from '../ui/useFileDrop.ts'
 import { EditorCanvas, type Tool } from './EditorCanvas.tsx'
+import { ComponentsPanel } from './ComponentsPanel.tsx'
 import { LayersPanel } from './LayersPanel.tsx'
 import { PagesPanel } from './PagesPanel.tsx'
+import { COMPONENT_DRAG_TYPE, placeInstance } from './placeInstance.ts'
 import { PropertiesPanel } from './PropertiesPanel.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
@@ -22,11 +24,15 @@ import { RedoIcon, UndoIcon } from './icons.tsx'
 import { placeImage, readImageFile } from './importImage.ts'
 import { fitTextNodes } from './measure.ts'
 import {
+  addAsset,
   createDocument,
+  patchNodes,
   renameDocument,
   sortByDocumentOrder,
   topLevelIds,
+  updatePage,
 } from './operations.ts'
+import { createId } from './nodes.ts'
 import { loadSavedDocument, saveDocument } from './persistence.ts'
 import { type EditorStore, createEditorStore } from './store.ts'
 
@@ -152,6 +158,26 @@ function Editor({ store }: { store: EditorStore }) {
     if (placed > 0) setTool('select')
   }
 
+  /**
+   * 選んでいる画像を、ファイルの画像に差し替える。大きさと収め方はそのまま。
+   * インスタンスの中の画像なら、そのインスタンスだけの上書きになる（ストアの後始末が覚える）
+   */
+  async function replaceImage(file: File) {
+    setMessage(null)
+    try {
+      const image = await readImageFile(file)
+      const assetId = createId()
+      const { page, selection } = store.getState()
+      store.applyDocument((doc) =>
+        updatePage(addAsset(doc, assetId, image.asset), page.id, (base) =>
+          patchNodes(base, selection, (node) => (node.type === 'image' ? { assetId } : null)),
+        ),
+      )
+    } catch (error) {
+      showError(error, '画像を差し替えられませんでした')
+    }
+  }
+
   /** ドロップされたファイル。画像はキャンバスに置き、それ以外は kdr として開く */
   function openFiles(files: File[]) {
     const images = files.filter((file) => file.type.startsWith('image/'))
@@ -247,9 +273,24 @@ function Editor({ store }: { store: EditorStore }) {
       <div className="editor-body">
         <aside className="panel layers-panel">
           <PagesPanel store={store} state={state} />
+          <ComponentsPanel store={store} state={state} camera={camera} />
           <LayersPanel store={store} state={state} />
         </aside>
-        <main className="app-main">
+        <main
+          className="app-main"
+          onDragOver={(event) => {
+            if (!event.dataTransfer.types.includes(COMPONENT_DRAG_TYPE)) return
+            event.preventDefault()
+            event.dataTransfer.dropEffect = 'copy'
+          }}
+          onDrop={(event) => {
+            const componentId = event.dataTransfer.getData(COMPONENT_DRAG_TYPE)
+            if (!componentId) return
+            event.preventDefault()
+            const rect = event.currentTarget.getBoundingClientRect()
+            placeInstance(store, camera, componentId, { x: event.clientX - rect.left, y: event.clientY - rect.top })
+          }}
+        >
           <EditorCanvas
             store={store}
             camera={camera}
@@ -260,7 +301,7 @@ function Editor({ store }: { store: EditorStore }) {
           />
           {dragging && <div className="drop-overlay">画像または kdr ファイルをドロップ</div>}
         </main>
-        <PropertiesPanel store={store} state={state} onExportPng={exportPng} />
+        <PropertiesPanel store={store} state={state} onExportPng={exportPng} onReplaceImage={replaceImage} />
       </div>
     </div>
   )

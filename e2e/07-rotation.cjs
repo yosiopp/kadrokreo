@@ -164,7 +164,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const rotations = Object.values(json.document.pages[0].nodes).map((n) => n.rotation).sort((a, b) => a - b)
-  check('kdr に角度が入る', json.version === 10 && rotations.join() === '-25,0,20,30', rotations.join())
+  check('kdr に角度が入る', json.version === 11 && rotations.join() === '-25,0,20,30', rotations.join())
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

@@ -1,5 +1,5 @@
 import { type DragEvent, type MouseEvent, useState } from 'react'
-import { isInstance, owningInstance } from '../document/component.ts'
+import { isComponentPart, isInstance, owningInstance } from '../document/component.ts'
 import { type LayerRow, isOpen, layerRows, toggleFolding } from '../document/layers.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'
@@ -100,6 +100,7 @@ export function LayersPanel({ store, state }: Props) {
             data-selected={selected.has(node.id)}
             data-hidden={!node.visible}
             data-copy={copy}
+            data-component={isComponentPart(page, node.id)}
             data-drop={drop?.id === node.id ? drop.placement : undefined}
             style={{ paddingLeft: 8 + depth * 16 }}
             draggable={!copy && renaming !== node.id}

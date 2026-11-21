@@ -1,19 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import { hitTest } from '../canvas/hitTest.ts'
-import { findMain, owningInstance } from '../document/component.ts'
+import { type InstanceNode, findMain, isComponentPart, owningInstance } from '../document/component.ts'
 import type { AutoLayout, DesignDocument, FrameNode, Page, Scene } from '../document/types.ts'
 import {
   type FitText,
+  canHoldInstance,
   captureOverrides,
   createInstance,
   detachComponent,
   hasOverrides,
+  listComponents,
   makeComponent,
+  overriddenKeys,
+  pushOverrides,
   resetOverrides,
+  swapComponent,
   syncComponents,
 } from './components.ts'
 import { nodesInMarquee } from './hitTest.ts'
-import { createFrame, createRect, createText } from './nodes.ts'
+import { createFrame, createImage, createRect, createText } from './nodes.ts'
 import {
   addPage,
   copyFragment,
@@ -221,6 +226,121 @@ describe('コンポーネント', () => {
   })
 })
 
+describe('インスタンスを置く', () => {
+  it('中心と入れるフレームを指定して置ける。回したフレームの中でも、中心はページ上で指定した位置に来る（向きはフレームに合わせる）', () => {
+    const base = fixture()
+    const box = { ...createFrame({ x: 400, y: 0, width: 300, height: 300 }), rotation: 90 }
+    const doc = updatePage(base.doc, base.pageId, (page) => insertNode(page, box))
+    const created = createInstance(doc, base.pageId, base.componentId, { center: { x: 550, y: 150 }, parentId: box.id })
+    const page = syncComponents(created.document).pages[0]
+    const instance = frameOf(page, created.id!)
+    expect(instance.parentId).toBe(box.id)
+    // フレームの中心に置いたので、フレームの中での位置は (300 - 120) / 2, (300 - 40) / 2
+    expect(instance).toMatchObject({ x: 90, y: 130, rotation: 0 })
+    expect(childrenOf(page, created.id!)).toHaveLength(2)
+  })
+
+  it('元の中や、インスタンスの中へは入れず、ページ直下に置く', () => {
+    const { doc, pageId, button, componentId, instanceId } = withInstance()
+    const page = doc.pages[0]
+    expect(canHoldInstance(doc, page, button.id, componentId)).toBe(false)
+    expect(canHoldInstance(doc, page, instanceId, componentId)).toBe(false)
+    const created = createInstance(doc, pageId, componentId, { center: { x: 160, y: 120 }, parentId: button.id })
+    const placed = frameOf(syncComponents(created.document).pages[0], created.id!)
+    expect(placed).toMatchObject({ parentId: null, x: 100, y: 100 })
+    expect(placed.component?.role).toBe('instance')
+  })
+
+  it('別の元の中には入れられるが、入れると循環するなら入れない', () => {
+    const base = fixture()
+    // カード（元）の中にボタンのインスタンスを入れる
+    const card = createFrame({ x: 0, y: 300, width: 300, height: 200 })
+    let doc = updatePage(base.doc, base.pageId, (page) => makeComponent(insertNode(page, card), card.id))
+    const cardId = frameOf(doc.pages[0], card.id).component!.id
+    expect(canHoldInstance(doc, doc.pages[0], card.id, base.componentId)).toBe(true)
+    doc = createInstance(doc, base.pageId, base.componentId, { center: { x: 100, y: 400 }, parentId: card.id }).document
+    // ボタン（元）の中にカードのインスタンスを入れると、カード → ボタン → カード と循環する
+    expect(canHoldInstance(doc, doc.pages[0], base.button.id, cardId)).toBe(false)
+    expect(canHoldInstance(doc, doc.pages[0], base.background.id, cardId)).toBe(false)
+  })
+
+  it('コンポーネントの一覧は、すべてのページの元を並べる', () => {
+    const base = fixture()
+    const other = createPage('Page 2')
+    const icon = createFrame({ x: 0, y: 0, width: 24, height: 24 })
+    const doc = updatePage(addPage(base.doc, other), other.id, (page) => makeComponent(insertNode(page, icon), icon.id))
+    expect(listComponents(doc).map((entry) => [entry.page.id, entry.node.id])).toEqual([
+      [base.pageId, base.button.id],
+      [other.id, icon.id],
+    ])
+  })
+})
+
+describe('インスタンスの元を差し替える', () => {
+  /** ボタンのほかに、同じ名前の背景と文字を持つ「大きいボタン」と、何も持たない「アイコン」の元を足す */
+  function withAlternatives() {
+    const base = withInstance()
+    const large = createFrame({ x: 0, y: 300, width: 200, height: 60 })
+    const background = { ...createRect({ x: 0, y: 0, width: 200, height: 60 }), name: base.background.name }
+    const label = { ...createText({ x: 40, y: 20, width: 40, height: 20 }, 'Large'), name: base.label.name }
+    const icon = createFrame({ x: 300, y: 300, width: 24, height: 24 })
+    let doc = updatePage(base.doc, base.pageId, (page) => {
+      let next = insertNode(page, { ...large, name: 'Large' })
+      next = insertNode(next, background, large.id)
+      next = insertNode(next, label, large.id)
+      next = makeComponent(next, large.id)
+      return makeComponent(insertNode(next, { ...icon, name: 'Icon' }), icon.id)
+    })
+    // ボタンのインスタンスの文言と地の色を上書きしておく
+    doc = updatePage(doc, base.pageId, (page) => {
+      const copy = childrenOf(page, base.instanceId).find((node) => node.type === 'text')!
+      return updateNode(updateNode(page, copy.id, { text: '送信' }), base.instanceId, { fill: '#ff0000' })
+    })
+    doc = syncComponents(captureOverrides(base.doc, doc))
+    const idOf = (id: string) => frameOf(doc.pages[0], id).component!.id
+    return { ...base, doc, largeId: idOf(large.id), iconId: idOf(icon.id), large, icon }
+  }
+
+  it('差し替えると中身が新しい元の写しになり、名前の同じノードの上書きは引き継ぐ', () => {
+    const { doc, pageId, instanceId, largeId } = withAlternatives()
+    const swapped = syncComponents(swapComponent(doc, pageId, instanceId, largeId))
+    const page = swapped.pages[0]
+    const instance = frameOf(page, instanceId)
+    expect(instance).toMatchObject({ width: 200, height: 60, name: 'Large', x: 120, y: 120, fill: '#ff0000' })
+    expect(childrenOf(page, instanceId).map((node) => (node.type === 'text' ? node.text : node.type))).toEqual([
+      'rect',
+      '送信',
+    ])
+  })
+
+  it('当てはまるノードのない上書きは捨てる', () => {
+    const { doc, pageId, instanceId, iconId } = withAlternatives()
+    const instance = swapComponent(doc, pageId, instanceId, iconId).pages[0].nodes[instanceId] as InstanceNode
+    // 地の色（元そのものへの上書き）だけが残る
+    expect(Object.values(instance.component.overrides)).toEqual([{ fill: '#ff0000' }])
+  })
+
+  it('循環するなら差し替えない', () => {
+    const { doc, pageId, button, largeId, large } = withAlternatives()
+    // 大きいボタンの元の中に、ボタンのインスタンスを入れる
+    const placed = createInstance(doc, pageId, frameOf(doc.pages[0], button.id).component!.id, {
+      center: { x: 100, y: 330 },
+      parentId: large.id,
+    })
+    const nested = syncComponents(placed.document)
+    expect(swapComponent(nested, pageId, placed.id!, largeId)).toBe(nested)
+  })
+
+  it('コンポーネントのものかどうか', () => {
+    const { doc, button, background, instanceId } = withInstance()
+    const page = doc.pages[0]
+    const copy = frameOf(page, instanceId).children[0]
+    expect([button.id, instanceId, copy].every((id) => isComponentPart(page, id))).toBe(true)
+    // 元の中身は、ふつうのノード
+    expect(isComponentPart(page, background.id)).toBe(false)
+  })
+})
+
 describe('インスタンスごとの上書き', () => {
   /** 変更を加えて、ストアと同じ順（上書きを覚える → 同期）で後始末する */
   const edit = (doc: DesignDocument, recipe: (page: Page) => Page, fitText?: FitText) =>
@@ -265,9 +385,68 @@ describe('インスタンスごとの上書き', () => {
   it('上書きできない項目を変えても覚えず、元に戻る', () => {
     const { doc, instanceId } = withInstance()
     const labelCopy = frameOf(doc.pages[0], instanceId).children[1]
-    const edited = edit(doc, (page) => updateNode(page, labelCopy, { x: 99, fontSize: 40, name: '別名' }))
+    const edited = edit(doc, (page) => updateNode(page, labelCopy, { x: 99, lineHeight: 3, name: '別名' }))
     expect(overridesOf(edited, instanceId)).toEqual({})
-    expect(edited.pages[0].nodes[labelCopy]).toMatchObject({ x: 20, fontSize: 16, name: 'Text' })
+    expect(edited.pages[0].nodes[labelCopy]).toMatchObject({ x: 20, lineHeight: 1.2, name: 'Text' })
+  })
+
+  it('文字の大きさ・書体・太さを上書きすると、大きさを測り直す', () => {
+    const { doc, label, instanceId } = withInstance()
+    const labelCopy = frameOf(doc.pages[0], instanceId).children[1]
+    const edited = edit(
+      doc,
+      // プロパティパネルと同じく、変えたテキストはその場で測り直す
+      (page) => fitText(updateNode(page, labelCopy, { fontSize: 30, fontWeight: 700, fontFamily: 'serif' }), [labelCopy]),
+      fitText,
+    )
+    expect(overridesOf(edited, instanceId)).toEqual({ [label.id]: { fontSize: 30, fontWeight: 700, fontFamily: 'serif' } })
+    // 「OK」の 2 文字 × 30
+    expect(edited.pages[0].nodes[labelCopy]).toMatchObject({ fontSize: 30, fontWeight: 700, width: 60, height: 30 })
+    expect(edited.pages[0].nodes[label.id]).toMatchObject({ fontSize: 16, fontWeight: 400 })
+  })
+
+  it('写しの画像を差し替えると上書きになる', () => {
+    const base = fixture()
+    const photo = createImage({ x: 0, y: 0, width: 40, height: 40 }, 'a1')
+    let doc = updatePage(base.doc, base.pageId, (page) => insertNode(page, photo, base.button.id))
+    const created = createInstance(doc, base.pageId, base.componentId)
+    doc = syncComponents(created.document)
+    const copy = frameOf(doc.pages[0], created.id!).children.at(-1)!
+    const edited = edit(doc, (page) => updateNode(page, copy, { assetId: 'a2' }))
+    expect(overridesOf(edited, created.id!)).toEqual({ [photo.id]: { assetId: 'a2' } })
+    expect(edited.pages[0].nodes[copy]).toMatchObject({ assetId: 'a2' })
+    expect(edited.pages[0].nodes[photo.id]).toMatchObject({ assetId: 'a1' })
+  })
+
+  it('元と違えている項目と、上書きを元に反映する操作', () => {
+    const { doc, pageId, button, label, instanceId } = withInstance()
+    const [backgroundCopy, labelCopy] = frameOf(doc.pages[0], instanceId).children
+    // もう 1 つインスタンスを作っておく
+    const other = createInstance(doc, pageId, frameOf(doc.pages[0], button.id).component!.id)
+    let edited = syncComponents(other.document)
+    edited = edit(edited, (page) => {
+      let next = updateNode(page, labelCopy, { text: '送信', fontSize: 20 })
+      next = updateNode(next, backgroundCopy, { fill: '#ff0000' })
+      return updateNode(next, instanceId, { stroke: '#0000ff' })
+    })
+    const page = edited.pages[0]
+    expect(overriddenKeys(edited, page, labelCopy)).toEqual(['text', 'fontSize'])
+    expect(overriddenKeys(edited, page, instanceId)).toEqual(['stroke'])
+    expect(overriddenKeys(edited, page, label.id)).toEqual([])
+
+    // 中身なら、そのノードの分だけ元へ
+    const one = syncComponents(pushOverrides(edited, pageId, [labelCopy], fitText), fitText)
+    expect(one.pages[0].nodes[label.id]).toMatchObject({ text: '送信', fontSize: 20, width: 40 })
+    expect(Object.keys(overridesOf(one, instanceId)!)).toHaveLength(2)
+    // ほかのインスタンスにも入る
+    const otherLabel = frameOf(one.pages[0], other.id!).children[1]
+    expect(one.pages[0].nodes[otherLabel]).toMatchObject({ text: '送信', fontSize: 20 })
+
+    // インスタンスの根なら、すべて
+    const all = syncComponents(pushOverrides(edited, pageId, [instanceId]))
+    expect(overridesOf(all, instanceId)).toEqual({})
+    expect(all.pages[0].nodes[button.id]).toMatchObject({ stroke: '#0000ff' })
+    expect(frameOf(all.pages[0], other.id!)).toMatchObject({ stroke: '#0000ff' })
   })
 
   it('元と同じ値に戻すと、上書きは消える', () => {

@@ -21,6 +21,10 @@ export const OVERRIDE_KEYS = [
   'fillGradient',
   'stroke',
   'visible',
+  'fontSize',
+  'fontFamily',
+  'fontWeight',
+  'assetId',
 ] as const satisfies readonly (keyof Override)[]
 
 /** コンポーネントの元か */
@@ -42,6 +46,11 @@ export function owningInstance(scene: Scene, id: NodeId): InstanceNode | null {
     current = node.parentId
   }
   return null
+}
+
+/** コンポーネントの元か、インスタンスか、その中身。画面ではこれらを紫で見分けられるようにする */
+export function isComponentPart(scene: Scene, id: NodeId): boolean {
+  return isMain(scene.nodes[id]) || instanceOf(scene, id) !== null
 }
 
 /** id がインスタンスか、その中身なら、そのインスタンス */

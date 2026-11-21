@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isComponentPart } from '../document/component.ts'
 import { isOpen, layerRows, toggleFolding } from '../document/layers.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'
@@ -57,6 +58,7 @@ export function LayerTree({ scene, selection, onSelect }: Props) {
             className="layer-row inspect-layer"
             data-selected={selection.includes(node.id)}
             data-hidden={!node.visible}
+            data-component={isComponentPart(scene, node.id)}
             style={{ paddingLeft: 8 + depth * 14 }}
             title={TYPE_LABELS[node.type]}
             onClick={(event) => onSelect(node.id, event.shiftKey)}

@@ -105,7 +105,7 @@ describe('parseKdr', () => {
   it('別形式や未対応バージョンを拒否する', () => {
     const doc = documentOf(valid())
     expect(() => parseKdr({ format: 'other', version: 1, document: doc })).toThrow(KdrError)
-    expect(() => parseKdr(kdrJson(doc, 11))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 12))).toThrow('新しいバージョン')
     expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)
@@ -258,6 +258,11 @@ describe('parseKdr', () => {
 
     expect(() => parseKdr(withOverrides({ n1: { fill: 'red' } }))).toThrow('overrides.n1.fill')
     expect(() => parseKdr(withOverrides({ n1: { text: 1 } }))).toThrow('overrides.n1.text')
+    // version 11 で増えた、テキストの書式と画像の差し替え。画像はファイルの中になければならない
+    const styled = { n1: { fontSize: 24, fontFamily: 'serif', fontWeight: 700 } }
+    expect(parseKdr(withOverrides(styled)).pages[0].nodes[frame.id]).toMatchObject({ component: { overrides: styled } })
+    expect(() => parseKdr(withOverrides({ n1: { fontWeight: 500 } }))).toThrow('overrides.n1.fontWeight')
+    expect(() => parseKdr(withOverrides({ n1: { assetId: 'nothing' } }))).toThrow('上書きの画像データがありません')
     expect(() => parseKdr(withOverrides({ n1: { visible: 'no' } }))).toThrow('overrides.n1.visible')
     expect(() => parseKdr(withOverrides({ '../x': {} }))).toThrow('不正な id')
     expect(() => parseKdr(withOverrides([]))).toThrow('component.overrides')

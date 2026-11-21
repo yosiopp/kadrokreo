@@ -4,7 +4,7 @@ import type { Camera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
 import { hitTest } from '../canvas/hitTest.ts'
 import { measureTextNode } from '../canvas/measure.ts'
-import { OVERLAY_ACCENT, OVERLAY_GUIDE, drawBadge, strokePolyline } from '../canvas/overlay.ts'
+import { OVERLAY_ACCENT, OVERLAY_GUIDE, drawBadge, overlayColor, strokePolyline } from '../canvas/overlay.ts'
 import { HIT_TOLERANCE, pickNode } from '../canvas/pick.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import { isInstance, owningInstance } from '../document/component.ts'
@@ -973,7 +973,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   function drawOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport) {
     const { page, selection } = state
     const gesture = gestureRef.current
-    ctx.strokeStyle = OVERLAY_ACCENT
+    // コンポーネントのもの（元・インスタンス・その中身）だけを選んでいれば、枠を紫にする
+    const accent = overlayColor(page, selection)
+    ctx.strokeStyle = accent
     ctx.lineWidth = 1
 
     /** ページ座標の点をつないだ線を引く */
@@ -996,7 +998,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
     if (hover && !gesture && page.nodes[hover] && !selection.includes(hover)) {
       ctx.lineWidth = 2
+      ctx.strokeStyle = overlayColor(page, [hover])
       outlineNode(hover)
+      ctx.strokeStyle = accent
       ctx.lineWidth = 1
     }
     // 頂点を編集中のパスは、枠ではなく形そのものを後でなぞる
@@ -1051,7 +1055,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
           : `${Math.round(w)} × ${Math.round(h)}`
       const screen = toScreenBounds(viewport, box.bounds)
       const below = { x: screen.x + screen.width / 2, y: screen.y + screen.height + 17 }
-      drawBadge(ctx, label, below, OVERLAY_ACCENT)
+      drawBadge(ctx, label, below, accent)
     }
 
     if (gesture?.kind === 'move' || gesture?.kind === 'resize') {
@@ -1065,13 +1069,14 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         ctx.lineTo(Math.round(to.x) + 0.5, Math.round(to.y) + 0.5)
       }
       ctx.stroke()
-      ctx.strokeStyle = OVERLAY_ACCENT
+      ctx.strokeStyle = accent
     }
 
     if (gesture?.kind === 'marquee') {
       const b = toScreenBounds(viewport, boundsFromPoints(gesture.world, gesture.current))
       ctx.fillStyle = 'rgba(13, 153, 255, 0.12)'
       ctx.fillRect(b.x, b.y, b.width, b.height)
+      ctx.strokeStyle = OVERLAY_ACCENT
       ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.width, b.height)
     }
   }

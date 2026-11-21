@@ -101,7 +101,8 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('一覧でインスタンスの中身を開ける', (await layers()).join() === 'Frame 1,Text 1,Frame 1,Text 1' && (await page.locator('.layer-row[data-copy="true"]').count()) === 1, (await layers()).join())
   const copyRow = page.locator('.layer-row[data-copy="true"]')
   await copyRow.click()
-  check('写しを選ぶと、上書きできる項目だけが出る', (await section('インスタンスの中身').count()) === 1 && (await section('塗り').count()) === 1 && (await section('位置とサイズ').count()) === 0 && (await section('テキスト').count()) === 0)
+  check('写しを選ぶと、上書きできる項目だけが出る（テキストは大きさ・太さ・書体だけ）', (await section('インスタンスの中身').count()) === 1 && (await section('塗り').count()) === 1 && (await section('位置とサイズ').count()) === 0 &&
+    (await field('サイズ').count()) === 1 && (await field('行の高さ').count()) === 0 && (await page.locator('.properties-panel .field-label:text-is("折り返し")').count()) === 0)
   await page.locator('[aria-label="塗りの色"]').fill('#ffffff')
   s = await read()
   check('写しの文字の色だけが変わる', s.copyText.fill === '#ffffff' && s.mainText.fill === '#000000', `${s.copyText.fill} / ${s.mainText.fill}`)
@@ -167,7 +168,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const links = Object.values(json.document.pages[0].nodes).filter((n) => n.component)
   const exported = links.filter((n) => n.component.role === 'instance').map((n) => Object.values(n.component.overrides).map((o) => o.text || o.fill).sort().join('+'))
-  check('kdr v10 に上書きが入る。元は上書きを持たない', json.version === 10 && exported.sort().join() === '#e11d48+予約する,#e11d48+送信する' && links.filter((n) => n.component.role === 'main').every((n) => !('overrides' in n.component)), exported.join())
+  check('kdr v11 に上書きが入る。元は上書きを持たない', json.version === 11 && exported.sort().join() === '#e11d48+予約する,#e11d48+送信する' && links.filter((n) => n.component.role === 'main').every((n) => !('overrides' in n.component)), exported.join())
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -186,9 +187,37 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.screenshot({ path: path.join(OUT, '41-viewer-overrides.png') })
   await viewer.locator('.inspect-panel button:text-is("元のコンポーネントへ移動")').click()
   check('viewer で、インスタンスの中身から元へ移れる', (await viewer.locator('.inspect-panel .panel-title').textContent()) === 'Frame 1' && (await inspectRows('コンポーネント')).join() === '種類=元' && (await viewer.locator('.inspect-panel button:text-is("元のコンポーネントへ移動")').count()) === 0, (await inspectRows('コンポーネント')).join())
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v9.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 9 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0)
+  for (const version of [9, 10]) {
+    await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, `sample-v${version}.kdr`))
+    await viewer.waitForTimeout(400)
+    check(`version ${version} の kdr も開ける`, (await viewer.locator('.app-message').count()) === 0)
+  }
+
+  // ── 文字の書式の上書きと、元に反映 ──
+  // 読み込み直した後に「予約する」にした写しを、まだ選んでいる
+  await page.bringToFront()
+  const overrideNote = () => page.locator('.properties-panel .override-keys').textContent()
+  check('元と違えている項目が出る', (await overrideNote()) === '元と違えている項目: 文言・塗り', await overrideNote())
+  await set('サイズ', 24)
+  s = await read()
+  let booked = s.copies.find((copy) => copy.x === 400)
+  let bookedText = s.nodes.find((n) => n.id === booked.children[0])
+  check('写しの文字の大きさを上書きできる', bookedText.fontSize === 24 && booked.component.overrides[s.mainText.id].fontSize === 24 && s.mainText.fontSize !== 24 && booked.width > s.main.width,
+    `${bookedText.fontSize} ${booked.width}/${s.main.width}`)
+  check('項目の一覧も変わる', (await overrideNote()) === '元と違えている項目: 文言・塗り・文字の大きさ', await overrideNote())
+  await button('元に反映').click()
+  s = await read()
+  booked = s.copies.find((copy) => copy.x === 400)
+  const other = s.copies.find((copy) => copy !== booked)
+  const otherText = s.nodes.find((n) => n.id === other.children[0])
+  check('元に反映すると、元が同じ文言と大きさになり、上書きが外れる',
+    s.mainText.text === '予約する' && s.mainText.fontSize === 24 && s.main.width === booked.width && Object.keys(booked.component.overrides).length === 1,
+    `${s.mainText.text} ${s.mainText.fontSize} ${JSON.stringify(booked.component.overrides)}`)
+  check('ほかのインスタンスは、自分の上書き（文言）を保ったまま大きさが変わる', otherText.text === '送信する' && otherText.fontSize === 24, `${otherText.text} ${otherText.fontSize}`)
+  await page.screenshot({ path: path.join(OUT, '42-push-overrides.png') })
+  await page.keyboard.press('Meta+z')
+  s = await read()
+  check('undo で元に戻る', s.mainText.text === 'はい' && s.mainText.fontSize !== 24)
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

@@ -24,8 +24,9 @@ import type {
 //   8: オートレイアウト
 //   9: コンポーネント
 //   10: インスタンスごとの上書き
+//   11: 上書きできる項目に、テキストの書式（大きさ・書体・太さ）と画像の差し替えを追加
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 10
+export const KDR_VERSION = 11
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -142,6 +143,14 @@ function parseScene(
     if (node.type === 'image' && !Object.hasOwn(assets, node.assetId)) {
       throw new KdrError(`${path}.nodes.${id}: 画像データがありません`)
     }
+    // 画像を差し替える上書きも、ファイルの中の画像を指していなければならない
+    if (node.type === 'frame' && node.component?.role === 'instance') {
+      for (const override of Object.values(node.component.overrides)) {
+        if (override.assetId !== undefined && !Object.hasOwn(assets, override.assetId)) {
+          throw new KdrError(`${path}.nodes.${id}: 上書きの画像データがありません`)
+        }
+      }
+    }
     nodes[id] = node
   }
   const scene = { nodes, rootIds: idArray(raw.rootIds, `${path}.rootIds`) }
@@ -167,7 +176,7 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
+type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
 
 const CAPS = ['none', 'arrow'] as const
 const MAX_PATH_POINTS = 10_000
@@ -312,6 +321,10 @@ function parseOverrides(value: unknown, path: string): Record<NodeId, Override> 
       override.stroke = raw.stroke === null ? null : color(raw.stroke, at('stroke'))
     }
     if (Object.hasOwn(raw, 'visible')) override.visible = boolean(raw.visible, at('visible'))
+    if (Object.hasOwn(raw, 'fontSize')) override.fontSize = size(raw.fontSize, at('fontSize'))
+    if (Object.hasOwn(raw, 'fontFamily')) override.fontFamily = string(raw.fontFamily, at('fontFamily'))
+    if (Object.hasOwn(raw, 'fontWeight')) override.fontWeight = oneOf(raw.fontWeight, [400, 700] as const, at('fontWeight'))
+    if (Object.hasOwn(raw, 'assetId')) override.assetId = nodeId(raw.assetId, at('assetId'))
     overrides[nodeId(id, `${path}.${id}`)] = override
   }
   return overrides

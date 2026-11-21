@@ -1,4 +1,4 @@
-import type { AutoLayout, Cap, ImageNode, SceneNode } from '../document/types.ts'
+import type { AutoLayout, Cap, ImageNode, Override, SceneNode } from '../document/types.ts'
 
 // 設定の値の、画面での呼び名。editor のプロパティパネルと、viewer のインスペクトが同じ言葉で出す
 
@@ -34,4 +34,17 @@ export function alignLabels(direction: AutoLayout['direction']): Record<AutoLayo
 /** 呼び名の表を、選択欄に出す [値, 呼び名] の並びにする */
 export function optionsOf<T extends string>(labels: Record<T, string>): [T, string][] {
   return Object.entries(labels) as [T, string][]
+}
+
+/** インスタンスごとに上書きできる項目の名前 */
+export const OVERRIDE_LABELS: Record<keyof Override, string> = {
+  text: '文言',
+  fill: '塗り',
+  fillGradient: 'グラデーション',
+  stroke: '線の色',
+  visible: '表示',
+  fontSize: '文字の大きさ',
+  fontFamily: '書体',
+  fontWeight: '太さ',
+  assetId: '画像',
 }

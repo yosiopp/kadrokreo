@@ -10,7 +10,7 @@ import {
   mainsOf,
   owningInstance,
 } from '../document/component.ts'
-import { getAbsoluteBounds } from '../document/geometry.ts'
+import { type Point, getAbsoluteBounds, poseInParent } from '../document/geometry.ts'
 import type {
   DesignDocument,
   FrameNode,
@@ -56,32 +56,112 @@ export function detachComponent<T extends Scene>(scene: T, id: NodeId): T {
   return updateNode(scene, id, { component: null })
 }
 
+/** インスタンスを置く場所。center はページ上での中心、parentId は入れるフレーム（null ならページ直下） */
+export type InstancePlacement = { center: Point; parentId: NodeId | null }
+
 /**
- * 元（mainId）のインスタンスを、pageId のページ直下に置く。中身は次の同期で入る。
- * 元と同じページなら、元の少し右下に置く。
+ * 元（mainId）のインスタンスを pageId のページに置く。中身は次の同期で入る。
+ * at を省くと、元と同じページなら元の少し右下、別のページなら原点に、ページ直下で置く。
+ * at の親に入れると元が自分自身を含むことになる（循環する）なら、ページ直下に置く。
  */
 export function createInstance(
   doc: DesignDocument,
   pageId: PageId,
   componentId: string,
+  at?: InstancePlacement,
 ): { document: DesignDocument; id: NodeId | null } {
   const main = findMain(doc, componentId)
-  if (!main) return { document: doc, id: null }
-  const bounds = main.page.id === pageId ? getAbsoluteBounds(main.page, main.node.id) : null
+  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  if (!main || !page) return { document: doc, id: null }
+  const size = { width: main.node.width, height: main.node.height }
+  let parentId: NodeId | null = null
+  let position = { x: 0, y: 0 }
+  if (at) {
+    parentId = at.parentId !== null && canHoldInstance(doc, page, at.parentId, componentId) ? at.parentId : null
+    const pose = poseInParent(page, parentId, at.center, 0, size)
+    position = { x: Math.round(pose.x), y: Math.round(pose.y) }
+  } else if (main.page.id === pageId) {
+    const bounds = getAbsoluteBounds(main.page, main.node.id)
+    position = { x: bounds.x + 20, y: bounds.y + 20 }
+  }
   const instance: FrameNode = {
-    ...createFrame({
-      x: bounds ? bounds.x + 20 : 0,
-      y: bounds ? bounds.y + 20 : 0,
-      width: main.node.width,
-      height: main.node.height,
-    }),
+    ...createFrame({ ...position, ...size }),
     name: main.node.name,
     component: { id: componentId, role: 'instance', overrides: {} },
   }
   return {
-    document: updatePage(doc, pageId, (page) => insertNode(page, instance)),
+    document: updatePage(doc, pageId, (base) => insertNode(base, instance, parentId)),
     id: instance.id,
   }
+}
+
+/**
+ * parentId のフレームの中に、componentId のインスタンスを入れてよいか。
+ * インスタンスやその中身の中へは入れられず、元の中に入れると元が自分自身を含むことになる（循環する）なら入れられない。
+ */
+export function canHoldInstance(doc: DesignDocument, scene: Scene, parentId: NodeId, componentId: string): boolean {
+  const parent = scene.nodes[parentId]
+  if (parent?.type !== 'frame' || instanceOf(scene, parentId)) return false
+  const enclosing = isMain(parent) ? parent.component.id : enclosingMain(scene, parentId)
+  return enclosing === null || !componentReach(doc)(componentId, enclosing)
+}
+
+/**
+ * インスタンスを、別のコンポーネントのインスタンスに差し替える。位置・名前以外の見た目は、次の同期で新しい元に合わせる。
+ * 上書きは、元の中でのレイヤー名のたどり方（親から順の名前）が同じノードがあれば、そちらへ移す。なければ捨てる。
+ * 差し替えると循環する（インスタンスが入っている元を、新しい元が含むことになる）なら変えない。
+ */
+export function swapComponent(doc: DesignDocument, pageId: PageId, instanceId: NodeId, componentId: string): DesignDocument {
+  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const instance = page?.nodes[instanceId]
+  if (!page || !isInstance(instance) || instance.component.id === componentId) return doc
+  if (owningInstance(page, instanceId)) return doc
+  const parentId = instance.parentId
+  if (parentId !== null && !canHoldInstance(doc, page, parentId, componentId)) return doc
+  const next = findMain(doc, componentId)
+  if (!next) return doc
+
+  const previous = findMain(doc, instance.component.id)
+  const overrides: Record<NodeId, Override> = {}
+  if (previous) {
+    // 新しい元の中のノードを、名前のたどり方で引けるようにする（同じたどり方のものが複数あれば、最初に見つけたもの）
+    const byPath = new Map<string, NodeId>()
+    for (const id of subtreeIds(next.page, next.node.id)) {
+      const path = namePath(next.page, next.node.id, id)
+      if (path !== null && !byPath.has(path)) byPath.set(path, id)
+    }
+    for (const [sourceId, override] of Object.entries(instance.component.overrides)) {
+      if (!Object.hasOwn(previous.page.nodes, sourceId)) continue
+      const path = namePath(previous.page, previous.node.id, sourceId)
+      const target = path === null ? undefined : byPath.get(path)
+      if (target !== undefined) overrides[target] = override
+    }
+  }
+  return updatePage(doc, pageId, (base) =>
+    updateNode(base, instanceId, {
+      name: instance.name === previous?.node.name ? next.node.name : instance.name,
+      component: { id: componentId, role: 'instance', overrides },
+    }),
+  )
+}
+
+/** 元（rootId）の中での、id までのレイヤー名のたどり方。元そのものは空文字、元の中になければ null */
+function namePath(scene: Scene, rootId: NodeId, id: NodeId): string | null {
+  const names: string[] = []
+  for (let current: NodeId | null = id; current !== rootId; current = scene.nodes[current].parentId) {
+    if (current === null) return null
+    names.unshift(scene.nodes[current].name)
+  }
+  return names.join('\u0000')
+}
+
+/** ドキュメントにあるコンポーネントの元。ページの順、ページの中では作った順 */
+export function listComponents(doc: DesignDocument): { page: Page; node: MainNode }[] {
+  return doc.pages.flatMap((page) =>
+    [...mainsOf(page).values()]
+      .filter((node) => findMain(doc, node.component.id)?.node === node)
+      .map((node) => ({ page, node })),
+  )
 }
 
 /**
@@ -160,6 +240,52 @@ function overridden({ instance, source }: Source, id: NodeId): boolean {
   return instance.id === id ? Object.keys(overrides).length > 0 : Object.hasOwn(overrides, source.id)
 }
 
+/** id（インスタンスの根か、その中身）が、元と違えている項目。根なら、根そのものへの上書きだけ */
+export function overriddenKeys(doc: DesignDocument, scene: Scene, id: NodeId): (keyof Override)[] {
+  const found = sourceOf(doc, scene, id)
+  if (!found) return []
+  const override = found.instance.component.overrides[found.source.id]
+  return OVERRIDE_KEYS.filter((key) => override?.[key] !== undefined)
+}
+
+/**
+ * ids の上書きを元に書き込み、上書きを外す。インスタンスの根ならそのインスタンスのすべての上書きを、中身ならそのノードの分を移す。
+ * 元を使っているほかのインスタンスにも、次の同期で同じ値が入る（そのインスタンスが上書きしていなければ）。
+ * 根の表示・非表示はインスタンスごとの設定なので、元には移さない。fitText を渡すと、元のテキストの大きさを測り直す。
+ */
+export function pushOverrides(
+  doc: DesignDocument,
+  pageId: PageId,
+  ids: readonly NodeId[],
+  fitText?: FitText,
+): DesignDocument {
+  return ids.reduce((current, id) => {
+    const page = current.pages.find((candidate) => candidate.id === pageId)
+    const found = page ? sourceOf(current, page, id) : null
+    if (!found) return current
+    const { instance, source } = found
+    const main = findMain(current, instance.component.id)
+    if (!main) return current
+    const sourceIds = instance.id === id ? Object.keys(instance.component.overrides) : [source.id]
+    let next = current
+    const overrides = { ...instance.component.overrides }
+    for (const sourceId of sourceIds) {
+      const override = overrides[sourceId]
+      const target = main.page.nodes[sourceId]
+      if (!override || !target) continue
+      delete overrides[sourceId]
+      const pushed = applyOverride(target, override, sourceId === main.node.id)
+      next = updatePage(next, main.page.id, (base) => {
+        const changed = { ...base, nodes: { ...base.nodes, [sourceId]: pushed } }
+        return fitText && pushed.type === 'text' ? fitText(changed, [sourceId]) : changed
+      })
+    }
+    return updatePage(next, pageId, (base) =>
+      updateNode(base, instance.id, { component: { ...instance.component, overrides } }),
+    )
+  }, doc)
+}
+
 /**
  * 上書きを捨てて、元と同じ見た目に戻す（実際に戻るのは次の同期）。
  * id がインスタンスならすべての上書きを、その中身ならそのノードの分だけを捨てる。
@@ -201,29 +327,8 @@ export function syncComponents(doc: DesignDocument, fitText?: FitText): DesignDo
 const MAX_PASSES = 8
 
 function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocument {
-  const mains = new Map<string, { page: Page; node: MainNode }>()
-  for (const page of doc.pages) {
-    for (const [id, node] of mainsOf(page)) {
-      if (!mains.has(id)) mains.set(id, { page, node })
-    }
-  }
-
-  // 元 A の中に B のインスタンスがあれば「A は B を使う」。循環を見つけるのに使う
-  const uses = new Map<string, Set<string>>()
-  for (const [id, main] of mains) {
-    const used = new Set<string>()
-    for (const nodeId of subtreeIds(main.page, main.node.id)) {
-      const node = main.page.nodes[nodeId]
-      if (nodeId !== main.node.id && isInstance(node)) used.add(node.component.id)
-    }
-    uses.set(id, used)
-  }
-  const reaches = (from: string, to: string, seen = new Set<string>()): boolean => {
-    if (from === to) return true
-    if (seen.has(from)) return false
-    seen.add(from)
-    return [...(uses.get(from) ?? [])].some((next) => reaches(next, to, seen))
-  }
+  const mains = collectMains(doc)
+  const reaches = componentReach(doc, mains)
 
   let changed = false
   const pages = doc.pages.map((page) => {
@@ -245,6 +350,43 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
     return next
   })
   return changed ? { ...doc, pages } : doc
+}
+
+/**
+ * 「コンポーネント from を置くと、その中に to が入るか」を答える関数。
+ * 元 A の中に B のインスタンスがあれば「A は B を使う」として、使う関係をたどる。循環を見つけるのに使う。
+ */
+function componentReach(
+  doc: DesignDocument,
+  mains: ReadonlyMap<string, { page: Page; node: MainNode }> = collectMains(doc),
+): (from: string, to: string) => boolean {
+  const uses = new Map<string, Set<string>>()
+  for (const [id, main] of mains) {
+    const used = new Set<string>()
+    for (const nodeId of subtreeIds(main.page, main.node.id)) {
+      const node = main.page.nodes[nodeId]
+      if (nodeId !== main.node.id && isInstance(node)) used.add(node.component.id)
+    }
+    uses.set(id, used)
+  }
+  const reaches = (from: string, to: string, seen = new Set<string>()): boolean => {
+    if (from === to) return true
+    if (seen.has(from)) return false
+    seen.add(from)
+    return [...(uses.get(from) ?? [])].some((next) => reaches(next, to, seen))
+  }
+  return (from, to) => reaches(from, to)
+}
+
+/** コンポーネントの id から、その元（同じ id が複数あれば、先のページにあるもの） */
+function collectMains(doc: DesignDocument): Map<string, { page: Page; node: MainNode }> {
+  const mains = new Map<string, { page: Page; node: MainNode }>()
+  for (const page of doc.pages) {
+    for (const [id, node] of mainsOf(page)) {
+      if (!mains.has(id)) mains.set(id, { page, node })
+    }
+  }
+  return mains
 }
 
 /** id を含む、いちばん近い元のコンポーネントの id。なければ null */
@@ -355,8 +497,8 @@ function expectedCopies(
       // 写しの中にあるのは、ただの写し。入れ子のインスタンスとして別に同期されないようにする
       copy.component = null
     }
-    if (copy.type === 'text' && node.type === 'text' && copy.text !== node.text) {
-      // 文言が違えば大きさも違う。いまの写しが同じ文言と書式なら、その大きさは測ってあるのでそのまま使う
+    if (copy.type === 'text' && node.type === 'text' && !sameTextStyle(copy, node)) {
+      // 文言や書式が違えば大きさも違う。いまの写しが同じ文言と書式なら、その大きさは測ってあるのでそのまま使う
       const current = page.nodes[copy.id]
       if (current?.type === 'text' && sameTextStyle(current, copy)) {
         copy = { ...copy, width: current.width, height: current.height }
@@ -387,6 +529,12 @@ function applyOverride<N extends SceneNode>(node: N, values: Override | undefine
   }
   // 根の表示・非表示は、インスタンス自身の設定
   if (values.visible !== undefined && !root) patch.visible = values.visible
+  if (node.type === 'text') {
+    if (values.fontSize !== undefined) patch.fontSize = values.fontSize
+    if (values.fontFamily !== undefined) patch.fontFamily = values.fontFamily
+    if (values.fontWeight !== undefined) patch.fontWeight = values.fontWeight
+  }
+  if (values.assetId !== undefined && node.type === 'image') patch.assetId = values.assetId
   return { ...node, ...patch }
 }
 

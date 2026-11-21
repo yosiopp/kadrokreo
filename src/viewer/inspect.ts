@@ -10,7 +10,7 @@ import { getAbsoluteBounds, getNodesBounds, tidy } from '../document/geometry.ts
 import { type ColorFormat, formatColor } from './colors.ts'
 import { type Distance, measureBetween } from './distances.ts'
 import type { DesignDocument, Gradient, NodeId, Override, Scene, Shadow } from '../document/types.ts'
-import { CAP_LABELS, FIT_LABELS, SIZE_MODE_LABELS, alignLabels } from '../ui/labels.ts'
+import { CAP_LABELS, FIT_LABELS, OVERRIDE_LABELS, SIZE_MODE_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
 
@@ -21,13 +21,6 @@ export type InspectSection = { title: string; rows: InspectRow[] }
 const DIRECTIONS = { horizontal: '横', vertical: '縦' }
 const JUSTIFY = { start: '先頭', center: '中央', end: '末尾', 'space-between': '均等' }
 const TEXT_ALIGN = { left: '左', center: '中央', right: '右' }
-const OVERRIDE_LABELS: Record<keyof Override, string> = {
-  text: '文言',
-  fill: '塗り',
-  fillGradient: 'グラデーション',
-  stroke: '線の色',
-  visible: '表示',
-}
 
 /** CSS の長さの単位 */
 export type Unit = 'px' | 'rem'

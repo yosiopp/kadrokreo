@@ -156,6 +156,12 @@ export type Override = {
   fillGradient?: Gradient | null
   stroke?: string | null
   visible?: boolean
+  /** テキストの書式。大きさは、写しを作り直すときに測り直す */
+  fontSize?: number
+  fontFamily?: string
+  fontWeight?: 400 | 700
+  /** 画像の差し替え。ドキュメントの assets にあるもの */
+  assetId?: AssetId
 }
 
 export type FrameNode = BaseNode &

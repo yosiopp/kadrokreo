@@ -13,6 +13,8 @@
   --danger-bg: #fdecec;
   --danger-text: #a4262c;
   --logo-accent: #5b4cf5;
+  /* コンポーネント（元・インスタンス・その中身）の印の色。キャンバスの上では、テーマによらず #9747ff */
+  --component: #8638e5;
 
   font: 12px/1.4 system-ui, 'Segoe UI', Roboto, 'Hiragino Sans', sans-serif;
   color-scheme: light dark;
@@ -32,6 +34,7 @@
     --danger-bg: #4a2326;
     --danger-text: #ffb3b3;
     --logo-accent: #a99fff;
+    --component: #c09bff;
   }
 }
 
@@ -386,7 +389,8 @@ input.document-name:focus {
 /* 一覧の行。ページの一覧とレイヤーの一覧で、見た目は同じ（クラスは分けてある。e2e がそれぞれを数える） */
 
 .page-row,
-.layer-row {
+.layer-row,
+.component-row {
   position: relative;
   display: flex;
   align-items: center;
@@ -400,13 +404,42 @@ input.document-name:focus {
   padding: 0 6px 0 12px;
 }
 
+/* コンポーネントの一覧。たくさんあっても、下のレイヤーの一覧を押し出しすぎないよう、一覧だけをスクロールする */
+.components {
+  border-bottom: 1px solid var(--border);
+}
+
+.component-list {
+  max-height: 200px;
+  margin: 0;
+  padding: 0 0 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.component-row {
+  padding: 0 6px 0 12px;
+  cursor: grab;
+}
+
+.component-page {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 左の余白は、深さに応じて行ごとに決める */
 .layer-row {
   padding-right: 6px;
 }
 
 .page-row:hover,
-.layer-row:hover {
+.layer-row:hover,
+.component-row:hover {
   background: var(--bg-hover);
 }
 
@@ -438,7 +471,8 @@ input.document-name:focus {
 }
 
 .page-name,
-.layer-name {
+.layer-name,
+.component-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -463,6 +497,7 @@ input.document-name:focus {
 }
 
 .page-row:hover .row-action,
+.component-row:hover .row-action,
 .row-action:focus-visible {
   opacity: 1;
 }
@@ -682,9 +717,16 @@ input.document-name:focus {
   opacity: 0.45;
 }
 
-/* インスタンスの中身（元の写し） */
+/* コンポーネントの元・インスタンス・その中身は、紫で見分ける */
+.layer-row[data-component='true'] .layer-name,
+.layer-row[data-component='true'] .layer-icon,
+.component-row .layer-icon {
+  color: var(--component);
+}
+
+/* インスタンスの中身（元の写し）。ほかの行より控えめにする */
 .layer-row[data-copy='true'] .layer-name {
-  color: var(--text-muted);
+  opacity: 0.75;
 }
 
 .layer-row[data-drop='inside'] {

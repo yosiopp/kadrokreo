@@ -137,7 +137,69 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const links = json.document.pages.flatMap((p) => Object.values(p.nodes)).filter((n) => n.component).map((n) => n.component.role).sort()
-  check('kdr につながりが入る', json.version === 10 && links.join() === 'instance,instance,instance,main', links.join())
+  check('kdr につながりが入る', json.version === 11 && links.join() === 'instance,instance,instance,main', links.join())
+
+  // ── コンポーネントの一覧から置く ──
+  const componentRows = page.locator('.component-row')
+  check('一覧にコンポーネントの元が出る', (await componentRows.count()) === 1 && (await componentRows.locator('.component-name').textContent()) === 'Frame 1')
+  // 置き先のフレーム (600,400) 300×250 を作り、そこへドラッグする
+  await deselect()
+  await page.keyboard.press('f')
+  await page.mouse.move(...at(600, 400)); await page.mouse.down()
+  await page.mouse.move(...at(750, 520), { steps: 4 }); await page.mouse.move(...at(900, 650), { steps: 4 }); await page.mouse.up()
+  await deselect()
+  await componentRows.first().dragTo(page.locator('.canvas-view'), { targetPosition: { x: 750, y: 525 } })
+  nodes = await nodesOf()
+  const target = nodes.find((n) => n.type === 'frame' && !n.component && n.x === 600)
+  const dropped = instances(nodes).find((n) => target && n.parentId === target.id)
+  check('キャンバスへドラッグすると、その位置のフレームの中にインスタンスが入る',
+    dropped && Math.abs(dropped.x + dropped.width / 2 - 150) <= 1 && Math.abs(dropped.y + dropped.height / 2 - 125) <= 1 && textsIn(nodes, dropped).join() === '保存する',
+    JSON.stringify(dropped && [dropped.x, dropped.y, dropped.width, dropped.height]))
+  check('置いたインスタンスが選ばれる', (await selected()).join() === 'Frame 1', (await selected()).join())
+  const rootInstances = () => instances(nodes).filter((n) => n.parentId === null).length
+  const before = rootInstances()
+  await componentRows.first().click()
+  nodes = await nodesOf()
+  check('行を押すと、ページ直下にインスタンスが増える', rootInstances() === before + 1, `${before} → ${rootInstances()}`)
+  // 別のページからも置け、元のページ名が出る
+  await page.locator('.page-row').nth(1).click()
+  check('別のページでは、元のページ名を添える', (await componentRows.first().locator('.component-page').textContent()) === 'Page 1')
+  await componentRows.first().click()
+  second = await nodesOf(1)
+  check('別のページにも一覧から置ける', instances(second).length === 2, String(instances(second).length))
+  await componentRows.first().hover()
+  await page.locator('[aria-label="Frame 1 の元を表示"]').click()
+  check('一覧から元を表示できる', (await page.locator('.page-row[data-selected="true"] .page-name').textContent()) === 'Page 1' && (await button('インスタンスを作る').count()) === 1)
+  await page.screenshot({ path: path.join(OUT, '39-components-panel.png') })
+
+  // ── コンポーネントは紫で見分けられる ──
+  check('一覧で、コンポーネントの行に印が付く',
+    (await row('Frame 4').first().getAttribute('data-component')) === 'false' && (await page.locator('.layer-row[data-component="true"]').count()) >= 3)
+  // 選択枠の色（元を選んでいる）。枠の左上の辺の画素が紫（#9747ff）になる
+  const mainBox = nodes.find((n) => n.type === 'frame' && n.component && n.component.role === 'main')
+  const pixel = await page.evaluate(([x, y]) => {
+    const canvas = document.querySelector('.canvas-view canvas')
+    const ratio = canvas.width / canvas.clientWidth
+    return [...canvas.getContext('2d').getImageData(Math.round(x * ratio), Math.round(y * ratio), 1, 1).data]
+  }, [mainBox.x + 10, mainBox.y])
+  check('元を選ぶと、選択枠が紫になる', pixel[0] === 0x97 && pixel[1] === 0x47 && pixel[2] === 0xff, pixel.join())
+
+  // ── インスタンスの元を差し替える ──
+  await row('Frame 4').first().click()
+  await button('コンポーネントにする').click()
+  await deselect()
+  await page.mouse.click(...at(425, 318))
+  const swapSelect = page.locator('[aria-label="インスタンスの元"]')
+  check('インスタンスでは、元を選べる', (await swapSelect.locator('option').allTextContents()).join() === 'Frame 1,Frame 4', (await swapSelect.locator('option').allTextContents()).join())
+  await swapSelect.selectOption({ label: 'Frame 4' })
+  nodes = await nodesOf()
+  const frame4 = nodes.find((n) => n.type === 'frame' && n.component && n.component.role === 'main' && n.x === 600)
+  const swapped = instances(nodes).find((n) => n.x === 400 && n.y === 300)
+  check('元を差し替えると、新しい元の大きさと中身になる', swapped && swapped.component.id === frame4.component.id && swapped.width === 300 && swapped.name === 'Frame 4',
+    JSON.stringify(swapped && [swapped.name, swapped.width]))
+  await page.keyboard.press('Meta+z')
+  nodes = await nodesOf()
+  check('undo で元に戻る', instances(nodes).some((n) => n.x === 400 && n.y === 300 && n.width === 104))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

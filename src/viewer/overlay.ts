@@ -1,4 +1,4 @@
-import { OVERLAY_ACCENT, OVERLAY_GUIDE, drawBadge, strokePolyline } from '../canvas/overlay.ts'
+import { OVERLAY_GUIDE, drawBadge, overlayColor, strokePolyline } from '../canvas/overlay.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import { type Bounds, type Point, getAbsoluteBounds, getCorners, getNodesBounds, tidy } from '../document/geometry.ts'
 import type { NodeId, Scene } from '../document/types.ts'
@@ -26,12 +26,13 @@ export function drawInspectOverlay(
 
   if (hovered) {
     // 1 つだけ選んでいれば、ポインタの下のものは「間隔を測る相手」として色を変える
-    ctx.strokeStyle = selected.length === 1 ? OVERLAY_GUIDE : OVERLAY_ACCENT
+    ctx.strokeStyle = selected.length === 1 ? OVERLAY_GUIDE : overlayColor(scene, [hovered])
     outline(hovered)
   }
   if (selected.length === 0) return
 
-  ctx.strokeStyle = OVERLAY_ACCENT
+  const accent = overlayColor(scene, selected)
+  ctx.strokeStyle = accent
   ctx.lineWidth = 2
   for (const id of selected) outline(id)
   ctx.lineWidth = 1
@@ -50,7 +51,7 @@ export function drawInspectOverlay(
       ? `${tidy(node.width)} × ${tidy(node.height)}`
       : `${tidy(bounds.width)} × ${tidy(bounds.height)}`
   const bottom = toScreen({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height })
-  drawBadge(ctx, size, { x: bottom.x, y: bottom.y + 17 }, OVERLAY_ACCENT)
+  drawBadge(ctx, size, { x: bottom.x, y: bottom.y + 17 }, accent)
 }
 
 function drawDistances(

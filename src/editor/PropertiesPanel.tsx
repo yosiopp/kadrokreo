@@ -13,18 +13,26 @@ import { ExportControls } from '../ui/ExportControls.tsx'
 import {
   CAP_LABELS,
   FIT_LABELS,
+  OVERRIDE_LABELS,
   SIZE_MODE_LABELS,
   TYPE_LABELS,
   alignLabels,
   optionsOf,
 } from '../ui/labels.ts'
 import {
+  canHoldInstance,
   createInstance,
   detachComponent,
   hasOverrides,
+  listComponents,
   makeComponent,
+  overriddenKeys,
+  pushOverrides,
   resetOverrides,
+  swapComponent,
 } from './components.ts'
+import { IMAGE_MIME_TYPES } from '../document/kdr.ts'
+import { OpenFileButton } from '../ui/OpenFile.tsx'
 import { enableAutoLayout } from './layout.ts'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
@@ -45,6 +53,8 @@ type Props = {
   state: EditorState
   /** 選択中のもの（何も選んでいなければページ全体）を PNG に書き出す */
   onExportPng: (scale: number) => void
+  /** 選んでいる画像を、選んだファイルの画像に差し替える */
+  onReplaceImage: (file: File) => void
 }
 
 /** 複数選択で値が揃っていないことを表す */
@@ -88,7 +98,7 @@ const SHORTCUTS = [
   ['] / [', '最前面 / 最背面へ'],
 ]
 
-export function PropertiesPanel({ store, state, onExportPng }: Props) {
+export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: Props) {
   const { page, selection } = state
   const nodes = selection.map((id) => page.nodes[id])
 
@@ -203,6 +213,10 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
   const overridden = selection.some((id) => hasOverrides(state.document, page, id))
   /** 選んでいるインスタンスや、その中身の上書きを捨てる */
   const reset = () => store.applyDocument((doc) => resetOverrides(doc, page.id, selection))
+  /** 選んでいるインスタンスや、その中身の上書きを、元に書き込む */
+  const push = () => store.applyDocument((doc) => pushOverrides(doc, page.id, selection, fitTextNodes))
+  // 1 つだけ選んでいる中身が、元と違えている項目
+  const changedKeys = single ? overriddenKeys(state.document, page, single.id) : []
   /** 元のすぐそばにインスタンスを置いて、それを選ぶ */
   const addInstance = (componentId: string) => {
     let id: string | null = null
@@ -238,12 +252,22 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
       {inner && (
         <Section title="インスタンスの中身">
           <p className="section-note">
-            文言・塗り・線の色・表示だけを、このインスタンスに限って変えられます。文言はダブルクリックで編集します。
+            文言・塗り・線の色・表示・文字の書式・画像を、このインスタンスに限って変えられます。文言はダブルクリックで編集します。
           </p>
+          {changedKeys.length > 0 && (
+            <p className="section-note override-keys">
+              元と違えている項目: {changedKeys.map((key) => OVERRIDE_LABELS[key]).join('・')}
+            </p>
+          )}
           {overridden && (
-            <button type="button" onClick={reset}>
-              元と同じに戻す
-            </button>
+            <>
+              <button type="button" onClick={reset}>
+                元と同じに戻す
+              </button>
+              <button type="button" title="この値を元に書き込み、ほかのインスタンスにも反映する" onClick={push}>
+                元に反映
+              </button>
+            </>
           )}
         </Section>
       )}
@@ -350,13 +374,49 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
               <p className="section-note">
                 インスタンスです。中身は元に合わせて変わります。ダブルクリックで中身を選ぶと、文言や色をこのインスタンスだけ変えられます。
               </p>
+              <label className="field">
+                <span className="field-label">元</span>
+                <select
+                  aria-label="インスタンスの元"
+                  value={single.component.id}
+                  onChange={(event) => {
+                    const componentId = event.target.value
+                    store.applyDocument((doc) => swapComponent(doc, page.id, single.id, componentId))
+                    // フォーカスを残すとキーボードショートカットが効かなくなる
+                    event.target.blur()
+                  }}
+                >
+                  {listComponents(state.document).map(({ node }) => (
+                    <option
+                      key={node.component.id}
+                      value={node.component.id}
+                      // 差し替えると、このインスタンスが入っている元を、新しい元が含むことになる
+                      disabled={
+                        single.parentId !== null &&
+                        !canHoldInstance(state.document, page, single.parentId, node.component.id)
+                      }
+                    >
+                      {node.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" onClick={() => selectMain(single.component!.id)}>
                 元を表示
               </button>
               {overridden && (
-                <button type="button" onClick={reset}>
-                  上書きをすべて戻す
-                </button>
+                <>
+                  <button type="button" onClick={reset}>
+                    上書きをすべて戻す
+                  </button>
+                  <button
+                    type="button"
+                    title="このインスタンスの上書きをすべて元に書き込み、ほかのインスタンスにも反映する"
+                    onClick={push}
+                  >
+                    上書きを元に反映
+                  </button>
+                </>
               )}
               <button type="button" onClick={() => store.apply((base) => detachComponent(base, single.id))}>
                 切り離して編集できるようにする
@@ -411,14 +471,19 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         </Section>
       )}
 
-      {!inner && images.length === nodes.length && (
+      {images.length === nodes.length && (
         <Section title="画像">
-          <SelectField
-            label="収め方"
-            value={common(images.map((node) => node.fit))}
-            options={optionsOf(FIT_LABELS)}
-            onChange={(fit) => apply({ fit })}
-          />
+          {!inner && (
+            <SelectField
+              label="収め方"
+              value={common(images.map((node) => node.fit))}
+              options={optionsOf(FIT_LABELS)}
+              onChange={(fit) => apply({ fit })}
+            />
+          )}
+          <OpenFileButton accept={IMAGE_MIME_TYPES.join(',')} onFiles={(files) => onReplaceImage(files[0])}>
+            画像を差し替え
+          </OpenFileButton>
         </Section>
       )}
 
@@ -617,7 +682,7 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
         </Section>
       )}
 
-      {!inner && texts.length === nodes.length && (
+      {texts.length === nodes.length && (
         <Section title="テキスト">
           <NumberField
             label="サイズ"
@@ -626,14 +691,16 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
             max={1000}
             onCommit={(fontSize) => apply({ fontSize })}
           />
-          <NumberField
-            label="行の高さ"
-            value={common(texts.map((n) => n.lineHeight))}
-            min={0.5}
-            max={5}
-            step={0.1}
-            onCommit={(lineHeight) => apply({ lineHeight })}
-          />
+          {!inner && (
+            <NumberField
+              label="行の高さ"
+              value={common(texts.map((n) => n.lineHeight))}
+              min={0.5}
+              max={5}
+              step={0.1}
+              onCommit={(lineHeight) => apply({ lineHeight })}
+            />
+          )}
           <div className="button-row">
             <button
               type="button"
@@ -645,7 +712,8 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
             >
               <b>B</b>
             </button>
-            {TEXT_ALIGNMENTS.map(({ value, label }) => (
+            {/* 写しの行揃えは上書きできない */}
+            {!inner && TEXT_ALIGNMENTS.map(({ value, label }) => (
               <button
                 key={value}
                 type="button"
@@ -659,15 +727,17 @@ export function PropertiesPanel({ store, state, onExportPng }: Props) {
               </button>
             ))}
           </div>
-          <SelectField
-            label="折り返し"
-            value={mapValue(autoWidth, (auto) => (auto ? 'auto' : 'fixed'))}
-            options={[
-              ['auto', 'しない（幅は自動）'],
-              ['fixed', '幅に合わせる'],
-            ]}
-            onChange={(wrap) => apply({ autoWidth: wrap === 'auto' })}
-          />
+          {!inner && (
+            <SelectField
+              label="折り返し"
+              value={mapValue(autoWidth, (auto) => (auto ? 'auto' : 'fixed'))}
+              options={[
+                ['auto', 'しない（幅は自動）'],
+                ['fixed', '幅に合わせる'],
+              ]}
+              onChange={(wrap) => apply({ autoWidth: wrap === 'auto' })}
+            />
+          )}
           <label className="field">
             <span className="field-label">書体</span>
             <select

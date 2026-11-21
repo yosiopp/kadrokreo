@@ -103,6 +103,12 @@ export function pruneAssets(doc: DesignDocument): DesignDocument {
   for (const page of doc.pages) {
     for (const node of Object.values(page.nodes)) {
       if (node.type === 'image') used.add(node.assetId)
+      // 上書きが指す画像も残す。kdr を読むときに、その画像がファイルにあることを確かめている
+      if (node.type === 'frame' && node.component?.role === 'instance') {
+        for (const override of Object.values(node.component.overrides)) {
+          if (override.assetId !== undefined) used.add(override.assetId)
+        }
+      }
     }
   }
   const ids = Object.keys(doc.assets)
