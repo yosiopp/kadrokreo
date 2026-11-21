@@ -3,8 +3,10 @@ import type { AutoLayout, FrameNode, Scene } from '../document/types.ts'
 import {
   enableAutoLayout,
   moveInLayout,
+  patchLayouts,
   placeInLayout,
   relayout,
+  setAutoLayoutEnabled,
   setLayoutFill,
   setLayoutPositioning,
   setLayoutWrap,
@@ -463,5 +465,29 @@ describe('ストア', () => {
     expect(store.getState().page.nodes[frame.id].width).toBe(140)
     store.cancelPreview()
     expect(store.getState().page.nodes[frame.id].width).toBe(80)
+  })
+})
+
+describe('オートレイアウトの切り替えと設定', () => {
+  it('フレームだけを自動で並べるようにし、外すと設定を消す', () => {
+    const frame = createFrame({ x: 0, y: 0, width: 200, height: 100 })
+    const rect = createRect({ x: 300, y: 0, width: 10, height: 10 })
+    let page = insertNode(createPage(), frame)
+    page = insertNode(page, rect)
+    const on = setAutoLayoutEnabled(page, [frame.id, rect.id], true)
+    expect((on.nodes[frame.id] as FrameNode).layout).not.toBeNull()
+    expect(on.nodes[rect.id]).toBe(page.nodes[rect.id])
+    const off = setAutoLayoutEnabled(on, [frame.id, rect.id], false)
+    expect((off.nodes[frame.id] as FrameNode).layout).toBeNull()
+    expect(off.nodes[rect.id]).toBe(page.nodes[rect.id])
+  })
+
+  it('patchLayouts は自動で並べているフレームの設定だけを書き換える', () => {
+    const { page, frame } = fixture()
+    const plain = createFrame({ x: 500, y: 0, width: 50, height: 50 })
+    const withPlain = insertNode(page, plain)
+    const next = patchLayouts(withPlain, [frame.id, plain.id], { gap: 33 })
+    expect((next.nodes[frame.id] as FrameNode).layout).toMatchObject({ gap: 33, direction: 'horizontal' })
+    expect(next.nodes[plain.id]).toBe(withPlain.nodes[plain.id])
   })
 })

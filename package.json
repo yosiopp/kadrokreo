@@ -14,7 +14,10 @@
     "e2e": "node e2e/run.mjs",
     "capture": "node e2e/run.mjs capture",
     "preview": "vite preview --outDir dist/viewer",
-    "preview:editor": "vite preview --outDir dist/editor"
+    "preview:editor": "vite preview --outDir dist/editor",
+    "kdr": "node cli/kadrokreo.ts",
+    "check:viewer": "node scripts/check-viewer.mjs",
+    "check": "npm test && npm run lint && npm run build && npm run check:viewer && npm run e2e"
   },
   "dependencies": {
     "react": "^19.3.1",
@@ -30,5 +33,9 @@
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
     "vitest": "^5.1.1"
+  },
+  "bin": {
+    "kdr": "./cli/kadrokreo.ts",
+    "kadrokreo": "./cli/kadrokreo.ts"
   }
 }

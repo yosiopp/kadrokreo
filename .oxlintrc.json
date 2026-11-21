@@ -16,6 +16,26 @@
               {
                 "group": ["**/editor/**"],
                 "message": "viewer ビルドに編集機能を含めないため、src/editor は editor 側からしか import できません"
+              },
+              {
+                "group": ["**/cli/**"],
+                "message": "cli/ は Node で動かすコマンドラインなので、src から import できません"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/editor/**", "src/App.tsx", "src/main.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/cli/**"],
+                "message": "cli/ は Node で動かすコマンドラインなので、src から import できません"
               }
             ]
           }

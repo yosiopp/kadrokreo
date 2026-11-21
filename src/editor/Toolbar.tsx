@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { Tool } from './EditorCanvas.tsx'
+import type { Tool } from './tools.ts'
 
 const TOOLS: { tool: Tool; label: string; shortcut: string; icon: ReactNode }[] = [
   {

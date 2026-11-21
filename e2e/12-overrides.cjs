@@ -168,7 +168,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const links = Object.values(json.document.pages[0].nodes).filter((n) => n.component)
   const exported = links.filter((n) => n.component.role === 'instance').map((n) => Object.values(n.component.overrides).map((o) => o.text || o.fill).sort().join('+'))
-  check('kdr v13 に上書きが入る。元は上書きを持たない', json.version === 14 && exported.sort().join() === '#e11d48+予約する,#e11d48+送信する' && links.filter((n) => n.component.role === 'main').every((n) => !('overrides' in n.component)), exported.join())
+  check('kdr v14 に上書きが入る。元は上書きを持たない', json.version === 14 && exported.sort().join() === '#e11d48+予約する,#e11d48+送信する' && links.filter((n) => n.component.role === 'main').every((n) => !('overrides' in n.component)), exported.join())
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -187,7 +187,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.screenshot({ path: path.join(OUT, '41-viewer-overrides.png') })
   await viewer.locator('.inspect-panel button:text-is("元のコンポーネントへ移動")').click()
   check('viewer で、インスタンスの中身から元へ移れる', (await viewer.locator('.inspect-panel .panel-title').textContent()) === 'Frame 1' && (await inspectRows('コンポーネント')).join() === '種類=元' && (await viewer.locator('.inspect-panel button:text-is("元のコンポーネントへ移動")').count()) === 0, (await inspectRows('コンポーネント')).join())
-  for (const version of [9, 10, 11, 12]) {
+  for (const version of [9, 10, 11, 12, 13]) {
     await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, `sample-v${version}.kdr`))
     await viewer.waitForTimeout(400)
     check(`version ${version} の kdr も開ける`, (await viewer.locator('.app-message').count()) === 0)

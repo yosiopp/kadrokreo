@@ -35,12 +35,14 @@ docker build -t kadrokreo .
 
 docker run --rm -p 8080:80 kadrokreo            # viewer モード
 docker run --rm -p 8080:80 kadrokreo --editor   # editor モード
+docker run --rm -i -v "$PWD:/work" kadrokreo kdr --help   # kdr コマンド（下の「コマンドライン」）
 ```
 
 http://localhost:8080 を開く。
 
 イメージには viewer と editor の 2 つのビルドが入っていて、`--editor` の有無でどちらを配信するかが決まる。
 viewer として起動したコンテナからは、編集機能のコードそのものが配信されない。
+最初の引数を `kdr` にすると、配信はせずに kdr コマンドを実行して終わる（Node もイメージに入っているので、手元に Node は要らない）。
 
 ## 使い方
 
@@ -163,6 +165,96 @@ viewer は、デザインを実装する人のための表示（既存のデザ�
 
 どれも見ることと書き出すことだけで、ドキュメントは変更されない。
 
+### コマンドライン
+
+`cli/kadrokreo.ts` は、kdr ファイルを調べたり編集したりするコマンドライン（Node 24 以降。TypeScript のままビルドせずに動く）。
+コマンドの名前は **`kdr`**（長い名前の `kadrokreo` でも動く）。リポジトリで `npm install` と `npm link` をすると、`kdr` で呼べるようになる。
+`npm link` をしなくても、`./cli/kadrokreo.ts`（または `npm run --silent kdr --`）で同じように動く。
+自動化やエージェントから kdr を組み立てる・書き換えるためのもの。Docker のイメージからも使える（下の「Docker で使う」）。
+
+```sh
+npm link        # kdr と kadrokreo を PATH に置く（npm unlink -g kadrokreo で外す）
+
+kdr [-f 入力.kdr] [-o 出力.kdr | -w] コマンド 引数… [+ コマンド 引数…]…
+```
+
+- `+` だけの引数でコマンドを区切ると、1 回の実行で左から順に実行する
+- 入力は `-f`（省略すると標準入力）、先頭が `new` なら新しいドキュメント
+- 出力は `-o`、`-w` なら入力のファイルへ上書き。どちらもなく、ドキュメントを変えたときは kdr を標準出力へ出すので、パイプでつなげられる
+- `ls` などの文字の出力は標準出力へ出る（kdr と同時に標準出力へは出せないので、そのときは `-o` を指定する）
+- ノードは id、レイヤー名、`親/子` の道筋（名前か id を `/` でつなぐ）、`@`（直前に作ったノード）で指す
+
+```sh
+# 新しく作る（+ でつなぐ）
+kdr new Demo \
+  + add frame --name Card --id card --width 320 --height 200 fill=#f5f5ff cornerRadius=12 \
+  + add frame --name Button --id btn --parent card fill=#5b4cf5 cornerRadius=8 \
+  + add text --parent btn --name Label --text OK fill=#ffffff \
+  + auto-layout btn padding=12 + component btn \
+  -o demo.kdr
+
+# パイプでつなぐ。インスタンスの中身を変えると、editor と同じく上書きとして覚える
+kdr -f demo.kdr instance Button --id btn2 --parent card --x 120 \
+  | kdr set btn2/Label text=Cancel -o demo2.kdr
+
+# 調べる
+kdr -f demo2.kdr info + ls
+kdr -f demo2.kdr css btn2
+kdr -f demo2.kdr html card --standalone > card.html
+
+# 上書き保存、古い版の kdr を今の版に書き直す
+kdr -f demo2.kdr -w set Card fill=#ffffff
+kdr -f old.kdr -o new.kdr
+```
+
+| コマンド | 内容 |
+| --- | --- |
+| `new [名前]` | 新しいドキュメント（先頭にだけ置ける） |
+| `info` / `ls [ノード] [--all] [--json]` / `get ノード [項目]` / `find 文字列` / `bounds ノード` | 調べる |
+| `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の中身、コンポーネントの一覧 |
+| `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
+| `add 種類 …` | `rect` `ellipse` `frame` `text`（`--text`）`line`（`--from x,y --to x,y`）`path`（`--points "x,y …" [--closed]`）`image`（`--src 画像`） |
+| `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`maxWidth=320`、`fill=null` で外す） |
+| `rm` / `mv (--parent フレーム \| --root)` / `order front\|back\|forward\|backward` / `dup` | 削除、親の付け替え、重なり順、複製 |
+| `auto-layout フレーム [--off] [direction=… gap=… padding=… wrap=true crossGap=…]` / `wrap ノード…` / `layout-fill width\|height ノード…` | オートレイアウト（`wrap=true` は折り返し。`wrap` コマンドはまとめる操作で別物） |
+| `component フレーム` / `detach フレーム` / `instance 元 [--parent フレーム]` | コンポーネント |
+
+すべてのコマンドの説明は `kdr --help`、1 つだけなら `kdr help add`。
+
+#### Docker で使う
+
+イメージの最初の引数を `kdr` にすると、kdr コマンドとして動く。手元のディレクトリを `/work` につなぐと、ファイルの相対パスはそこから数える。
+
+```sh
+docker build -t kadrokreo .
+
+# 手元のファイルを読み書きする（--user を付けると、書き出したファイルの持ち主が自分になる）
+docker run --rm -v "$PWD:/work" --user "$(id -u):$(id -g)" kadrokreo kdr new Demo + add rect --name Box -o demo.kdr
+docker run --rm -v "$PWD:/work" --user "$(id -u):$(id -g)" kadrokreo kdr -f demo.kdr ls
+
+# パイプでつなぐときは -i を付ける（標準入力を渡すため）。-t は付けない（kdr を端末へは出さない）
+docker run --rm -i kadrokreo kdr new | docker run --rm -i kadrokreo kdr add rect --name Box > demo.kdr
+```
+
+毎回書くのが長ければ、シェルの関数にしておくと手元の `kdr` と同じように使える。
+
+```sh
+kdr() { docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" kadrokreo kdr "$@"; }
+```
+
+- 終了コード（0 成功・1 エラー・2 使い方の誤り）とエラーの表示は、そのまま `docker run` の結果になる
+- `/work` の外（親ディレクトリや絶対パス）のファイルは、コンテナからは見えない。必要なら `-v` で別につなぐ
+- コンテナの中では `kdr`（と `kadrokreo`）が PATH にあるので、`--entrypoint sh` で入ってスクリプトから呼ぶこともできる
+
+まとまった例として、スマホ画面（375×812）のワイヤーフレームを組み立てるスクリプトを [`docs/examples/wireframe.sh`](docs/examples/wireframe.sh) に置いている
+（`sh docs/examples/wireframe.sh 出力.kdr`。`kdr` が PATH になければ、リポジトリの `cli/kadrokreo.ts` を使う）。
+オートレイアウトで区画を並べ、リストの行をコンポーネントにしてインスタンスで増やす、という組み立て方の見本になっている。
+
+- 変更のたびに editor と同じ後始末（自動で並べ直す・インスタンスを元に合わせる・インスタンスへの変更を上書きとして覚える）をし、
+  kdr として読み込める形かを確かめる。壊れた値（`fill=red` など）はエラーにして、何も書き出さない
+- Node には Canvas がないので、テキストの大きさは文字の種類ごとのおおよその幅で見積もる。editor で文字を変えれば測り直される
+- PNG の書き出しはできない（描画がブラウザの Canvas 前提のため）
+
 ## kdr ファイル
 
 次の JSON を gzip 圧縮したもの。
@@ -215,11 +307,12 @@ viewer は、デザインを実装する人のための表示（既存のデザ�
 | `src/ui/` | 共通の UI 部品 | ○ | ○ |
 | `src/viewer/` | viewer の画面（設定と CSS・HTML の表示、間隔の計測を含む） | ○ | |
 | `src/editor/` | 編集操作、Undo/Redo、ツール、パネル、kdr の書き出し | | ○ |
-| `docker/` | 配信用の nginx 設定と起動スクリプト | | |
+| `cli/` | コマンドライン（Node で動かす。`src/editor/` の編集処理を使う） | | |
+| `docker/` | 配信用の nginx 設定と起動スクリプト（最初の引数が `kdr` なら kdr コマンドを実行） | | |
 | `e2e/` | ブラウザでの動作確認スクリプト | | |
 
 viewer 側のディレクトリ（`document` / `canvas` / `ui` / `viewer`）から `src/editor/` を import すると lint エラーになる。
-これにより viewer ビルドに編集機能が紛れ込まない。
+これにより viewer ビルドに編集機能が紛れ込まない。`src/` から `cli/` を import することもできない。
 
 ## 開発
 
@@ -232,6 +325,7 @@ npm run lint
 npm run build        # dist/viewer と dist/editor を出力
 npm run e2e          # ブラウザでの動作確認（Google Chrome が必要）
 npm run capture      # サンプルを組み立てて画面のキャプチャを撮る（e2e/out/captures に出る）
+./cli/kadrokreo.ts --help   # コマンドライン（npm link すれば kdr --help）
 ```
 
 設計の要点、作業の経緯、次にやることは [`docs/HANDOVER.md`](docs/HANDOVER.md)（引き継ぎ資料）にまとめてある。

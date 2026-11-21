@@ -496,3 +496,19 @@ export function setLayoutWrap<T extends Scene>(scene: T, ids: readonly NodeId[],
     return { layout: { ...node.layout, wrap: value, ...fixed } }
   })
 }
+
+/** ids のうち自動で並べているフレームだけ、設定の一部を書き換える */
+export function patchLayouts<T extends Scene>(scene: T, ids: readonly NodeId[], patch: Partial<AutoLayout>): T {
+  return patchNodes(scene, ids, (node) =>
+    node.type === 'frame' && node.layout ? { layout: { ...node.layout, ...patch } } : null,
+  )
+}
+
+/** フレーム ids を自動で並べるようにする（enabled が false ならやめる）。フレームでないものは変えない */
+export function setAutoLayoutEnabled<T extends Scene>(scene: T, ids: readonly NodeId[], enabled: boolean): T {
+  return ids.reduce(
+    (next, id) =>
+      enabled ? enableAutoLayout(next, id) : next.nodes[id]?.type === 'frame' ? updateNode(next, id, { layout: null }) : next,
+    scene,
+  )
+}

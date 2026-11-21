@@ -17,11 +17,13 @@ import type {
   Asset,
   AssetId,
   DesignDocument,
+  Gradient,
   NodeId,
   Page,
   PageId,
   Scene,
   SceneNode,
+  Shadow,
 } from '../document/types.ts'
 import { createId } from './nodes.ts'
 
@@ -183,6 +185,62 @@ export function updateNodes<T extends Scene>(
   patch: NodePatch,
 ): T {
   return patchNodes(scene, ids, () => patch)
+}
+
+// ── 塗り・影 ──
+
+/** index 番目（負なら後ろから）の色を変えたグラデーション */
+export function withStopColor(gradient: Gradient, index: number, color: string): Gradient {
+  const at = index < 0 ? gradient.stops.length + index : index
+  return { ...gradient, stops: gradient.stops.with(at, { ...gradient.stops[at], color }) }
+}
+
+/**
+ * 塗りの色を変える（null で塗りをなくす）。グラデーションにしている図形は、始まりの色も一緒に変え、
+ * 塗りをなくすとグラデーションもやめる。テキストは塗りを消せないので、null なら変えない
+ */
+export function setFill<T extends Scene>(scene: T, ids: readonly NodeId[], fill: string | null): T {
+  return patchNodes(scene, ids, (node) => {
+    if (!('fill' in node)) return null
+    if (node.type === 'text') return fill === null ? null : { fill }
+    const fillGradient = fill !== null && node.fillGradient ? withStopColor(node.fillGradient, 0, fill) : null
+    return { fill, fillGradient }
+  })
+}
+
+/**
+ * 塗りをグラデーションにする（enabled が false ならやめる）。
+ * 新しく付けるときは上から下へ、いまの色から白へ。塗りのない図形とテキストは変えない
+ */
+export function setGradientEnabled<T extends Scene>(scene: T, ids: readonly NodeId[], enabled: boolean): T {
+  return patchNodes(scene, ids, (node) => {
+    if (!('fillGradient' in node) || node.fill === null) return null
+    if (!enabled) return { fillGradient: null }
+    if (node.fillGradient) return null
+    const stops = [
+      { offset: 0, color: node.fill },
+      { offset: 1, color: '#ffffff' },
+    ]
+    return { fillGradient: { angle: 90, stops } }
+  })
+}
+
+/** グラデーションにしている図形だけ、グラデーションを書き換える */
+export function patchGradients<T extends Scene>(
+  scene: T,
+  ids: readonly NodeId[],
+  change: (gradient: Gradient) => Gradient,
+): T {
+  return patchNodes(scene, ids, (node) =>
+    'fillGradient' in node && node.fillGradient ? { fillGradient: change(node.fillGradient) } : null,
+  )
+}
+
+/** 影のある図形だけ、影の一部を書き換える */
+export function patchShadows<T extends Scene>(scene: T, ids: readonly NodeId[], patch: Partial<Shadow>): T {
+  return patchNodes(scene, ids, (node) =>
+    'shadow' in node && node.shadow ? { shadow: { ...node.shadow, ...patch } } : null,
+  )
 }
 
 /** 指定ノードを子孫ごと削除する */
