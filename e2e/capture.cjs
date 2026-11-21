@@ -145,8 +145,7 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   // ボタン（テキストをまとめて余白を付ける）
   await text(210, 560, 'はじめる', { size: 15, color: '#ffffff', bold: true })
   await page.keyboard.press('Shift+A')
-  await set('左右', 36)
-  await set('上下', 12)
+  await set('上', 12); await set('右', 36); await set('下', 12); await set('左', 36)
   await page.locator('[aria-label="塗りを有効にする"]').check()
   await fill('#4f46e5')
   await set('半径', 22)
@@ -250,6 +249,28 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await viewer.mouse.move(canvas.x + canvas.width / 2, canvas.y + 4)
   await viewer.locator('.inspect-layer:has(.layer-name:text-is("ボタン"))').first().click()
   await shot(viewer, '11-viewer-instance.png')
+
+  // ── editor のバリアント（ほかのキャプチャに写らないよう、最後に 2 ページ目で作る） ──
+  await page.bringToFront()
+  await page.locator('.page-row:has(.page-name:text-is("設定"))').click()
+  await text(640, 140, 'タグ', { size: 14 })
+  await page.keyboard.press('Shift+A')
+  await set('上', 6); await set('右', 14); await set('下', 6); await set('左', 14)
+  await page.locator('[aria-label="塗りを有効にする"]').check()
+  await fill('#e0e7ff')
+  await set('半径', 14)
+  await rename(await page.locator('.layer-row[data-selected="true"] .layer-name').textContent(), 'タグ')
+  await page.locator('button:text-is("コンポーネントにする")').click()
+  await page.locator('button:text-is("バリアントを追加")').click()
+  await set('種類', '選択中')
+  await fill('#a5b4fc')
+  await row('種類=標準').click()
+  await page.locator('button:text-is("インスタンスを作る")').click()
+  // 2 ページ目の座標は、まとまりが (144, -317) あたりに来る。インスタンスはその下へ
+  await set('X', 164)
+  await set('Y', -220)
+  await page.locator('.field:has(.field-label:text-is("種類")) select').selectOption('選択中')
+  await shot(page, '12-editor-variants.png')
 
   await browser.close()
 })().catch((e) => {

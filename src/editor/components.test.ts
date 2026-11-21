@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hitTest } from '../canvas/hitTest.ts'
-import { type InstanceNode, findMain, isComponentPart, owningInstance } from '../document/component.ts'
+import { type InstanceNode, findMain, owningInstance } from '../document/component.ts'
+import { isComponentPart } from '../document/variants.ts'
 import type { AutoLayout, DesignDocument, FrameNode, Page, Scene } from '../document/types.ts'
 import {
   type FitText,
@@ -30,6 +31,7 @@ import {
   updateNode,
   updatePage,
 } from './operations.ts'
+import { setLayoutFill } from './layout.ts'
 import { createEditorStore } from './store.ts'
 
 /** ボタン（フレーム + 背景 + ラベル）を元にしたドキュメント */
@@ -273,6 +275,38 @@ describe('インスタンスを置く', () => {
       [base.pageId, base.button.id],
       [other.id, icon.id],
     ])
+  })
+})
+
+describe('親いっぱいに伸ばすインスタンス', () => {
+  it('伸ばした大きさを同期で元に戻さず、中身もその大きさで並べる', () => {
+    const base = fixture()
+    // ボタンの元を、中身を右に寄せて並べるフレームにする
+    let doc = updatePage(base.doc, base.pageId, (page) =>
+      updateNode(page, base.button.id, {
+        layout: {
+          direction: 'horizontal', gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+          align: 'start', justify: 'end', widthMode: 'fixed', heightMode: 'fixed', wrap: false, crossGap: 0,
+        },
+      }),
+    )
+    const column = { ...createFrame({ x: 0, y: 300, width: 400, height: 200 }), layout: {
+      direction: 'vertical' as const, gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+      align: 'start' as const, justify: 'start' as const, widthMode: 'fixed' as const, heightMode: 'fixed' as const, wrap: false, crossGap: 0,
+    } }
+    doc = updatePage(doc, base.pageId, (page) => insertNode(page, column))
+    const created = createInstance(doc, base.pageId, base.componentId, { center: { x: 100, y: 320 }, parentId: column.id })
+    const store = createEditorStore(syncComponents(created.document))
+    store.applyDocument((current) =>
+      updatePage(current, base.pageId, (page) => setLayoutFill(page, [created.id!], 'width', true)),
+    )
+    const page = store.getState().document.pages[0]
+    const instance = frameOf(page, created.id!)
+    expect(instance).toMatchObject({ width: 400, layoutFill: { width: true, height: false } })
+    // 元は 120 幅のまま。中身（背景 120 と文字）は右へ寄る
+    expect(frameOf(page, base.button.id).width).toBe(120)
+    expect(childrenOf(page, created.id!).map((node) => node.x)).toEqual([...childrenOf(page, base.button.id).map((node) => node.x + 280)])
+    expect(syncComponents(store.getState().document)).toBe(store.getState().document)
   })
 })
 
@@ -539,12 +573,14 @@ describe('インスタンスごとの上書き', () => {
     const layout: AutoLayout = {
       direction: 'horizontal',
       gap: 0,
-      paddingX: 10,
-      paddingY: 10,
+      paddingTop: 10,
+      paddingRight: 10,
+      paddingBottom: 10,
+      paddingLeft: 10,
       align: 'start',
       justify: 'start',
       widthMode: 'hug',
-      heightMode: 'hug',
+      heightMode: 'hug', wrap: false, crossGap: 0,
     }
     const store = createEditorStore(doc, fitText)
     store.apply((page) => updateNode(page, button.id, { layout }))

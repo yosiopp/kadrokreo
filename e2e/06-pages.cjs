@@ -114,7 +114,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const kdrPath = path.join(OUT, 'pages.kdr')
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
-  check('kdr に全ページが入る', json.version === 11 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
+  check('kdr に全ページが入る', json.version === 14 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

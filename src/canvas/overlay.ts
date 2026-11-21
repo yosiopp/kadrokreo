@@ -1,4 +1,4 @@
-import { isComponentPart } from '../document/component.ts'
+import { isComponentPart } from '../document/variants.ts'
 import type { Point } from '../document/geometry.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 

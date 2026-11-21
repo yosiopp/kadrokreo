@@ -146,7 +146,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const nodes = Object.values(json.document.pages[0].nodes)
-  check('kdr にグラデーションと収め方が入る', json.version === 11 && nodes.some((n) => n.fillGradient) && nodes.some((n) => n.fit === 'contain'))
+  check('kdr にグラデーションと収め方が入る', json.version === 14 && nodes.some((n) => n.fillGradient) && nodes.some((n) => n.fit === 'contain'))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))

@@ -25,8 +25,11 @@ import type {
 //   9: コンポーネント
 //   10: インスタンスごとの上書き
 //   11: 上書きできる項目に、テキストの書式（大きさ・書体・太さ）と画像の差し替えを追加
+//   12: 子を親いっぱいに伸ばす指定（layoutFill）、オートレイアウトの 4 辺ばらばらの余白
+//   13: 自動で並べるフレームの子を並びから外す指定（layoutPositioning）
+//   14: オートレイアウトの折り返し（wrap・crossGap）、大きさの下限と上限（minWidth など）
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 11
+export const KDR_VERSION = 14
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -176,7 +179,7 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 /** 描画は再帰で辿るので、入れ子の深さに上限を設ける */
 export const MAX_DEPTH = 100
 
-type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
+type Version = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
 
 const CAPS = ['none', 'arrow'] as const
 const MAX_PATH_POINTS = 10_000
@@ -200,6 +203,17 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
     visible: boolean(raw.visible, at('visible')),
     locked: boolean(raw.locked, at('locked')),
     opacity: ratio(raw.opacity, at('opacity')),
+    layoutFill: added(12, { width: false, height: false }, () => {
+      const fill = record(raw.layoutFill, at('layoutFill'))
+      return { width: boolean(fill.width, at('layoutFill.width')), height: boolean(fill.height, at('layoutFill.height')) }
+    }),
+    layoutPositioning: added(13, 'auto' as const, () =>
+      oneOf(raw.layoutPositioning, ['auto', 'absolute'] as const, at('layoutPositioning')),
+    ),
+    minWidth: added(14, null, () => optionalSize(raw.minWidth, at('minWidth'))),
+    maxWidth: added(14, null, () => optionalSize(raw.maxWidth, at('maxWidth'))),
+    minHeight: added(14, null, () => optionalSize(raw.minHeight, at('minHeight'))),
+    maxHeight: added(14, null, () => optionalSize(raw.maxHeight, at('maxHeight'))),
   }
 
   const paint = () => ({
@@ -287,7 +301,7 @@ function parseNode(value: unknown, path: string, version: Version): SceneNode {
         clipContent: boolean(raw.clipContent, at('clipContent')),
         cornerRadius: added(3, 0, cornerRadius),
         layout: added(8, null, () =>
-          raw.layout === null ? null : parseLayout(raw.layout, at('layout')),
+          raw.layout === null ? null : parseLayout(raw.layout, at('layout'), version),
         ),
         component: added(9, null, () => {
           if (raw.component === null) return null
@@ -330,14 +344,27 @@ function parseOverrides(value: unknown, path: string): Record<NodeId, Override> 
   return overrides
 }
 
-function parseLayout(value: unknown, path: string): AutoLayout {
+function parseLayout(value: unknown, path: string, version: Version): AutoLayout {
   const raw = record(value, path)
   const modes = ['hug', 'fixed'] as const
+  // version 11 までは、左右（paddingX）と上下（paddingY）の 2 つだった
+  const padding =
+    version < 12
+      ? (() => {
+          const x = size(raw.paddingX, `${path}.paddingX`)
+          const y = size(raw.paddingY, `${path}.paddingY`)
+          return { paddingTop: y, paddingRight: x, paddingBottom: y, paddingLeft: x }
+        })()
+      : {
+          paddingTop: size(raw.paddingTop, `${path}.paddingTop`),
+          paddingRight: size(raw.paddingRight, `${path}.paddingRight`),
+          paddingBottom: size(raw.paddingBottom, `${path}.paddingBottom`),
+          paddingLeft: size(raw.paddingLeft, `${path}.paddingLeft`),
+        }
   return {
     direction: oneOf(raw.direction, ['horizontal', 'vertical'] as const, `${path}.direction`),
     gap: number(raw.gap, `${path}.gap`),
-    paddingX: size(raw.paddingX, `${path}.paddingX`),
-    paddingY: size(raw.paddingY, `${path}.paddingY`),
+    ...padding,
     align: oneOf(raw.align, ['start', 'center', 'end'] as const, `${path}.align`),
     justify: oneOf(
       raw.justify,
@@ -346,6 +373,9 @@ function parseLayout(value: unknown, path: string): AutoLayout {
     ),
     widthMode: oneOf(raw.widthMode, modes, `${path}.widthMode`),
     heightMode: oneOf(raw.heightMode, modes, `${path}.heightMode`),
+    // version 13 までは折り返しがなかった。行の間隔は、折り返すようにしたときに子の間隔と同じになるように
+    wrap: version < 14 ? false : boolean(raw.wrap, `${path}.wrap`),
+    crossGap: version < 14 ? number(raw.gap, `${path}.gap`) : number(raw.crossGap, `${path}.crossGap`),
   }
 }
 
@@ -448,6 +478,10 @@ function size(value: unknown, path: string): number {
   const n = number(value, path)
   if (n < 0) throw new KdrError(`${path}: 負の値です`)
   return n
+}
+
+function optionalSize(value: unknown, path: string): number | null {
+  return value === null ? null : size(value, path)
 }
 
 function nodeId(value: unknown, path: string): NodeId {

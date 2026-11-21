@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { isComponentPart } from '../document/component.ts'
+import { isComponentPart } from '../document/variants.ts'
 import { isOpen, layerRows, toggleFolding } from '../document/layers.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'

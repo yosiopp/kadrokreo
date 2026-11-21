@@ -1,5 +1,13 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { findMain, isInstance, owningInstance } from '../document/component.ts'
+import { type MainNode, findMain, isInstance, isMain, owningInstance } from '../document/component.ts'
+import {
+  isVariantSet,
+  parseVariantName,
+  propValue,
+  variantProperties,
+  variantSetOf,
+  variantsIn,
+} from '../document/variants.ts'
 import { normalizeAngle, tidy } from '../document/geometry.ts'
 import type {
   AutoLayout,
@@ -33,7 +41,8 @@ import {
 } from './components.ts'
 import { IMAGE_MIME_TYPES } from '../document/kdr.ts'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
-import { enableAutoLayout } from './layout.ts'
+import { enableAutoLayout, setLayoutFill, setLayoutPositioning, setLayoutWrap } from './layout.ts'
+import { sizeLimited } from '../document/autoLayout.ts'
 import { fitTextNodes } from './measure.ts'
 import { AlignIcon, TextAlignIcon } from './icons.tsx'
 import {
@@ -47,6 +56,7 @@ import {
   updateNodes,
 } from './operations.ts'
 import type { EditorState, EditorStore } from './store.ts'
+import { addVariant, renameVariantProperty, selectVariant, setVariantValue } from './variants.ts'
 
 type Props = {
   store: EditorStore
@@ -56,6 +66,22 @@ type Props = {
   /** 選んでいる画像を、選んだファイルの画像に差し替える */
   onReplaceImage: (file: File) => void
 }
+
+/** 余白の欄。上・右・下・左（CSS と同じ順） */
+const PADDING_FIELDS = [
+  ['paddingTop', '上'],
+  ['paddingRight', '右'],
+  ['paddingBottom', '下'],
+  ['paddingLeft', '左'],
+] as const
+
+/** 大きさの下限・上限の欄 */
+const LIMIT_FIELDS = [
+  ['minWidth', '最小 W', 'width'],
+  ['maxWidth', '最大 W', 'width'],
+  ['minHeight', '最小 H', 'height'],
+  ['maxHeight', '最大 H', 'height'],
+] as const
 
 /** 複数選択で値が揃っていないことを表す */
 const MIXED = Symbol('mixed')
@@ -133,7 +159,19 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
   // （塗り・線の色。文言はキャンバスで、表示はレイヤー一覧で変える）だけ。
   // インスタンス自身は、それに加えて位置・回転・不透明度を持つ
   const hasInstance = nodes.some(isInstance)
+  // 自動で並べるフレームの子だけを選んでいれば、親いっぱいに伸ばす指定ができる
+  const inLayout =
+    nodes.length > 0 &&
+    nodes.every((node) => {
+      const parent = node.parentId === null ? null : page.nodes[node.parentId]
+      return parent?.type === 'frame' && parent.layout !== null
+    })
   const inner = nodes.some((node) => owningInstance(page, node.id) !== null)
+  // 大きさの下限・上限は、大きさを自動で決める向き（親いっぱい・中身に合わせる）でだけ効くので、その向きの欄だけ出す
+  const limitAxes = {
+    width: nodes.every((node) => sizeLimited(page, node).width),
+    height: nodes.every((node) => sizeLimited(page, node).height),
+  }
   const limited = hasInstance || inner
   const plain = inner ? [] : nodes.filter((node) => !isInstance(node))
   // 塗りと線を持つ図形
@@ -227,6 +265,21 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
     })
     if (id) store.select([id])
   }
+  /** バリアントを増やして、増やしたものを選ぶ */
+  const addVariantOf = (mainId: string) => {
+    let id: string | null = null
+    store.applyDocument((doc) => {
+      const result = addVariant(doc, page.id, mainId)
+      id = result.id
+      return result.document
+    })
+    if (id) store.select([id])
+  }
+  // 1 つだけ選んでいるものが、バリアントのまとまり・バリアント・バリアントのインスタンスなら、そのまとまり
+  const variantSet = single && isVariantSet(page, single.id) ? single : null
+  const variantMainSet = single && isMain(single) ? variantSetOf(page, single.id) : null
+  const instanceMain = single && isInstance(single) ? findMain(state.document, single.component.id) : null
+  const instanceSet = instanceMain ? variantSetOf(instanceMain.page, instanceMain.node.id) : null
   /** 元のあるページへ移って、元を選ぶ */
   const selectMain = (componentId: string) => {
     const main = findMain(state.document, componentId)
@@ -337,6 +390,61 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
             </div>
           </Section>
 
+          {inLayout && (
+            <Section title="並び">
+              <CheckField
+                label="並びから外す（位置を自由に決める）"
+                value={common(nodes.map((n) => n.layoutPositioning === 'absolute'))}
+                onChange={(checked) =>
+                  store.apply((base) => setLayoutPositioning(base, selection, checked ? 'absolute' : 'auto'))
+                }
+              />
+              {nodes.every((n) => n.layoutPositioning === 'auto') && (
+                <p className="section-note">並べる向きの矢印キーで、順番を入れ替えられます。</p>
+              )}
+            </Section>
+          )}
+
+          {inLayout && nodes.every((n) => n.layoutPositioning === 'auto') && (
+            <Section title="親いっぱいに伸ばす">
+              <div className="button-row">
+                <CheckField
+                  label="幅"
+                  value={common(nodes.map((n) => n.layoutFill.width))}
+                  onChange={(checked) => store.apply((base) => setLayoutFill(base, selection, 'width', checked))}
+                />
+                {!hasText && (
+                  <CheckField
+                    label="高さ"
+                    value={common(nodes.map((n) => n.layoutFill.height))}
+                    onChange={(checked) => store.apply((base) => setLayoutFill(base, selection, 'height', checked))}
+                  />
+                )}
+              </div>
+              <p className="section-note">
+                並べる向きなら余った場所を分け合い、直交する向きなら余白の内側いっぱいに広がります。
+              </p>
+            </Section>
+          )}
+
+          {!hasInstance && (limitAxes.width || limitAxes.height) && (
+            <Section title="大きさの下限・上限">
+              <div className="field-grid">
+                {LIMIT_FIELDS.filter(([, , axis]) => limitAxes[axis]).map(([key, label]) => (
+                  <NumberField
+                    key={key}
+                    label={label}
+                    value={common(nodes.map((n) => n[key]))}
+                    min={0}
+                    onCommit={(value) => apply({ [key]: value })}
+                    onClear={() => apply({ [key]: null })}
+                  />
+                ))}
+              </div>
+              <p className="section-note">空欄にすると、決めない状態に戻ります。</p>
+            </Section>
+          )}
+
           <Section title="不透明度">
             <NumberField
               label="%"
@@ -349,7 +457,26 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
         </>
       )}
 
-      {!inner && single?.type === 'frame' && (
+      {variantSet && (
+        <Section title="バリアント">
+          <p className="section-note">
+            中のコンポーネントを、名前の「プロパティ=値」で選び分けられます。プロパティ名を変えると、すべてのバリアントに反映されます。
+          </p>
+          {variantProperties(page, variantSet.id).map(({ name, values }) => (
+            <TextField
+              key={name}
+              label={`${values.length} 値`}
+              value={name}
+              onCommit={(next) => store.apply((base) => renameVariantProperty(base, variantSet.id, name, next))}
+            />
+          ))}
+          <button type="button" onClick={() => addVariantOf(variantsIn(page, variantSet.id).at(-1)!.id)}>
+            バリアントを追加
+          </button>
+        </Section>
+      )}
+
+      {!inner && single?.type === 'frame' && !variantSet && (
         <Section title="コンポーネント">
           {single.component === null && (
             <button type="button" onClick={() => store.apply((base) => makeComponent(base, single.id))}>
@@ -359,10 +486,28 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
           {single.component?.role === 'main' && (
             <>
               <p className="section-note">
-                このフレームが元です。変更すると、すべてのインスタンスに反映されます。
+                {variantMainSet
+                  ? `「${variantMainSet.name}」のバリアントです。変更すると、このバリアントのインスタンスに反映されます。`
+                  : 'このフレームが元です。変更すると、すべてのインスタンスに反映されます。'}
               </p>
+              {variantMainSet &&
+                (parseVariantName(single.name) ?? []).map(([key, value]) => (
+                  <TextField
+                    key={key}
+                    label={key}
+                    value={value}
+                    onCommit={(next) => store.apply((base) => setVariantValue(base, single.id, key, next))}
+                  />
+                ))}
               <button type="button" onClick={() => addInstance(single.component!.id)}>
                 インスタンスを作る
+              </button>
+              <button
+                type="button"
+                title="この元を複製して、選び分けられるもう 1 つの形（バリアント）にする"
+                onClick={() => addVariantOf(single.id)}
+              >
+                バリアントを追加
               </button>
               <button type="button" onClick={() => store.apply((base) => detachComponent(base, single.id))}>
                 コンポーネントをやめる
@@ -374,6 +519,19 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
               <p className="section-note">
                 インスタンスです。中身は元に合わせて変わります。ダブルクリックで中身を選ぶと、文言や色をこのインスタンスだけ変えられます。
               </p>
+              {instanceMain &&
+                instanceSet &&
+                variantProperties(instanceMain.page, instanceSet.id).map(({ name, values }) => (
+                  <SelectField
+                    key={name}
+                    label={name}
+                    value={propValue(parseVariantName(instanceMain.node.name) ?? [], name) ?? MIXED}
+                    options={values.map((value) => [value, value] as const)}
+                    onChange={(value) =>
+                      store.applyDocument((doc) => selectVariant(doc, page.id, single.id, name, value))
+                    }
+                  />
+                ))}
               <label className="field">
                 <span className="field-label">元</span>
                 <select
@@ -386,7 +544,7 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
                     event.target.blur()
                   }}
                 >
-                  {listComponents(state.document).map(({ node }) => (
+                  {listComponents(state.document).map(({ page: mainPage, node }) => (
                     <option
                       key={node.component.id}
                       value={node.component.id}
@@ -396,7 +554,7 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
                         !canHoldInstance(state.document, page, single.parentId, node.component.id)
                       }
                     >
-                      {node.name}
+                      {optionName(mainPage, node)}
                     </option>
                   ))}
                 </select>
@@ -631,19 +789,16 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
                 value={layoutValue('gap')}
                 onCommit={(gap) => store.apply(patchLayouts({ gap }))}
               />
-              <div className="field-grid">
-                <NumberField
-                  label="左右"
-                  value={layoutValue('paddingX')}
-                  min={0}
-                  onCommit={(paddingX) => store.apply(patchLayouts({ paddingX }))}
-                />
-                <NumberField
-                  label="上下"
-                  value={layoutValue('paddingY')}
-                  min={0}
-                  onCommit={(paddingY) => store.apply(patchLayouts({ paddingY }))}
-                />
+              <div className="field-grid" aria-label="余白">
+                {PADDING_FIELDS.map(([key, label]) => (
+                  <NumberField
+                    key={key}
+                    label={label}
+                    value={layoutValue(key)}
+                    min={0}
+                    onCommit={(value) => store.apply(patchLayouts({ [key]: value }))}
+                  />
+                ))}
               </div>
               <SelectField
                 label="揃え"
@@ -665,6 +820,18 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
                 ]}
                 onChange={(justify) => store.apply(patchLayouts({ justify }))}
               />
+              <CheckField
+                label="収まらなければ折り返す"
+                value={layoutValue('wrap')}
+                onChange={(checked) => store.apply((base) => setLayoutWrap(base, selection, checked))}
+              />
+              {layoutValue('wrap') === true && (
+                <NumberField
+                  label="行の間隔"
+                  value={layoutValue('crossGap')}
+                  onCommit={(crossGap) => store.apply(patchLayouts({ crossGap }))}
+                />
+              )}
               <SelectField
                 label="幅"
                 value={layoutValue('widthMode')}
@@ -783,6 +950,47 @@ function ExportSection({ label, onExport }: { label: string; onExport: (scale: n
   )
 }
 
+/** 元を選ぶ欄での名前。バリアントなら「まとまりの名前（バリアントの名前）」 */
+function optionName(page: Page, node: MainNode): string {
+  const set = variantSetOf(page, node.id)
+  return set ? `${set.name}（${node.name}）` : node.name
+}
+
+type TextFieldProps = {
+  label: string
+  value: string
+  onCommit: (value: string) => void
+}
+
+/** 文字の欄。NumberField と同じく、Enter かフォーカスが外れたときに確定し、Esc で打ち直しを捨てる */
+function TextField({ label, value, onCommit }: TextFieldProps) {
+  const [draft, setDraft] = useState<string | null>(null)
+  function commit() {
+    if (draft !== null && draft !== value) onCommit(draft)
+    setDraft(null)
+  }
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      <input
+        type="text"
+        value={draft ?? value}
+        onFocus={(event) => event.target.select()}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+          else if (event.key === 'Escape') {
+            const input = event.currentTarget
+            setDraft(null)
+            requestAnimationFrame(() => input.blur())
+          }
+        }}
+      />
+    </label>
+  )
+}
+
 type SelectFieldProps<T extends string> = {
   label: string
   value: T | Mixed
@@ -852,13 +1060,15 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 type NumberFieldProps = {
   label: string
-  value: number | Mixed
+  /** null は「決めていない」。空欄で出し、onClear があれば空欄にして確定すると呼ぶ */
+  value: number | Mixed | null
   min?: number
   max?: number
   /** 上下キーで増減する量。Shift でその 10 倍 */
   step?: number
   disabled?: boolean
   onCommit: (value: number) => void
+  onClear?: () => void
 }
 
 /** 入力中は下書きとして持ち、Enter かフォーカスが外れたときに確定する */
@@ -870,13 +1080,18 @@ function NumberField({
   step = 1,
   disabled,
   onCommit,
+  onClear,
 }: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null)
-  const shown = draft ?? (value === MIXED ? '' : String(tidy(value)))
+  const shown = draft ?? (value === MIXED || value === null ? '' : String(tidy(value)))
 
   function commit(text: string | null) {
     setDraft(null)
-    if (text === null || text.trim() === '') return
+    if (text === null) return
+    if (text.trim() === '') {
+      if (value !== null) onClear?.()
+      return
+    }
     const parsed = Number(text)
     if (!Number.isFinite(parsed)) return
     // 0.1 刻みの足し算で出る端数を落とす
@@ -890,7 +1105,7 @@ function NumberField({
         type="text"
         inputMode="decimal"
         value={shown}
-        placeholder={value === MIXED ? '混在' : undefined}
+        placeholder={value === MIXED ? '混在' : value === null ? 'なし' : undefined}
         disabled={disabled}
         onFocus={(event) => event.target.select()}
         onChange={(event) => setDraft(event.target.value)}
@@ -906,8 +1121,9 @@ function NumberField({
           } else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && value !== MIXED) {
             event.preventDefault()
             const delta = step * (event.shiftKey ? 10 : 1) * (event.key === 'ArrowUp' ? 1 : -1)
-            const current = draft === null ? value : Number(draft)
-            commit(String((Number.isFinite(current) ? current : value) + delta))
+            const fallback = value ?? 0
+            const current = draft === null ? fallback : Number(draft)
+            commit(String((Number.isFinite(current) ? current : fallback) + delta))
           }
         }}
       />

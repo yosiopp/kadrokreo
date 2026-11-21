@@ -36,12 +36,14 @@ describe('nodeCss', () => {
       layout: {
         direction: 'vertical',
         gap: 8,
-        paddingX: 16,
-        paddingY: 0,
+        paddingTop: 0,
+        paddingRight: 16,
+        paddingBottom: 0,
+        paddingLeft: 16,
         align: 'center',
         justify: 'space-between',
         widthMode: 'hug',
-        heightMode: 'fixed',
+        heightMode: 'fixed', wrap: false, crossGap: 0,
       },
     })
     const scene = sceneOf(parent, rect({ parentId: 'frame', x: 16, y: 0 }))
@@ -56,6 +58,80 @@ describe('nodeCss', () => {
       'background: #ff0000;',
     ])
     expect(css(scene, 'rect')).toEqual(['width: 100px;', 'height: 50px;', 'background: #ff0000;'])
+  })
+
+  it('親いっぱいに伸ばす子は、大きさの代わりに flex と align-self を書く。余白は 4 辺ばらばらにも書ける', () => {
+    const layout = {
+      direction: 'horizontal' as const,
+      gap: 0,
+      paddingTop: 1,
+      paddingRight: 2,
+      paddingBottom: 3,
+      paddingLeft: 4,
+      align: 'start' as const,
+      justify: 'start' as const,
+      widthMode: 'fixed' as const,
+      heightMode: 'fixed' as const, wrap: false, crossGap: 0,
+    }
+    const scene = sceneOf(
+      frame({ children: ['rect'], clipContent: false, layout }),
+      rect({ parentId: 'frame', layoutFill: { width: true, height: true } }),
+    )
+    expect(css(scene, 'frame')).toContain('padding: 1px 2px 3px 4px;')
+    expect(css(scene, 'rect')).toEqual(['flex: 1 0 0;', 'align-self: stretch;', 'background: #ff0000;'])
+    // 並びから外した子は、親を基準に置く
+    const outside = sceneOf(
+      frame({ children: ['rect'], clipContent: false, layout }),
+      rect({ parentId: 'frame', x: 7, y: 8, layoutPositioning: 'absolute' }),
+    )
+    expect(css(outside, 'frame')).toContain('position: relative;')
+    expect(css(outside, 'rect').slice(0, 3)).toEqual(['position: absolute;', 'left: 7px;', 'top: 8px;'])
+    // 親が自動で並べていなければ、伸ばす指定は意味がない
+    const plain = sceneOf(frame({ children: ['rect'] }), rect({ parentId: 'frame', layoutFill: { width: true, height: true } }))
+    expect(css(plain, 'rect')).toContain('width: 100px;')
+  })
+
+  it('折り返しと、大きさの下限・上限', () => {
+    const layout = {
+      direction: 'horizontal' as const,
+      gap: 8,
+      paddingTop: 0,
+      paddingRight: 0,
+      paddingBottom: 0,
+      paddingLeft: 0,
+      align: 'center' as const,
+      justify: 'start' as const,
+      widthMode: 'fixed' as const,
+      heightMode: 'hug' as const,
+      wrap: true,
+      crossGap: 4,
+    }
+    const scene = sceneOf(
+      frame({ children: ['rect'], clipContent: false, layout, minHeight: 40, maxWidth: 500 }),
+      rect({ parentId: 'frame', layoutFill: { width: true, height: false }, minWidth: 60, maxHeight: 99 }),
+    )
+    expect(css(scene, 'frame')).toEqual([
+      'display: flex;',
+      'flex-direction: row;',
+      'flex-wrap: wrap;',
+      'align-items: center;',
+      'align-content: center;',
+      'gap: 4px 8px;',
+      'width: 100px;',
+      // 幅は固定なので上限は書かない。高さは中身に合わせるので下限を書く
+      'min-height: 40px;',
+      'background: #ff0000;',
+    ])
+    // 横に伸ばす子の幅の下限だけ。高さは固定なので上限は書かない
+    expect(css(scene, 'rect')).toEqual(['flex: 1 0 0;', 'height: 50px;', 'min-width: 60px;', 'background: #ff0000;'])
+    expect(rowsOf(scene, 'frame', 'オートレイアウト')).toContain('折り返し=する（行の間隔 4）')
+    expect(rowsOf(scene, 'frame', '位置とサイズ')).toContain('最小の高さ=40')
+    expect(rowsOf(scene, 'frame', '位置とサイズ')).not.toContain('最大の幅=500')
+    expect(rowsOf(scene, 'rect', '位置とサイズ')).toContain('最小の幅=60')
+    // 並べる向きを中身に合わせていれば折り返さない
+    const hug = sceneOf(frame({ children: [], layout: { ...layout, widthMode: 'hug', gap: 4 } }))
+    expect(css(hug, 'frame')).not.toContain('flex-wrap: wrap;')
+    expect(css(hug, 'frame')).toContain('gap: 4px;')
   })
 
   it('線・角丸・影・回転・不透明度', () => {
@@ -247,12 +323,14 @@ describe('inspectNode', () => {
       layout: {
         direction: 'horizontal',
         gap: 8,
-        paddingX: 20,
-        paddingY: 10,
+        paddingTop: 10,
+        paddingRight: 20,
+        paddingBottom: 10,
+        paddingLeft: 20,
         align: 'end',
         justify: 'start',
         widthMode: 'hug',
-        heightMode: 'fixed',
+        heightMode: 'fixed', wrap: false, crossGap: 0,
       },
     })
     const instance = frame({ id: 'instance', component: { id: 'c1', role: 'instance', overrides: {} } })
@@ -261,8 +339,7 @@ describe('inspectNode', () => {
     expect(rowsOf(scene, 'main', 'オートレイアウト')).toEqual([
       '向き=横',
       '間隔=8',
-      '余白（左右）=20',
-      '余白（上下）=10',
+      '余白=10 20',
       '揃え=下',
       '寄せ=先頭',
       '幅=中身に合わせる',
@@ -271,6 +348,23 @@ describe('inspectNode', () => {
     expect(rowsOf(scene, 'main', 'コンポーネント')).toEqual(['種類=元'])
     expect(rowsOf(scene, 'instance', 'コンポーネント')).toEqual(['種類=インスタンス', '元の名前=ボタン'])
     expect(rowsOf(scene, 'orphan', 'コンポーネント')).toEqual(['種類=インスタンス'])
+  })
+
+  it('バリアントのまとまり・バリアント・そのインスタンスには、プロパティを出す', () => {
+    const scene = sceneOf(
+      frame({ id: 'set', name: 'ボタン', children: ['small', 'large'] }),
+      frame({ id: 'small', name: 'サイズ=小, 状態=標準', parentId: 'set', component: { id: 'c1', role: 'main' } }),
+      frame({ id: 'large', name: 'サイズ=大, 状態=標準', parentId: 'set', component: { id: 'c2', role: 'main' } }),
+      frame({ id: 'instance', name: 'ボタン', component: { id: 'c2', role: 'instance', overrides: {} } }),
+    )
+    expect(rowsOf(scene, 'set', 'コンポーネント')).toEqual(['種類=バリアントのまとまり', 'サイズ=小 / 大', '状態=標準'])
+    expect(rowsOf(scene, 'large', 'コンポーネント')).toEqual(['種類=バリアント', 'まとまり=ボタン', 'サイズ=大', '状態=標準'])
+    expect(rowsOf(scene, 'instance', 'コンポーネント')).toEqual([
+      '種類=インスタンス',
+      'コンポーネント=ボタン',
+      'サイズ=大',
+      '状態=標準',
+    ])
   })
 
   it('インスタンスには、元と違えている項目を、当たっているノードごとに出す', () => {

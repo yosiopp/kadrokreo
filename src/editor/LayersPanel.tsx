@@ -1,5 +1,6 @@
 import { type DragEvent, type MouseEvent, useState } from 'react'
-import { isComponentPart, isInstance, owningInstance } from '../document/component.ts'
+import { isInstance, owningInstance } from '../document/component.ts'
+import { isComponentPart } from '../document/variants.ts'
 import { type LayerRow, isOpen, layerRows, toggleFolding } from '../document/layers.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'

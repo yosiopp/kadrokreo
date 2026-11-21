@@ -9,7 +9,9 @@ import {
 import { getAbsoluteBounds, getNodesBounds, tidy } from '../document/geometry.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
 import { type Distance, measureBetween } from './distances.ts'
-import type { DesignDocument, Gradient, NodeId, Override, Scene, Shadow } from '../document/types.ts'
+import { sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
+import { isVariantSet, parseVariantName, variantProperties, variantSetOf } from '../document/variants.ts'
+import type { AutoLayout, DesignDocument, Gradient, NodeId, Override, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { CAP_LABELS, FIT_LABELS, OVERRIDE_LABELS, SIZE_MODE_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
@@ -53,11 +55,16 @@ export function inspectNode(
     if (shown.length > 0) sections.push({ title, rows: shown })
   }
 
+  const stretched = stretchedAxes(scene, node)
+  // 親いっぱいに伸ばしている向きは、値のあとに書き添える
+  const fillNote = (on: boolean) => (on ? '（親いっぱい）' : '')
   add('位置とサイズ', [
     { label: 'X', value: num(node.x) },
     { label: 'Y', value: num(node.y) },
-    { label: '幅', value: num(node.width) },
-    { label: '高さ', value: num(node.height) },
+    { label: '幅', value: `${num(node.width)}${fillNote(stretched.width)}` },
+    { label: '高さ', value: `${num(node.height)}${fillNote(stretched.height)}` },
+    ...limitRows(scene, node),
+    inFlexParent(scene, node.id) && node.layoutPositioning === 'absolute' && { label: '配置', value: '並びから外す' },
     node.rotation !== 0 && { label: '回転', value: `${num(node.rotation)}°` },
     'cornerRadius' in node && node.cornerRadius > 0 && { label: '角丸', value: num(node.cornerRadius) },
     node.opacity < 1 && { label: '不透明度', value: percent(node.opacity) },
@@ -68,10 +75,10 @@ export function inspectNode(
     add('オートレイアウト', [
       { label: '向き', value: DIRECTIONS[layout.direction] },
       { label: '間隔', value: num(layout.gap) },
-      { label: '余白（左右）', value: num(layout.paddingX) },
-      { label: '余白（上下）', value: num(layout.paddingY) },
+      { label: '余白', value: paddingText(layout) },
       { label: '揃え', value: alignLabels(layout.direction)[layout.align] },
       { label: '寄せ', value: JUSTIFY[layout.justify] },
+      wraps(scene, node) && { label: '折り返し', value: `する（行の間隔 ${num(layout.crossGap)}）` },
       { label: '幅', value: SIZE_MODE_LABELS[layout.widthMode] },
       { label: '高さ', value: SIZE_MODE_LABELS[layout.heightMode] },
     ])
@@ -141,7 +148,18 @@ export function inspectNode(
   }
 
   if (isMain(node)) {
-    add('コンポーネント', [{ label: '種類', value: '元' }])
+    const set = variantSetOf(scene, node.id)
+    add('コンポーネント', [
+      { label: '種類', value: set ? 'バリアント' : '元' },
+      set !== null && { label: 'まとまり', value: set.name },
+      ...variantRows(node.name),
+    ])
+  }
+  if (isVariantSet(scene, node.id)) {
+    add('コンポーネント', [
+      { label: '種類', value: 'バリアントのまとまり' },
+      ...variantProperties(scene, node.id).map(({ name, values }) => ({ label: name, value: values.join(' / ') })),
+    ])
   }
   const instance = instanceOf(scene, id)
   if (instance) {
@@ -150,7 +168,9 @@ export function inspectNode(
     add('コンポーネント', [
       { label: '種類', value: own ? 'インスタンス' : 'インスタンスの中身' },
       !own && { label: 'インスタンス', value: instance.name },
-      main !== null && { label: '元の名前', value: main.node.name },
+      main !== null && variantSetOf(main.page, main.node.id) === null && { label: '元の名前', value: main.node.name },
+      // バリアントのインスタンスは、まとまりの名前と、選んでいるプロパティの値
+      ...(main === null ? [] : variantInstanceRows(main.page, main.node)),
       // 中身は、そのノード自身が元と違えている項目だけを出す。インスタンス全体の分は、下の一覧で出す
       !own && overrideRow('上書き', overridesOn(scene, instance, main?.node.id).get(id)),
     ])
@@ -199,13 +219,17 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   const add = (property: string, value: string) => lines.push(`${property}: ${value};`)
   const px = (value: number) => length(value, style)
 
-  // 自動で並べるフレームの子は、親が位置を決める。ページ直下のものは、置き場所を決めない
-  const absolute = parent?.type === 'frame' && !parent.layout
+  // 自動で並べるフレームの子は、親が位置を決める（並びから外したものを除く）。ページ直下のものは、置き場所を決めない
+  const absolute =
+    parent?.type === 'frame' && (!parent.layout || node.layoutPositioning === 'absolute')
+  const holdsAbsolute =
+    node.type === 'frame' &&
+    node.children.some((child) => !node.layout || scene.nodes[child].layoutPositioning === 'absolute')
   if (absolute) {
     add('position', 'absolute')
     add('left', px(node.x))
     add('top', px(node.y))
-  } else if (node.type === 'frame' && !node.layout && node.children.length > 0) {
+  } else if (holdsAbsolute) {
     // 子を absolute で置くための基準にする
     add('position', 'relative')
   }
@@ -218,22 +242,48 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       end: 'flex-end',
       'space-between': 'space-between',
     }
+    const wrapping = wraps(scene, node)
     add('display', 'flex')
     add('flex-direction', layout.direction === 'horizontal' ? 'row' : 'column')
+    if (wrapping) add('flex-wrap', 'wrap')
     if (layout.align !== 'start') add('align-items', flex[layout.align])
+    // 折り返すとき、行のまとまりも揃え方に従って置く（既定の stretch だと行の間に隙間ができる）
+    if (wrapping) add('align-content', flex[layout.align])
     if (layout.justify !== 'start') add('justify-content', flex[layout.justify])
-    if (layout.gap !== 0) add('gap', px(layout.gap))
-    if (layout.paddingX !== 0 || layout.paddingY !== 0) {
-      add('padding', `${px(layout.paddingY)} ${px(layout.paddingX)}`)
-    }
+    if (wrapping && layout.crossGap !== layout.gap) {
+      // gap は「行の間隔 列の間隔」の順
+      const [row, column] =
+        layout.direction === 'horizontal' ? [layout.crossGap, layout.gap] : [layout.gap, layout.crossGap]
+      add('gap', `${px(row)} ${px(column)}`)
+    } else if (layout.gap !== 0) add('gap', px(layout.gap))
+    const padding = paddingCss(layout, px)
+    if (padding !== null) add('padding', padding)
   }
 
   // 中身で決まる大きさは書かない
   const hugWidth =
     node.type === 'frame' ? node.layout?.widthMode === 'hug' : node.type === 'text' && node.autoWidth
   const hugHeight = node.type === 'frame' ? node.layout?.heightMode === 'hug' : node.type === 'text'
-  if (!hugWidth) add('width', px(node.width))
-  if (!hugHeight) add('height', px(node.height))
+  // 親いっぱいに伸ばす向きは、大きさの代わりに伸ばし方を書く
+  const stretched = stretchedAxes(scene, node)
+  if (parent?.type === 'frame' && parent.layout) {
+    const mainStretched = parent.layout.direction === 'horizontal' ? stretched.width : stretched.height
+    const crossStretched = parent.layout.direction === 'horizontal' ? stretched.height : stretched.width
+    if (mainStretched) add('flex', '1 0 0')
+    if (crossStretched) add('align-self', 'stretch')
+  }
+  if (!hugWidth && !stretched.width) add('width', px(node.width))
+  if (!hugHeight && !stretched.height) add('height', px(node.height))
+  // 大きさの下限・上限は、大きさを自動で決める向きでだけ書く
+  const limited = sizeLimited(scene, node)
+  for (const [property, value, axis] of [
+    ['min-width', node.minWidth, 'width'],
+    ['max-width', node.maxWidth, 'width'],
+    ['min-height', node.minHeight, 'height'],
+    ['max-height', node.maxHeight, 'height'],
+  ] as const) {
+    if (value !== null && limited[axis]) add(property, px(value))
+  }
   if (node.rotation !== 0) add('transform', `rotate(${num(node.rotation)}deg)`)
   if (node.opacity < 1) add('opacity', num(node.opacity))
 
@@ -282,6 +332,52 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
 function gradientCss(gradient: Gradient, style: CodeStyle): string {
   const stops = gradient.stops.map((stop) => `${formatColor(stop.color, style.color)} ${percent(stop.offset)}`)
   return `linear-gradient(${num((((gradient.angle + 90) % 360) + 360) % 360)}deg, ${stops.join(', ')})`
+}
+
+/** 自動で並べるフレームの子か */
+function inFlexParent(scene: Scene, id: NodeId): boolean {
+  const parentId = scene.nodes[id].parentId
+  const parent = parentId === null ? null : scene.nodes[parentId]
+  return parent?.type === 'frame' && parent.layout !== null
+}
+
+/** 余白の値。4 辺が同じなら 1 つ、上下と左右がそれぞれ同じなら「上下 左右」、そうでなければ上・右・下・左 */
+function paddingValues(layout: AutoLayout): number[] {
+  const { paddingTop: top, paddingRight: right, paddingBottom: bottom, paddingLeft: left } = layout
+  if (top === bottom && left === right) return top === left ? [top] : [top, right]
+  return [top, right, bottom, left]
+}
+
+function paddingText(layout: AutoLayout): string {
+  return paddingValues(layout).map(num).join(' ')
+}
+
+/** バリアントの名前を、プロパティごとの行にしたもの。バリアントの形の名前でなければ空 */
+function variantRows(name: string): InspectRow[] {
+  return (parseVariantName(name) ?? []).map(([key, value]) => ({ label: key, value }))
+}
+
+/** バリアントの元 main のインスタンスに出す行（まとまりの名前と、プロパティの値） */
+function variantInstanceRows(page: Scene, main: SceneNode): InspectRow[] {
+  const set = variantSetOf(page, main.id)
+  return set ? [{ label: 'コンポーネント', value: set.name }, ...variantRows(main.name)] : []
+}
+
+/** 大きさの下限・上限の行。決めていて、効く向きのものだけ */
+function limitRows(scene: Scene, node: SceneNode): InspectRow[] {
+  const limited = sizeLimited(scene, node)
+  const rows: [string, number | null, 'width' | 'height'][] = [
+    ['最小の幅', node.minWidth, 'width'],
+    ['最大の幅', node.maxWidth, 'width'],
+    ['最小の高さ', node.minHeight, 'height'],
+    ['最大の高さ', node.maxHeight, 'height'],
+  ]
+  return rows.flatMap(([label, value, axis]) => (value !== null && limited[axis] ? [{ label, value: num(value) }] : []))
+}
+
+function paddingCss(layout: AutoLayout, px: (value: number) => string): string | null {
+  const values = paddingValues(layout)
+  return values.every((value) => value === 0) ? null : values.map(px).join(' ')
 }
 
 /** CSS の box-shadow の値 */

@@ -30,7 +30,7 @@ import type { LineNode, NodeId, PathNode, Scene, SceneNode, TextNode } from '../
 import { TextEditor } from './TextEditor.tsx'
 import { findFrameAt, nodesInMarquee } from './hitTest.ts'
 import { makeComponent, withoutCopies } from './components.ts'
-import { placeInLayout, wrapInAutoLayout } from './layout.ts'
+import { flowParent, moveInLayout, placeInLayout, wrapInAutoLayout } from './layout.ts'
 import { fitTextNodes } from './measure.ts'
 import {
   createEllipse,
@@ -652,9 +652,12 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       // ポインタの下にあるフレームの中へ入れる（フレームの外へ出せばページ直下に戻る）
       const parentId = findFrameAt(store.getState().page, pointer.world, exclude)
 
-      // 自動で並べるフレームの中では、位置はフレームが決める。ポインタの位置に応じて順番だけ入れ替える
-      const parent = parentId === null ? null : store.getState().page.nodes[parentId]
-      if (parent?.type === 'frame' && parent.layout) {
+      // 自動で並べるフレームの中では、位置はフレームが決める。ポインタの位置に応じて順番だけ入れ替える。
+      // ただし、そのフレームの中で並びから外してある子は、ほかのフレームと同じく自由に動かす
+      const page = store.getState().page
+      const parent = parentId === null ? null : page.nodes[parentId]
+      const free = ids.every((id) => page.nodes[id].parentId === parentId && page.nodes[id].layoutPositioning === 'absolute')
+      if (parent?.type === 'frame' && parent.layout && !free) {
         gesture.guides = []
         store.preview((base) => placeInLayout(base, ids, parent.id, pointer.world))
         return
@@ -892,8 +895,18 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (event.altKey) return
 
     const step = event.shiftKey ? 10 : 1
-    const nudge = (dx: number, dy: number) =>
-      store.apply((base) => translateNodes(base, movableIds(), dx, dy))
+    const nudge = (dx: number, dy: number) => {
+      const ids = movableIds()
+      // 自動で並べるフレームの並びの中では、位置はフレームが決めるので、並べる向きの矢印で順番を入れ替える
+      const parent = ids.length > 0 ? flowParent(page, ids[0]) : null
+      if (parent) {
+        const horizontal = parent.layout!.direction === 'horizontal'
+        const along = horizontal ? dx : dy
+        if (along !== 0) store.apply((base) => moveInLayout(base, ids, along < 0 ? -1 : 1))
+        return
+      }
+      store.apply((base) => translateNodes(base, ids, dx, dy))
+    }
     const tools: Record<string, Tool> = {
       v: 'select',
       f: 'frame',

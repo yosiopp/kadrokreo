@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KdrError, decodeKdr, parseKdr } from '../document/kdr.ts'
+import { KDR_VERSION, KdrError, decodeKdr, parseKdr } from '../document/kdr.ts'
 import type { DesignDocument, Page, Scene, TextNode } from '../document/types.ts'
 import { encodeKdr } from './exportKdr.ts'
 import { pathFromPoints } from '../document/path.ts'
@@ -38,7 +38,7 @@ const PNG = {
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 }
 
-function kdrJson(document: unknown, version = 10) {
+function kdrJson(document: unknown, version: number = KDR_VERSION) {
   return { format: 'kadrokreo', version, document }
 }
 
@@ -105,7 +105,7 @@ describe('parseKdr', () => {
   it('別形式や未対応バージョンを拒否する', () => {
     const doc = documentOf(valid())
     expect(() => parseKdr({ format: 'other', version: 1, document: doc })).toThrow(KdrError)
-    expect(() => parseKdr(kdrJson(doc, 12))).toThrow('新しいバージョン')
+    expect(() => parseKdr(kdrJson(doc, 15))).toThrow('新しいバージョン')
     expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)
@@ -280,21 +280,69 @@ describe('parseKdr', () => {
     const layout = {
       direction: 'vertical',
       gap: 8,
-      paddingX: 16,
-      paddingY: 12,
+      paddingTop: 12,
+      paddingRight: 16,
+      paddingBottom: 4,
+      paddingLeft: 0,
       align: 'center',
       justify: 'space-between',
       widthMode: 'hug',
       heightMode: 'fixed',
+      wrap: true,
+      crossGap: 6,
     }
     const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), layout }
     expect(parseKdr(kdrOf(sceneOf(frame))).pages[0].nodes[frame.id]).toEqual(frame)
 
     const withLayout = (patch: object) => kdrOf(sceneOf({ ...frame, layout: { ...layout, ...patch } }))
     expect(() => parseKdr(withLayout({ direction: 'diagonal' }))).toThrow('layout.direction')
-    expect(() => parseKdr(withLayout({ paddingX: -1 }))).toThrow('layout.paddingX')
+    expect(() => parseKdr(withLayout({ paddingLeft: -1 }))).toThrow('layout.paddingLeft')
     expect(() => parseKdr(withLayout({ widthMode: 'fill' }))).toThrow('layout.widthMode')
     expect(() => parseKdr(withLayout({ gap: '8' }))).toThrow('layout.gap')
+    expect(() => parseKdr(withLayout({ wrap: 'yes' }))).toThrow('layout.wrap')
+    expect(() => parseKdr(withLayout({ crossGap: null }))).toThrow('layout.crossGap')
+  })
+
+  it('version 13 のファイルも読める（折り返さず、行の間隔は子の間隔と同じ。大きさの下限・上限なし）', () => {
+    const { minWidth: _a, maxWidth: _b, minHeight: _c, maxHeight: _d, ...v13Frame } = createFrame({ x: 0, y: 0, width: 10, height: 10 })
+    const layout = { direction: 'horizontal', gap: 7, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, align: 'start', justify: 'start', widthMode: 'hug', heightMode: 'hug' }
+    const doc = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf({ ...v13Frame, layout }) }], assets: {} }
+    const parsed = parseKdr(kdrJson(doc, 13)).pages[0].nodes[v13Frame.id]
+    expect(parsed).toMatchObject({ minWidth: null, maxWidth: null, minHeight: null, maxHeight: null })
+    expect(parsed.type === 'frame' && parsed.layout).toMatchObject({ wrap: false, crossGap: 7 })
+  })
+
+  it('大きさの下限・上限を検証する', () => {
+    const rect = { ...createRect({ x: 0, y: 0, width: 10, height: 10 }), minWidth: 20, maxHeight: 40 }
+    expect(parseKdr(kdrOf(sceneOf(rect))).pages[0].nodes[rect.id]).toEqual(rect)
+    expect(() => parseKdr(kdrOf(sceneOf({ ...rect, minWidth: -1 })))).toThrow('minWidth')
+    expect(() => parseKdr(kdrOf(sceneOf({ ...rect, maxHeight: '40' })))).toThrow('maxHeight')
+  })
+
+  it('version 11 のファイルも読める（余白は左右と上下の 2 つ、伸ばす指定なし）', () => {
+    const { layoutFill: _fill, ...v11Frame } = createFrame({ x: 0, y: 0, width: 10, height: 10 })
+    const layout = { direction: 'vertical', gap: 8, paddingX: 16, paddingY: 12, align: 'start', justify: 'start', widthMode: 'hug', heightMode: 'hug' }
+    const v11 = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf({ ...v11Frame, layout }) }], assets: {} }
+    expect(parseKdr(kdrJson(v11, 11)).pages[0].nodes[v11Frame.id]).toMatchObject({
+      layoutFill: { width: false, height: false },
+      layout: { paddingTop: 12, paddingRight: 16, paddingBottom: 12, paddingLeft: 16 },
+    })
+    expect(() => parseKdr(kdrJson(v11, 12))).toThrow(KdrError)
+  })
+
+  it('親いっぱいに伸ばす指定を検証する', () => {
+    const rect = { ...createRect({ x: 0, y: 0, width: 10, height: 10 }), layoutFill: { width: true, height: false } }
+    expect(parseKdr(kdrOf(sceneOf(rect))).pages[0].nodes[rect.id]).toEqual(rect)
+    expect(() => parseKdr(kdrOf(sceneOf({ ...rect, layoutFill: { width: 1, height: false } })))).toThrow('layoutFill.width')
+  })
+
+  it('並びから外す指定を検証する。version 12 までは並びに加わる', () => {
+    const rect = { ...createRect({ x: 0, y: 0, width: 10, height: 10 }), layoutPositioning: 'absolute' }
+    expect(parseKdr(kdrOf(sceneOf(rect))).pages[0].nodes[rect.id]).toEqual(rect)
+    expect(() => parseKdr(kdrOf(sceneOf({ ...rect, layoutPositioning: 'fixed' })))).toThrow('layoutPositioning')
+    const { layoutPositioning: _positioning, ...v12Rect } = rect
+    const v12 = { name: 'x', pages: [{ id: 'p1', name: 'Page 1', ...sceneOf(v12Rect) }], assets: {} }
+    expect(parseKdr(kdrJson(v12, 12)).pages[0].nodes[rect.id]).toMatchObject({ layoutPositioning: 'auto' })
   })
 
   it('グラデーションを検証する', () => {

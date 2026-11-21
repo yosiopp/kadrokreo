@@ -22,6 +22,7 @@ import type {
   Shadow,
 } from '../document/types.ts'
 import { OVERLAY_COMPONENT } from './overlay.ts'
+import { isVariantSet } from '../document/variants.ts'
 import { getImage } from './images.ts'
 import { applyFont, layoutText } from './text.ts'
 import type { Viewport } from './viewport.ts'
@@ -419,8 +420,8 @@ function drawFrameLabels(
   for (const id of scene.rootIds) {
     const node = scene.nodes[id]
     if (node.type !== 'frame' || !node.visible) continue
-    // コンポーネントの元とインスタンスは、名前の色で見分けられるようにする
-    ctx.fillStyle = node.component ? OVERLAY_COMPONENT : options.labelColor
+    // コンポーネントの元とインスタンス、バリアントのまとまりは、名前の色で見分けられるようにする
+    ctx.fillStyle = node.component || isVariantSet(scene, id) ? OVERLAY_COMPONENT : options.labelColor
     const bounds = transformRect(nodeMatrix(node), { x: 0, y: 0, width: node.width, height: node.height })
     const x = (bounds.x - viewport.x) * viewport.zoom
     const y = (bounds.y - viewport.y) * viewport.zoom

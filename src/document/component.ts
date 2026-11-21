@@ -48,11 +48,6 @@ export function owningInstance(scene: Scene, id: NodeId): InstanceNode | null {
   return null
 }
 
-/** コンポーネントの元か、インスタンスか、その中身。画面ではこれらを紫で見分けられるようにする */
-export function isComponentPart(scene: Scene, id: NodeId): boolean {
-  return isMain(scene.nodes[id]) || instanceOf(scene, id) !== null
-}
-
 /** id がインスタンスか、その中身なら、そのインスタンス */
 export function instanceOf(scene: Scene, id: NodeId): InstanceNode | null {
   const node = scene.nodes[id]

@@ -5,12 +5,14 @@ import { paintOrder, searchLayers, stepFrom } from './traverse.ts'
 const layout = {
   direction: 'horizontal',
   gap: 0,
-  paddingX: 0,
-  paddingY: 0,
+  paddingTop: 0,
+  paddingRight: 0,
+  paddingBottom: 0,
+  paddingLeft: 0,
   align: 'start',
   justify: 'start',
   widthMode: 'hug',
-  heightMode: 'hug',
+  heightMode: 'hug', wrap: false, crossGap: 0,
 } as const
 
 // ページ直下に card と back。card の中に a, b, row。row（自動で並べる）の中に x, y

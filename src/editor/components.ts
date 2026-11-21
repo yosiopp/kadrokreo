@@ -22,6 +22,8 @@ import type {
   SceneNode,
   TextNode,
 } from '../document/types.ts'
+import { stretchedAxes } from '../document/autoLayout.ts'
+import { variantSetOf } from '../document/variants.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createId } from './nodes.ts'
 import { insertNode, removeNodes, updateNode, updatePage } from './operations.ts'
@@ -86,7 +88,7 @@ export function createInstance(
   }
   const instance: FrameNode = {
     ...createFrame({ ...position, ...size }),
-    name: main.node.name,
+    name: componentName(main),
     component: { id: componentId, role: 'instance', overrides: {} },
   }
   return {
@@ -139,10 +141,21 @@ export function swapComponent(doc: DesignDocument, pageId: PageId, instanceId: N
   }
   return updatePage(doc, pageId, (base) =>
     updateNode(base, instanceId, {
-      name: instance.name === previous?.node.name ? next.node.name : instance.name,
+      // 名前を元のまま（バリアントならまとまりの名前のまま）にしていれば、新しい元の名前にする
+      name:
+        previous && (instance.name === previous.node.name || instance.name === componentName(previous))
+          ? componentName(next)
+          : instance.name,
       component: { id: componentId, role: 'instance', overrides },
     }),
   )
+}
+
+/**
+ * インスタンスに付ける名前。ふつうは元の名前で、バリアントならまとまりの名前（「サイズ=大」ではなく「ボタン」）
+ */
+export function componentName(main: { page: Page; node: MainNode }): string {
+  return variantSetOf(main.page, main.node.id)?.name ?? main.node.name
 }
 
 /** 元（rootId）の中での、id までのレイヤー名のたどり方。元そのものは空文字、元の中になければ null */
@@ -461,8 +474,13 @@ function expectedCopies(
   }
 
   const expected: Record<NodeId, SceneNode> = {}
+  // 親いっぱいに伸ばしているインスタンスは、その向きの大きさを、元ではなく置いた先（親）が決める
+  const stretched = stretchedAxes(page, instance)
   const root: FrameNode = {
     ...main,
+    width: stretched.width ? instance.width : main.width,
+    height: stretched.height ? instance.height : main.height,
+    layoutFill: instance.layoutFill,
     // 置き場所と表示の設定は、インスタンスごとに持つ
     id: instance.id,
     name: instance.name,
@@ -508,10 +526,24 @@ function expectedCopies(
     }
     expected[copy.id] = copy
   }
-  if (Object.keys(overrides).length === 0) return expected
-  // 上書きで大きさや表示が変わると、自動で並べるフレームの並びも元とは変わる
+  const resized = stretched.width || stretched.height
+  if (Object.keys(overrides).length === 0 && !resized) return expected
+  // 上書きで大きさや表示が変わったり、伸ばして大きさが元と違ったりすると、自動で並べるフレームの並びも元とは変わる。
+  // ここでは親がいないので、伸ばしている向きは「固定」として並べ、あとで元の設定に戻す
+  const layout = root.layout
+  if (layout && resized) {
+    expected[instance.id] = {
+      ...(expected[instance.id] as FrameNode),
+      layout: {
+        ...layout,
+        widthMode: stretched.width ? 'fixed' : layout.widthMode,
+        heightMode: stretched.height ? 'fixed' : layout.heightMode,
+      },
+    }
+  }
   const scene: Scene = { nodes: expected, rootIds: [instance.id] }
-  return relayout(fitText ? fitText(scene, stale) : scene).nodes
+  const nodes = relayout(fitText ? fitText(scene, stale) : scene, fitText).nodes
+  return { ...nodes, [instance.id]: { ...(nodes[instance.id] as FrameNode), layout } }
 }
 
 /** 上書きのうち、このノードに当てられるものを当てる。root はインスタンスの根 */

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { AutoLayout, FrameNode, Scene } from '../document/types.ts'
-import { enableAutoLayout, placeInLayout, relayout, wrapInAutoLayout } from './layout.ts'
+import {
+  enableAutoLayout,
+  moveInLayout,
+  placeInLayout,
+  relayout,
+  setLayoutFill,
+  setLayoutPositioning,
+  setLayoutWrap,
+  wrapInAutoLayout,
+} from './layout.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
 import { createDocument, createPage, insertNode, removeNodes, setSize, updateNode } from './operations.ts'
 import { createEditorStore } from './store.ts'
@@ -8,12 +17,16 @@ import { createEditorStore } from './store.ts'
 const LAYOUT: AutoLayout = {
   direction: 'horizontal',
   gap: 10,
-  paddingX: 20,
-  paddingY: 5,
+  paddingTop: 5,
+  paddingRight: 20,
+  paddingBottom: 5,
+  paddingLeft: 20,
   align: 'start',
   justify: 'start',
   widthMode: 'hug',
   heightMode: 'hug',
+  wrap: false,
+  crossGap: 0,
 }
 
 /** 大きさの違う 3 つの長方形（a: 30×20, b: 50×40, c: 20×10）を持つフレーム */
@@ -92,8 +105,8 @@ describe('relayout', () => {
   })
 
   it('入れ子は内側から並べる', () => {
-    const outer = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), layout: { ...LAYOUT, direction: 'vertical' as const, paddingX: 0, paddingY: 0 } }
-    const inner = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), layout: { ...LAYOUT, paddingX: 0, paddingY: 0, gap: 0 } }
+    const outer = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), layout: { ...LAYOUT, direction: 'vertical' as const, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 } }
+    const inner = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), layout: { ...LAYOUT, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, gap: 0 } }
     const label = createRect({ x: 0, y: 0, width: 70, height: 20 })
     const footer = createRect({ x: 0, y: 0, width: 40, height: 15 })
     let page = insertNode(createPage(), outer)
@@ -123,6 +136,215 @@ describe('relayout', () => {
   })
 })
 
+describe('親いっぱいに伸ばす', () => {
+  /** 横に並べる 300×100 の固定のフレーム（左右の余白 20、上下 5、間隔 10）に、a・b・c */
+  const fixed = () => fixture({ widthMode: 'fixed', heightMode: 'fixed' })
+  const box = (scene: Scene, id: string) => {
+    const { x, y, width, height } = scene.nodes[id]
+    return { x, y, width, height }
+  }
+
+  it('並べる向きに伸ばすと、残りを分け合う', () => {
+    const { page, a, b, c } = fixed()
+    const one = relayout(setLayoutFill(page, [b.id], 'width', true))
+    // 300 - 左右 40 - 間隔 20 - a 30 - c 20 = 190
+    expect(box(one, b.id)).toEqual({ x: 60, y: 5, width: 190, height: 40 })
+    expect(box(one, c.id)).toMatchObject({ x: 260 })
+    const two = relayout(setLayoutFill(page, [a.id, b.id], 'width', true))
+    // 300 - 40 - 20 - c 20 = 220 を 2 つで
+    expect(box(two, a.id).width).toBe(110)
+    expect(box(two, b.id)).toMatchObject({ x: 140, width: 110 })
+  })
+
+  it('直交する向きに伸ばすと、余白の内側いっぱいになる。揃え方より優先する', () => {
+    const { page, a } = fixture({ widthMode: 'fixed', heightMode: 'fixed', align: 'end' })
+    const next = relayout(setLayoutFill(page, [a.id], 'height', true))
+    expect(box(next, a.id)).toEqual({ x: 20, y: 5, width: 30, height: 90 })
+  })
+
+  it('中身に合わせる親では、ほかの子の大きさまで伸ばす', () => {
+    const { page, c } = fixture()
+    const next = relayout(setLayoutFill(page, [c.id], 'height', true))
+    // いちばん高い b（40）に合わせる。フレームの高さは変わらない
+    expect(box(next, c.id).height).toBe(40)
+    expect(next.nodes[fixture().frame.id]?.height ?? 50).toBe(50)
+  })
+
+  it('並べる向きを中身に合わせている親なら、伸ばすと親を固定にする', () => {
+    const { page, frame, b } = fixture()
+    const next = setLayoutFill(page, [b.id], 'width', true)
+    expect((next.nodes[frame.id] as FrameNode).layout).toMatchObject({ widthMode: 'fixed', heightMode: 'hug' })
+  })
+
+  it('テキストは横に伸ばすと折り返すようになり、縦には伸ばさない。伸ばした幅で測り直す', () => {
+    const { page, frame } = fixed()
+    const label = createText({ x: 0, y: 0, width: 40, height: 20 }, 'Hello')
+    let next = insertNode(page, label, frame.id)
+    expect(setLayoutFill(next, [label.id], 'height', true)).toBe(next)
+    next = setLayoutFill(next, [label.id], 'width', true)
+    expect(next.nodes[label.id]).toMatchObject({ autoWidth: false })
+    const measured = relayout(next, (scene, ids) =>
+      ids.reduce((acc, id) => updateNode(acc, id, { height: 1000 / acc.nodes[id].width }), scene),
+    )
+    // 300 - 40 - 間隔 30 - 30 - 50 - 20 = 130
+    expect(box(measured, label.id).width).toBe(130)
+    expect(box(measured, label.id).height).toBeCloseTo(1000 / 130, 1)
+  })
+
+  it('子のフレームを伸ばすと、その中身も伸ばした大きさで並べ直す', () => {
+    const outer = { ...createFrame({ x: 0, y: 0, width: 200, height: 100 }), layout: { ...LAYOUT, widthMode: 'fixed' as const, direction: 'vertical' as const } }
+    const inner = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), layout: { ...LAYOUT, justify: 'end' as const } }
+    const dot = createRect({ x: 0, y: 0, width: 10, height: 10 })
+    let page = insertNode(createPage(), outer)
+    page = insertNode(page, { ...inner, layoutFill: { width: true, height: false } }, outer.id)
+    page = insertNode(page, dot, inner.id)
+    const next = relayout(page)
+    // 内側のフレームは中身に合わせる設定でも、親に伸ばされて 200 - 40 = 160。中身は右寄せ
+    expect(box(next, inner.id)).toMatchObject({ x: 20, width: 160 })
+    expect(box(next, dot.id)).toMatchObject({ x: 130 })
+  })
+})
+
+describe('並びから外す・矢印キーでの並べ替え', () => {
+  const childrenOf = (scene: Scene, id: string) => (scene.nodes[id] as FrameNode).children
+
+  it('並びから外した子は場所を取らず、いまの位置のまま残る。戻せばまた並ぶ', () => {
+    const { page, frame, a, b, c } = fixture()
+    const out = relayout(setLayoutPositioning(page, [b.id], 'absolute'))
+    expect(out.nodes[b.id]).toMatchObject({ x: 60, y: 5, layoutPositioning: 'absolute' })
+    // a の次に c が詰める。フレームは a と c だけを囲む
+    expect(out.nodes[c.id].x).toBe(60)
+    expect(out.nodes[frame.id]).toMatchObject({ width: 20 + 30 + 10 + 20 + 20, height: 5 + 20 + 5 })
+    // 外した子は自由に動かせる（並べ直しても戻されない）
+    const moved = relayout(updateNode(out, b.id, { x: 200, y: 50 }))
+    expect(moved.nodes[b.id]).toMatchObject({ x: 200, y: 50 })
+    const back = relayout(setLayoutPositioning(moved, [b.id], 'auto'))
+    expect(back.nodes[b.id]).toMatchObject({ x: 60, y: 5 })
+    expect(back.nodes[a.id].x).toBe(20)
+  })
+
+  it('並びから外すと、親いっぱいに伸ばす指定もやめる', () => {
+    const { page, a } = fixture({ widthMode: 'fixed' })
+    const filled = setLayoutFill(page, [a.id], 'width', true)
+    expect(setLayoutPositioning(filled, [a.id], 'absolute').nodes[a.id].layoutFill).toEqual({ width: false, height: false })
+  })
+
+  it('並べ替えは、並びに加わる子の中で 1 つずらす。端なら変えない', () => {
+    const { page, frame, a, b, c } = fixture()
+    expect(childrenOf(moveInLayout(page, [a.id], 1), frame.id)).toEqual([b.id, a.id, c.id])
+    expect(childrenOf(moveInLayout(page, [b.id, c.id], -1), frame.id)).toEqual([b.id, c.id, a.id])
+    expect(moveInLayout(page, [c.id], 1)).toBe(page)
+    // 外した子は飛ばす
+    const out = setLayoutPositioning(page, [b.id], 'absolute')
+    expect(childrenOf(moveInLayout(out, [a.id], 1), frame.id)).toEqual([c.id, b.id, a.id])
+    expect(moveInLayout(out, [b.id], 1)).toBe(out)
+  })
+})
+
+describe('折り返し', () => {
+  /** 幅 120 の固定のフレーム（左右の余白 20、上下 5、間隔 10）。中に収まる幅は 80 */
+  const narrow = (layout: Partial<AutoLayout> = {}) => {
+    const { page, frame, ...rest } = fixture({ widthMode: 'fixed', wrap: true, crossGap: 4, ...layout })
+    return { page: relayout(setSize(page, [frame.id], { width: 120 })), frame, ...rest }
+  }
+
+  it('収まらない子を次の行へ送り、高さを中身に合わせる', () => {
+    const { page, frame, a, b, c } = narrow()
+    // a 30 + 10 + b 50 = 90 > 80 なので b は次の行。b + 10 + c 20 = 80 は収まる
+    expect(at(page, a.id)).toEqual({ x: 20, y: 5 })
+    expect(at(page, b.id)).toEqual({ x: 20, y: 29 })
+    expect(at(page, c.id)).toEqual({ x: 80, y: 29 })
+    // 高さ: 余白 5 × 2 + 1 行目 20 + 行の間隔 4 + 2 行目 40
+    expect(sizeOf(page, frame.id)).toEqual({ width: 120, height: 74 })
+  })
+
+  it('揃え方は、行の中と、行のまとまりの両方に効く', () => {
+    const { page, a, c } = narrow({ align: 'end' })
+    expect(page.nodes[c.id].y).toBe(59)
+    const tall = relayout(updateNode(page, page.rootIds[0], {
+      layout: { ...(page.nodes[page.rootIds[0]] as FrameNode).layout!, heightMode: 'fixed' },
+    }))
+    const higher = relayout(setSize(tall, [tall.rootIds[0]], { height: 100 }))
+    // 内側 90 に中身 64。余った 26 だけ下へ
+    expect(higher.nodes[a.id].y).toBe(31)
+  })
+
+  it('寄せ方は行ごとに効く', () => {
+    const { page, a, c } = narrow({ justify: 'end' })
+    expect(page.nodes[a.id].x).toBe(70)
+    expect(page.nodes[c.id].x).toBe(80)
+  })
+
+  it('並べる向きを中身に合わせていれば折り返さない', () => {
+    const { page, frame } = fixture({ wrap: true })
+    expect(sizeOf(page, frame.id)).toEqual({ width: 160, height: 50 })
+  })
+
+  it('折り返すようにすると、並べる向きは固定になる', () => {
+    const { page, frame } = fixture()
+    const next = setLayoutWrap(page, [frame.id], true)
+    expect((next.nodes[frame.id] as FrameNode).layout).toMatchObject({ wrap: true, widthMode: 'fixed', heightMode: 'hug' })
+  })
+
+  it('並べる向きに伸ばすものは、その行の残りを分け合う。直交する向きは行の高さまで', () => {
+    const { page, a, b, c } = narrow()
+    const next = relayout(setLayoutFill(setLayoutFill(page, [c.id], 'width', true), [c.id], 'height', true))
+    // c は 2 行目の b の後ろ: 80 - b 50 - 10 = 20。高さは 2 行目の b と同じ 40
+    expect(sizeOf(next, c.id)).toEqual({ width: 20, height: 40 })
+    expect(at(next, c.id)).toEqual({ x: 80, y: 29 })
+    expect(at(next, b.id)).toEqual({ x: 20, y: 29 })
+    expect(at(next, a.id)).toEqual({ x: 20, y: 5 })
+    // 下限があれば、その大きさで数える: b 50 + 10 + 30 > 80 なので 3 行目へ
+    const min = relayout(updateNode(next, c.id, { minWidth: 30 }))
+    expect(at(min, c.id)).toEqual({ x: 20, y: 73 })
+    // 行に伸ばすものしかなければ、行の高さはいまの高さのまま
+    expect(sizeOf(min, c.id)).toEqual({ width: 80, height: 40 })
+  })
+
+  it('ドラッグで入れる位置は、ポインタのある行で決める', () => {
+    const { page, frame, a, b, c } = narrow()
+    const order = (scene: Scene) => (scene.nodes[frame.id] as FrameNode).children
+    // 2 行目（ページの y 129〜169）の c の右へ
+    expect(order(placeInLayout(page, [a.id], frame.id, { x: 210, y: 140 }))).toEqual([b.id, c.id, a.id])
+    // 2 行目の先頭へ
+    expect(order(placeInLayout(page, [c.id], frame.id, { x: 105, y: 140 }))).toEqual([a.id, c.id, b.id])
+    // 1 行目の先頭へ
+    expect(order(placeInLayout(page, [b.id], frame.id, { x: 105, y: 108 }))).toEqual([b.id, a.id, c.id])
+  })
+})
+
+describe('大きさの下限・上限', () => {
+  const fixed = () => fixture({ widthMode: 'fixed', heightMode: 'fixed' })
+
+  it('中身に合わせるフレームの大きさを収める', () => {
+    const { page, frame } = fixture()
+    const wide = relayout(updateNode(page, frame.id, { minWidth: 200, maxHeight: 30 }))
+    expect(sizeOf(wide, frame.id)).toEqual({ width: 200, height: 30 })
+    // 固定の大きさには効かない
+    const other = fixed()
+    const fixedFrame = relayout(updateNode(other.page, other.frame.id, { maxWidth: 100 }))
+    expect(sizeOf(fixedFrame, other.frame.id).width).toBe(300)
+  })
+
+  it('伸ばすものの上限を超えた分は、ほかの伸ばすものが分け合う', () => {
+    const { page, a, b } = fixed()
+    const filled = setLayoutFill(page, [a.id, b.id], 'width', true)
+    const next = relayout(updateNode(filled, a.id, { maxWidth: 60 }))
+    // 220 を 2 つで 110 ずつのはずが、a は 60 まで。残り 160 が b
+    expect(sizeOf(next, a.id).width).toBe(60)
+    expect(sizeOf(next, b.id).width).toBe(160)
+    const min = relayout(updateNode(filled, a.id, { minWidth: 150 }))
+    expect(sizeOf(min, a.id).width).toBe(150)
+    expect(sizeOf(min, b.id).width).toBe(70)
+  })
+
+  it('直交する向きに伸ばすものにも効く', () => {
+    const { page, a } = fixed()
+    const next = relayout(updateNode(setLayoutFill(page, [a.id], 'height', true), a.id, { maxHeight: 50 }))
+    expect(sizeOf(next, a.id).height).toBe(50)
+  })
+})
+
 describe('enableAutoLayout', () => {
   it('いまの並びから、向き・順番・間隔・余白を決める', () => {
     const frame = createFrame({ x: 0, y: 0, width: 400, height: 200 })
@@ -135,13 +357,15 @@ describe('enableAutoLayout', () => {
 
     const next = enableAutoLayout(page, frame.id)
     const result = next.nodes[frame.id] as FrameNode
-    expect(result.layout).toMatchObject({ direction: 'horizontal', gap: 20, paddingX: 40, paddingY: 30 })
+    // 余白は 4 辺それぞれ、いまの子とフレームの辺との隙間。フレームの大きさも変わらない
+    expect(result.layout).toMatchObject({ direction: 'horizontal', gap: 20, paddingTop: 30, paddingRight: 150, paddingBottom: 120, paddingLeft: 40 })
+    expect(result).toMatchObject({ width: 400, height: 200 })
     expect(result.children).toEqual([left.id, middle.id, right.id])
     // 見た目の位置は変わらない
     expect(at(next, left.id)).toEqual({ x: 40, y: 30 })
     expect(at(next, middle.id)).toEqual({ x: 120, y: 30 })
     expect(at(next, right.id)).toEqual({ x: 200, y: 30 })
-    expect(sizeOf(next, frame.id)).toEqual({ width: 290, height: 110 })
+    expect(sizeOf(next, frame.id)).toEqual({ width: 400, height: 200 })
   })
 
   it('縦に並んでいれば縦に並べる', () => {
@@ -172,7 +396,7 @@ describe('wrapInAutoLayout', () => {
     const { scene, id } = wrapInAutoLayout(page, [a.id, b.id], 'Group')
     const frame = scene.nodes[id!] as FrameNode
     expect(frame).toMatchObject({ x: 100, y: 100, width: 100, height: 20, name: 'Group', fill: null })
-    expect(frame.layout).toMatchObject({ direction: 'horizontal', gap: 20, paddingX: 0, paddingY: 0 })
+    expect(frame.layout).toMatchObject({ direction: 'horizontal', gap: 20, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 })
     expect(frame.children).toEqual([a.id, b.id])
     // いちばん手前にあった b の位置に入る
     expect(scene.rootIds).toEqual([other.id, frame.id])

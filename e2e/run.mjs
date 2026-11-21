@@ -6,6 +6,7 @@
 // Google Chrome がインストールされている必要がある。スクリーンショットなどは e2e/out に出る。
 import { spawn } from 'node:child_process'
 import { readdirSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,6 +24,22 @@ const scripts =
 
 const servers = []
 const env = { ...process.env }
+
+/**
+ * 空いているポート。別の worktree のセッションが同時に e2e を走らせても、互いのサーバーに繋がないよう、
+ * 決まった番号は使わない（使っていた頃は、相手の古いビルドを相手に確認してしまうことがあった）
+ */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = createServer()
+    probe.unref()
+    probe.on('error', reject)
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address()
+      probe.close(() => resolve(port))
+    })
+  })
+}
 
 function startServer(mode, port) {
   const args = ['vite', '--port', String(port), '--strictPort', ...(mode === 'editor' ? ['--mode', 'editor'] : [])]
@@ -50,8 +67,8 @@ function run(script) {
 
 let failed = 0
 try {
-  env.EDITOR_URL ??= startServer('editor', 5180)
-  env.VIEWER_URL ??= startServer('viewer', 5181)
+  env.EDITOR_URL ??= startServer('editor', await freePort())
+  env.VIEWER_URL ??= startServer('viewer', await freePort())
   await Promise.all([waitFor(env.EDITOR_URL), waitFor(env.VIEWER_URL)])
 
   for (const script of scripts) {

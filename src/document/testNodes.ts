@@ -13,6 +13,12 @@ export const base = {
   visible: true,
   locked: false,
   opacity: 1,
+  layoutFill: { width: false, height: false },
+  layoutPositioning: 'auto' as const,
+  minWidth: null,
+  maxWidth: null,
+  minHeight: null,
+  maxHeight: null,
 }
 export const paint = { fill: '#ff0000', fillGradient: null, stroke: null, strokeWidth: 1, shadow: null }
 

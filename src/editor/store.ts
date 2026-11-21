@@ -78,7 +78,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     // インスタンスを直すと大きさが変わって並べ直しが要る、ということがあるので、落ち着くまで繰り返す
     for (let pass = 0; pass < 4; pass++) {
       const previous = base
-      const arranged = mapPages(current, (page) => (previous.pages.includes(page) ? page : relayout(page)))
+      const arranged = mapPages(current, (page) => (previous.pages.includes(page) ? page : relayout(page, fitText)))
       const synced = syncComponents(arranged, fitText)
       if (synced === current) break
       base = current

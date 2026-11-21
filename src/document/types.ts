@@ -17,6 +17,24 @@ type BaseNode = {
   visible: boolean
   locked: boolean
   opacity: number
+  /**
+   * 自動で並べるフレームの子のとき、その向きに親いっぱいまで伸ばすか。
+   * 並べる向きなら余った場所を分け合い、直交する向きなら余白の内側いっぱいになる。親が自動で並べないなら意味はない
+   */
+  layoutFill: { width: boolean; height: boolean }
+  /**
+   * 自動で並べるフレームの子のとき、並びに加わるか（auto）、並びから外れて x / y のまま置かれるか（absolute）。
+   * 親が自動で並べないなら意味はない
+   */
+  layoutPositioning: 'auto' | 'absolute'
+  /**
+   * 大きさの下限と上限（null は決めない）。大きさを自動で決める向きでだけ効く:
+   * 親いっぱいに伸ばしている向きと、自動で並べるフレームが中身に合わせている向き（`sizeLimited`）
+   */
+  minWidth: number | null
+  maxWidth: number | null
+  minHeight: number | null
+  maxHeight: number | null
 }
 
 /** 落ち影。color は #rrggbb、濃さは opacity（0〜1）で持つ */
@@ -116,13 +134,22 @@ export type AutoLayout = {
   direction: 'horizontal' | 'vertical'
   /** 子と子の間隔 */
   gap: number
-  /** 左右・上下の余白 */
-  paddingX: number
-  paddingY: number
+  /** 内側の余白 */
+  paddingTop: number
+  paddingRight: number
+  paddingBottom: number
+  paddingLeft: number
   /** 並べる向きと直交する向きの揃え方 */
   align: 'start' | 'center' | 'end'
   /** 並べる向きの寄せ方。大きさが固定のときだけ意味がある */
   justify: 'start' | 'center' | 'end' | 'space-between'
+  /**
+   * 並べる向きに収まらない子を、次の行（縦に並べるなら次の列）へ折り返すか。
+   * 並べる向きの大きさが中身に合わせる（hug）なら折り返さない
+   */
+  wrap: boolean
+  /** 折り返したときの、行と行の間隔 */
+  crossGap: number
   /** hug は中身に合わせる、fixed は width / height のまま */
   widthMode: 'hug' | 'fixed'
   heightMode: 'hug' | 'fixed'

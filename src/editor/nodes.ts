@@ -30,6 +30,12 @@ function base(name: string, bounds: Bounds) {
     visible: true,
     locked: false,
     opacity: 1,
+    layoutFill: { width: false, height: false },
+    layoutPositioning: 'auto' as const,
+    minWidth: null,
+    maxWidth: null,
+    minHeight: null,
+    maxHeight: null,
   }
 }
 

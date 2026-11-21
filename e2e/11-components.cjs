@@ -47,7 +47,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.keyboard.type('OK')
   await page.keyboard.press('Escape')
   await page.keyboard.press('Shift+A')
-  await set('左右', 20); await set('上下', 10)
+  await set('上', 10); await set('右', 20); await set('下', 10); await set('左', 20)
   await page.locator('[aria-label="塗りを有効にする"]').check()
   await button('コンポーネントにする').click()
   let nodes = await nodesOf()
@@ -137,7 +137,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await download.saveAs(kdrPath)
   const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
   const links = json.document.pages.flatMap((p) => Object.values(p.nodes)).filter((n) => n.component).map((n) => n.component.role).sort()
-  check('kdr につながりが入る', json.version === 11 && links.join() === 'instance,instance,instance,main', links.join())
+  check('kdr につながりが入る', json.version === 14 && links.join() === 'instance,instance,instance,main', links.join())
 
   // ── コンポーネントの一覧から置く ──
   const componentRows = page.locator('.component-row')
@@ -200,6 +200,33 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.keyboard.press('Meta+z')
   nodes = await nodesOf()
   check('undo で元に戻る', instances(nodes).some((n) => n.x === 400 && n.y === 300 && n.width === 104))
+
+  // ── バリアント ──
+  await row('Frame 4').first().click()
+  await button('バリアントを追加').click()
+  nodes = await nodesOf()
+  const variantSet = nodes.find((n) => n.type === 'frame' && !n.component && n.name === 'Frame 4')
+  const variantNames = () => variantSet.children.map((id) => nodes.find((n) => n.id === id).name)
+  check('バリアントを追加すると、元をまとまりで包み、複製を 2 つめのバリアントにする',
+    variantSet && variantNames().join() === '種類=標準,種類=2' && (await selected()).join() === '種類=2',
+    variantSet ? variantNames().join() : 'まとまりがない')
+  await set('種類', '押下')
+  nodes = await nodesOf()
+  check('プロパティの値を変えられる', nodes.some((n) => n.name === '種類=押下'))
+  const componentRow = page.locator('.component-row:has(.component-name:text-is("Frame 4"))')
+  check('一覧では、まとまりを 1 行にまとめる', (await componentRow.count()) === 1 && (await componentRow.locator('.component-page').textContent()) === '2 種類')
+  await deselect()
+  await page.mouse.click(...at(425, 318))
+  await swapSelect.selectOption({ label: 'Frame 4（種類=標準）' })
+  const kind = page.locator('.field:has(.field-label:text-is("種類")) select')
+  check('バリアントのインスタンスでは、プロパティを選べる', (await kind.locator('option').allTextContents()).join() === '標準,押下', (await kind.locator('option').allTextContents()).join())
+  await kind.selectOption('押下')
+  nodes = await nodesOf()
+  const pressed = nodes.find((n) => n.name === '種類=押下')
+  const variantInstance = instances(nodes).find((n) => n.x === 400 && n.y === 300)
+  check('値を選ぶと、そのバリアントに差し替わる。名前はまとまりの名前', variantInstance.component.id === pressed.component.id && variantInstance.name === 'Frame 4',
+    JSON.stringify([variantInstance.name, variantInstance.component.id === pressed.component.id]))
+  await page.screenshot({ path: path.join(OUT, '39-variants.png') })
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
