@@ -1,4 +1,4 @@
-import type { DesignDocument, FrameNode, RectNode, Scene, SceneNode, TextNode } from './types.ts'
+import type { DesignDocument, FrameNode, RectNode, Scene, SceneNode, Style, TextNode } from './types.ts'
 
 // テストで使うノードの組み立て。editor の側にあるノードの生成（nodes.ts）は、共通側や viewer のテストからは使えない
 
@@ -13,14 +13,15 @@ export const base = {
   visible: true,
   locked: false,
   opacity: 1,
-  layoutFill: { width: false, height: false },
+  sizing: { width: 'fixed', height: 'fixed' } as SceneNode['sizing'],
   layoutPositioning: 'auto' as const,
+  constraints: { horizontal: 'start', vertical: 'start' } as SceneNode['constraints'],
   minWidth: null,
   maxWidth: null,
   minHeight: null,
   maxHeight: null,
 }
-export const paint = { fill: '#ff0000', fillGradient: null, stroke: null, strokeWidth: 1, shadow: null }
+export const paint: Style = { fills: [{ type: 'solid', color: '#ff0000' }], strokes: [], strokeWidth: 1, effects: [] }
 
 export const rect = (patch: Partial<RectNode> = {}): RectNode => ({
   ...base,
@@ -49,8 +50,8 @@ export const text = (patch: Partial<TextNode> = {}): TextNode => ({
   text: 'こんにちは',
   fontSize: 16,
   fontFamily: 'sans-serif',
-  fill: '#111111',
-  autoWidth: true,
+  fills: [{ type: 'solid', color: '#111111' }],
+  sizing: { width: 'hug', height: 'hug' },
   fontWeight: 400,
   textAlign: 'left',
   lineHeight: 1.5,

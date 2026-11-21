@@ -1,7 +1,8 @@
 import { isInstance } from '../../document/component.ts'
 import { normalizeAngle } from '../../document/geometry.ts'
 import { IMAGE_MIME_TYPES } from '../../document/kdr.ts'
-import type { Shadow } from '../../document/types.ts'
+import { paintColor } from '../../document/paint.ts'
+import type { Effect, Paint } from '../../document/types.ts'
 import { OpenFileButton } from '../../ui/OpenFile.tsx'
 import { CAP_LABELS, FIT_LABELS, optionsOf } from '../../ui/labels.ts'
 import {
@@ -9,12 +10,20 @@ import {
   patchShadows,
   setFill,
   setGradientEnabled,
+  setShadow,
+  setStroke,
   withStopColor,
 } from '../operations.ts'
-import { type PanelContext, shapesIn, textsIn, common, mapValue } from './context.ts'
+import { type PanelContext, linesIn, shapesIn, textsIn, common, mapValue } from './context.ts'
 import { CheckField, ColorField, NumberField, Section, SelectField } from './fields.tsx'
 
-const DEFAULT_SHADOW: Shadow = { x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+
+/** いちばん上の塗りの代表の色。塗りがなければ null（パネルは、いちばん上の塗りだけを編集する） */
+function topColor(paints: readonly Paint[]): string | null {
+  const top = paints.at(-1)
+  return top ? paintColor(top) : null
+}
 
 type Props = {
   ctx: PanelContext
@@ -24,35 +33,38 @@ type Props = {
 
 /** 塗り・画像・線・端の形・パス・角丸・影 */
 export function AppearanceSections({ ctx, onReplaceImage }: Props) {
-  const { store, selection, nodes, apply, preview, inner, hasInstance } = ctx
+  const { store, selection, nodes, apply, inner, hasInstance, overridden } = ctx
   // インスタンスとその中身（写し）の見た目は元に合わせて作り直されるので、変えられるのは上書きできる項目
   // （塗り・線の色。文言はキャンバスで、表示はレイヤー一覧で変える）だけ
   const limited = hasInstance || inner
   const plain = inner ? [] : nodes.filter((node) => !isInstance(node))
   const shapes = shapesIn(nodes)
   const texts = textsIn(nodes)
-  const lines = nodes.filter((node) => node.type === 'line')
+  const lines = linesIn(nodes)
   const paths = nodes.filter((node) => node.type === 'path')
   const images = nodes.filter((node) => node.type === 'image')
   // 端の形を付けられるもの。閉じたパスには端がない
-  const capped = [...lines, ...paths.filter((node) => !node.closed)]
+  const capped = paths.filter((node) => !node.closed)
   const rounded = plain.filter((node) => node.type === 'rect' || node.type === 'frame' || node.type === 'image')
   const filled = [...shapes, ...texts]
   const stroked = [...shapes, ...lines]
   const onlyShapes = shapes.length === nodes.length
 
-  const gradients = shapes.flatMap((node) => (node.fillGradient ? [node.fillGradient] : []))
-  const gradientEnabled = common(shapes.map((node) => node.fillGradient !== null))
-  const shadows = shapes.flatMap((node) => (node.shadow ? [node.shadow] : []))
-  const shadowEnabled = common(shapes.map((node) => node.shadow !== null))
+  const gradients = shapes.flatMap((node) => {
+    const top = node.fills.at(-1)
+    return top?.type === 'linear' ? [top] : []
+  })
+  const gradientEnabled = common(shapes.map((node) => node.fills.at(-1)?.type === 'linear'))
+  const shadows = shapes.flatMap((node) => node.effects.slice(0, 1))
+  const shadowEnabled = common(shapes.map((node) => node.effects.length > 0))
 
   return (
     <>
       {filled.length === nodes.length && (
-        <Section title="塗り">
+        <Section title="塗り" overridden={overridden.has('fills')}>
           <ColorField
             label="塗り"
-            value={common(filled.map((n) => n.fill))}
+            value={common(filled.map((n) => topColor(n.fills)))}
             // テキストは塗りを消せない
             nullable={onlyShapes}
             fallback="#d9d9d9"
@@ -60,7 +72,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
             onCommit={store.commitPreview}
             onSet={(fill) => store.apply((base) => setFill(base, selection, fill))}
           />
-          {onlyShapes && shapes.every((node) => node.fill !== null) && (
+          {onlyShapes && shapes.every((node) => node.fills.length > 0) && (
             <CheckField
               label="グラデーション"
               value={gradientEnabled}
@@ -100,7 +112,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
       )}
 
       {images.length === nodes.length && (
-        <Section title="画像">
+        <Section title="画像" overridden={overridden.has('assetId')}>
           {!inner && (
             <SelectField
               label="収め方"
@@ -116,16 +128,16 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
       )}
 
       {stroked.length === nodes.length && (
-        <Section title="線">
+        <Section title="線" overridden={overridden.has('strokes')}>
           <ColorField
             label="線"
-            value={common(stroked.map((n) => n.stroke))}
+            value={common(stroked.map((n) => topColor(n.strokes)))}
             // 直線は線を消せない
             nullable={lines.length === 0}
             fallback="#000000"
-            onPreview={(stroke) => preview({ stroke })}
+            onPreview={(stroke) => store.preview((base) => setStroke(base, selection, stroke))}
             onCommit={store.commitPreview}
-            onSet={(stroke) => apply({ stroke })}
+            onSet={(stroke) => store.apply((base) => setStroke(base, selection, stroke))}
           />
           {!limited && (
             <NumberField
@@ -181,7 +193,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
           <CheckField
             label="影を付ける"
             value={shadowEnabled}
-            onChange={(checked) => apply({ shadow: checked ? DEFAULT_SHADOW : null })}
+            onChange={(checked) => store.apply((base) => setShadow(base, selection, checked ? DEFAULT_SHADOW : null))}
           />
           {shadows.length > 0 && (
             <>

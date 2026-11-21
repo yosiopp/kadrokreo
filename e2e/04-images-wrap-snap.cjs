@@ -1,10 +1,8 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
 require('fs').mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -111,7 +109,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.waitForTimeout(700)
   let text = await byName('Text 1')
   const lines0 = Math.round(text.height / (16 * 1.2))
-  check('ドラッグで作ると固定幅で折り返す', text.autoWidth === false && text.width === 160 && lines0 >= 4, `w=${text.width} lines=${lines0}`)
+  check('ドラッグで作ると固定幅で折り返す', text.sizing.width === 'fixed' && text.width === 160 && lines0 >= 4, `w=${text.width} lines=${lines0}`)
   await page.screenshot({ path: path.join(OUT, '10-wrap-done.png') })
   // 幅を広げると行数が減る
   await field('W').fill('320'); await field('W').press('Enter')
@@ -122,7 +120,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.locator('.field:has(.field-label:text-is("折り返し")) select').selectOption('auto')
   await page.waitForTimeout(700)
   text = await byName('Text 1')
-  check('折り返しをやめると 1 行になる', text.autoWidth === true && text.height === 20 && text.width > 400, `${text.width}x${text.height}`)
+  check('折り返しをやめると 1 行になる', text.sizing.width === 'hug' && text.height === 20 && text.width > 400, `${text.width}x${text.height}`)
   await page.keyboard.press('Meta+z')
   // ハンドルで幅を変える（右辺）
   await page.waitForTimeout(700)
@@ -196,9 +194,9 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'with-image.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const used = new Set(Object.values(json.document.pages[0].nodes).filter((n) => n.type === 'image').map((n) => n.assetId))
-  check('kdr に画像が埋め込まれる', json.version === 14 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
+  check('kdr に画像が埋め込まれる', json.version === 15 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -222,14 +220,6 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.locator('input[type=file]').setInputFiles(photo)
   await viewer.waitForSelector('.app-message')
   check('viewer は画像ファイルを受け付けない', true)
-
-  // v1 のファイル（前のマイルストーンで書き出したもの）も開ける
-  {
-    await viewer.locator('.app-message button').click()
-    await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v1.kdr'))
-    await viewer.waitForFunction(() => document.querySelector('.document-name')?.textContent === 'テスト デザイン')
-    check('version 1 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0)
-  }
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

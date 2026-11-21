@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { ImageNode, LineNode, PathNode } from '../document/types.ts'
+import { solid } from '../document/paint.ts'
+import type { ImageNode, PathNode } from '../document/types.ts'
 import { base, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
-import { nodeMarkup, slug, standaloneHtml } from './markup.ts'
+import { nodeCode, nodeMarkup, slug, standaloneHtml } from './markup.ts'
 
 describe('nodeMarkup', () => {
   it('子孫を入れ子の要素にし、レイヤー名からクラス名を付ける。同じ名前には番号を付ける', () => {
@@ -45,16 +46,21 @@ describe('nodeMarkup', () => {
   })
 
   it('直線とパスは SVG、画像は img にする', () => {
-    const line: LineNode = {
+    const line: PathNode = {
       ...base,
       id: 'line',
       name: 'Line',
       parentId: 'frame',
-      type: 'line',
-      stroke: '#000000',
+      type: 'path',
+      fills: [],
+      strokes: solid('#000000'),
       strokeWidth: 2,
-      direction: 'down',
-      flipped: false,
+      effects: [],
+      points: [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      closed: false,
       startCap: 'none',
       endCap: 'none',
     }
@@ -88,24 +94,29 @@ describe('nodeMarkup', () => {
     const assets = { a1: { mime: 'image/jpeg', data: 'AAAA' } }
     const lines = nodeMarkup(scene, 'frame', { assets }).html.split('\n')
     expect(lines[1]).toBe('  <svg class="line" viewBox="0 0 100 50"><line x1="0" y1="0" x2="100" y2="50"/></svg>')
-    expect(lines[2]).toBe('  <svg class="shape" viewBox="0 0 100 50"><polygon points="0,0 100,0 50,50"/></svg>')
+    expect(lines[2]).toBe('  <svg class="shape" viewBox="0 0 100 50"><path d="M0 0 L100 0 L50 50 Z"/></svg>')
     expect(lines[3]).toBe('  <img class="photo" src="photo.jpg" alt="Photo">')
     const embedded = nodeMarkup(scene, 'image', { assets, images: 'embed' }).html
     expect(embedded).toBe('<img class="photo" src="data:image/jpeg;base64,AAAA" alt="Photo">')
   })
 
   it('端の矢印は、線を矢印の分だけ短くし、線の色で塗った三角形にする', () => {
-    const line: LineNode = {
+    const line: PathNode = {
       ...base,
       id: 'line',
       name: 'Arrow',
-      type: 'line',
+      type: 'path',
       width: 100,
       height: 0,
-      stroke: '#ff0000',
+      fills: [],
+      strokes: solid('#ff0000'),
       strokeWidth: 2,
-      direction: 'down',
-      flipped: false,
+      effects: [],
+      points: [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      closed: false,
       startCap: 'none',
       endCap: 'arrow',
     }
@@ -120,7 +131,7 @@ describe('nodeMarkup', () => {
       id: 'path',
       name: 'Bend',
       type: 'path',
-      stroke: '#000000',
+      strokes: solid('#000000'),
       strokeWidth: 2,
       width: 100,
       height: 100,
@@ -135,9 +146,78 @@ describe('nodeMarkup', () => {
     }
     const html = nodeMarkup(sceneOf(path), 'path', { style: { color: 'rgb' } }).html
     // 塗りは元の形のまま、線は始点側を短くする
-    expect(html).toContain('<polyline points="0,0 100,0 100,100" stroke="none"/>')
-    expect(html).toContain('<polyline points="8,0 100,0 100,100" fill="none"/>')
+    expect(html).toContain('<path d="M0 0 L100 0 L100 100" stroke="none"/>')
+    expect(html).toContain('<path d="M8 0 L100 0 L100 100" fill="none"/>')
     expect(html).toContain('<polygon points="0,0 10,-4 10,4" fill="rgb(0, 0, 0)" stroke="none"/>')
+  })
+
+  it('曲線は path の d の C で書き、終点の矢印は曲線の接線の向きに向ける', () => {
+    const path: PathNode = {
+      ...base,
+      ...paint,
+      id: 'path',
+      name: 'Curve',
+      type: 'path',
+      strokes: solid('#000000'),
+      strokeWidth: 1,
+      width: 100,
+      height: 100,
+      // 始点から右へ出て、終点には真下へ入る
+      points: [
+        { x: 0, y: 0, out: { x: 1, y: 0 } },
+        { x: 1, y: 1, in: { x: 0, y: -1 } },
+      ],
+      closed: false,
+      startCap: 'none',
+      endCap: 'none',
+    }
+    expect(nodeMarkup(sceneOf(path), 'path').html).toBe(
+      '<svg class="curve" viewBox="0 0 100 100"><path d="M0 0 C100 0 100 0 100 100"/></svg>',
+    )
+    const html = nodeMarkup(sceneOf({ ...path, endCap: 'arrow' }), 'path', { style: { color: 'rgb' } }).html
+    // 矢印は真下を向く（先が 100,100、根元は 10 上）
+    expect(html).toContain('<polygon points="100,100 96,90 104,90" fill="rgb(0, 0, 0)" stroke="none"/>')
+    // 線は曲線のまま、先の 8 手前で止まる
+    expect(html).toMatch(/<path d="M0 0 C[\d. ]+ 100 92" fill="none"\/>/)
+  })
+
+  it('グラデーションの塗りと線は linearGradient で書き、要素の fill / stroke で指す', () => {
+    const gradient = {
+      type: 'linear' as const,
+      angle: 0,
+      stops: [
+        { offset: 0, color: '#ff0000' },
+        { offset: 1, color: '#0000ff' },
+      ],
+    }
+    const path: PathNode = {
+      ...base,
+      ...paint,
+      id: 'path',
+      name: 'Blob',
+      type: 'path',
+      fills: [gradient],
+      strokes: [gradient],
+      width: 100,
+      height: 50,
+      points: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 0.5, y: 1 },
+      ],
+      closed: true,
+      startCap: 'none',
+      endCap: 'none',
+    }
+    const html = nodeMarkup(sceneOf(path), 'path').html
+    expect(html).toContain(
+      '<defs><linearGradient id="blob-fill" gradientUnits="userSpaceOnUse" x1="0" y1="25" x2="100" y2="25">' +
+        '<stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>',
+    )
+    expect(html).toContain('<linearGradient id="blob-stroke"')
+    expect(html).toContain('<path d="M0 0 L100 0 L50 50 Z" fill="url(#blob-fill)" stroke="url(#blob-stroke)"/>')
+    // React の形式では stop の属性名を JSX の書き方にする
+    expect(nodeMarkup(sceneOf(path), 'path', { style: { format: 'react' } }).html).toContain('stopColor="#ff0000"')
   })
 
   it('単位を rem にできる', () => {
@@ -159,5 +239,98 @@ describe('standaloneHtml', () => {
     const file = standaloneHtml('a<b', { html: '<div></div>', css: '.x { font-family: </style><script>; }' })
     expect(file).not.toContain('</style><script>')
     expect(file).toContain('<title>a&lt;b</title>')
+  })
+})
+
+describe('nodeMarkup の出力形式', () => {
+  const card = () =>
+    sceneOf(
+      frame({ name: 'Card', children: ['icon', 'label', 'shape'] }),
+      rect({ id: 'icon', name: 'Icon', parentId: 'frame', x: 10, y: 0, width: 20, height: 20 }),
+      text({ id: 'label', name: 'Label', parentId: 'frame', text: '{a}\nb' }),
+      {
+        ...base,
+        ...paint,
+        id: 'shape',
+        name: 'Shape',
+        parentId: 'frame',
+        type: 'path',
+        points: [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+          { x: 0.5, y: 1 },
+        ],
+        closed: true,
+        startCap: 'none',
+        endCap: 'none',
+      } satisfies PathNode,
+    )
+
+  it('React（style）は、style を付けた JSX のコンポーネントにし、CSS は出さない', () => {
+    const { html, css } = nodeMarkup(card(), 'frame', { style: { format: 'react' } })
+    const lines = html.split('\n')
+    expect(lines[0]).toBe('export function Card() {')
+    expect(lines[1]).toBe('  return (')
+    expect(lines[2]).toMatch(/^ {4}<div style=\{\{ position: 'relative', width: 100, height: 50/)
+    expect(lines[3]).toBe("      <div style={{ position: 'absolute', left: 10, top: 0, width: 20, height: 20, background: '#ff0000' }}></div>")
+    // 文字の { } は式と読まれないようにし、改行は <br />
+    expect(lines[4]).toMatch(/>&#123;a&#125;<br \/>b<\/div>$/)
+    // パスは HTML と同じ SVG を包む
+    expect(lines[5]).toContain('viewBox="0 0 100 50"><path d="M0 0 L100 0 L50 50 Z"/></svg>')
+    expect(lines.at(-1)).toBe('}')
+    expect(css).toBe('')
+  })
+
+  it('React（CSS Modules）は、styles.名前 を付けた JSX と、同じ名前のクラスの CSS', () => {
+    const scene = sceneOf(
+      frame({ name: 'Card', children: ['a', 'b'] }),
+      rect({ id: 'a', name: 'Icon', parentId: 'frame' }),
+      rect({ id: 'b', name: 'Icon', parentId: 'frame' }),
+    )
+    const { html, css } = nodeMarkup(scene, 'frame', { style: { format: 'css-modules' } })
+    expect(html.split('\n')).toEqual([
+      "import styles from './Card.module.css'",
+      '',
+      'export function Card() {',
+      '  return (',
+      '    <div className={styles.card}>',
+      '      <div className={styles.icon}></div>',
+      '      <div className={styles.icon2}></div>',
+      '    </div>',
+      '  )',
+      '}',
+    ])
+    expect(css).toContain('.icon2 {\n  position: absolute;')
+  })
+
+  it('React（Tailwind）は、クラスを並べた JSX にし、CSS は出さない', () => {
+    const { html, css } = nodeMarkup(card(), 'frame', { style: { format: 'tailwind' } })
+    expect(html).toContain('<div className="absolute left-[10px] top-[0] w-[20px] h-[20px] bg-[#ff0000]"></div>')
+    expect(html).toContain('w-[100px] h-[50px] [fill:#ff0000] [stroke:none] overflow-visible" viewBox')
+    expect(css).toBe('')
+  })
+
+  it('画像は JSX では閉じた img にする', () => {
+    const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover' }
+    const { html } = nodeMarkup(sceneOf(image), 'image', { style: { format: 'react' } })
+    expect(html).toContain(`<img style={{ width: 100, height: 50, objectFit: 'cover' }} src="photo.png" alt="Photo" />`)
+  })
+})
+
+describe('nodeCode', () => {
+  const scene = () => sceneOf(frame({ children: ['rect'] }), rect({ parentId: 'frame', x: 10, cornerRadius: 4 }))
+
+  it('HTML + CSS と CSS Modules は CSS', () => {
+    expect(nodeCode(scene(), 'rect').title).toBe('CSS')
+    expect(nodeCode(scene(), 'rect', { format: 'css-modules' }).code).toBe(nodeCode(scene(), 'rect').code)
+  })
+
+  it('React は style のオブジェクト、Tailwind はクラスの並び', () => {
+    expect(nodeCode(scene(), 'rect', { format: 'react' }).code).toBe(
+      ['{', "  position: 'absolute',", '  left: 10,', '  top: 0,', '  width: 100,', '  height: 50,', "  background: '#ff0000',", '  borderRadius: 4,', '}'].join('\n'),
+    )
+    expect(nodeCode(scene(), 'rect', { format: 'tailwind', unit: 'rem' }).code).toBe(
+      'absolute left-[0.625rem] top-[0] w-[6.25rem] h-[3.125rem] bg-[#ff0000] rounded-[0.25rem]',
+    )
   })
 })

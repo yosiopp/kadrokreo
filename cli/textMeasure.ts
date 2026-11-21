@@ -1,5 +1,5 @@
 import type { NodeId, Scene, TextNode } from '../src/document/types.ts'
-import { wrapLine } from '../src/canvas/text.ts'
+import { hugWidth, wrapLine, wrapWidth } from '../src/canvas/text.ts'
 import { patchNodes } from '../src/editor/operations.ts'
 
 // Node には Canvas がないので、文字の幅は字の種類ごとのおおよその値で見積もる。
@@ -20,7 +20,7 @@ function charWidth(char: string): number {
   return 0.52
 }
 
-type Style = Pick<TextNode, 'text' | 'fontSize' | 'fontWeight' | 'autoWidth' | 'width' | 'lineHeight'>
+type Style = Pick<TextNode, 'text' | 'fontSize' | 'fontWeight' | 'sizing' | 'width' | 'lineHeight' | 'minWidth' | 'maxWidth'>
 
 export function estimateTextWidth(text: string, fontSize: number, fontWeight: number): number {
   let total = 0
@@ -32,12 +32,13 @@ export function estimateTextWidth(text: string, fontSize: number, fontWeight: nu
 export function estimateTextSize(style: Style): { width: number; height: number } {
   const measure = (text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight)
   const paragraphs = style.text.split('\n')
-  const lines = style.autoWidth
+  const wrapAt = wrapWidth(style)
+  const lines = wrapAt === null
     ? paragraphs.map((text) => measure(text))
-    : paragraphs.flatMap((paragraph) => wrapLine(paragraph, style.width, measure)).map((text) => measure(text.trimEnd()))
+    : paragraphs.flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure)).map((text) => measure(text.trimEnd()))
   const height = Math.ceil(lines.length * style.fontSize * style.lineHeight)
-  if (!style.autoWidth) return { width: style.width, height }
-  return { width: Math.max(1, Math.ceil(Math.max(...lines))), height }
+  if (style.sizing.width !== 'hug') return { width: style.width, height }
+  return { width: Math.max(1, Math.ceil(hugWidth(style, lines.reduce((max, width) => Math.max(max, width), 0)))), height }
 }
 
 /** editor の fitTextNodes の代わり。ストアに FitText として渡す */

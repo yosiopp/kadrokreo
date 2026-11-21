@@ -17,14 +17,14 @@ export type InstanceNode = FrameNode & { component: Extract<ComponentLink, { rol
 /** インスタンスごとに上書きできる項目 */
 export const OVERRIDE_KEYS = [
   'text',
-  'fill',
-  'fillGradient',
-  'stroke',
+  'fills',
+  'strokes',
   'visible',
   'fontSize',
   'fontFamily',
   'fontWeight',
   'assetId',
+  'componentId',
 ] as const satisfies readonly (keyof Override)[]
 
 /** コンポーネントの元か */

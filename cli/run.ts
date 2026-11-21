@@ -70,7 +70,12 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
   )
 
   const output: string[] = []
-  const ctx = { session, print: (text: string) => output.push(text), readFile: io.readFile }
+  const ctx = {
+    session,
+    print: (text: string) => output.push(text),
+    readFile: io.readFile,
+    warn: (text: string) => io.stderr(`kdr: ${text}\n`),
+  }
   for (const [i, step] of steps.entries()) {
     try {
       await commands[i].run(ctx, step)

@@ -1,7 +1,7 @@
 import { isInstance } from '../../document/component.ts'
-import type { AutoLayout } from '../../document/types.ts'
-import { SIZE_MODE_LABELS, alignLabels, optionsOf } from '../../ui/labels.ts'
-import { patchLayouts, setAutoLayoutEnabled, setLayoutWrap } from '../layout.ts'
+import type { AutoLayout, Sizing } from '../../document/types.ts'
+import { ALIGN_CONTENT_LABELS, SIZING_LABELS, alignLabels, optionsOf } from '../../ui/labels.ts'
+import { patchLayouts, setAutoLayoutEnabled, setFrameSizing, setLayoutWrap } from '../layout.ts'
 import { type PanelContext, common } from './context.ts'
 import { CheckField, NumberField, Section, SelectField } from './fields.tsx'
 
@@ -25,6 +25,20 @@ export function FrameSections({ ctx }: { ctx: PanelContext }) {
   const layoutValue = <K extends keyof AutoLayout>(key: K) => common(layouts.map((layout) => layout[key]))
   /** 自動で並べているフレームだけ、設定の一部を書き換える */
   const setLayout = (patch: Partial<AutoLayout>) => store.apply((base) => patchLayouts(base, selection, patch))
+  const laidOut = frames.filter((node) => node.layout)
+  /** 大きさの決め方。親いっぱいは「親いっぱいに伸ばす」の欄で決めるので、いまそうなっているときだけ選択肢に出す */
+  const sizingField = (axis: 'width' | 'height', label: string) => {
+    const value = common(laidOut.map((node) => node.sizing[axis]))
+    const options = optionsOf(SIZING_LABELS).filter(([key]) => key !== 'fill' || value === 'fill')
+    return (
+      <SelectField
+        label={label}
+        value={value}
+        options={options}
+        onChange={(sizing: Sizing) => store.apply((base) => setFrameSizing(base, selection, axis, sizing))}
+      />
+    )
+  }
 
   return (
     <>
@@ -89,24 +103,22 @@ export function FrameSections({ ctx }: { ctx: PanelContext }) {
               onChange={(checked) => store.apply((base) => setLayoutWrap(base, selection, checked))}
             />
             {layoutValue('wrap') === true && (
-              <NumberField
-                label="行の間隔"
-                value={layoutValue('crossGap')}
-                onCommit={(crossGap) => setLayout({ crossGap })}
-              />
+              <>
+                <NumberField
+                  label="行の間隔"
+                  value={layoutValue('crossGap')}
+                  onCommit={(crossGap) => setLayout({ crossGap })}
+                />
+                <SelectField
+                  label="行の配置"
+                  value={layoutValue('alignContent')}
+                  options={optionsOf(ALIGN_CONTENT_LABELS)}
+                  onChange={(alignContent) => setLayout({ alignContent })}
+                />
+              </>
             )}
-            <SelectField
-              label="幅"
-              value={layoutValue('widthMode')}
-              options={optionsOf(SIZE_MODE_LABELS)}
-              onChange={(widthMode) => setLayout({ widthMode })}
-            />
-            <SelectField
-              label="高さ"
-              value={layoutValue('heightMode')}
-              options={optionsOf(SIZE_MODE_LABELS)}
-              onChange={(heightMode) => setLayout({ heightMode })}
-            />
+            {sizingField('width', '幅')}
+            {sizingField('height', '高さ')}
           </>
         )}
       </Section>

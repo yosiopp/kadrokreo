@@ -10,8 +10,8 @@ import {
   getWorldRotation,
   normalizeAngle,
 } from '../../document/geometry.ts'
-import { lineEndpoints, pathPoints } from '../../document/path.ts'
-import type { LineNode, NodeId, PathNode, Scene, SceneNode } from '../../document/types.ts'
+import { type NodeKind, type Vertex, mapVertices, nodeKind, pathPoints } from '../../document/path.ts'
+import type { NodeId, PathNode, Scene } from '../../document/types.ts'
 import { HANDLES, type Handle, handlePoint } from '../resize.ts'
 
 // キャンバスの上に出す選択枠とハンドルの位置、ポインタの座標の丸めなど、EditorCanvas が使う計算
@@ -49,8 +49,8 @@ const NAMES = {
   image: 'Image',
 } as const
 
-export function nextName(page: Scene, type: SceneNode['type']): string {
-  const count = Object.values(page.nodes).filter((node) => node.type === type).length
+export function nextName(page: Scene, type: NodeKind): string {
+  const count = Object.values(page.nodes).filter((node) => nodeKind(node) === type).length
   return `${NAMES[type]} ${count + 1}`
 }
 
@@ -70,11 +70,38 @@ export function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
-/** 直線の両端（始点・終点の順）またはパスの頂点（ページ座標） */
-export function editablePoints(page: Scene, node: LineNode | PathNode): Point[] {
+/** 直線の両端（始点・終点の順）またはパスの頂点と制御点（ページ座標） */
+export function editablePoints(page: Scene, node: PathNode): Vertex[] {
   const matrix = getWorldMatrix(page, node.id)
-  const points = node.type === 'line' ? lineEndpoints(node) : pathPoints(node)
-  return points.map((point) => applyMatrix(matrix, point))
+  return mapVertices(pathPoints(node), (point) => applyMatrix(matrix, point))
+}
+
+/** つかんだ点が頂点そのものか、その制御点か */
+export type PointPart = 'vertex' | 'in' | 'out'
+
+/**
+ * 頂点を編集中に出す制御点のハンドル。選んだ頂点の 2 つと、両隣の頂点のうち選んだ頂点へ向かう辺の制御点
+ * （どちらの端の曲がり具合も、選んだ頂点のまわりで直せるように）
+ */
+export function visibleControls(
+  vertices: readonly Vertex[],
+  selected: number | null,
+  closed: boolean,
+): { index: number; part: 'in' | 'out'; point: Point }[] {
+  if (selected === null || !vertices[selected]) return []
+  const count = vertices.length
+  const controls: { index: number; part: 'in' | 'out'; point: Point }[] = []
+  const add = (index: number, part: 'in' | 'out') => {
+    const point = vertices[index]?.[part]
+    if (point) controls.push({ index, part, point })
+  }
+  add(selected, 'in')
+  add(selected, 'out')
+  const prev = selected > 0 ? selected - 1 : closed ? count - 1 : -1
+  const next = selected < count - 1 ? selected + 1 : closed ? 0 : -1
+  if (prev >= 0 && prev !== selected) add(prev, 'out')
+  if (next >= 0 && next !== selected && next !== prev) add(next, 'in')
+  return controls
 }
 
 /** ハンドルを引いた後の枠の大きさを整数にする。つかんでいない側の辺は動かさない */

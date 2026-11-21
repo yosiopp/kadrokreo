@@ -1,7 +1,7 @@
 import type { TextNode } from '../../document/types.ts'
 import { TextAlignIcon } from '../icons.tsx'
 import { type PanelContext, textsIn, MIXED, common, mapValue } from './context.ts'
-import { NumberField, Section, SelectField } from './fields.tsx'
+import { NumberField, OverrideMark, Section, SelectField } from './fields.tsx'
 
 const FONT_FAMILIES = [
   { value: 'sans-serif', label: 'ゴシック体' },
@@ -17,18 +17,19 @@ const TEXT_ALIGNMENTS: { value: TextNode['textAlign']; label: string }[] = [
 
 /** テキストだけを選んでいるときの、文字の書式 */
 export function TextSection({ ctx }: { ctx: PanelContext }) {
-  const { nodes, apply, inner } = ctx
+  const { nodes, apply, inner, overridden } = ctx
   const texts = textsIn(nodes)
   if (texts.length !== nodes.length) return null
   const fontFamily = common(texts.map((node) => node.fontFamily))
-  const autoWidth = common(texts.map((node) => node.autoWidth))
+  const autoWidth = common(texts.map((node) => node.sizing.width === 'hug'))
   const fontWeight = common(texts.map((node) => node.fontWeight))
   const textAlign = common(texts.map((node) => node.textAlign))
 
   return (
-    <Section title="テキスト">
+    <Section title="テキスト" overridden={overridden.has('text')}>
       <NumberField
         label="サイズ"
+        overridden={overridden.has('fontSize')}
         value={common(texts.map((n) => n.fontSize))}
         min={1}
         max={1000}
@@ -55,6 +56,7 @@ export function TextSection({ ctx }: { ctx: PanelContext }) {
         >
           <b>B</b>
         </button>
+        <OverrideMark show={overridden.has('fontWeight')} />
         {/* 写しの行揃えは上書きできない */}
         {!inner && TEXT_ALIGNMENTS.map(({ value, label }) => (
           <button
@@ -78,11 +80,14 @@ export function TextSection({ ctx }: { ctx: PanelContext }) {
             ['auto', 'しない（幅は自動）'],
             ['fixed', '幅に合わせる'],
           ]}
-          onChange={(wrap) => apply({ autoWidth: wrap === 'auto' })}
+          onChange={(wrap) => apply({ sizing: { width: wrap === 'auto' ? 'hug' : 'fixed', height: 'hug' } })}
         />
       )}
       <label className="field">
-        <span className="field-label">書体</span>
+        <span className="field-label">
+          書体
+          <OverrideMark show={overridden.has('fontFamily')} />
+        </span>
         <select
           value={fontFamily === MIXED ? '' : fontFamily}
           onChange={(event) => {

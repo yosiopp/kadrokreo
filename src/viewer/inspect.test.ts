@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { derivedId } from '../document/component.ts'
-import type { EllipseNode, ImageNode, LineNode, PathNode, Scene } from '../document/types.ts'
+import { solid } from '../document/paint.ts'
+import type { EllipseNode, ImageNode, PathNode, Scene } from '../document/types.ts'
 import { inspectNode, inspectSelection, nodeCss } from './inspect.ts'
 import { base, docOf, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
 
@@ -33,6 +34,7 @@ describe('nodeCss', () => {
     const parent = frame({
       children: ['rect'],
       clipContent: false,
+      sizing: { width: 'hug', height: 'fixed' },
       layout: {
         direction: 'vertical',
         gap: 8,
@@ -42,8 +44,8 @@ describe('nodeCss', () => {
         paddingLeft: 16,
         align: 'center',
         justify: 'space-between',
-        widthMode: 'hug',
-        heightMode: 'fixed', wrap: false, crossGap: 0,
+        wrap: false,
+        crossGap: 0, alignContent: 'auto' as const,
       },
     })
     const scene = sceneOf(parent, rect({ parentId: 'frame', x: 16, y: 0 }))
@@ -70,12 +72,12 @@ describe('nodeCss', () => {
       paddingLeft: 4,
       align: 'start' as const,
       justify: 'start' as const,
-      widthMode: 'fixed' as const,
-      heightMode: 'fixed' as const, wrap: false, crossGap: 0,
+      wrap: false,
+      crossGap: 0, alignContent: 'auto' as const,
     }
     const scene = sceneOf(
       frame({ children: ['rect'], clipContent: false, layout }),
-      rect({ parentId: 'frame', layoutFill: { width: true, height: true } }),
+      rect({ parentId: 'frame', sizing: { width: 'fill', height: 'fill' } }),
     )
     expect(css(scene, 'frame')).toContain('padding: 1px 2px 3px 4px;')
     expect(css(scene, 'rect')).toEqual(['flex: 1 0 0;', 'align-self: stretch;', 'background: #ff0000;'])
@@ -87,8 +89,38 @@ describe('nodeCss', () => {
     expect(css(outside, 'frame')).toContain('position: relative;')
     expect(css(outside, 'rect').slice(0, 3)).toEqual(['position: absolute;', 'left: 7px;', 'top: 8px;'])
     // 親が自動で並べていなければ、伸ばす指定は意味がない
-    const plain = sceneOf(frame({ children: ['rect'] }), rect({ parentId: 'frame', layoutFill: { width: true, height: true } }))
+    const plain = sceneOf(frame({ children: ['rect'] }), rect({ parentId: 'frame', sizing: { width: 'fill', height: 'fill' } }))
     expect(css(plain, 'rect')).toContain('width: 100px;')
+  })
+
+  it('親の辺への追従は、left / right / top / bottom と割合で書く', () => {
+    // 親は 100 × 50。子は x 10, y 5, 30 × 20
+    const sceneWith = (horizontal: string, vertical: string) =>
+      sceneOf(
+        frame({ children: ['rect'] }),
+        rect({ parentId: 'frame', x: 10, y: 5, width: 30, height: 20, constraints: { horizontal, vertical } as never }),
+      )
+    expect(css(sceneWith('end', 'end', ), 'rect').slice(0, 5)).toEqual([
+      'position: absolute;', 'right: 60px;', 'bottom: 25px;', 'width: 30px;', 'height: 20px;',
+    ])
+    expect(css(sceneWith('stretch', 'center'), 'rect').slice(0, 5)).toEqual([
+      'position: absolute;', 'left: 10px;', 'right: 60px;', 'top: calc(50% - 20px);', 'height: 20px;',
+    ])
+    expect(css(sceneWith('scale', 'scale'), 'rect').slice(0, 5)).toEqual([
+      'position: absolute;', 'left: 10%;', 'width: 30%;', 'top: 10%;', 'height: 40%;',
+    ])
+    expect(rowsOf(sceneWith('stretch', 'end'), 'rect', '位置とサイズ')).toContain('親の辺に固定=横 左右・縦 下')
+    expect(rowsOf(sceneWith('start', 'start'), 'rect', '位置とサイズ')?.join()).not.toContain('親の辺に固定')
+  })
+
+  it('折り返した行を均等に配るなら align-content: space-between', () => {
+    const layout = {
+      direction: 'horizontal' as const, gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+      align: 'center' as const, justify: 'start' as const, wrap: true, crossGap: 0, alignContent: 'space-between' as const,
+    }
+    const scene = sceneOf(frame({ children: [], layout, sizing: { width: 'fixed', height: 'fixed' } }))
+    expect(css(scene, 'frame')).toContain('align-content: space-between;')
+    expect(rowsOf(scene, 'frame', 'オートレイアウト')).toContain('行の配置=均等に配る')
   })
 
   it('折り返しと、大きさの下限・上限', () => {
@@ -101,14 +133,12 @@ describe('nodeCss', () => {
       paddingLeft: 0,
       align: 'center' as const,
       justify: 'start' as const,
-      widthMode: 'fixed' as const,
-      heightMode: 'hug' as const,
       wrap: true,
-      crossGap: 4,
+      crossGap: 4, alignContent: 'auto' as const,
     }
     const scene = sceneOf(
-      frame({ children: ['rect'], clipContent: false, layout, minHeight: 40, maxWidth: 500 }),
-      rect({ parentId: 'frame', layoutFill: { width: true, height: false }, minWidth: 60, maxHeight: 99 }),
+      frame({ children: ['rect'], clipContent: false, layout, sizing: { width: 'fixed', height: 'hug' }, minHeight: 40, maxWidth: 500 }),
+      rect({ parentId: 'frame', sizing: { width: 'fill', height: 'fixed' }, minWidth: 60, maxHeight: 99 }),
     )
     expect(css(scene, 'frame')).toEqual([
       'display: flex;',
@@ -129,19 +159,19 @@ describe('nodeCss', () => {
     expect(rowsOf(scene, 'frame', '位置とサイズ')).not.toContain('最大の幅=500')
     expect(rowsOf(scene, 'rect', '位置とサイズ')).toContain('最小の幅=60')
     // 並べる向きを中身に合わせていれば折り返さない
-    const hug = sceneOf(frame({ children: [], layout: { ...layout, widthMode: 'hug', gap: 4 } }))
+    const hug = sceneOf(frame({ children: [], layout: { ...layout, gap: 4 }, sizing: { width: 'hug', height: 'hug' } }))
     expect(css(hug, 'frame')).not.toContain('flex-wrap: wrap;')
     expect(css(hug, 'frame')).toContain('gap: 4px;')
   })
 
   it('線・角丸・影・回転・不透明度', () => {
     const node = rect({
-      stroke: '#000000',
+      strokes: solid('#000000'),
       strokeWidth: 2,
       cornerRadius: 8,
       rotation: -30,
       opacity: 0.5,
-      shadow: { x: 0, y: 4, blur: 12, color: '#102030', opacity: 0.25 },
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#102030', opacity: 0.25 }],
     })
     expect(css(sceneOf(node), 'rect').slice(2)).toEqual([
       'transform: rotate(-30deg);',
@@ -159,11 +189,46 @@ describe('nodeCss', () => {
       { offset: 0, color: '#000000' },
       { offset: 1, color: '#ffffff' },
     ]
-    const gradient = (angle: number) => css(sceneOf(rect({ fillGradient: { angle, stops } })), 'rect').at(-1)
+    const gradient = (angle: number) => css(sceneOf(rect({ fills: [{ type: 'linear', angle, stops }] })), 'rect').at(-1)
     // 0° は左から右、90° は上から下
     expect(gradient(0)).toBe('background: linear-gradient(90deg, #000000 0%, #ffffff 100%);')
     expect(gradient(90)).toBe('background: linear-gradient(180deg, #000000 0%, #ffffff 100%);')
     expect(gradient(-135)).toBe('background: linear-gradient(315deg, #000000 0%, #ffffff 100%);')
+  })
+
+  it('塗りが重なっていれば background を手前から並べ、重ねる単色は同じ色のグラデーションにする。影はカンマでつなぐ', () => {
+    const stops = [
+      { offset: 0, color: '#000000' },
+      { offset: 1, color: '#ffffff' },
+    ]
+    const node = rect({
+      fills: [{ type: 'solid', color: '#ff0000' }, { type: 'linear', angle: 0, stops }, { type: 'solid', color: '#00ff00' }],
+      effects: [
+        { type: 'drop-shadow', x: 0, y: 1, blur: 2, color: '#000000', opacity: 0.5 },
+        { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 },
+      ],
+    })
+    const lines = css(sceneOf(node), 'rect')
+    expect(lines).toContain(
+      'background: linear-gradient(#00ff00, #00ff00), linear-gradient(90deg, #000000 0%, #ffffff 100%), #ff0000;',
+    )
+    // CSS は先に書いた影が手前。効果は先頭が奥
+    expect(lines).toContain('box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.5);')
+    const section = inspectNode(docOf(sceneOf(node)), sceneOf(node), 'rect').find((item) => item.title === '塗り')
+    expect(section?.rows.map((row) => row.value)).toEqual(['#00FF00', '0°', '#000000', '#FFFFFF', '#FF0000'])
+  })
+
+  it('テキストのグラデーションは、背景を文字の形で切り抜いて表す', () => {
+    const stops = [
+      { offset: 0, color: '#ff0000' },
+      { offset: 1, color: '#0000ff' },
+    ]
+    const lines = css(sceneOf(text({ fills: [{ type: 'linear', angle: 90, stops }] })), 'text')
+    expect(lines.slice(0, 3)).toEqual([
+      'background: linear-gradient(180deg, #ff0000 0%, #0000ff 100%);',
+      'background-clip: text;',
+      'color: transparent;',
+    ])
   })
 
   it('テキストは文字の設定を出し、中身で決まる大きさは書かない', () => {
@@ -175,7 +240,14 @@ describe('nodeCss', () => {
       'line-height: 1.5;',
       'white-space: nowrap;',
     ])
-    const wrapped = text({ autoWidth: false, width: 200, fontWeight: 700, textAlign: 'center' })
+    // 中身に合わせる幅に上限があれば、そこで折り返す
+    const limited = css(sceneOf(text({ maxWidth: 240, minWidth: 20 })), 'text')
+    expect(limited).toContain('max-width: 240px;')
+    expect(limited).toContain('min-width: 20px;')
+    expect(limited).toContain('width: max-content;')
+    expect(limited).not.toContain('white-space: nowrap;')
+    expect(rowsOf(sceneOf(text({ maxWidth: 240 })), 'text', 'テキスト')).toContain('折り返し=最大の幅（240）で')
+    const wrapped = text({ sizing: { width: 'fixed', height: 'hug' }, width: 200, fontWeight: 700, textAlign: 'center' })
     expect(css(sceneOf(wrapped), 'text')).toEqual([
       'width: 200px;',
       'color: #111111;',
@@ -201,14 +273,19 @@ describe('nodeCss', () => {
     }
     expect(css(sceneOf(image), 'image').slice(2)).toEqual(['object-fit: fill;', 'border-radius: 4px;'])
 
-    const line: LineNode = {
+    const line: PathNode = {
       ...base,
       id: 'line',
-      type: 'line',
-      stroke: '#00ff00',
+      type: 'path',
+      fills: [],
+      strokes: solid('#00ff00'),
       strokeWidth: 3,
-      direction: 'down',
-      flipped: false,
+      effects: [],
+      points: [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      closed: false,
       startCap: 'none',
       endCap: 'arrow',
     }
@@ -219,15 +296,17 @@ describe('nodeCss', () => {
       ...paint,
       id: 'path',
       type: 'path',
-      fill: null,
+      fills: [],
+      // 2 頂点の開いたパスは直線になるので、頂点を 3 つにする
       points: [
         { x: 0, y: 0 },
+        { x: 1, y: 0 },
         { x: 1, y: 1 },
       ],
       closed: false,
       startCap: 'none',
       endCap: 'none',
-      shadow: { x: 1, y: 2, blur: 0, color: '#000000', opacity: 1 },
+      effects: [{ type: 'drop-shadow', x: 1, y: 2, blur: 0, color: '#000000', opacity: 1 }],
     }
     expect(css(sceneOf(path), 'path').slice(2)).toEqual([
       'fill: none;',
@@ -245,9 +324,9 @@ describe('nodeCss', () => {
       width: 100,
       height: 50,
       cornerRadius: 6,
-      stroke: '#000000',
+      strokes: solid('#000000'),
       strokeWidth: 1,
-      shadow: { x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 },
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }],
     })
     const label = text({ parentId: 'frame', fontSize: 14 })
     const scene = sceneOf(parent, child, label)
@@ -285,20 +364,20 @@ describe('inspectNode', () => {
       { offset: 0, color: '#4f46e5' },
       { offset: 1, color: '#c026d3' },
     ]
-    const scene = sceneOf(rect({ fillGradient: { angle: 30, stops } }))
+    const scene = sceneOf(rect({ fills: [{ type: 'linear', angle: 30, stops }] }))
     const section = inspectNode(docOf(scene), scene, 'rect').find((item) => item.title === '塗り')
     expect(section?.rows).toEqual([
       { label: 'グラデーション', value: '30°' },
       { label: '0%', value: '#4F46E5', color: '#4f46e5' },
       { label: '100%', value: '#C026D3', color: '#c026d3' },
     ])
-    expect(rowsOf(sceneOf(rect({ fill: null })), 'rect', '塗り')).toBeUndefined()
+    expect(rowsOf(sceneOf(rect({ fills: [] })), 'rect', '塗り')).toBeUndefined()
   })
 
   it('線は、色があって太さが 0 でないときだけ出す。影は濃さも出す', () => {
-    expect(rowsOf(sceneOf(rect({ stroke: '#000000', strokeWidth: 0 })), 'rect', '線')).toBeUndefined()
-    const shadow = { x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
-    const scene = sceneOf(rect({ stroke: '#0000ff', strokeWidth: 2, shadow }))
+    expect(rowsOf(sceneOf(rect({ strokes: solid('#000000'), strokeWidth: 0 })), 'rect', '線')).toBeUndefined()
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+    const scene = sceneOf(rect({ strokes: solid('#0000ff'), strokeWidth: 2, effects: [shadow] }))
     expect(rowsOf(scene, 'rect', '線')).toEqual(['色=#0000FF', '太さ=2'])
     expect(rowsOf(scene, 'rect', '影')).toEqual(['横=0', '縦=4', 'ぼかし=12', '色=#000000 25%'])
   })
@@ -320,6 +399,7 @@ describe('inspectNode', () => {
       id: 'main',
       name: 'ボタン',
       component: { id: 'c1', role: 'main' },
+      sizing: { width: 'hug', height: 'fixed' },
       layout: {
         direction: 'horizontal',
         gap: 8,
@@ -329,8 +409,8 @@ describe('inspectNode', () => {
         paddingLeft: 20,
         align: 'end',
         justify: 'start',
-        widthMode: 'hug',
-        heightMode: 'fixed', wrap: false, crossGap: 0,
+        wrap: false,
+        crossGap: 0, alignContent: 'auto' as const,
       },
     })
     const instance = frame({ id: 'instance', component: { id: 'c1', role: 'instance', overrides: {} } })
@@ -381,8 +461,8 @@ describe('inspectNode', () => {
         id: 'c1',
         role: 'instance',
         overrides: {
-          main: { fill: '#000000' },
-          label: { text: '保存', fill: '#ffffff' },
+          main: { fills: solid('#000000') },
+          label: { text: '保存', fills: solid('#ffffff') },
           // 元から消えたノードへの上書きは出さない
           gone: { visible: false },
         },
@@ -413,6 +493,27 @@ describe('inspectNode', () => {
     expect(rowsOf(scene, 'main', '上書き')).toBeUndefined()
   })
 
+  it('入れ子のインスタンスを差し替えた写しには、差し替えた元を出す', () => {
+    const icon = frame({ id: 'icon', name: 'Icon', component: { id: 'c2', role: 'main' } })
+    const card = frame({ id: 'card', name: 'Card', component: { id: 'c1', role: 'main' }, children: ['nested'] })
+    const nested = frame({ id: 'nested', name: 'Button', parentId: 'card', component: { id: 'c3', role: 'instance', overrides: {} } })
+    const copy = derivedId('instance', 'nested')
+    const instance = frame({
+      id: 'instance',
+      name: 'Card',
+      children: [copy],
+      component: { id: 'c1', role: 'instance', overrides: { nested: { componentId: 'c2' } } },
+    })
+    const scene = sceneOf(icon, card, nested, instance, frame({ id: copy, name: 'Icon', parentId: 'instance' }))
+    expect(rowsOf(scene, copy, 'コンポーネント')).toEqual([
+      '種類=インスタンスの中身',
+      'インスタンス=Card',
+      '元の名前=Card',
+      '上書き=入れ子のインスタンスの元',
+      '差し替えた元=Icon',
+    ])
+  })
+
   it('画像は収め方と形式を出す', () => {
     const image: ImageNode = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover' }
     expect(rowsOf(sceneOf(image), 'image', '画像')).toEqual(['収め方=枠を埋めて切り抜く', '形式=PNG'])
@@ -433,6 +534,20 @@ describe('inspectSelection', () => {
     expect(rowsOfSelection(scene, ['inner', 'outer'])[1]).toBe('間隔:横（左）=10,横（右）=90,縦（上）=20,縦（下）=30')
   })
 
+  it('同じ向きに回った 2 つは、辺に沿った間隔と、測った向きを出す', () => {
+    // 100 × 50 の 2 つを縦に並べ、それぞれ 90° 回す（回すと縦 100 になり、間は 30）
+    const scene = sceneOf(rect({ id: 'a', rotation: 90 }), rect({ id: 'b', x: 0, y: 130, rotation: 90 }))
+    // 90° は回っていないのと同じ向き。ページの縦で測る
+    expect(rowsOfSelection(scene, ['a', 'b'])[1]).toBe('間隔:縦=30')
+    const tilted = sceneOf(rect({ id: 'a', rotation: 30 }), rect({ id: 'b', x: 0, y: 130, rotation: 30 }))
+    expect(rowsOfSelection(tilted, ['a', 'b'])[1]).toMatch(/測る向き=辺に沿う（30°）$/)
+  })
+
+  it('向きが違えば、囲む矩形で測ったことを書き添える', () => {
+    const scene = sceneOf(rect({ id: 'a', rotation: 45 }), rect({ id: 'b', x: 300 }))
+    expect(rowsOfSelection(scene, ['a', 'b'])[1]).toMatch(/測る向き=回した図形は囲む矩形で$/)
+  })
+
   it('3 つ以上なら、全体の矩形だけ', () => {
     const scene = sceneOf(rect({ id: 'a' }), rect({ id: 'b', x: 200 }), rect({ id: 'c', y: 100 }))
     expect(rowsOfSelection(scene, ['a', 'b', 'c'])).toEqual(['全体:X=0,Y=0,幅=300,高さ=150'])
@@ -440,11 +555,11 @@ describe('inspectSelection', () => {
 })
 
 describe('色の書き方と rem の基準', () => {
-  const shadow = { x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25 }
-  const gradient = { angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }
+  const shadow = { type: 'drop-shadow' as const, x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25 }
+  const gradient = { type: 'linear' as const, angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }
 
   it('CSS の色を RGB や HSL で書ける。影は透明度つき', () => {
-    const scene = sceneOf(rect({ fill: '#4f46e5', stroke: '#ffffff', strokeWidth: 2, shadow }))
+    const scene = sceneOf(rect({ fills: solid('#4f46e5'), strokes: solid('#ffffff'), strokeWidth: 2, effects: [shadow] }))
     expect(nodeCss(scene, 'rect', { color: 'rgb' })).toContain('background: rgb(79, 70, 229);')
     expect(nodeCss(scene, 'rect', { color: 'rgb' })).toContain('outline: 2px solid rgb(255, 255, 255);')
     expect(nodeCss(scene, 'rect', { color: 'hsl' })).toContain('box-shadow: 0 2px 4px hsla(0, 0%, 0%, 0.25);')
@@ -452,7 +567,7 @@ describe('色の書き方と rem の基準', () => {
   })
 
   it('グラデーションとテキストの色も書き方に従う', () => {
-    const scene = sceneOf(rect({ fillGradient: gradient }), text({ fill: '#ff0000' }))
+    const scene = sceneOf(rect({ fills: [gradient] }), text({ fills: solid('#ff0000') }))
     expect(nodeCss(scene, 'rect', { color: 'hsl' })).toContain(
       'background: linear-gradient(90deg, hsl(0, 100%, 50%) 0%, hsl(240, 100%, 50%) 100%);',
     )
@@ -465,7 +580,7 @@ describe('色の書き方と rem の基準', () => {
   })
 
   it('設定の一覧の色も書き方に従う。影は、HEX なら色と濃さを分け、それ以外は透明度つき', () => {
-    const scene = sceneOf(rect({ fill: '#4f46e5', shadow }))
+    const scene = sceneOf(rect({ fills: solid('#4f46e5'), effects: [shadow] }))
     const doc = docOf(scene)
     const color = (format: 'hex' | 'rgb' | 'hsl', title: string) =>
       inspectNode(doc, scene, 'rect', format).find((section) => section.title === title)?.rows.at(-1)?.value

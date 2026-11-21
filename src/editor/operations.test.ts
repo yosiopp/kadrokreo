@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { FrameNode } from '../document/types.ts'
+import { solid } from '../document/paint.ts'
 import { createFrame, createImage, createLine, createRect, createText } from './nodes.ts'
 import {
   getAbsoluteBounds,
@@ -9,6 +10,7 @@ import {
 } from '../document/geometry.ts'
 import {
   addAsset,
+  addOrReuseAsset,
   alignNodes,
   copyFragment,
   addPage,
@@ -36,6 +38,8 @@ import {
   rotateNodes,
   setFill,
   setGradientEnabled,
+  setShadow,
+  setStroke,
   topLevelIds,
   translateNodes,
   updateNode,
@@ -94,8 +98,8 @@ describe('insertNode', () => {
 describe('updateNode', () => {
   it('指定したフィールドだけを更新する', () => {
     const { doc, rect } = fixture()
-    const next = updateNode(doc, rect.id, { x: 42, fill: '#ff0000' })
-    expect(next.nodes[rect.id]).toEqual({ ...doc.nodes[rect.id], x: 42, fill: '#ff0000' })
+    const next = updateNode(doc, rect.id, { x: 42, fills: solid('#ff0000') })
+    expect(next.nodes[rect.id]).toEqual({ ...doc.nodes[rect.id], x: 42, fills: solid('#ff0000') })
   })
 
   it('値が変わらなければ同じドキュメントを返す', () => {
@@ -245,10 +249,10 @@ describe('resizeNodes', () => {
     const from = { x: 0, y: 0, width: 200, height: 200 }
 
     const wider = resizeNodes(doc, [text.id], from, { x: 0, y: 0, width: 400, height: 400 })
-    expect(wider.nodes[text.id]).toMatchObject({ x: 200, y: 200, width: 80, height: 20, autoWidth: false })
+    expect(wider.nodes[text.id]).toMatchObject({ x: 200, y: 200, width: 80, height: 20, sizing: { width: 'fixed', height: 'hug' } })
 
     const taller = resizeNodes(doc, [text.id], from, { x: 0, y: 0, width: 200, height: 400 })
-    expect(taller.nodes[text.id]).toMatchObject({ x: 100, y: 200, width: 40, height: 20, autoWidth: true })
+    expect(taller.nodes[text.id]).toMatchObject({ x: 100, y: 200, width: 40, height: 20, sizing: { width: 'hug', height: 'hug' } })
   })
 })
 
@@ -380,6 +384,22 @@ describe('assets', () => {
     const doc = createDocument()
     return addAsset(updatePage(doc, doc.pages[0].id, (page) => insertNode(page, image)), 'a', asset)
   }
+
+  it('中身が同じ画像は、新しいアセットを作らずに既存のものを使う', () => {
+    const doc = withImage()
+    let made = 0
+    const newId = () => `new${++made}`
+    // 同じ中身（別のオブジェクト）なら、そのままのドキュメントと既存の id
+    const same = addOrReuseAsset(doc, { ...asset }, newId)
+    expect(same).toEqual({ document: doc, assetId: 'a' })
+    expect(same.document).toBe(doc)
+    expect(made).toBe(0)
+    // 中身か形式が違えば足す
+    const other = addOrReuseAsset(doc, { mime: 'image/png', data: 'BBBB' }, newId)
+    expect(other.assetId).toBe('new1')
+    expect(other.document.assets).toEqual({ a: asset, new1: { mime: 'image/png', data: 'BBBB' } })
+    expect(addOrReuseAsset(doc, { mime: 'image/jpeg', data: 'AAAA' }, newId).assetId).toBe('new2')
+  })
 
   it('どのページでも使われていないアセットを除く', () => {
     const doc = addAsset(withImage(), 'b', asset)
@@ -588,11 +608,19 @@ describe('塗り・グラデーション・影', () => {
     for (const node of [rect, text, line]) page = insertNode(page, node)
     return { page, rect, text, line }
   }
-  const gradientOf = (page: ReturnType<typeof createPage>, id: string) =>
-    (page.nodes[id] as { fillGradient: unknown }).fillGradient
+  /** いちばん上の塗りがグラデーションならそれ、そうでなければ null */
+  const gradientOf = (page: ReturnType<typeof createPage>, id: string) => {
+    const node = page.nodes[id]
+    const top = 'fills' in node ? node.fills.at(-1) : undefined
+    return top?.type === 'linear' ? top : null
+  }
 
   it('withStopColor は index 番目（負なら後ろから）の色だけを変える', () => {
-    const gradient = { angle: 90, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }] }
+    const gradient = {
+      type: 'linear' as const,
+      angle: 90,
+      stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }],
+    }
     expect(withStopColor(gradient, -1, '#ff0000').stops).toEqual([
       { offset: 0, color: '#000000' },
       { offset: 1, color: '#ff0000' },
@@ -601,10 +629,11 @@ describe('塗り・グラデーション・影', () => {
     expect(gradient.stops[1].color).toBe('#ffffff')
   })
 
-  it('グラデーションを付けると、いまの色から白への上から下のグラデーションになる。外すと消える', () => {
+  it('グラデーションを付けると、いまの色から白への上から下のグラデーションになる。外すと単色に戻る', () => {
     const { page, rect, line } = shapes()
     const on = setGradientEnabled(page, [rect.id, line.id], true)
     expect(gradientOf(on, rect.id)).toEqual({
+      type: 'linear',
       angle: 90,
       stops: [{ offset: 0, color: '#d9d9d9' }, { offset: 1, color: '#ffffff' }],
     })
@@ -612,25 +641,61 @@ describe('塗り・グラデーション・影', () => {
     expect(on.nodes[line.id]).toBe(page.nodes[line.id])
     // 付いているものに付け直しても変わらない
     expect(setGradientEnabled(on, [rect.id], true)).toBe(on)
-    expect(gradientOf(setGradientEnabled(on, [rect.id], false), rect.id)).toBeNull()
+    const off = setGradientEnabled(on, [rect.id], false)
+    expect(gradientOf(off, rect.id)).toBeNull()
+    expect(off.nodes[rect.id]).toMatchObject({ fills: solid('#d9d9d9') })
   })
 
   it('塗りの色を変えると、グラデーションの始まりの色も変わる。塗りをなくすとグラデーションもやめる', () => {
     const { page, rect } = shapes()
     const on = setGradientEnabled(page, [rect.id], true)
     const red = setFill(on, [rect.id], '#ff0000')
-    expect(red.nodes[rect.id]).toMatchObject({ fill: '#ff0000' })
     expect(gradientOf(red, rect.id)).toMatchObject({ stops: [{ color: '#ff0000' }, { color: '#ffffff' }] })
     const none = setFill(red, [rect.id], null)
-    expect(none.nodes[rect.id]).toMatchObject({ fill: null, fillGradient: null })
+    expect(none.nodes[rect.id]).toMatchObject({ fills: [] })
   })
 
-  it('テキストの塗りは消せない（null なら変えない）。直線は塗りを持たないので変えない', () => {
+  it('塗りの操作は、いちばん上の塗りだけを変える', () => {
+    const { page, rect } = shapes()
+    const layered = updateNode(page, rect.id, { fills: [...solid('#000000'), ...solid('#00ff00')] })
+    expect(setFill(layered, [rect.id], '#ff0000').nodes[rect.id]).toMatchObject({
+      fills: [...solid('#000000'), ...solid('#ff0000')],
+    })
+    expect(setFill(layered, [rect.id], null).nodes[rect.id]).toMatchObject({ fills: solid('#000000') })
+  })
+
+  it('テキストの塗りは消せない（null なら変えない）。塗りのない直線も null なら変えない', () => {
     const { page, text, line } = shapes()
     expect(setFill(page, [text.id, line.id], null)).toBe(page)
     const blue = setFill(page, [text.id, line.id], '#0000ff')
-    expect(blue.nodes[text.id]).toMatchObject({ fill: '#0000ff' })
-    expect(blue.nodes[line.id]).toBe(page.nodes[line.id])
+    expect(blue.nodes[text.id]).toMatchObject({ fills: solid('#0000ff') })
+    // 直線も見た目（Style）を持つパスなので、色を指定すると塗りが付く
+    expect(blue.nodes[line.id]).toMatchObject({ fills: solid('#0000ff') })
+  })
+
+  it('線の色を変えると、いちばん上の線を単色に置き換える。null で外し、テキストは変えない', () => {
+    const { page, rect, text, line } = shapes()
+    const red = setStroke(page, [rect.id, text.id, line.id], '#ff0000')
+    expect(red.nodes[rect.id]).toMatchObject({ strokes: solid('#ff0000') })
+    expect(red.nodes[line.id]).toMatchObject({ strokes: solid('#ff0000') })
+    expect(red.nodes[text.id]).toBe(page.nodes[text.id])
+    const none = setStroke(red, [rect.id, line.id], null)
+    expect(none.nodes[rect.id]).toMatchObject({ strokes: [] })
+    expect(none.nodes[line.id]).toMatchObject({ strokes: [] })
+    // 線のないものから外しても変わらない
+    expect(setStroke(page, [rect.id], null)).toBe(page)
+  })
+
+  it('影を付けると最初の効果を置き換え、null で外す', () => {
+    const { page, rect } = shapes()
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+    const second = { ...shadow, y: 8 }
+    const two = updateNode(page, rect.id, { effects: [shadow, second] })
+    const replaced = setShadow(two, [rect.id], { ...shadow, blur: 2 })
+    expect(replaced.nodes[rect.id]).toMatchObject({ effects: [{ ...shadow, blur: 2 }, second] })
+    expect(setShadow(two, [rect.id], null).nodes[rect.id]).toMatchObject({ effects: [second] })
+    expect(setShadow(page, [rect.id], shadow).nodes[rect.id]).toMatchObject({ effects: [shadow] })
+    expect(setShadow(page, [rect.id], null)).toBe(page)
   })
 
   it('グラデーションと影は、付いているものだけを書き換える', () => {
@@ -642,10 +707,10 @@ describe('塗り・グラデーション・影', () => {
     expect(gradientOf(angled, rect.id)).toMatchObject({ angle: 45 })
     expect(angled.nodes[other.id]).toBe(next.nodes[other.id])
 
-    const shadow = { x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
-    next = updateNode(next, rect.id, { shadow })
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+    next = updateNode(next, rect.id, { effects: [shadow] })
     const moved = patchShadows(next, [rect.id, other.id], { blur: 20 })
-    expect(moved.nodes[rect.id]).toMatchObject({ shadow: { ...shadow, blur: 20 } })
+    expect(moved.nodes[rect.id]).toMatchObject({ effects: [{ ...shadow, blur: 20 }] })
     expect(moved.nodes[other.id]).toBe(next.nodes[other.id])
   })
 })

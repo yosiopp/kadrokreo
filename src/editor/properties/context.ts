@@ -1,4 +1,5 @@
-import type { NodeId, Page, SceneNode } from '../../document/types.ts'
+import { isLine } from '../../document/path.ts'
+import type { EllipseNode, FrameNode, NodeId, Override, Page, PathNode, RectNode, SceneNode } from '../../document/types.ts'
 import type { NodePatch } from '../operations.ts'
 import type { EditorState, EditorStore } from '../store.ts'
 
@@ -18,13 +19,22 @@ export type PanelContext = {
   inner: boolean
   /** インスタンスを選んでいる */
   hasInstance: boolean
+  /** 1 つだけ選んでいるインスタンスか中身が、元と違う値にしている項目（欄に印を付ける） */
+  overridden: ReadonlySet<keyof Override>
 }
 
 /** 塗りと線を持つ図形 */
+/** 面を持つ図形（直線は線だけなので含めない） */
 export function shapesIn(nodes: readonly SceneNode[]) {
   return nodes.filter(
-    (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path',
+    (node): node is RectNode | EllipseNode | FrameNode | PathNode =>
+      node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || (node.type === 'path' && !isLine(node)),
   )
+}
+
+/** 直線（2 つの頂点を持つ開いたパス） */
+export function linesIn(nodes: readonly SceneNode[]) {
+  return nodes.filter((node): node is PathNode => node.type === 'path' && isLine(node))
 }
 
 export function textsIn(nodes: readonly SceneNode[]) {

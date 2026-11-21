@@ -23,3 +23,4 @@ e2e/out
 *.njsproj
 *.sln
 *.sw?
+bench/out

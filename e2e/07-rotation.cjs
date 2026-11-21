@@ -1,10 +1,8 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
 fs.mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -162,9 +160,9 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'rotation.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const rotations = Object.values(json.document.pages[0].nodes).map((n) => n.rotation).sort((a, b) => a - b)
-  check('kdr に角度が入る', json.version === 14 && rotations.join() === '-25,0,20,30', rotations.join())
+  check('kdr に角度が入る', json.version === 15 && rotations.join() === '-25,0,20,30', rotations.join())
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -174,9 +172,6 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(300)
   await viewer.screenshot({ path: path.join(OUT, '24-viewer-rotation.png') })
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v4.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 4 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0 && (await viewer.locator('[aria-label="ページ"] .list-button').count()) === 2)
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

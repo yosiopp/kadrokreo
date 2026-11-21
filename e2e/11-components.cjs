@@ -1,10 +1,8 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
 fs.mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -109,7 +107,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   // 元の色を変えると、別のページのインスタンスも変わる
   await page.locator('[aria-label="塗りの色"]').fill('#4f46e5')
   second = await nodesOf(1)
-  check('別のページのインスタンスにも反映される', instances(second)[0].fill === '#4f46e5', instances(second)[0].fill)
+  check('別のページのインスタンスにも反映される', instances(second)[0].fills[0].color === '#4f46e5', JSON.stringify(instances(second)[0].fills))
   await page.screenshot({ path: path.join(OUT, '37-components.png') })
 
   // ── 切り離す ──
@@ -135,9 +133,9 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'components.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const links = json.document.pages.flatMap((p) => Object.values(p.nodes)).filter((n) => n.component).map((n) => n.component.role).sort()
-  check('kdr につながりが入る', json.version === 14 && links.join() === 'instance,instance,instance,main', links.join())
+  check('kdr につながりが入る', json.version === 15 && links.join() === 'instance,instance,instance,main', links.join())
 
   // ── コンポーネントの一覧から置く ──
   const componentRows = page.locator('.component-row')
@@ -228,6 +226,77 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
     JSON.stringify([variantInstance.name, variantInstance.component.id === pressed.component.id]))
   await page.screenshot({ path: path.join(OUT, '39-variants.png') })
 
+  // ── バリアントのまとまりに破線の枠が出る ──
+  const setNow = nodes.find((n) => n.id === variantSet.id)
+  const setPixel = await page.evaluate(([x, y]) => {
+    const canvas = document.querySelector('.canvas-view canvas')
+    const ratio = canvas.width / canvas.clientWidth
+    const data = canvas.getContext('2d').getImageData(Math.round(x * ratio), Math.round(y * ratio) - 1, 1, 3).data
+    return [0, 4, 8].some((i) => data[i] === 0x97 && data[i + 1] === 0x47 && data[i + 2] === 0xff)
+  }, [setNow.x + 2, setNow.y])
+  check('バリアントのまとまりを紫の破線で囲む', setPixel)
+
+  // ── プロパティを足す・消す、真偽値のプロパティ ──
+  const selectSet = async () => {
+    const rows = page.locator('.layer-row:has(.layer-name:text-is("Frame 4"))')
+    for (let i = 0; i < (await rows.count()); i++) {
+      await rows.nth(i).click()
+      if ((await page.locator('.properties-panel .section-title:text-is("バリアント")').count()) === 1) return
+    }
+  }
+  const names = async () => { nodes = await nodesOf(); const set = nodes.find((n) => n.id === variantSet.id); return set.children.map((id) => nodes.find((n) => n.id === id).name) }
+  await selectSet()
+  await button('プロパティを追加').click()
+  check('プロパティを足すと、すべてのバリアントの名前に書き足す', (await names()).join('|') === '種類=標準, プロパティ1=標準|種類=押下, プロパティ1=標準', (await names()).join('|'))
+  const propertyName = page.locator('.variant-property input').nth(1)
+  await propertyName.fill('選択'); await propertyName.press('Enter')
+  await page.locator('.layer-row:has(.layer-name:text-is("種類=標準, 選択=標準"))').click()
+  await set('選択', 'false')
+  await page.locator('.layer-row:has(.layer-name:text-is("種類=押下, 選択=標準"))').click()
+  await set('選択', 'true')
+  check('値が true / false だけのプロパティは、バリアントではチェック欄になる', (await page.locator('.check-field:has-text("選択") input').isChecked()) === true)
+  await selectSet()
+  check('まとまりでは、真偽値のプロパティと分かる', (await page.locator('.variant-property .field-label').allTextContents()).join() === '2 値,真偽', (await page.locator('.variant-property .field-label').allTextContents()).join())
+  await button('プロパティを追加').click()
+  await page.locator('[aria-label="プロパティ プロパティ1 を消す"]').click()
+  check('プロパティを消すと、すべてのバリアントの名前から外す', (await names()).join('|') === '種類=標準, 選択=false|種類=押下, 選択=true', (await names()).join('|'))
+  await deselect()
+  await page.mouse.click(...at(425, 318))
+  const toggle = page.locator('.properties-panel .check-field:has-text("選択") input')
+  check('インスタンスでは、真偽値のプロパティをチェック欄で選べる', (await toggle.count()) === 1 && (await toggle.isChecked()) === true)
+  await toggle.uncheck()
+  nodes = await nodesOf()
+  const unchecked = nodes.find((n) => n.name === '種類=標準, 選択=false')
+  check('チェックを外すと、false のバリアントに差し替わる', instances(nodes).find((n) => n.x === 400 && n.y === 300).component.id === unchecked.component.id)
+  await page.screenshot({ path: path.join(OUT, '39-variant-properties.png') })
+
+  // ── 一覧からバリアントを選んで置く ──
+  const setRow = page.locator('.component-row:has(.component-name:text-is("Frame 4"))')
+  await setRow.locator('.component-toggle').click()
+  const variantRows = page.locator('.component-row[data-depth="1"]')
+  check('一覧でまとまりを開くと、バリアントが並ぶ', (await variantRows.locator('.component-name').allTextContents()).join('|') === '種類=標準, 選択=false|種類=押下, 選択=true', (await variantRows.locator('.component-name').allTextContents()).join('|'))
+  const countOf = (componentId) => instances(nodes).filter((n) => n.component.id === componentId).length
+  const pressedNow = nodes.find((n) => n.name === '種類=押下, 選択=true')
+  const placedBefore = countOf(pressedNow.component.id)
+  await variantRows.nth(1).click()
+  nodes = await nodesOf()
+  check('バリアントの行を押すと、そのバリアントのインスタンスを置く', countOf(pressedNow.component.id) === placedBefore + 1)
+  await page.keyboard.press('Meta+z')
+
+  // ── 一覧の検索と並べ替え ──
+  const search = page.locator('[aria-label="コンポーネントを検索"]')
+  const listed = () => page.locator('.component-row .component-name').allTextContents()
+  await search.fill('frame 1')
+  check('名前で絞り込める（大文字と小文字は区別しない）', (await listed()).join() === 'Frame 1', (await listed()).join())
+  await search.fill('true')
+  check('バリアントの名前でも絞り込め、当てはまるものを開いて見せる', (await listed()).join('|') === 'Frame 4|種類=押下, 選択=true', (await listed()).join('|'))
+  await search.fill('ない名前')
+  check('当てはまるものがなければ、そう出す', (await page.locator('.components .panel-hint').textContent()).includes('ない名前'))
+  await search.press('Escape')
+  await setRow.locator('.component-toggle').click()
+  await page.locator('[aria-label="コンポーネントの並べ方"]').selectOption('name')
+  check('名前の順に並べ替えられる', (await listed()).join() === 'Frame 1,Frame 4', (await listed()).join())
+
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
   viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
@@ -236,9 +305,6 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(300)
   await viewer.screenshot({ path: path.join(OUT, '38-viewer-components.png') })
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v8.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 8 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0)
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

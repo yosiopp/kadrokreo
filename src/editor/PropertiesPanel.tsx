@@ -1,5 +1,7 @@
 import { isInstance, owningInstance } from '../document/component.ts'
 import { TYPE_LABELS } from '../ui/labels.ts'
+import { nodeKind } from '../document/path.ts'
+import { overriddenKeys } from './components.ts'
 import { fitTextNodes } from './measure.ts'
 import { type NodePatch, updateNodes } from './operations.ts'
 import { AppearanceSections } from './properties/AppearanceSections.tsx'
@@ -68,12 +70,13 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
     // インスタンス自身は、上書きできる項目に加えて位置・回転・不透明度を持つ
     hasInstance: nodes.some(isInstance),
     inner: nodes.some((node) => owningInstance(page, node.id) !== null),
+    overridden: new Set(nodes.length === 1 ? overriddenKeys(state.document, page, nodes[0].id) : []),
   }
 
   return (
     <aside className="panel properties-panel" aria-label="プロパティ">
       <h2 className="panel-title">
-        {nodes.length === 1 ? TYPE_LABELS[nodes[0].type] : `${nodes.length} 個を選択中`}
+        {nodes.length === 1 ? TYPE_LABELS[nodeKind(nodes[0])] : `${nodes.length} 個を選択中`}
       </h2>
       {ctx.inner ? <InstanceContentSection ctx={ctx} /> : <ArrangeSections ctx={ctx} />}
       <ComponentSections ctx={ctx} />

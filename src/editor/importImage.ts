@@ -6,7 +6,7 @@ import { IMAGE_MIME_TYPES } from '../document/kdr.ts'
 import type { Asset } from '../document/types.ts'
 import { findFrameAt } from './hitTest.ts'
 import { createId, createImage } from './nodes.ts'
-import { addAsset, insertNode, updatePage } from './operations.ts'
+import { addOrReuseAsset, insertNode, updatePage } from './operations.ts'
 import type { EditorStore } from './store.ts'
 
 /** kdr に base64 で埋め込むので、元のファイルの大きさを抑える */
@@ -57,21 +57,19 @@ export function placeImage(store: EditorStore, camera: Camera, image: ImportedIm
   // フレームが回っていても、その中での座標に直して置く
   const local = toLocal(page, parentId, center)
 
-  const assetId = createId()
-  const node = {
-    ...createImage(
-      {
-        x: Math.round(local.x - image.width / 2) + offset,
-        y: Math.round(local.y - image.height / 2) + offset,
-        width: image.width,
-        height: image.height,
-      },
-      assetId,
-    ),
-    name: image.name,
+  const box = {
+    x: Math.round(local.x - image.width / 2) + offset,
+    y: Math.round(local.y - image.height / 2) + offset,
+    width: image.width,
+    height: image.height,
   }
-  store.applyDocument((doc) =>
-    updatePage(addAsset(doc, assetId, image.asset), page.id, (base) => insertNode(base, node, parentId)),
-  )
-  store.select([node.id])
+  let nodeId = ''
+  store.applyDocument((doc) => {
+    // 同じ画像がすでにあれば、新しいアセットを作らずにそれを使う
+    const { document, assetId } = addOrReuseAsset(doc, image.asset, createId)
+    const node = { ...createImage(box, assetId), name: image.name }
+    nodeId = node.id
+    return updatePage(document, page.id, (base) => insertNode(base, node, parentId))
+  })
+  store.select([nodeId])
 }

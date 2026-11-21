@@ -48,6 +48,14 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'dev-mode.kdr')
   await download.saveAs(kdrPath)
+  // 回した図形の計測を確かめるための 2 ページ目: 30° 回した 2 つと、回していない 1 つ（別の kdr に書き出す）
+  await page.locator('[aria-label="ページを追加"]').click()
+  await page.keyboard.press('r'); await drag([100, 100], [200, 150]); await set('回転', 30)
+  await page.keyboard.press('r'); await drag([300, 100], [400, 150]); await set('回転', 30)
+  await page.keyboard.press('r'); await drag([150, 300], [250, 350])
+  const [rotatedDownload] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
+  const rotatedPath = path.join(OUT, 'dev-mode-rotated.kdr')
+  await rotatedDownload.saveAs(rotatedPath)
 
   // ── viewer ──
   const viewer = await context.newPage()
@@ -207,6 +215,30 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.locator('.inspect-layer:has(.layer-name:text-is("Rectangle 1"))').click()
   check('中身のない図形には HTML の欄を出さない', (await htmlSection.count()) === 0)
 
+  // ── コードの形式を切り替える（React の style / CSS Modules / Tailwind） ──
+  const format = panel.locator('select[aria-label="コードの形式"]')
+  const jsxSection = panel.locator('section[aria-label="JSX"]')
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Frame 1"))').click()
+  await format.selectOption('react')
+  const reactJsx = await jsxSection.locator('.inspect-code').first().textContent()
+  check('React（style）にすると、style を付けた JSX のコンポーネントが出て、CSS の欄はない', reactJsx.startsWith('export function Frame1() {\n  return (\n    <div style={{ position: \'relative\'') && reactJsx.includes("<div style={{ position: 'absolute', left: 150, top: 40, width: 80, height: 60") && (await jsxSection.locator('.inspect-code').count()) === 1 && (await htmlSection.count()) === 0, JSON.stringify(reactJsx.slice(0, 160)))
+  check('1 つのノードの欄も style のオブジェクトになる', (await panel.locator('section[aria-label="style"] .inspect-code').textContent()).startsWith("{\n  position: 'relative',"))
+  await jsxSection.locator('button:text-is("JSX をコピー")').click()
+  check('JSX をコピーできる', (await clipboard()) === reactJsx)
+  const [reactFile] = await Promise.all([viewer.waitForEvent('download'), jsxSection.locator('button:text-is("HTML ファイルを保存")').click()])
+  await reactFile.saveAs(path.join(OUT, 'dev-mode-react.html'))
+  check('形式が React でも、保存するファイルは HTML', fs.readFileSync(path.join(OUT, 'dev-mode-react.html'), 'utf8').includes(markupHtml))
+  await format.selectOption('css-modules')
+  const modules = await jsxSection.locator('.inspect-code').allTextContents()
+  check('React（CSS Modules）にすると、styles を読み込む JSX と、そのクラスの CSS が出る', modules.length === 2 && modules[0].startsWith("import styles from './Frame1.module.css'") && modules[0].includes('<div className={styles.rectangle2}></div>') && modules[1].includes('.rectangle2 {\n  position: absolute;'), JSON.stringify(modules[0].slice(0, 120)))
+  await format.selectOption('tailwind')
+  const tailwind = await jsxSection.locator('.inspect-code').allTextContents()
+  check('React（Tailwind）にすると、クラスを並べた JSX が出る', tailwind.length === 1 && tailwind[0].includes('<div className="absolute left-[150px] top-[40px] w-[80px] h-[60px] bg-[#d9d9d9]"></div>'), JSON.stringify(tailwind[0]))
+  check('1 つのノードの欄も Tailwind のクラスになる', (await panel.locator('section[aria-label="Tailwind のクラス"] .inspect-code').textContent()).startsWith('relative w-[400px] h-[300px]'))
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Rectangle 1"))').click()
+  check('選び直しても形式はそのまま', (await panel.locator('section[aria-label="Tailwind のクラス"] .inspect-code').textContent()) === 'absolute left-[30px] top-[40px] w-[60px] h-[60px] bg-[#4f46e5] rounded-[8px]', await panel.locator('.inspect-code').first().textContent())
+  await format.selectOption('html')
+
   // ── フレームの名前のラベルで選ぶ ──
   await viewer.mouse.click(...at(700, 250))
   await viewer.mouse.click(...at(112, 92))
@@ -288,6 +320,23 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   for (const key of ['Backspace', 'ArrowRight', 'Meta+d', 'Meta+z']) await viewer.keyboard.press(key)
   check('選んでいても、キー操作で何も変わらない', (await title()) === 'Rectangle 1' && (await value('位置とサイズ', 'X').textContent()) === '30' && (await tree()).join() === 'Frame 1,Text 1,Rectangle 2,Rectangle 1')
   check('viewer はブラウザに何も保存しない', (await viewer.evaluate(() => localStorage.length)) === 0)
+
+  // ── 回した図形の間隔 ──
+  await viewer.locator('input[type=file]').setInputFiles(rotatedPath)
+  await viewer.locator('[aria-label="ページ"] .list-button:text-is("Page 2")').click()
+  const rotatedLayers = viewer.locator('.inspect-layer')
+  const pickLayers = async (first, second) => {
+    await rotatedLayers.nth(first).click()
+    await viewer.keyboard.down('Shift'); await rotatedLayers.nth(second).click(); await viewer.keyboard.up('Shift')
+  }
+  // 一覧は上から、回していないもの・回した 2 つめ・回した 1 つめ
+  await pickLayers(2, 1)
+  const along = await rows('間隔')
+  check('同じ向きに回した 2 つは、辺に沿って測る', along.includes('測る向き=辺に沿う（30°）') && along.some((row) => row.startsWith('横')), along.join())
+  await viewer.screenshot({ path: path.join(OUT, '45-dev-mode-rotated.png') })
+  await pickLayers(2, 0)
+  const boxed = await rows('間隔')
+  check('向きの違う 2 つは、回した図形を囲む矩形で測る', boxed.includes('測る向き=回した図形は囲む矩形で'), boxed.join())
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

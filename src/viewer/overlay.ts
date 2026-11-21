@@ -1,8 +1,8 @@
 import { OVERLAY_GUIDE, drawBadge, overlayColor, strokePolyline } from '../canvas/overlay.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
-import { type Bounds, type Point, getAbsoluteBounds, getCorners, getNodesBounds, tidy } from '../document/geometry.ts'
+import { type Point, getCorners, getNodesBounds, tidy } from '../document/geometry.ts'
 import type { NodeId, Scene } from '../document/types.ts'
-import { measureBetween } from './distances.ts'
+import { measureCorners } from './distances.ts'
 
 /**
  * 選んでいるノードの枠と大きさ、間隔を、キャンバスに重ねて描く。座標は画面ピクセル。
@@ -40,7 +40,7 @@ export function drawInspectOverlay(
   const bounds = getNodesBounds(scene, selected)!
   const partner = selected.length === 1 ? hovered : selected.length === 2 ? selected[1] : null
   if (partner !== null) {
-    drawDistances(ctx, toScreen, getAbsoluteBounds(scene, selected[0]), getAbsoluteBounds(scene, partner))
+    drawDistances(ctx, toScreen, getCorners(scene, selected[0]), getCorners(scene, partner))
     return
   }
 
@@ -54,14 +54,21 @@ export function drawInspectOverlay(
   drawBadge(ctx, size, { x: bottom.x, y: bottom.y + 17 }, accent)
 }
 
+/**
+ * 2 つの図形の間隔。向きが同じなら辺に沿って、違えば囲む矩形どうしを測る（measureCorners）。
+ * 囲む矩形で測った図形は、その矩形を破線で示す。
+ */
 function drawDistances(
   ctx: CanvasRenderingContext2D,
   toScreen: (point: Point) => Point,
-  from: Bounds,
-  to: Bounds,
+  from: Point[],
+  to: Point[],
 ): void {
-  const distances = measureBetween(from, to)
+  const { distances, outlines } = measureCorners(from, to)
   ctx.strokeStyle = OVERLAY_GUIDE
+  ctx.setLineDash([3, 3])
+  for (const outline of outlines) strokePolyline(ctx, outline.map(toScreen), true)
+  ctx.setLineDash([])
   for (const { from, to, guide } of distances) {
     strokePolyline(ctx, [toScreen(from), toScreen(to)], false)
     if (guide) {

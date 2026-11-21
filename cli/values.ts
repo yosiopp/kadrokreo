@@ -1,13 +1,37 @@
-import type { SceneNode, Shadow } from '../src/document/types.ts'
+import { solid } from '../src/document/paint.ts'
+import type { Effect, SceneNode } from '../src/document/types.ts'
 import type { NodePatch } from '../src/editor/operations.ts'
 import { UsageError } from './args.ts'
 
 // set / add の「名前=値」を、ノードへの patch に直す。
 // 値の型は、そのノードがいま持っている値の型に合わせる（text=123 は文字列のまま）。
-// 入れ子の項目は . でつなぐ（layout.gap=8、shadow.blur=4、layoutFill.width=true）。
+// 入れ子の項目は . でつなぐ（layout.gap=8、sizing.width=fill）。配列の要素は番号でつなぐ（effects.0.blur=4）。
+// よく使うものには略記がある: fill=色 / stroke=色（単色 1 つの塗り・線にする。null で外す）、
+// shadow.blur=4 など（最初の影。なければ既定の影を付けてから変える）、shadow=null（影を外す）。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
 
-const DEFAULT_SHADOW: Shadow = { x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 }
+const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 }
+
+/** 略記を、本来の項目の「名前=値」に直す。直せないもの（そのノードにない項目）はそのまま返す */
+function expandShorthand(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): [string, unknown] | null {
+  const [head, ...rest] = path.split('.')
+  if ((head === 'fill' || head === 'stroke') && rest.length === 0) {
+    const key = head === 'fill' ? 'fills' : 'strokes'
+    if (!Object.hasOwn(node, key)) return null
+    const color = raw === 'null' ? null : raw
+    return [key, solid(color)]
+  }
+  if (head === 'shadow' && Object.hasOwn(node, 'effects')) {
+    if (rest.length === 0) {
+      if (raw !== 'null') throw new UsageError(`${path}: shadow は null（外す）か shadow.blur=4 のように指定してください`)
+      return ['effects', []]
+    }
+    const current = (Object.hasOwn(draft, 'effects') ? draft.effects : (node as { effects: Effect[] }).effects) as Effect[]
+    const first = structuredClone(current[0] ?? DEFAULT_SHADOW) as unknown as Record<string, unknown>
+    return ['effects', [setIn(first, rest, raw, path), ...current.slice(1)]]
+  }
+  return null
+}
 
 /** そのノードの種類が持たない項目や、木構造に関わる項目は変えられない */
 const READONLY = new Set(['id', 'type', 'parentId', 'children', 'component'])
@@ -42,6 +66,11 @@ export function buildPatch(node: SceneNode, assignments: readonly [string, strin
   const draft: Record<string, unknown> = {}
   const source = node as unknown as Record<string, unknown>
   for (const [path, raw] of assignments) {
+    const shorthand = expandShorthand(node, path, raw, draft)
+    if (shorthand) {
+      draft[shorthand[0]] = shorthand[1]
+      continue
+    }
     const [head, ...rest] = path.split('.')
     if (READONLY.has(head)) throw new UsageError(`${path} は set では変えられません`)
     if (!Object.hasOwn(source, head)) throw new UsageError(`${node.type} には ${head} がありません`)
@@ -50,8 +79,7 @@ export function buildPatch(node: SceneNode, assignments: readonly [string, strin
       continue
     }
     // 入れ子: いまの値（同じコマンドで先に変えたものを含む）を写して、その中を変える
-    let base = (Object.hasOwn(draft, head) ? draft[head] : source[head]) as unknown
-    if (base === null && head === 'shadow') base = DEFAULT_SHADOW
+    const base = (Object.hasOwn(draft, head) ? draft[head] : source[head]) as unknown
     if (base === null || typeof base !== 'object') {
       throw new UsageError(
         head === 'layout' ? `${path}: 先に auto-layout で自動で並べるようにしてください` : `${path}: ${head} が空です`,

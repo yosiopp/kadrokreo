@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
 import { gzipSync, gunzipSync } from 'node:zlib'
-import { join } from 'node:path'
 import { KDR_VERSION, decodeKdr } from '../src/document/kdr.ts'
 import type { DesignDocument, FrameNode, TextNode } from '../src/document/types.ts'
 import { type IO, run } from './run.ts'
@@ -70,9 +68,9 @@ describe('kadrokreo CLI', () => {
     const doc = await h.doc('out.kdr')
     expect(doc.name).toBe('Demo')
     const card = doc.pages[0].nodes.card as FrameNode
-    expect(card).toMatchObject({ type: 'frame', width: 320, fill: '#f5f5ff', cornerRadius: 12 })
+    expect(card).toMatchObject({ type: 'frame', width: 320, fills: [{ type: 'solid', color: '#f5f5ff' }], cornerRadius: 12 })
     const btn = nodeByName(doc, 'Btn')
-    expect(btn).toMatchObject({ parentId: 'card', x: 16, y: 60, fill: '#5b4cf5' })
+    expect(btn).toMatchObject({ parentId: 'card', x: 16, y: 60, fills: [{ type: 'solid', color: '#5b4cf5' }] })
     expect(card.children).toEqual([btn.id])
   })
 
@@ -85,7 +83,7 @@ describe('kadrokreo CLI', () => {
     const second = harness({}, { stdin: piped })
     expect(await second.run(argv('set Box fill=#ff0000 width=50'))).toBe(0)
     const third = harness({}, { stdin: second.stdoutBytes! })
-    expect(await third.run(argv('get Box fill'))).toBe(0)
+    expect(await third.run(argv('get Box fills.0.color'))).toBe(0)
     expect(third.stdout).toBe('#ff0000\n')
     // 調べるだけなら kdr は出さない
     expect(third.stdoutBytes).toBeNull()
@@ -122,9 +120,9 @@ describe('kadrokreo CLI', () => {
     const h = harness()
     await h.run(['new', '+', 'add', 'text', '--text', 'あいう', 'fontSize=20', '+', 'add', 'text', '--name', 'Wrap', '--width', '50', '--text', 'あいうえおかきくけこ', '-o', 'a.kdr'])
     const doc = await h.doc('a.kdr')
-    expect(nodeByName(doc, 'Text')).toMatchObject({ autoWidth: true, width: 60, height: 24 })
+    expect(nodeByName(doc, 'Text')).toMatchObject({ sizing: { width: 'hug' }, width: 60, height: 24 })
     // 1 行に 3 文字（16px × 3 = 48 ≦ 50）で 4 行
-    expect(nodeByName(doc, 'Wrap')).toMatchObject({ autoWidth: false, width: 50, height: Math.ceil(4 * 16 * 1.2) })
+    expect(nodeByName(doc, 'Wrap')).toMatchObject({ sizing: { width: 'fixed' }, width: 50, height: Math.ceil(4 * 16 * 1.2) })
     // 文字を変えると測り直す
     await h.run(['-f', 'a.kdr', '-w', 'set', 'Text', 'text=あいうえお'])
     expect(nodeByName(await h.doc('a.kdr'), 'Text').width).toBe(100)
@@ -141,11 +139,74 @@ describe('kadrokreo CLI', () => {
     expect(h.stderr).toBe('')
     expect(code).toBe(0)
     const doc = await h.doc('a.kdr')
-    expect(nodeByName(doc, 'Line')).toMatchObject({ x: 0, y: 0, width: 100, height: 50, direction: 'up', flipped: true, endCap: 'arrow' })
+    // 直線は 2 つの頂点の開いたパス。--from が始点
+    expect(nodeByName(doc, 'Line')).toMatchObject({ type: 'path', x: 0, y: 0, width: 100, height: 50, points: [{ x: 1, y: 0 }, { x: 0, y: 1 }], endCap: 'arrow' })
     expect(nodeByName(doc, 'Path')).toMatchObject({ width: 100, height: 80, closed: true, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 1 }] })
     const image = nodeByName(doc, 'Image')
     expect(image).toMatchObject({ width: 20, height: 10 })
     expect(Object.values(doc.assets)).toEqual([{ mime: 'image/png', data: Buffer.from(png).toString('base64') }])
+
+    // 同じ画像をもう一度足しても、アセットは 1 つのまま
+    await h.run(['-f', 'a.kdr', '-w', 'add', 'image', '--src', 'a.png', '--name', 'Again'])
+    const again = await h.doc('a.kdr')
+    expect(Object.keys(again.assets)).toEqual(Object.keys(doc.assets))
+    expect(nodeByName(again, 'Again')).toMatchObject({ type: 'image', assetId: image.type === 'image' ? image.assetId : '' })
+  })
+
+  it('曲線のパスを SVG の path の d で作り、d で読み出す。制御点は set でも書ける', async () => {
+    const h = harness()
+    const code = await h.run(['new', '+', 'add', 'path', '--name', 'Arch', '--d', 'M10 110 C10 10 110 10 110 110', '-o', 'a.kdr'])
+    expect(h.stderr).toBe('')
+    expect(code).toBe(0)
+    const doc = await h.doc('a.kdr')
+    // 枠は制御点でなく曲線そのもの（いちばん上は y = 35）を囲む
+    const arch = nodeByName(doc, 'Arch')
+    expect(arch).toMatchObject({ type: 'path', x: 10, y: 35, width: 100, height: 75, closed: false })
+    expect(arch.type === 'path' && arch.points[0].out).toEqual({ x: 0, y: -100 / 75 })
+
+    const read = harness({ 'a.kdr': h.fs.get('a.kdr')! })
+    await read.run(['-f', 'a.kdr', 'get', 'Arch', 'd'])
+    expect(read.stdout.trim()).toBe('M10 110 C10 10 110 10 110 110')
+
+    // 円弧と Z の閉じた形も作れる
+    await read.run(['-f', 'a.kdr', '-w', 'add', 'path', '--name', 'Circle', '--d', 'M0 50 A50 50 0 1 1 100 50 A50 50 0 1 1 0 50 Z'])
+    const circle = nodeByName(await read.doc('a.kdr'), 'Circle')
+    expect(circle).toMatchObject({ closed: true, x: 0, y: 0 })
+    expect(circle.width).toBeCloseTo(100, 1)
+
+    // 制御点は頂点からのずれ（枠に対する割合）で、set の . つなぎで書ける
+    expect(await read.run(['-f', 'a.kdr', '-w', 'set', 'Arch', 'points.1.in.y=-1'])).toBe(0)
+    const edited = nodeByName(await read.doc('a.kdr'), 'Arch')
+    expect(edited.type === 'path' && edited.points[1].in).toEqual({ x: 0, y: -1 })
+
+    const bad = harness()
+    expect(await bad.run(['new', '+', 'add', 'path', '--d', 'M0 0 C1 1'])).not.toBe(0)
+    expect(bad.stderr).toContain('C の数値が足りません')
+    expect(await bad.run(['new', '+', 'add', 'path', '--d', 'M0 0 L1 1 M2 2 L3 3'])).not.toBe(0)
+    expect(bad.stderr).toContain('輪郭')
+  })
+
+  it('svg で SVG を図形のノードに変換して置き、落としたものを標準エラーに出す', async () => {
+    const svg = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 50 25">' +
+        '<script>alert(1)</script><g id="shapes" filter="url(#f)"><rect id="box" width="10" height="10" fill="#ff0000"/>' +
+        '<path d="M20 0 Q30 20 40 0"/></g></svg>',
+    )
+    const h = harness({ 'icons/logo.svg': svg })
+    expect(await h.run(argv('new + add frame --id card --width 400 --height 300 + svg icons/logo.svg --parent card --x 10 --y 20 + set @ opacity=0.5 -o out.kdr'))).toBe(0)
+    expect(h.stderr).toContain('スクリプト（<script>）')
+    expect(h.stderr).toContain('フィルタ')
+    const doc = await h.doc('out.kdr')
+    const root = nodeByName(doc, 'logo') as FrameNode
+    expect(root).toMatchObject({ type: 'frame', parentId: 'card', x: 10, y: 20, width: 100, height: 50, opacity: 0.5 })
+    const group = nodeByName(doc, 'shapes') as FrameNode
+    expect(group.parentId).toBe(root.id)
+    expect(nodeByName(doc, 'box')).toMatchObject({ type: 'rect', width: 20, height: 20, parentId: group.id })
+    expect(Object.values(doc.pages[0].nodes).some((node) => node.type === 'path' && node.points[0].out !== undefined)).toBe(true)
+
+    const bad = harness({ 'x.svg': new TextEncoder().encode('<svg><g></svg>') })
+    expect(await bad.run(argv('new + svg x.svg -o out.kdr'))).not.toBe(0)
+    expect(bad.stderr).toContain('x.svg')
   })
 
   it('オートレイアウトとまとめる操作は editor と同じく並べ直す', async () => {
@@ -174,7 +235,7 @@ describe('kadrokreo CLI', () => {
     expect(h.stderr).toBe('')
     const doc = await h.doc('a.kdr')
     const instance = doc.pages[1].nodes.b2 as FrameNode
-    expect(instance).toMatchObject({ x: 200, fill: '#123456' })
+    expect(instance).toMatchObject({ x: 200, fills: [{ type: 'solid', color: '#123456' }] })
     expect(instance.component?.role).toBe('instance')
     const label = doc.pages[1].nodes[instance.children[0]] as TextNode
     expect(label.text).toBe('Cancel')
@@ -196,14 +257,14 @@ describe('kadrokreo CLI', () => {
     expect(page.nodes.r).toBeUndefined()
   })
 
-  it('kdr v14 の折り返し・行の間隔・大きさの下限と上限を設定でき、editor と同じく並べ直す', async () => {
+  it('折り返し・行の間隔・大きさの決め方・下限と上限を設定でき、editor と同じく並べ直す', async () => {
     const h = harness()
     await h.run(argv(
       'new + add frame --name Tags --id tags --width 100 --height 10' +
         ' + add rect --name A --parent tags --width 40 --height 20' +
         ' + add rect --name B --parent tags --width 40 --height 20' +
         ' + add rect --name C --parent tags --width 40 --height 20' +
-        ' + auto-layout tags padding=0 gap=8 wrap=true crossGap=6 widthMode=fixed + set tags width=100 -o a.kdr',
+        ' + auto-layout tags padding=0 gap=8 wrap=true crossGap=6 sizing.width=fixed + set tags width=100 -o a.kdr',
     ))
     const doc = await h.doc('a.kdr')
     expect(doc.pages[0].nodes.tags).toMatchObject({ width: 100, height: 20 + 6 + 20, layout: { wrap: true, crossGap: 6 } })
@@ -219,6 +280,28 @@ describe('kadrokreo CLI', () => {
 
     expect(await h.run(argv('-f a.kdr -w set A minWidth=-1'))).toBe(1)
     expect(h.stderr).toMatch(/^kdr: set: .*minWidth/)
+  })
+
+  it('親の辺への固定・折り返した行の配置・テキストの幅の上限を設定できる', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add frame --name Card --id card --width 200 --height 100' +
+        ' + add rect --name Badge --id badge --parent card --x 150 --y 10 --width 30 --height 20' +
+        ' + set badge constraints.horizontal=end + set card width=300 -o a.kdr',
+    ))
+    const doc = await h.doc('a.kdr')
+    expect(doc.pages[0].nodes.badge).toMatchObject({ x: 250, constraints: { horizontal: 'end', vertical: 'start' } })
+    expect(await h.run(argv('-f a.kdr -w set badge constraints.vertical=bottom'))).toBe(1)
+    expect(h.stderr).toMatch(/constraints\.vertical/)
+
+    await h.run(argv('-f a.kdr -w auto-layout card wrap=true alignContent=space-between'))
+    expect((await h.doc('a.kdr')).pages[0].nodes.card).toMatchObject({ layout: { wrap: true, alignContent: 'space-between' } })
+
+    // 中身に合わせるテキストは、上限を超えると折り返して高さが増える
+    await h.run(argv('-f a.kdr -w add text --name Label --id label --text あいうえおかきくけこさしすせそ + set label maxWidth=60'))
+    const label = (await h.doc('a.kdr')).pages[0].nodes.label
+    expect(label.width).toBeLessThanOrEqual(60)
+    expect(label.height).toBeGreaterThan(30)
   })
 
   it('壊れた値は書き出さず、どのコマンドかを添えてエラーにする', async () => {
@@ -268,11 +351,36 @@ describe('kadrokreo CLI', () => {
     expect(await h.run(argv('-f bad2.kdr info'))).toBe(1)
   })
 
-  it('古い版の kdr を読み、-o で今の版に書き直せる', async () => {
-    const fixture = readFileSync(join(import.meta.dirname, '../e2e/fixtures/sample-v1.kdr'))
-    const h = harness({ 'old.kdr': new Uint8Array(fixture) })
-    expect(await h.run(argv('-f old.kdr -o new.kdr'))).toBe(0)
-    expect(JSON.parse(gunzipSync(h.fs.get('new.kdr')!).toString()).version).toBe(KDR_VERSION)
+  it('古い版の kdr は読まず、エラーにする', async () => {
+    const old = gzipSync(JSON.stringify({ format: 'kadrokreo', version: KDR_VERSION - 1, document: { name: 'x', pages: [], assets: {} } }))
+    const h = harness({ 'old.kdr': new Uint8Array(old) })
+    expect(await h.run(argv('-f old.kdr -o new.kdr'))).toBe(1)
+    expect(h.stderr).toMatch(/古いバージョン/)
+    expect(h.fs.has('new.kdr')).toBe(false)
+  })
+
+  it('塗り・線・影は略記でも、配列のまま JSON でも書ける。書き出す kdr は既定値を省く', async () => {
+    const h = harness()
+    await h.run([
+      'new', '+', 'add', 'rect', '--name', 'Box', 'stroke=#112233', 'strokeWidth=2', 'shadow.blur=4',
+      '+', 'add', 'ellipse', '--name', 'Dot', 'fills=[{"type":"linear","angle":0,"stops":[{"offset":0,"color":"#000000"},{"offset":1,"color":"#ffffff"}]}]',
+      '-o', 'a.kdr',
+    ])
+    expect(h.stderr).toBe('')
+    const doc = await h.doc('a.kdr')
+    expect(nodeByName(doc, 'Box')).toMatchObject({
+      strokes: [{ type: 'solid', color: '#112233' }],
+      strokeWidth: 2,
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25 }],
+    })
+    expect(nodeByName(doc, 'Dot')).toMatchObject({ fills: [{ type: 'linear', angle: 0 }] })
+    await h.run(argv('-f a.kdr -w set Box fill=null shadow=null'))
+    expect(nodeByName(await h.doc('a.kdr'), 'Box')).toMatchObject({ fills: [], effects: [] })
+    const file = JSON.parse(gunzipSync(h.fs.get('a.kdr')!).toString())
+    const box = file.document.pages[0].children.find((node: { name: string }) => node.name === 'Box')
+    expect(box).not.toHaveProperty('fills')
+    expect(box).not.toHaveProperty('rotation')
+    expect(box).not.toHaveProperty('parentId')
   })
 
   it('--help と help コマンド', async () => {

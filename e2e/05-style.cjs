@@ -1,10 +1,9 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
+const { lineDirection } = require('./kdr.cjs')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
 require('fs').mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -60,11 +59,11 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   // 右端をつかんで下へ
   await drag([300, 80], [300, 180])
   let line = await byName('Line 1')
-  check('端をつかんで向きを変えられる', line.width === 200 && line.height === 100 && line.direction === 'down' && line.strokeWidth === 4, JSON.stringify(line))
+  check('端をつかんで向きを変えられる', line.width === 200 && line.height === 100 && lineDirection(line) === 'down' && line.strokeWidth === 4, JSON.stringify(line))
   // 左端を右端より右下へ → 向きが入れ替わっても形が保たれる
   await drag([100, 80], [400, 80])
   line = await byName('Line 1')
-  check('反対側へ引くと向きが反転する', line.x === 300 && line.width === 100 && line.height === 100 && line.direction === 'up', JSON.stringify(line))
+  check('反対側へ引くと向きが反転する', line.x === 300 && line.width === 100 && line.height === 100 && lineDirection(line) === 'up', JSON.stringify(line))
   // 線の上をクリックすると選べ、線から離れた枠内では選べない
   await page.mouse.click(...at(700, 500))
   await page.mouse.click(...at(350, 130))
@@ -80,7 +79,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await set('ぼかし', 30)
   await set('濃さ', 40)
   const frame = await byName('Frame 1')
-  check('フレームに角丸と影', frame.cornerRadius === 24 && frame.shadow && frame.shadow.blur === 30 && frame.shadow.opacity === 0.4, JSON.stringify(frame.shadow))
+  check('フレームに角丸と影', frame.cornerRadius === 24 && frame.effects.length === 1 && frame.effects[0].blur === 30 && frame.effects[0].opacity === 0.4, JSON.stringify(frame.effects))
   await page.mouse.click(...at(700, 500))
   const corner = await pixel(82, 242)
   check('角丸の外はフレームの色で塗られない', corner[3] < 128, corner.join())
@@ -131,8 +130,8 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'style.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
-  check('kdr は version 13', json.version === 14)
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
+  check('kdr は version 15', json.version === 15)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -142,12 +141,6 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(400)
   await viewer.screenshot({ path: path.join(OUT, '17-viewer-style.png') })
-  for (const [file, label] of [['sample-v1.kdr', 'version 1'], ['sample-v2.kdr', 'version 2'], ['sample-v3.kdr', 'version 3']]) {
-    await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, file))
-    await viewer.waitForTimeout(500)
-    check(`${label} の kdr も開ける`, (await viewer.locator('.app-message').count()) === 0)
-  }
-  await viewer.screenshot({ path: path.join(OUT, '18-viewer-v2.png') })
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

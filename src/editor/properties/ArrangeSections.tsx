@@ -1,11 +1,14 @@
-import { sizeLimited } from '../../document/autoLayout.ts'
+import { isLine } from '../../document/path.ts'
+import { followsConstraints, sizeLimited } from '../../document/autoLayout.ts'
 import { normalizeAngle } from '../../document/geometry.ts'
 import { AlignIcon } from '../icons.tsx'
 import { setLayoutFill, setLayoutPositioning } from '../layout.ts'
 import { fitTextNodes } from '../measure.ts'
-import { type Alignment, alignNodes, distributeNodes, setSize } from '../operations.ts'
+import { type Alignment, alignNodes, distributeNodes, patchNodes, setSize } from '../operations.ts'
 import { type PanelContext, textsIn, common, mapValue } from './context.ts'
-import { CheckField, NumberField, Section } from './fields.tsx'
+import { CheckField, NumberField, Section, SelectField } from './fields.tsx'
+import { CONSTRAINT_LABELS, optionsOf } from '../../ui/labels.ts'
+import type { Constraint } from '../../document/types.ts'
 
 const ALIGNMENTS: { alignment: Alignment; label: string }[] = [
   { alignment: 'left', label: '左揃え' },
@@ -41,9 +44,15 @@ export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
     width: nodes.every((node) => sizeLimited(page, node).width),
     height: nodes.every((node) => sizeLimited(page, node).height),
   }
+  // 親の辺への追従は、並べないフレームの子と、並びから外した子だけが持つ
+  const constrained = nodes.every((node) => followsConstraints(node.parentId === null ? undefined : page.nodes[node.parentId], node))
+  const setConstraint = (axis: 'horizontal' | 'vertical', value: Constraint) =>
+    store.apply((base) =>
+      patchNodes(base, selection, (node) => ({ constraints: { ...node.constraints, [axis]: value } })),
+    )
   const hasText = textsIn(nodes).length > 0
   // 直線は水平・垂直にできるよう、幅や高さが 0 でもよい
-  const minSize = nodes.some((node) => node.type === 'line') ? 0 : 1
+  const minSize = nodes.some(isLine) ? 0 : 1
   // 1 つだけのときは親フレームに揃えるので、ページ直下では揃える先がない
   const canAlign = nodes.length > 1 || nodes[0].parentId !== null
 
@@ -127,18 +136,35 @@ export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
         </Section>
       )}
 
+      {constrained && (
+        <Section title="親の辺に固定">
+          <div className="field-grid">
+            {(['horizontal', 'vertical'] as const).map((axis) => (
+              <SelectField
+                key={axis}
+                label={axis === 'horizontal' ? '横' : '縦'}
+                value={common(nodes.map((n) => n.constraints[axis]))}
+                options={optionsOf(CONSTRAINT_LABELS[axis])}
+                onChange={(value: Constraint) => setConstraint(axis, value)}
+              />
+            ))}
+          </div>
+          <p className="section-note">親の大きさを変えたとき、選んだ辺からの距離を保ちます。</p>
+        </Section>
+      )}
+
       {inLayout && nodes.every((n) => n.layoutPositioning === 'auto') && (
         <Section title="親いっぱいに伸ばす">
           <div className="button-row">
             <CheckField
               label="幅"
-              value={common(nodes.map((n) => n.layoutFill.width))}
+              value={common(nodes.map((n) => n.sizing.width === 'fill'))}
               onChange={(checked) => store.apply((base) => setLayoutFill(base, selection, 'width', checked))}
             />
             {!hasText && (
               <CheckField
                 label="高さ"
-                value={common(nodes.map((n) => n.layoutFill.height))}
+                value={common(nodes.map((n) => n.sizing.height === 'fill'))}
                 onChange={(checked) => store.apply((base) => setLayoutFill(base, selection, 'height', checked))}
               />
             )}

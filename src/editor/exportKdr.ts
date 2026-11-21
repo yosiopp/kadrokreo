@@ -1,17 +1,11 @@
-import {
-  KDR_EXTENSION,
-  KDR_FORMAT,
-  KDR_MAX_BYTES,
-  KDR_VERSION,
-  KdrError,
-} from '../document/kdr.ts'
+import { KDR_EXTENSION, KDR_MAX_BYTES, KdrError, kdrFile } from '../document/kdr.ts'
 import type { DesignDocument } from '../document/types.ts'
 import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { pruneAssets } from './operations.ts'
 
 /** kdr ファイルの中身（圧縮前の JSON）。削除済みの画像のデータは含めない */
 function serializeKdr(doc: DesignDocument): string {
-  return JSON.stringify({ format: KDR_FORMAT, version: KDR_VERSION, document: pruneAssets(doc) })
+  return JSON.stringify(kdrFile(pruneAssets(doc)))
 }
 
 export async function encodeKdr(doc: DesignDocument): Promise<Blob> {

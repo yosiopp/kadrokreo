@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import type { LineNode } from '../document/types.ts'
+import { solid } from '../document/paint.ts'
+import type { PathNode } from '../document/types.ts'
 import { inspectPage, summarizePage } from './summary.ts'
 import { base, frame, rect, sceneOf, text } from '../document/testNodes.ts'
 
 describe('summarizePage', () => {
   it('塗りと線の色を、使われている数の多い順に数える', () => {
     const scene = sceneOf(
-      rect({ id: 'a', fill: '#FF0000' }),
-      rect({ id: 'b', fill: '#ff0000', stroke: '#0000ff', strokeWidth: 2 }),
-      rect({ id: 'c', fill: null, stroke: '#00ff00', strokeWidth: 1 }),
-      text({ id: 't', fill: '#0000ff' }),
+      rect({ id: 'a', fills: solid('#FF0000') }),
+      rect({ id: 'b', fills: solid('#ff0000'), strokes: solid('#0000ff'), strokeWidth: 2 }),
+      rect({ id: 'c', fills: [], strokes: solid('#00ff00'), strokeWidth: 1 }),
+      text({ id: 't', fills: solid('#0000ff') }),
     )
     expect(summarizePage(scene).colors).toEqual([
       { color: '#0000ff', count: 2, nodes: ['b', 't'] },
@@ -18,21 +19,26 @@ describe('summarizePage', () => {
     ])
   })
 
-  it('グラデーションは各色を数え、隠れている塗りの色は数えない。太さ 0 の線も数えない', () => {
-    const gradient = { angle: 0, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }] }
-    const scene = sceneOf(rect({ fill: '#ff0000', fillGradient: gradient, stroke: '#333333', strokeWidth: 0 }))
+  it('グラデーションは各色を数える。太さ 0 の線は数えない', () => {
+    const gradient = { type: 'linear' as const, angle: 0, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }] }
+    const scene = sceneOf(rect({ fills: [gradient], strokes: solid('#333333'), strokeWidth: 0 }))
     expect(summarizePage(scene).colors.map((use) => use.color)).toEqual(['#111111', '#222222'])
   })
 
   it('直線の色を数える。画像には色がない', () => {
-    const line: LineNode = {
+    const line: PathNode = {
       ...base,
       id: 'line',
-      type: 'line',
-      stroke: '#abcdef',
+      type: 'path',
+      fills: [],
+      strokes: solid('#abcdef'),
       strokeWidth: 2,
-      direction: 'down',
-      flipped: false,
+      effects: [],
+      points: [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      closed: false,
       startCap: 'none',
       endCap: 'none',
     }
@@ -41,13 +47,13 @@ describe('summarizePage', () => {
   })
 
   it('塗りと線に同じ色を使ったノードは、2 か所と数えるが、ノードは 1 つ', () => {
-    const scene = sceneOf(rect({ fill: '#123456', stroke: '#123456', strokeWidth: 1 }))
+    const scene = sceneOf(rect({ fills: solid('#123456'), strokes: solid('#123456'), strokeWidth: 1 }))
     expect(summarizePage(scene).colors).toEqual([{ color: '#123456', count: 2, nodes: ['rect'] }])
   })
 
   it('非表示のものと、その中身は数えない', () => {
     const scene = sceneOf(
-      frame({ fill: '#ffffff', visible: false, children: ['rect'] }),
+      frame({ fills: solid('#ffffff'), visible: false, children: ['rect'] }),
       rect({ parentId: 'frame' }),
       text({ visible: false }),
     )
@@ -85,11 +91,11 @@ describe('inspectPage', () => {
   })
 
   it('影は、同じものをまとめて CSS の値で出す。単位と色の書き方に従う', () => {
-    const shadow = { x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25 }
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25 }
     const scene = sceneOf(
-      rect({ id: 'a', fill: null, shadow }),
-      rect({ id: 'b', fill: null, shadow: { ...shadow } }),
-      rect({ id: 'c', fill: null, shadow: { ...shadow, blur: 16 } }),
+      rect({ id: 'a', fills: [], effects: [shadow] }),
+      rect({ id: 'b', fills: [], effects: [{ ...shadow }] }),
+      rect({ id: 'c', fills: [], effects: [{ ...shadow, blur: 16 }] }),
     )
     expect(inspectPage(scene)).toEqual([
       {
@@ -100,7 +106,7 @@ describe('inspectPage', () => {
         ],
       },
     ])
-    const rem = inspectPage(scene, { unit: 'rem', remBase: 16, color: 'hsl' })
+    const rem = inspectPage(scene, { unit: 'rem', remBase: 16, color: 'hsl', format: 'html' })
     expect(rem[0].rows[0].value).toBe('0 0.125rem 0.25rem hsla(0, 0%, 0%, 0.25)')
   })
 

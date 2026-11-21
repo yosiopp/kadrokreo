@@ -83,10 +83,10 @@ function check(name, condition, detail = '') {
   // 色の変更
   await page.locator('.color-field input[type=color]').first().fill('#ff3366')
   await page.waitForTimeout(700)
-  check('塗りの色が変わる', (await byName('Rectangle 1')).fill === '#ff3366')
+  check('塗りの色が変わる', (await byName('Rectangle 1')).fills[0].color === '#ff3366')
   await page.keyboard.press('Meta+z')
   await page.waitForTimeout(700)
-  check('色の変更は undo 1 回で戻る', (await byName('Rectangle 1')).fill === '#d9d9d9', (await byName('Rectangle 1')).fill)
+  check('色の変更は undo 1 回で戻る', (await byName('Rectangle 1')).fills[0].color === '#d9d9d9', JSON.stringify((await byName('Rectangle 1')).fills))
   await page.keyboard.press('Meta+Shift+z')
 
   // 線を有効にして太さを変える
@@ -97,7 +97,7 @@ function check(name, condition, detail = '') {
   await field('半径').press('Enter')
   await page.waitForTimeout(700)
   const styled = await byName('Rectangle 1')
-  check('線・太さ・角丸が反映', styled.stroke === '#000000' && styled.strokeWidth === 4 && styled.cornerRadius === 12, JSON.stringify(styled))
+  check('線・太さ・角丸が反映', styled.strokes[0].color === '#000000' && styled.strokeWidth === 4 && styled.cornerRadius === 12, JSON.stringify(styled))
 
   // コピー & ペースト
   await page.mouse.click(...at(470, 160))
@@ -185,7 +185,7 @@ function check(name, condition, detail = '') {
   await page.screenshot({ path: path.join(OUT, '6-more.png') })
 
   // editor で kdr を開く
-  await page.locator('input[type=file][accept=".kdr"]').setInputFiles(path.join(OUT, 'sample.kdr'))
+  await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(path.join(OUT, 'sample.kdr'))
   await page.waitForFunction(() => document.querySelector('.document-name').value === 'テスト デザイン')
   check('editor でも kdr を開ける', (await layers()).length === 4, (await layers()).join())
   check('開いた直後は undo できない', await page.locator('[aria-label="元に戻す"]').isDisabled())

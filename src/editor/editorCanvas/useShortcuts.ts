@@ -15,6 +15,7 @@ import {
   translateNodes,
 } from '../operations.ts'
 import type { EditorStore } from '../store.ts'
+import { isSvgFile, looksLikeSvg } from '../importSvg.ts'
 import type { Tool } from '../tools.ts'
 import { nextName } from './handles.ts'
 
@@ -25,6 +26,8 @@ type Options = {
   dragging: () => boolean
   /** Esc（ペンで描いている途中なら Enter も）を押した。扱ったら true を返す */
   onCancelKey: (key: string) => boolean
+  /** Delete / Backspace を押した。ノードの削除より先に呼ぶ（パスの頂点の削除など）。扱ったら true を返す */
+  onDeleteKey: () => boolean
   /** 選択中のうち、インスタンスの中身（写し）でないもの */
   ownIds: () => NodeId[]
   /** 選択中のうち動かせるもの */
@@ -34,6 +37,8 @@ type Options = {
   editText: (id: NodeId) => void
   /** クリップボードから画像が貼り付けられた */
   onPasteImages: (files: File[]) => void
+  /** クリップボードの文字が SVG の文書のとき */
+  onPasteSvg: (text: string) => void
 }
 
 const TOOL_KEYS: Record<string, Tool> = {
@@ -154,7 +159,9 @@ export function useShortcuts(options: Options) {
     } else if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)
     else if (Object.hasOwn(TOOL_KEYS, key)) options.onToolChange(TOOL_KEYS[key])
-    else if (key === 'delete' || key === 'backspace') remove()
+    else if (key === 'delete' || key === 'backspace') {
+      if (!options.onDeleteKey()) remove()
+    }
     else if (key === ']') reorder('front')
     else if (key === '[') reorder('back')
     else if (key === 'arrowleft') nudge(-step, 0)
@@ -184,10 +191,13 @@ export function useShortcuts(options: Options) {
 
   function onPaste(event: ClipboardEvent) {
     if (isTextInput(event.target) || dragging()) return
-    const images = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'))
+    const images = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/') || isSvgFile(file))
     event.preventDefault()
+    const text = event.clipboardData?.getData('text/plain') ?? ''
     if (images.length > 0) {
       options.onPasteImages(images)
+    } else if (looksLikeSvg(text)) {
+      options.onPasteSvg(text)
     } else if (clipboardRef.current) {
       const clipboard = clipboardRef.current
       clipboard.pastes += 1

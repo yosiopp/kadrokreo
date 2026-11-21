@@ -1,10 +1,8 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
 fs.mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -52,7 +50,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await row('Frame 1').click()
   await page.locator('label:has-text("中身を自動で並べる") input').check()
   let n = await nodesByName()
-  check('いまの並びから向き・間隔・余白を決める', JSON.stringify(n['Frame 1'].layout) === JSON.stringify({ direction: 'horizontal', gap: 30, paddingTop: 40, paddingRight: 130, paddingBottom: 80, paddingLeft: 30, align: 'start', justify: 'start', widthMode: 'hug', heightMode: 'hug', wrap: false, crossGap: 30 }), JSON.stringify(n['Frame 1'].layout))
+  check('いまの並びから向き・間隔・余白を決める', JSON.stringify(n['Frame 1'].layout) === JSON.stringify({ direction: 'horizontal', gap: 30, paddingTop: 40, paddingRight: 130, paddingBottom: 80, paddingLeft: 30, align: 'start', justify: 'start', wrap: false, crossGap: 30, alignContent: 'auto' }) && n['Frame 1'].sizing.width === 'hug' && n['Frame 1'].sizing.height === 'hug', JSON.stringify(n['Frame 1'].layout))
   check('見た目の位置もフレームの大きさも変わらない', n['Rectangle 1'].x === 30 && n['Rectangle 2'].x === 120 && n['Rectangle 3'].x === 230 && n['Frame 1'].width === 400 && n['Frame 1'].height === 200, `${n['Rectangle 2'].x}, ${n['Rectangle 3'].x}, ${n['Frame 1'].width}x${n['Frame 1'].height}`)
   check('レイヤー一覧は並び順のまま（先頭が上）', (await layers()).join() === 'Frame 1,Rectangle 1,Rectangle 2,Rectangle 3', (await layers()).join())
 
@@ -95,7 +93,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await row('Frame 1').click()
   await set('W', 500)
   n = await nodesByName()
-  check('幅を数値で指定すると固定になる', n['Frame 1'].layout.widthMode === 'fixed' && n['Frame 1'].width === 500 && (await select('幅').inputValue()) === 'fixed', JSON.stringify(n['Frame 1'].layout))
+  check('幅を数値で指定すると固定になる', n['Frame 1'].sizing.width === 'fixed' && n['Frame 1'].width === 500 && (await select('幅').inputValue()) === 'fixed', JSON.stringify(n['Frame 1'].layout))
   await select('寄せ').selectOption('space-between')
   n = await nodesByName()
   check('均等に配る', n['Rectangle 1'].x === 20 && n['Rectangle 3'].x === 440, `${n['Rectangle 1'].x}, ${n['Rectangle 3'].x}`)
@@ -113,15 +111,15 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   n = await nodesByName()
   const widest = Math.max(n['Rectangle 1'].width, n['Rectangle 3'].width)
   check('直交する向きに伸ばすと、いちばん広い子に合わせて余白の内側いっぱいになる',
-    n['Rectangle 2'].width === widest && n['Rectangle 2'].x === n['Frame 1'].layout.paddingLeft && n['Rectangle 2'].layoutFill.width,
+    n['Rectangle 2'].width === widest && n['Rectangle 2'].x === n['Frame 1'].layout.paddingLeft && n['Rectangle 2'].sizing.width === 'fill',
     `${n['Rectangle 2'].width} / ${widest}`)
   await fillBox('高さ').check()
   n = await nodesByName()
   const { paddingTop, paddingBottom, gap } = n['Frame 1'].layout
   const rest = n['Frame 1'].height - paddingTop - paddingBottom - gap * 2 - n['Rectangle 1'].height - n['Rectangle 3'].height
   check('並べる向きに伸ばすと、中身に合わせていた親は固定になり、残りを埋める',
-    n['Frame 1'].layout.heightMode === 'fixed' && n['Rectangle 2'].height === rest && (await select('高さ').count()) === 0,
-    `${n['Frame 1'].layout.heightMode} ${n['Rectangle 2'].height} / ${rest}`)
+    n['Frame 1'].sizing.height === 'fixed' && n['Rectangle 2'].height === rest && (await select('高さ').count()) === 0,
+    `${n['Frame 1'].sizing.height} ${n['Rectangle 2'].height} / ${rest}`)
   await row('Frame 1').click()
   await set('H', 400)
   n = await nodesByName()
@@ -129,7 +127,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('親を大きくすると、伸ばした子も伸びる', n['Frame 1'].height === 400 && n['Rectangle 2'].height === grown, `${n['Rectangle 2'].height} / ${grown}`)
   await page.keyboard.press('Meta+z'); await page.keyboard.press('Meta+z'); await page.keyboard.press('Meta+z')
   n = await nodesByName()
-  check('undo で伸ばす指定が外れる', !n['Rectangle 2'].layoutFill.width && n['Frame 1'].layout.heightMode === 'hug' && n['Frame 1'].height === 280, `${n['Frame 1'].height}`)
+  check('undo で伸ばす指定が外れる', n['Rectangle 2'].sizing.width !== 'fill' && n['Frame 1'].sizing.height === 'hug' && n['Frame 1'].height === 280, `${n['Frame 1'].height}`)
 
   // ── 矢印キーで並べ替える（縦に並べているので上下の矢印）。ページ直下の Ellipse 1 は数えない ──
   const frameLayers = async () => (await layers()).filter((name) => name !== 'Ellipse 1').join()
@@ -162,7 +160,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await select('向き').selectOption('horizontal')
   await page.locator('label:has-text("収まらなければ折り返す") input').check()
   n = await nodesByName()
-  check('折り返すようにすると、幅は固定になる', n['Frame 1'].layout.wrap && n['Frame 1'].layout.widthMode === 'fixed' && n['Frame 1'].width === 360, JSON.stringify(n['Frame 1'].layout))
+  check('折り返すようにすると、幅は固定になる', n['Frame 1'].layout.wrap && n['Frame 1'].sizing.width === 'fixed' && n['Frame 1'].width === 360, JSON.stringify(n['Frame 1'].layout))
   await set('W', 200)
   n = await nodesByName()
   check('収まらない子は次の行へ送り、高さが伸びる',
@@ -171,6 +169,22 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await set('行の間隔', 20)
   n = await nodesByName()
   check('行の間隔を変えられる', n['Rectangle 2'].y === n['Rectangle 1'].y + n['Rectangle 1'].height + 20, `${n['Rectangle 1'].y} ${n['Rectangle 2'].y}`)
+
+  // ── 折り返した行を均等に配る（高さを固定して余りを作る） ──
+  await select('行の配置').selectOption('space-between')
+  await set('H', 600)
+  n = await nodesByName()
+  {
+    const kids = ['Rectangle 1', 'Rectangle 2', 'Rectangle 3'].map((name) => n[name])
+    const top = Math.min(...kids.map((k) => k.y))
+    const bottom = Math.max(...kids.map((k) => k.y + k.height))
+    const { paddingTop: pt, paddingBottom: pb } = n['Frame 1'].layout
+    check('行の配置を「均等に配る」にすると、先頭の行は上端、最後の行は下端に付く',
+      n['Frame 1'].layout.alignContent === 'space-between' && top === pt && bottom === 600 - pb, `${top}..${bottom} / ${n['Frame 1'].height}`)
+  }
+  await page.keyboard.press('Meta+z'); await page.keyboard.press('Meta+z')
+  n = await nodesByName()
+  check('undo で行の配置と高さが戻る', n['Frame 1'].layout.alignContent === 'auto' && n['Frame 1'].sizing.height === 'hug', JSON.stringify(n['Frame 1'].sizing))
 
   // ── 大きさの下限・上限（幅は固定、高さは中身に合わせている） ──
   const limitTitle = page.locator('.section-title:text-is("大きさの下限・上限")')
@@ -202,6 +216,40 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.keyboard.press('Escape')
   n = await nodesByName()
   check('テキストを打ち替えるとフレームも伸びる', n['Frame 2'].width === n['Text 1'].width + 32 && n['Frame 2'].width > before, `${before} -> ${n['Frame 2'].width}`)
+  // ── 中身に合わせるテキストの幅の上限で折り返す ──
+  await row('Text 1').click()
+  check('中身に合わせるテキストには、幅の下限・上限の欄を出す', (await field('最大 W').count()) === 1)
+  const oneLine = n['Text 1']
+  await set('最大 W', 60)
+  n = await nodesByName()
+  check('上限を超えたテキストは上限で折り返し、フレームも高くなる',
+    n['Text 1'].maxWidth === 60 && n['Text 1'].width <= 60 && n['Text 1'].height > oneLine.height && n['Text 1'].sizing.width === 'hug' && n['Frame 2'].height === n['Text 1'].height + 16,
+    `${n['Text 1'].width}x${n['Text 1'].height} / ${n['Frame 2'].height}`)
+
+  // ── 並べないフレームの子を、親の右・下の辺に固定する ──
+  await deselect()
+  await page.keyboard.press('f'); await drag([380, 470], [620, 580])
+  await page.keyboard.press('r'); await drag([560, 530], [600, 560])
+  check('並べないフレームの子には「親の辺に固定」を出す', (await page.locator('.section-title:text-is("親の辺に固定")').count()) === 1)
+  await select('横').selectOption('end')
+  await select('縦').selectOption('end')
+  n = await nodesByName()
+  const pinned = n['Rectangle 4']
+  const holder = n['Frame 3']
+  await row('Frame 3').click()
+  await set('W', 340); await set('H', 220)
+  n = await nodesByName()
+  check('親を大きくすると、右・下に固定した子が辺からの距離を保つ',
+    n['Rectangle 4'].constraints.horizontal === 'end' && n['Rectangle 4'].x === pinned.x + 100 && n['Rectangle 4'].y === pinned.y + 220 - holder.height && n['Rectangle 4'].width === pinned.width,
+    `${pinned.x},${pinned.y} -> ${n['Rectangle 4'].x},${n['Rectangle 4'].y}`)
+  await page.keyboard.press('Meta+z')
+  n = await nodesByName()
+  check('undo で子も戻る', n['Rectangle 4'].y === pinned.y && n['Rectangle 4'].x === pinned.x + 100, `${n['Rectangle 4'].x},${n['Rectangle 4'].y}`)
+  await page.keyboard.press('Meta+Shift+z')
+  // 自動で並べるフレームでは、並びに加わっている子には出さない
+  await row('Rectangle 1').click()
+  check('並びに加わっている子には「親の辺に固定」を出さない', (await page.locator('.section-title:text-is("親の辺に固定")').count()) === 0)
+
   await deselect()
   await page.screenshot({ path: path.join(OUT, '34-auto-layout-done.png') })
 
@@ -209,9 +257,9 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'layout.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const frames = Object.values(json.document.pages[0].nodes).filter((node) => node.type === 'frame')
-  check('kdr に設定が入る', json.version === 14 && frames.every((frame) => frame.layout), JSON.stringify(frames.map((f) => f.layout && f.layout.direction)))
+  check('kdr に設定が入る', json.version === 15 && frames.filter((frame) => frame.name !== 'Frame 3').every((frame) => frame.layout) && Object.values(json.document.pages[0].nodes).some((node) => node.constraints && node.constraints.horizontal === 'end'), JSON.stringify(frames.map((f) => f.layout && f.layout.direction)))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -224,12 +272,12 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.locator('.layer-row:has(.layer-name:text-is("Frame 1"))').click()
   const inspectText = await viewer.locator('.inspect-panel').innerText()
   check('viewer の CSS に折り返しが出る', inspectText.includes('flex-wrap: wrap;') && inspectText.includes('gap: 20px 10px;'), inspectText.slice(0, 200))
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v13.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 13 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0)
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v7.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 7 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0)
+  await viewer.locator('.layer-row:has(.layer-name:text-is("Rectangle 4"))').click()
+  const pinnedText = await viewer.locator('.inspect-panel').innerText()
+  check('viewer の CSS に親の辺への固定が right / bottom で出る', pinnedText.includes('right: ') && pinnedText.includes('bottom: ') && pinnedText.includes('横 右・縦 下'), pinnedText.slice(0, 300))
+  await viewer.locator('.layer-row:has(.layer-name:text-is("Text 1"))').click()
+  const labelText = await viewer.locator('.inspect-panel').innerText()
+  check('viewer の CSS で、テキストの幅の上限が max-width になる', labelText.includes('max-width: 60px;') && !labelText.includes('white-space: nowrap;'), labelText.slice(0, 300))
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

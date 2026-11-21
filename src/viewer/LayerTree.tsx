@@ -4,6 +4,7 @@ import { isOpen, layerRows, toggleFolding } from '../document/layers.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'
 import { TYPE_LABELS } from '../ui/labels.ts'
+import { nodeKind } from '../document/path.ts'
 import { searchLayers } from './traverse.ts'
 
 type Props = {
@@ -60,7 +61,7 @@ export function LayerTree({ scene, selection, onSelect }: Props) {
             data-hidden={!node.visible}
             data-component={isComponentPart(scene, node.id)}
             style={{ paddingLeft: 8 + depth * 14 }}
-            title={TYPE_LABELS[node.type]}
+            title={TYPE_LABELS[nodeKind(node)]}
             onClick={(event) => onSelect(node.id, event.shiftKey)}
           >
             {!searching && (

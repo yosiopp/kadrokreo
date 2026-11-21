@@ -121,6 +121,54 @@ export function renameVariantProperty<T extends Scene>(scene: T, setId: NodeId, 
 }
 
 /**
+ * まとまり setId のすべてのバリアントに、プロパティを 1 つ足す（名前の最後に「name=value」を書き足す）。
+ * name を省くと「プロパティ1」「プロパティ2」… のうちまだないもの。名前や値が使えない、またはすでにあるなら変えない。
+ * 足したプロパティ名を返す（変えなければ null）
+ */
+export function addVariantProperty<T extends Scene>(
+  scene: T,
+  setId: NodeId,
+  name?: string,
+  value = DEFAULT_VALUE,
+): { scene: T; name: string | null } {
+  const variants = variantsIn(scene, setId)
+  const used = new Set(variants.flatMap((variant) => (parseVariantName(variant.name) ?? []).map(([key]) => key)))
+  let key = name?.trim() ?? ''
+  if (name === undefined) {
+    for (let n = 1; used.has(key) || key === ''; n++) key = `プロパティ${n}`
+  }
+  const trimmed = value.trim()
+  if (variants.length === 0 || !usable(key) || !usable(trimmed) || used.has(key)) return { scene, name: null }
+  const next = variants.reduce((current, variant) => {
+    const props = parseVariantName(variant.name) ?? []
+    return updateNode(current, variant.id, { name: formatVariantName([...props, [key, trimmed]]) })
+  }, scene)
+  return { scene: next, name: key }
+}
+
+/**
+ * まとまり setId のすべてのバリアントから、プロパティ key を消す（名前から「key=値」を外す）。
+ * 消すとプロパティが 1 つもなくなる（名前がバリアントの形でなくなる）バリアントがあれば変えない
+ */
+export function removeVariantProperty<T extends Scene>(scene: T, setId: NodeId, key: string): T {
+  const variants = variantsIn(scene, setId)
+  const rest = variants.map((variant) => (parseVariantName(variant.name) ?? []).filter(([other]) => other !== key))
+  if (rest.some((props) => props.length === 0)) return scene
+  return variants.reduce(
+    (current, variant, index) =>
+      rest[index].length === parseVariantName(variant.name)?.length
+        ? current
+        : updateNode(current, variant.id, { name: formatVariantName(rest[index]) }),
+    scene,
+  )
+}
+
+/** プロパティ名や値に使えるか（空でなく、名前の区切りの「,」「=」を含まない） */
+function usable(text: string): boolean {
+  return text !== '' && !text.includes(',') && !text.includes('=')
+}
+
+/**
  * インスタンスのプロパティ key を value にする: 元のまとまりから、そのプロパティを持ち、
  * ほかのプロパティがいまと多く一致するバリアントを選んで差し替える（上書きは swapComponent と同じく名前で移す）
  */

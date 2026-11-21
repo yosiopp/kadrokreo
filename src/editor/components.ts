@@ -24,6 +24,7 @@ import type {
 } from '../document/types.ts'
 import { stretchedAxes } from '../document/autoLayout.ts'
 import { variantSetOf } from '../document/variants.ts'
+import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createId } from './nodes.ts'
 import { insertNode, removeNodes, updateNode, updatePage } from './operations.ts'
@@ -124,21 +125,7 @@ export function swapComponent(doc: DesignDocument, pageId: PageId, instanceId: N
   if (!next) return doc
 
   const previous = findMain(doc, instance.component.id)
-  const overrides: Record<NodeId, Override> = {}
-  if (previous) {
-    // 新しい元の中のノードを、名前のたどり方で引けるようにする（同じたどり方のものが複数あれば、最初に見つけたもの）
-    const byPath = new Map<string, NodeId>()
-    for (const id of subtreeIds(next.page, next.node.id)) {
-      const path = namePath(next.page, next.node.id, id)
-      if (path !== null && !byPath.has(path)) byPath.set(path, id)
-    }
-    for (const [sourceId, override] of Object.entries(instance.component.overrides)) {
-      if (!Object.hasOwn(previous.page.nodes, sourceId)) continue
-      const path = namePath(previous.page, previous.node.id, sourceId)
-      const target = path === null ? undefined : byPath.get(path)
-      if (target !== undefined) overrides[target] = override
-    }
-  }
+  const overrides = previous ? moveOverrides(previous, next, instance.component.overrides) : {}
   return updatePage(doc, pageId, (base) =>
     updateNode(base, instanceId, {
       // 名前を元のまま（バリアントならまとまりの名前のまま）にしていれば、新しい元の名前にする
@@ -149,6 +136,41 @@ export function swapComponent(doc: DesignDocument, pageId: PageId, instanceId: N
       component: { id: componentId, role: 'instance', overrides },
     }),
   )
+}
+
+/**
+ * 上書きを、元 previous の中から元 next の中へ移す。キーは、レイヤー名のたどり方（親から順の名前）が同じノードに付け替え、
+ * 同じたどり方のノードがなければ捨てる（同じたどり方のものが複数あれば、最初に見つけたもの）。元そのものへの上書きは元へ
+ */
+function moveOverrides(
+  previous: { page: Scene; node: FrameNode },
+  next: { page: Scene; node: FrameNode },
+  overrides: Record<NodeId, Override>,
+): Record<NodeId, Override> {
+  const byPath = pathIndex(next.page, next.node.id)
+  const moved: Record<NodeId, Override> = {}
+  for (const [sourceId, override] of Object.entries(overrides)) {
+    if (!Object.hasOwn(previous.page.nodes, sourceId)) continue
+    const path = namePath(previous.page, previous.node.id, sourceId)
+    const target = path === null ? undefined : byPath.get(path)
+    if (target !== undefined) moved[target] = override
+  }
+  return moved
+}
+
+/** rootId の中のノードを、rootId からのレイヤー名のたどり方で引けるようにしたもの */
+function pathIndex(scene: Scene, rootId: NodeId): Map<string, NodeId> {
+  const byPath = new Map<string, NodeId>()
+  for (const id of subtreeIds(scene, rootId)) {
+    const path = namePath(scene, rootId, id)
+    if (path !== null && !byPath.has(path)) byPath.set(path, id)
+  }
+  return byPath
+}
+
+/** 入れ子のインスタンスを差し替えたときの名前。元の名前のままだったときだけ、新しい元の名前にする */
+function swappedName(name: string, previous: { page: Page; node: MainNode } | undefined, next: { page: Page; node: MainNode }) {
+  return previous && (name === previous.node.name || name === componentName(previous)) ? componentName(next) : name
 }
 
 /**
@@ -194,10 +216,172 @@ function sourceOf(doc: DesignDocument, scene: Scene, id: NodeId): Source | null 
   const main = findMain(doc, instance.component.id)
   if (!main) return null
   if (instance.id === id) return { instance, source: main.node }
-  const sourceId = subtreeIds(main.page, main.node.id).find(
+  const source = effectiveSource(doc, scene, instance, main)
+  const sourceId = subtreeIds(source, main.node.id).find(
     (candidate) => candidate !== main.node.id && derivedId(instance.id, candidate) === id,
   )
-  return sourceId === undefined ? null : { instance, source: main.page.nodes[sourceId] }
+  return sourceId === undefined ? null : { instance, source: source.nodes[sourceId] }
+}
+
+/**
+ * インスタンスの写しの元になる木。ふつうは元のあるページそのもので、入れ子のインスタンスを差し替えていれば、
+ * 差し替えた後の木（swappedSource）。上書きのキーは、この木のノードの id
+ */
+function effectiveSource(
+  doc: DesignDocument,
+  scene: Scene,
+  instance: InstanceNode,
+  main: { page: Page; node: MainNode },
+  fitText?: FitText,
+): Scene {
+  if (!Object.values(instance.component.overrides).some((override) => override.componentId !== undefined)) return main.page
+  const mains = collectMains(doc)
+  const ctx = { mains, reaches: componentReach(doc, mains) }
+  return swappedSource(main.page, main.node.id, instance.component.overrides, ctx, swapChain(scene, instance), fitText)
+}
+
+/**
+ * インスタンスの中で差し替え先にできないコンポーネントを決める、コンポーネントの id の並び。
+ * インスタンス自身の元と、インスタンスを含む元。差し替え先がこのどれかを含むと循環する
+ */
+function swapChain(scene: Scene, instance: InstanceNode): string[] {
+  const enclosing = enclosingMain(scene, instance.id)
+  return enclosing === null ? [instance.component.id] : [instance.component.id, enclosing]
+}
+
+/** 同期のあいだ使い回す、元の一覧と「含むか」の答え */
+type SyncContext = {
+  mains: ReadonlyMap<string, { page: Page; node: MainNode }>
+  reaches: (from: string, to: string) => boolean
+}
+
+/**
+ * 元 mainId の木（source）に、上書きの入れ子のインスタンスの差し替え（componentId）を当てたもの。
+ * 差し替えるのは、元の中に置いたインスタンスだけ（その中身の写しは、もう普通のノードなので差し替えない）。
+ * 差し替えたインスタンスの中身は、新しい元の写しに作り直す（id は derivedId(入れ子のインスタンス, 新しい元のノード)）。
+ * 新しい元がない、chain のどれかを含む（循環する）差し替えは無視する
+ */
+function swappedSource(
+  source: Scene,
+  mainId: NodeId,
+  overrides: Record<NodeId, Override>,
+  ctx: SyncContext,
+  chain: readonly string[],
+  fitText: FitText | undefined,
+): Scene {
+  let scene = source
+  for (const [sourceId, override] of Object.entries(overrides)) {
+    const componentId = override.componentId
+    if (componentId === undefined || sourceId === mainId) continue
+    const nested = scene.nodes[sourceId]
+    if (!isInstance(nested) || nested.component.id === componentId || !isInside(scene, sourceId, mainId)) continue
+    const next = ctx.mains.get(componentId)
+    if (!next || chain.some((id) => ctx.reaches(componentId, id))) continue
+    const previous = ctx.mains.get(nested.component.id)
+    const swapped: InstanceNode = {
+      ...nested,
+      name: swappedName(nested.name, previous, next),
+      // 入れ子のインスタンスが元の中で持っていた上書きも、名前のたどり方で移す
+      component: {
+        id: componentId,
+        role: 'instance',
+        overrides: previous ? moveOverrides(previous, next, nested.component.overrides) : {},
+      },
+    }
+    scene = rebuild(
+      { ...scene, nodes: { ...scene.nodes, [sourceId]: swapped } },
+      swapped,
+      next.page,
+      next.node,
+      fitText,
+      ctx,
+      [...chain, componentId],
+    )
+  }
+  return scene
+}
+
+/** id が rootId の子孫か */
+function isInside(scene: Scene, id: NodeId, rootId: NodeId): boolean {
+  for (let current = scene.nodes[id]?.parentId ?? null; current !== null; current = scene.nodes[current].parentId) {
+    if (current === rootId) return true
+  }
+  return false
+}
+
+/** 写し copyId が元の中に置いたインスタンスの写しなら、差し替えの情報。そうでなければ null */
+export type NestedInstance = {
+  /** 写しを持っているインスタンス */
+  instance: InstanceNode
+  /** 上書きのキー（元の中に置いたインスタンスの id） */
+  sourceId: NodeId
+  /** 元の中で置いたときのコンポーネント */
+  originalId: string
+  /** いま写しの元になっているコンポーネント（差し替えていなければ originalId） */
+  componentId: string
+  /** componentId のコンポーネントに差し替えられるか（元があり、循環しない） */
+  allowed: (componentId: string) => boolean
+}
+
+/** 写し copyId が、元の中に置いたインスタンス（入れ子のインスタンス）の写しなら、その情報 */
+export function nestedInstanceOf(doc: DesignDocument, scene: Scene, copyId: NodeId): NestedInstance | null {
+  const found = sourceOf(doc, scene, copyId)
+  if (!found || found.instance.id === copyId) return null
+  const main = findMain(doc, found.instance.component.id)
+  const original = main?.page.nodes[found.source.id]
+  if (!main || !isInstance(original) || !isInside(main.page, original.id, main.node.id)) return null
+  const reaches = componentReach(doc)
+  const chain = swapChain(scene, found.instance)
+  return {
+    instance: found.instance,
+    sourceId: original.id,
+    originalId: original.component.id,
+    componentId: isInstance(found.source) ? found.source.component.id : original.component.id,
+    allowed: (componentId) =>
+      findMain(doc, componentId) !== null && !chain.some((id) => reaches(componentId, id)),
+  }
+}
+
+/**
+ * インスタンスの中身のうち、元の中に置いたインスタンスの写し copyId を、componentId のコンポーネントの写しに差し替える
+ * （そのインスタンスの上書き componentId として覚える。元と同じコンポーネントに戻せば上書きを外す）。
+ * 差し替える写しの中への上書きは、レイヤー名のたどり方が同じノードへ移し、なければ捨てる。循環するなら変えない
+ */
+export function swapNestedInstance(
+  doc: DesignDocument,
+  pageId: PageId,
+  copyId: NodeId,
+  componentId: string,
+): DesignDocument {
+  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const nested = page ? nestedInstanceOf(doc, page, copyId) : null
+  if (!page || !nested || nested.componentId === componentId || !nested.allowed(componentId)) return doc
+  const { instance, sourceId } = nested
+  const main = findMain(doc, instance.component.id)!
+  const before = effectiveSource(doc, page, instance, main)
+
+  const overrides = { ...instance.component.overrides }
+  const entry: Override = { ...overrides[sourceId] }
+  if (componentId === nested.originalId) delete entry.componentId
+  else entry.componentId = componentId
+  if (Object.keys(entry).length > 0) overrides[sourceId] = entry
+  else delete overrides[sourceId]
+
+  const swappedInstance = { ...instance, component: { ...instance.component, overrides } }
+  const after = effectiveSource(doc, page, swappedInstance, main)
+  const byPath = pathIndex(after, sourceId)
+  const moved: Record<NodeId, Override> = {}
+  for (const key of Object.keys(overrides)) {
+    if (!isInside(before, key, sourceId)) continue
+    const path = namePath(before, sourceId, key)
+    const target = path === null ? undefined : byPath.get(path)
+    if (target !== undefined) moved[target] = overrides[key]
+    delete overrides[key]
+  }
+  Object.assign(overrides, moved)
+  return updatePage(doc, pageId, (base) =>
+    updateNode(base, instance.id, { component: { ...instance.component, overrides } }),
+  )
 }
 
 /**
@@ -292,6 +476,11 @@ export function pushOverrides(
         const changed = { ...base, nodes: { ...base.nodes, [sourceId]: pushed } }
         return fitText && pushed.type === 'text' ? fitText(changed, [sourceId]) : changed
       })
+      // 入れ子のインスタンスの差し替えは、元の中のインスタンスの元を差し替える。
+      // 差し替えた写しの中への上書きのキーは、元の中にできる写しの id と同じなので、そのまま効き続ける
+      if (override.componentId !== undefined && isInstance(target) && sourceId !== main.node.id) {
+        next = swapComponent(next, main.page.id, sourceId, override.componentId)
+      }
     }
     return updatePage(next, pageId, (base) =>
       updateNode(base, instance.id, { component: { ...instance.component, overrides } }),
@@ -342,6 +531,7 @@ const MAX_PASSES = 8
 function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocument {
   const mains = collectMains(doc)
   const reaches = componentReach(doc, mains)
+  const ctx: SyncContext = { mains, reaches }
 
   let changed = false
   const pages = doc.pages.map((page) => {
@@ -357,7 +547,7 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
         next = updateNode(next, instance.id, { component: null })
         continue
       }
-      next = rebuild(next, instance, main.page, main.node, fitText)
+      next = rebuild(next, instance, main.page, main.node, fitText, ctx, swapChain(next, instance))
     }
     if (next !== page) changed = true
     return next
@@ -378,7 +568,12 @@ function componentReach(
     const used = new Set<string>()
     for (const nodeId of subtreeIds(main.page, main.node.id)) {
       const node = main.page.nodes[nodeId]
-      if (nodeId !== main.node.id && isInstance(node)) used.add(node.component.id)
+      if (nodeId === main.node.id || !isInstance(node)) continue
+      used.add(node.component.id)
+      // 中で入れ子のインスタンスを差し替えていれば、差し替え先も使っている
+      for (const override of Object.values(node.component.overrides)) {
+        if (override.componentId !== undefined) used.add(override.componentId)
+      }
     }
     uses.set(id, used)
   }
@@ -418,20 +613,22 @@ function subtreeIds(scene: Scene, rootId: NodeId): NodeId[] {
     const id = stack.pop()!
     ids.push(id)
     const node = scene.nodes[id]
-    if (node.type === 'frame') stack.push(...node.children)
+    if (node.type === 'frame') for (const child of node.children) stack.push(child)
   }
   return ids
 }
 
 /** インスタンスの中身を、元の写しに上書きを当てたものに置き換える。すでに同じなら何もしない */
-function rebuild(
-  page: Page,
+function rebuild<S extends Scene>(
+  page: S,
   instance: InstanceNode,
   source: Scene,
   main: FrameNode,
   fitText: FitText | undefined,
-): Page {
-  const expected = expectedCopies(page, instance, source, main, fitText)
+  ctx: SyncContext,
+  chain: readonly string[],
+): S {
+  const expected = expectedCopies(page, instance, swappedSource(source, main.id, instance.component.overrides, ctx, chain, fitText), main, fitText)
   const currentIds = subtreeIds(page, instance.id)
   const same =
     currentIds.length === Object.keys(expected).length &&
@@ -454,7 +651,7 @@ function rebuild(
  * page は、いまの写しが持っている「測ってある大きさ」を引き継ぐためにだけ見る。
  */
 function expectedCopies(
-  page: Page,
+  page: Scene,
   instance: InstanceNode,
   source: Scene,
   main: FrameNode,
@@ -480,7 +677,11 @@ function expectedCopies(
     ...main,
     width: stretched.width ? instance.width : main.width,
     height: stretched.height ? instance.height : main.height,
-    layoutFill: instance.layoutFill,
+    // 伸ばす指定はインスタンスが持つ。伸ばさない向きの決まり方（中身に合わせるか）は元に従う
+    sizing: {
+      width: instance.sizing.width === 'fill' ? 'fill' : main.sizing.width,
+      height: instance.sizing.height === 'fill' ? 'fill' : main.sizing.height,
+    },
     // 置き場所と表示の設定は、インスタンスごとに持つ
     id: instance.id,
     name: instance.name,
@@ -529,21 +730,12 @@ function expectedCopies(
   const resized = stretched.width || stretched.height
   if (Object.keys(overrides).length === 0 && !resized) return expected
   // 上書きで大きさや表示が変わったり、伸ばして大きさが元と違ったりすると、自動で並べるフレームの並びも元とは変わる。
-  // ここでは親がいないので、伸ばしている向きは「固定」として並べ、あとで元の設定に戻す
-  const layout = root.layout
-  if (layout && resized) {
-    expected[instance.id] = {
-      ...(expected[instance.id] as FrameNode),
-      layout: {
-        ...layout,
-        widthMode: stretched.width ? 'fixed' : layout.widthMode,
-        heightMode: stretched.height ? 'fixed' : layout.heightMode,
-      },
-    }
-  }
+  // ここでは親がいないので、伸ばしている向き（fill）は固定の大きさとして並ぶ
+  // 伸ばして元と大きさが違えば、親の辺に固定した中身は、元の大きさからの変化に追従させる
   const scene: Scene = { nodes: expected, rootIds: [instance.id] }
-  const nodes = relayout(fitText ? fitText(scene, stale) : scene, fitText).nodes
-  return { ...nodes, [instance.id]: { ...(nodes[instance.id] as FrameNode), layout } }
+  const asMain: Scene = { nodes: { ...expected, [instance.id]: { ...expected[instance.id], width: main.width, height: main.height } }, rootIds: [instance.id] }
+  const followed = resized ? applyConstraints(asMain, scene, stale) : scene
+  return relayout(fitText ? fitText(followed, stale) : followed, fitText).nodes
 }
 
 /** 上書きのうち、このノードに当てられるものを当てる。root はインスタンスの根 */
@@ -551,14 +743,9 @@ function applyOverride<N extends SceneNode>(node: N, values: Override | undefine
   if (!values) return node
   const patch: Override = {}
   if (values.text !== undefined && node.type === 'text') patch.text = values.text
-  // テキストは塗りを、直線は線を消せない
-  if (values.fill !== undefined && 'fill' in node && (values.fill !== null || node.type !== 'text')) {
-    patch.fill = values.fill
-  }
-  if (values.fillGradient !== undefined && 'fillGradient' in node) patch.fillGradient = values.fillGradient
-  if (values.stroke !== undefined && 'stroke' in node && (values.stroke !== null || node.type !== 'line')) {
-    patch.stroke = values.stroke
-  }
+  // テキストは塗りを消せない（パネルの setFill と同じ）
+  if (values.fills !== undefined && 'fills' in node && (values.fills.length > 0 || node.type !== 'text')) patch.fills = values.fills
+  if (values.strokes !== undefined && 'strokes' in node) patch.strokes = values.strokes
   // 根の表示・非表示は、インスタンス自身の設定
   if (values.visible !== undefined && !root) patch.visible = values.visible
   if (node.type === 'text') {
@@ -567,6 +754,7 @@ function applyOverride<N extends SceneNode>(node: N, values: Override | undefine
     if (values.fontWeight !== undefined) patch.fontWeight = values.fontWeight
   }
   if (values.assetId !== undefined && node.type === 'image') patch.assetId = values.assetId
+  // values.componentId !== undefined（入れ子のインスタンスの差し替え）は、写しを作る前に swappedSource で当てている
   return { ...node, ...patch }
 }
 
@@ -578,8 +766,10 @@ function sameTextStyle(a: TextNode, b: TextNode): boolean {
     a.fontFamily === b.fontFamily &&
     a.fontWeight === b.fontWeight &&
     a.lineHeight === b.lineHeight &&
-    a.autoWidth === b.autoWidth &&
-    (a.autoWidth || a.width === b.width)
+    a.sizing.width === b.sizing.width &&
+    a.minWidth === b.minWidth &&
+    a.maxWidth === b.maxWidth &&
+    (a.sizing.width === 'hug' || a.width === b.width)
   )
 }
 

@@ -1,4 +1,4 @@
-import { KDR_FORMAT, KDR_VERSION, parseKdr } from '../src/document/kdr.ts'
+import { kdrFile, parseKdr } from '../src/document/kdr.ts'
 import type { Asset, DesignDocument, FrameNode, NodeId, Page, Scene, SceneNode } from '../src/document/types.ts'
 import { createEditorStore } from '../src/editor/store.ts'
 import { updatePage } from '../src/editor/operations.ts'
@@ -156,6 +156,6 @@ export function renameNodeId<T extends Scene>(scene: T, from: NodeId, to: NodeId
 export function validate(doc: DesignDocument): DesignDocument {
   const placeholders: Record<string, Asset> = {}
   for (const [id, asset] of Object.entries(doc.assets)) placeholders[id] = { mime: asset.mime, data: '' }
-  const json = JSON.stringify({ format: KDR_FORMAT, version: KDR_VERSION, document: { ...doc, assets: placeholders } })
+  const json = JSON.stringify(kdrFile({ ...doc, assets: placeholders }))
   return { ...parseKdr(JSON.parse(json)), assets: doc.assets }
 }

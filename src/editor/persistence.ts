@@ -1,9 +1,11 @@
-import { KDR_FORMAT, KDR_VERSION, parseKdr } from '../document/kdr.ts'
+import { KDR_VERSION, kdrFile, parseKdr } from '../document/kdr.ts'
 import type { Asset, AssetId, DesignDocument } from '../document/types.ts'
 import { pruneAssets } from './operations.ts'
 
 // 編集中のドキュメントはブラウザの IndexedDB に自動保存する。
 // 画像は大きいので別のストアに分け、一度書いたものは書き直さない。
+// ドキュメントはメモリ上の形（平らなノードの表）のまま保存し、読むときに kdr の形へ直して parseKdr で検証する。
+// kdr の version が違う保存データ（古い形）は読めないので捨て、空のドキュメントから始める。
 const DB_NAME = 'kadrokreo'
 const DOCUMENT_STORE = 'document'
 const ASSET_STORE = 'assets'
@@ -55,8 +57,9 @@ export async function loadSavedDocument(): Promise<DesignDocument | null> {
     ])
     if (file === undefined) return loadLegacyDocument()
 
+    if (file.version !== KDR_VERSION) return null
     const stored = Object.fromEntries(ids.map((id, i) => [String(id), assets[i]]))
-    const doc = pruneAssets(parseKdr({ ...file, document: { ...file.document, assets: stored } }))
+    const doc = pruneAssets(parseKdr(kdrFile({ ...file.document, assets: stored })))
 
     // 削除された画像のデータはここで片付ける（編集中は Undo で戻せるよう残してある）
     const orphans = ids.filter((id) => !Object.hasOwn(doc.assets, String(id)))
@@ -90,7 +93,7 @@ export async function saveDocument(doc: DesignDocument): Promise<boolean> {
       transaction.objectStore(ASSET_STORE).put(asset, id)
       added.push(id)
     }
-    const file = { format: KDR_FORMAT, version: KDR_VERSION, document: { ...pruned, assets: {} } }
+    const file = { version: KDR_VERSION, document: { ...pruned, assets: {} } }
     transaction.objectStore(DOCUMENT_STORE).put(file, CURRENT)
     await completed(transaction)
     for (const id of added) savedAssets.add(id)

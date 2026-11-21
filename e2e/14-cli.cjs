@@ -56,7 +56,7 @@ const cli = (args, input) => execFileSync(process.execPath, [CLI, ...args], { in
   editor.on('console', (m) => m.type() === 'error' && errors.push('editor: ' + m.text()))
   await editor.goto(EDITOR)
   await editor.waitForSelector('.canvas-view canvas')
-  await editor.locator('input[type=file][accept=".kdr"]').setInputFiles(kdrPath)
+  await editor.locator('input[type=file][accept^=".kdr"]').setInputFiles(kdrPath)
   await editor.waitForSelector('.layer-row:has(.layer-name:text-is("Card"))')
   const rows = await editor.locator('.layer-row .layer-name').allTextContents()
   check('editor で開ける', rows.includes('Card') && rows.includes('Button'), rows.join())

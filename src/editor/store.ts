@@ -1,6 +1,7 @@
 import type { DesignDocument, NodeId, Page, PageId } from '../document/types.ts'
 import { createHistory, pushHistory, redoHistory, undoHistory } from './history.ts'
 import { type FitText, captureOverrides, syncComponents } from './components.ts'
+import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
 import { updatePage } from './operations.ts'
 
@@ -67,8 +68,8 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   }
 
   /**
-   * 変更のあとの後始末。インスタンスの中身への変更を上書きとして覚え、自動で並べるフレームを並べ直し、
-   * コンポーネントのインスタンスを元に合わせる。
+   * 変更のあとの後始末。インスタンスの中身への変更を上書きとして覚え、大きさが変わったフレームの子を辺に追従させ、
+   * 自動で並べるフレームを並べ直し、コンポーネントのインスタンスを元に合わせる。
    * どの操作も、レイアウトやインスタンスのことは気にせずノードを動かしてよい。
    */
   function settle(before: DesignDocument, after: DesignDocument): DesignDocument {
@@ -78,13 +79,31 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     // インスタンスを直すと大きさが変わって並べ直しが要る、ということがあるので、落ち着くまで繰り返す
     for (let pass = 0; pass < 4; pass++) {
       const previous = base
-      const arranged = mapPages(current, (page) => (previous.pages.includes(page) ? page : relayout(page, fitText)))
+      const arranged = mapPages(current, (page) =>
+        previous.pages.includes(page) ? page : arrange(previous.pages.find((prior) => prior.id === page.id), page),
+      )
       const synced = syncComponents(arranged, fitText)
       if (synced === current) break
       base = current
       current = synced
     }
     return current
+  }
+
+  /**
+   * 変わったページの後始末: 大きさが変わったフレームの子を追従させてから並べ直す。
+   * 並べ直しでも大きさが変わる（中身に合わせる、親いっぱいに伸ばす）ので、その子も追従させ、もう一度並べる
+   */
+  function arrange(prior: Page | undefined, page: Page): Page {
+    const follow = (from: Page, to: Page) => {
+      const resized: NodeId[] = []
+      const followed = applyConstraints(from, to, resized)
+      return fitText && resized.length > 0 ? fitText(followed, resized) : followed
+    }
+    const constrained = prior ? follow(prior, page) : page
+    const arranged = relayout(constrained, fitText)
+    const followed = follow(constrained, arranged)
+    return followed === arranged ? arranged : relayout(followed, fitText)
   }
 
   function mapPages(doc: DesignDocument, change: (page: Page) => Page): DesignDocument {

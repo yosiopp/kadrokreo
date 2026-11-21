@@ -2,24 +2,25 @@ import {
   type Bounds,
   IDENTITY,
   type Matrix,
-  type Point,
   type Size,
   intersects,
   multiply,
   nodeMatrix,
   transformRect,
 } from '../document/geometry.ts'
-import { arrowSize, cappedStroke, lineEndpoints, pathPoints } from '../document/path.ts'
+import { type Vertex, arrowSize, cappedStroke, pathPoints, tracePath } from '../document/path.ts'
+import { gradientLine, hasStroke } from '../document/paint.ts'
 import type {
   Asset,
   AssetId,
   Cap,
-  Gradient,
+  Effect,
   ImageNode,
   NodeId,
+  Paint,
   Scene,
   SceneNode,
-  Shadow,
+  Style,
 } from '../document/types.ts'
 import { OVERLAY_COMPONENT } from './overlay.ts'
 import { isVariantSet } from '../document/variants.ts'
@@ -172,15 +173,11 @@ function drawContent(
       ctx.ellipse(width / 2, height / 2, width / 2, height / 2, 0, 0, Math.PI * 2)
       paint(ctx, pass, node)
       break
-    case 'line':
-      strokeWithCaps(ctx, lineEndpoints(node), node)
-      break
     case 'path': {
       const points = pathPoints(node)
       const outline = () => {
         ctx.beginPath()
-        points.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
-        if (node.closed) ctx.closePath()
+        tracePath(ctx, points, node.closed)
       }
       const capped = !node.closed && (node.startCap !== 'none' || node.endCap !== 'none')
       if (!capped) {
@@ -188,19 +185,17 @@ function drawContent(
         paint(ctx, pass, node)
         break
       }
-      // 端に矢印を付ける折れ線は、線を矢印の分だけ短くするので、塗りと線を別々に描く
-      const fill = fillStyle(ctx, node)
-      if (fill) {
+      // 端に矢印を付ける線は、線を矢印の分だけ短くするので、塗りと線を別々に描く
+      if (node.fills.length > 0) {
         outline()
-        fillWithShadow(ctx, pass, fill, node.shadow)
+        fillAll(ctx, pass, node, node.effects)
       }
-      if (node.stroke) strokeWithCaps(ctx, points, { ...node, stroke: node.stroke })
+      strokeWithCaps(ctx, points, node)
       break
     }
     case 'text':
       if (node.id !== pass.options.hiddenId) {
         applyFont(ctx, node)
-        ctx.fillStyle = node.fill
         ctx.textBaseline = 'alphabetic'
         // CSS の行ボックスと同じ位置にベースラインを置き、編集中の入力欄と文字がずれないようにする
         const metrics = ctx.measureText('')
@@ -208,9 +203,13 @@ function drawContent(
         const contentHeight = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent
         const baseline = (lineHeight - contentHeight) / 2 + metrics.fontBoundingBoxAscent
         const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
-        layoutText(ctx, node).forEach((line, i) => {
-          ctx.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline)
-        })
+        const lines = layoutText(ctx, node)
+        for (const fill of node.fills) {
+          ctx.fillStyle = paintStyle(ctx, fill, node)
+          lines.forEach((line, i) => {
+            ctx.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline)
+          })
+        }
       }
       break
     case 'image': {
@@ -239,18 +238,15 @@ function drawContent(
         ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
       }
       outline()
-      const fill = fillStyle(ctx, node)
-      if (fill) fillWithShadow(ctx, pass, fill, node.shadow)
+      fillAll(ctx, pass, node, node.effects)
       ctx.save()
       if (node.clipContent) ctx.clip()
       for (const childId of node.children) drawNode(ctx, pass, childId, world)
       ctx.restore()
       // 枠線は子より手前に描く
-      if (node.stroke && node.strokeWidth > 0) {
+      if (hasStroke(node)) {
         outline()
-        ctx.strokeStyle = node.stroke
-        ctx.lineWidth = node.strokeWidth
-        ctx.stroke()
+        strokeAll(ctx, node)
       }
       break
     }
@@ -258,50 +254,45 @@ function drawContent(
 }
 
 /** いま組んであるパスを塗りと線で描く。影は塗りに付け、塗りがなければ線に付ける */
-function paint(
-  ctx: CanvasRenderingContext2D,
-  pass: Pass,
-  node: Size & {
-    fill: string | null
-    fillGradient: Gradient | null
-    stroke: string | null
-    strokeWidth: number
-    shadow: Shadow | null
-  },
-): void {
-  const fill = fillStyle(ctx, node)
-  if (fill) fillWithShadow(ctx, pass, fill, node.shadow)
-  if (node.stroke && node.strokeWidth > 0) {
+function paint(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Style): void {
+  fillAll(ctx, pass, node, node.effects)
+  if (hasStroke(node)) {
     ctx.save()
-    if (!fill) applyShadow(ctx, pass, node.shadow)
-    ctx.strokeStyle = node.stroke
-    ctx.lineWidth = node.strokeWidth
-    ctx.stroke()
+    if (node.fills.length === 0) applyEffects(ctx, pass, node.effects)
+    strokeAll(ctx, node)
     ctx.restore()
   }
 }
 
-/** 塗りに使う色かグラデーション。塗らないなら null */
-function fillStyle(
-  ctx: CanvasRenderingContext2D,
-  node: Size & { fill: string | null; fillGradient: Gradient | null },
-): string | CanvasGradient | null {
-  if (!node.fillGradient) return node.fill
-  // 枠の中心を通る、angle の向きの線に沿って色を変える。線の長さは、枠の角がちょうど両端の色になる長さ
-  const { angle, stops } = node.fillGradient
-  const radians = (angle * Math.PI) / 180
-  const dx = Math.cos(radians)
-  const dy = Math.sin(radians)
-  const half = (Math.abs(node.width * dx) + Math.abs(node.height * dy)) / 2
-  const cx = node.width / 2
-  const cy = node.height / 2
-  const gradient = ctx.createLinearGradient(
-    cx - dx * half,
-    cy - dy * half,
-    cx + dx * half,
-    cy + dy * half,
-  )
-  for (const stop of stops) gradient.addColorStop(stop.offset, stop.color)
+/** いま組んであるパスを、塗りを下から順に重ねて塗る。影は一番下の塗りに付ける */
+function fillAll(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Pick<Style, 'fills'>, effects: readonly Effect[]): void {
+  node.fills.forEach((fill, i) => {
+    ctx.save()
+    if (i === 0) applyEffects(ctx, pass, effects)
+    ctx.fillStyle = paintStyle(ctx, fill, node)
+    ctx.fill()
+    ctx.restore()
+  })
+}
+
+/** いま組んであるパスに、線を下から順に重ねて引く */
+function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'strokes' | 'strokeWidth'>): void {
+  ctx.lineWidth = node.strokeWidth
+  for (const stroke of node.strokes) {
+    ctx.strokeStyle = paintStyle(ctx, stroke, node)
+    ctx.stroke()
+  }
+}
+
+/** 塗りに使う色かグラデーション。グラデーションは枠（size）に合わせる */
+function paintStyle(ctx: CanvasRenderingContext2D, paint: Paint, size: Size): string | CanvasGradient {
+  if (paint.type === 'solid') return paint.color
+  // 枠の中心を通る、angle の向きの線に沿って色を変える
+  const [from, to] = gradientLine(paint, size)
+  // 枠が極端に大きいと端が Infinity になり、createLinearGradient が例外を投げる。そのときは最初の色で塗る
+  if (![from.x, from.y, to.x, to.y].every(Number.isFinite)) return paint.stops[0].color
+  const gradient = ctx.createLinearGradient(from.x, from.y, to.x, to.y)
+  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stop.color)
   return gradient
 }
 
@@ -335,22 +326,17 @@ function drawFitted(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, node: Im
   }
 }
 
-function fillWithShadow(
-  ctx: CanvasRenderingContext2D,
-  pass: Pass,
-  fill: string | CanvasGradient,
-  shadow: Shadow | null,
-): void {
-  ctx.save()
-  applyShadow(ctx, pass, shadow)
-  ctx.fillStyle = fill
-  ctx.fill()
-  ctx.restore()
+/**
+ * 効果（影）を、次に描くものに付ける。影のずれは回転に従わない（図形を回しても、影は同じ向きに落ちる）。
+ * Canvas は 1 回の描画に影を 1 つしか付けられないので、2 つ目からは図形を画面外へずらして影だけを先に描く
+ */
+function applyEffects(ctx: CanvasRenderingContext2D, pass: Pass, effects: readonly Effect[]): void {
+  if (effects.length === 0) return
+  for (const effect of effects.slice(0, -1)) drawShadowOnly(ctx, pass, effect)
+  setShadow(ctx, pass, effects[effects.length - 1])
 }
 
-/** 影のずれは回転に従わない（図形を回しても、影は同じ向きに落ちる） */
-function applyShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow | null): void {
-  if (!shadow) return
+function setShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Effect): void {
   const alpha = Math.round(shadow.opacity * 255)
   ctx.shadowColor = shadow.color + alpha.toString(16).padStart(2, '0')
   ctx.shadowBlur = shadow.blur * pass.scale
@@ -358,26 +344,43 @@ function applyShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow |
   ctx.shadowOffsetY = shadow.y * pass.scale
 }
 
-/** points を順につないだ線を引き、両端に端の形を描く */
+/** いま組んであるパスの影だけを描く。パスを画面の外へずらして塗り、影のずれで元の位置へ戻す */
+function drawShadowOnly(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Effect): void {
+  const far = 100_000
+  const inverse = ctx.getTransform().inverse()
+  ctx.save()
+  setShadow(ctx, pass, shadow)
+  ctx.shadowOffsetX += far
+  // 画面の座標で far だけ左へずらす量を、いまの座標系に直す
+  ctx.translate(-far * inverse.a, -far * inverse.b)
+  ctx.fillStyle = '#000000'
+  ctx.fill()
+  ctx.restore()
+}
+
+/** 頂点を順につないだ線（曲線を含む）を引き、両端に端の形を描く */
 function strokeWithCaps(
   ctx: CanvasRenderingContext2D,
-  points: readonly Point[],
-  style: { stroke: string; strokeWidth: number; startCap: Cap; endCap: Cap },
+  points: readonly Vertex[],
+  style: Size & Pick<Style, 'strokes' | 'strokeWidth'> & { startCap: Cap; endCap: Cap },
 ): void {
-  if (style.strokeWidth <= 0 || points.length < 2) return
+  if (!hasStroke(style) || points.length < 2) return
   const { line, heads } = cappedStroke(points, style)
-  ctx.beginPath()
-  line.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
-  ctx.strokeStyle = style.stroke
-  ctx.lineWidth = style.strokeWidth
-  ctx.stroke()
-
-  ctx.fillStyle = style.stroke
-  for (const head of heads) {
+  for (const stroke of style.strokes) {
+    const color = paintStyle(ctx, stroke, style)
     ctx.beginPath()
-    head.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
-    ctx.closePath()
-    ctx.fill()
+    tracePath(ctx, line, false)
+    ctx.strokeStyle = color
+    ctx.lineWidth = style.strokeWidth
+    ctx.stroke()
+
+    ctx.fillStyle = color
+    for (const head of heads) {
+      ctx.beginPath()
+      head.forEach((point, i) => (i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
+      ctx.closePath()
+      ctx.fill()
+    }
   }
 }
 
@@ -387,10 +390,10 @@ function clampRadius(radius: number, size: Size): number {
 
 /** 線の太さや影も含めて、ノードが描かれうる範囲（ノードの座標系） */
 function paintedRect(node: SceneNode): Bounds {
-  const stroke = 'stroke' in node && node.stroke ? node.strokeWidth / 2 : 0
-  const shadow = 'shadow' in node ? node.shadow : null
+  const stroke = 'strokes' in node && node.strokes.length > 0 ? node.strokeWidth / 2 : 0
+  const effects = 'effects' in node ? node.effects : []
   // ぼかしは指定した長さより少し外まで広がる。影のずれは回転に従わないので、どの向きにも余裕を取る
-  const spread = shadow ? shadow.blur * 2 + Math.max(Math.abs(shadow.x), Math.abs(shadow.y)) : 0
+  const spread = Math.max(0, ...effects.map((shadow) => shadow.blur * 2 + Math.max(Math.abs(shadow.x), Math.abs(shadow.y))))
   // 矢印は線より外へ張り出す
   const arrow =
     'startCap' in node && (node.startCap !== 'none' || node.endCap !== 'none')

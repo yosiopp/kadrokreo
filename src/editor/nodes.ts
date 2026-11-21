@@ -1,10 +1,10 @@
 import type { Bounds } from '../document/geometry.ts'
+import { solid } from '../document/paint.ts'
 import type {
   AssetId,
   EllipseNode,
   FrameNode,
   ImageNode,
-  LineNode,
   NodeId,
   PathNode,
   RectNode,
@@ -30,8 +30,9 @@ function base(name: string, bounds: Bounds) {
     visible: true,
     locked: false,
     opacity: 1,
-    layoutFill: { width: false, height: false },
+    sizing: { width: 'fixed', height: 'fixed' } as RectNode['sizing'],
     layoutPositioning: 'auto' as const,
+    constraints: { horizontal: 'start', vertical: 'start' } as RectNode['constraints'],
     minWidth: null,
     maxWidth: null,
     minHeight: null,
@@ -43,11 +44,10 @@ export function createRect(bounds: Bounds): RectNode {
   return {
     ...base('Rectangle', bounds),
     type: 'rect',
-    fill: '#d9d9d9',
-    fillGradient: null,
-    stroke: null,
+    fills: solid('#d9d9d9'),
+    strokes: [],
     strokeWidth: 1,
-    shadow: null,
+    effects: [],
     cornerRadius: 0,
   }
 }
@@ -56,25 +56,20 @@ export function createEllipse(bounds: Bounds): EllipseNode {
   return {
     ...base('Ellipse', bounds),
     type: 'ellipse',
-    fill: '#d9d9d9',
-    fillGradient: null,
-    stroke: null,
+    fills: solid('#d9d9d9'),
+    strokes: [],
     strokeWidth: 1,
-    shadow: null,
+    effects: [],
   }
 }
 
-export function createLine(bounds: Bounds, direction: LineNode['direction'] = 'down'): LineNode {
-  return {
-    ...base('Line', bounds),
-    type: 'line',
-    stroke: '#000000',
-    strokeWidth: 1,
-    direction,
-    flipped: false,
-    startCap: 'none',
-    endCap: 'none',
-  }
+/**
+ * 直線（2 つの頂点を持つ開いたパス）。points を省くと、枠の左上から右下へ引く。
+ * shape は pathFromPoints で作った枠と頂点でもよい
+ */
+export function createLine(shape: Bounds & Partial<Pick<PathNode, 'points'>>): PathNode {
+  const { points = [{ x: 0, y: 0 }, { x: 1, y: 1 }], ...bounds } = shape
+  return { ...createPath({ ...bounds, points }, false), name: 'Line' }
 }
 
 /** shape は pathFromPoints で作った枠と頂点。閉じた形には塗りを付ける */
@@ -84,11 +79,10 @@ export function createPath(shape: Bounds & Pick<PathNode, 'points'>, closed: boo
     type: 'path',
     points: shape.points,
     closed,
-    fill: closed ? '#d9d9d9' : null,
-    fillGradient: null,
-    stroke: '#000000',
+    fills: solid(closed ? '#d9d9d9' : null),
+    strokes: solid('#000000'),
     strokeWidth: 1,
-    shadow: null,
+    effects: [],
     startCap: 'none',
     endCap: 'none',
   }
@@ -101,8 +95,8 @@ export function createText(bounds: Bounds, text = ''): TextNode {
     text,
     fontSize: 16,
     fontFamily: 'sans-serif',
-    fill: '#000000',
-    autoWidth: true,
+    fills: solid('#000000'),
+    sizing: { width: 'hug', height: 'hug' },
     fontWeight: 400,
     textAlign: 'left',
     lineHeight: 1.2,
@@ -117,11 +111,10 @@ export function createFrame(bounds: Bounds): FrameNode {
   return {
     ...base('Frame', bounds),
     type: 'frame',
-    fill: '#ffffff',
-    fillGradient: null,
-    stroke: null,
+    fills: solid('#ffffff'),
+    strokes: [],
     strokeWidth: 1,
-    shadow: null,
+    effects: [],
     children: [],
     clipContent: true,
     cornerRadius: 0,

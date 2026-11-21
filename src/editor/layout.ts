@@ -8,7 +8,7 @@ import {
   transformRect,
 } from '../document/geometry.ts'
 import { clampSize, stretchedAxes, wraps } from '../document/autoLayout.ts'
-import type { AutoLayout, FrameNode, NodeId, Scene, SceneNode } from '../document/types.ts'
+import type { AutoLayout, FrameNode, NodeId, Scene, SceneNode, Sizing } from '../document/types.ts'
 import { createFrame } from './nodes.ts'
 import {
   type NodePatch,
@@ -60,7 +60,7 @@ function relayoutOnce<T extends Scene>(scene: T, fitText: FitText | undefined): 
   if (!fitText || arranged === scene) return arranged
   // 伸ばして幅が変わった、折り返すテキスト
   const resized = Object.values(arranged.nodes).flatMap((node) =>
-    node.type === 'text' && !node.autoWidth && scene.nodes[node.id].width !== node.width ? [node.id] : [],
+    node.type === 'text' && node.sizing.width !== 'hug' && scene.nodes[node.id].width !== node.width ? [node.id] : [],
   )
   return resized.length > 0 ? fitText(arranged, resized) : arranged
 }
@@ -88,10 +88,6 @@ function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
   if (frame.type !== 'frame' || !frame.layout) return scene
   const { direction, gap, crossGap, align, justify } = frame.layout
   const horizontal = direction === 'horizontal'
-  // 親に伸ばされている向きは、中身に合わせない（大きさは親が決める）
-  const stretched = stretchedAxes(scene, frame)
-  const widthMode = stretched.width ? 'fixed' : frame.layout.widthMode
-  const heightMode = stretched.height ? 'fixed' : frame.layout.heightMode
   // 並べる向き（main）と、それに直交する向き（cross）で考える
   const mainAxis = horizontal ? 'width' : 'height'
   const crossAxis = horizontal ? 'height' : 'width'
@@ -102,10 +98,10 @@ function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
   const padEnd = horizontal ? right : bottom
   const crossStart = horizontal ? top : left
   const crossEnd = horizontal ? bottom : right
-  const hugMain = (horizontal ? widthMode : heightMode) === 'hug'
-  const hugCross = (horizontal ? heightMode : widthMode) === 'hug'
+  const hugMain = frame.sizing[mainAxis] === 'hug'
+  const hugCross = frame.sizing[crossAxis] === 'hug'
   // 中身に合わせる向きは、行の長さに限りがないので折り返さない
-  const wrap = wraps(scene, frame)
+  const wrap = wraps(frame)
 
   const items: LayoutItem[] = visibleItems(scene, frame).map((item) => {
     const axes = stretchedAxes(scene, item.node)
@@ -166,10 +162,13 @@ function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
   const lineStarts: number[] = []
   if (wrap) {
     const free = innerCross - contentCross
-    let at = crossStart + (align === 'center' ? free / 2 : align === 'end' ? free : 0)
+    // 均等に配るなら、余りを行の間に足す（余りがないか、行が 1 つなら先頭に寄せる。CSS の space-between と同じ）
+    const between = frame.layout.alignContent === 'space-between'
+    const spread = between && lines.length > 1 && free > 0 ? free / (lines.length - 1) : 0
+    let at = crossStart + (between ? 0 : align === 'center' ? free / 2 : align === 'end' ? free : 0)
     for (const size of lineCross) {
       lineStarts.push(at)
-      at += size + crossGap
+      at += size + crossGap + spread
     }
   } else {
     lineStarts.push(crossStart)
@@ -260,10 +259,8 @@ const DEFAULT_LAYOUT: AutoLayout = {
   paddingLeft: 10,
   align: 'start',
   justify: 'start',
-  widthMode: 'hug',
-  heightMode: 'hug',
   wrap: false,
-  crossGap: 10,
+  crossGap: 10, alignContent: 'auto',
 }
 
 /**
@@ -275,7 +272,12 @@ export function enableAutoLayout<T extends Scene>(scene: T, id: NodeId): T {
   if (frame?.type !== 'frame' || frame.layout) return scene
 
   const items = visibleItems(scene, frame)
-  if (items.length === 0) return updateNode(scene, id, { layout: DEFAULT_LAYOUT })
+  // 大きさは中身に合わせる。親いっぱいに伸ばしている向きはそのまま
+  const sizing = {
+    width: frame.sizing.width === 'fill' ? 'fill' : 'hug',
+    height: frame.sizing.height === 'fill' ? 'fill' : 'hug',
+  } as const
+  if (items.length === 0) return updateNode(scene, id, { layout: DEFAULT_LAYOUT, sizing })
 
   // 子の中心が、横と縦のどちらに広がっているかで向きを決める
   const centers = items.map(({ box }) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 }))
@@ -309,7 +311,7 @@ export function enableAutoLayout<T extends Scene>(scene: T, id: NodeId): T {
     paddingBottom: Math.max(0, Math.round(bottom)),
     paddingLeft: Math.max(0, Math.round(left)),
   }
-  const next = { ...frame, children, layout } satisfies FrameNode
+  const next = { ...frame, children, layout, sizing } satisfies FrameNode
   return relayout({ ...scene, nodes: { ...scene.nodes, [id]: next } })
 }
 
@@ -335,7 +337,7 @@ export function wrapInAutoLayout<T extends Scene>(
     ...createFrame({ x: origin.x, y: origin.y, width: bounds.width, height: bounds.height }),
     name,
     // まとめるだけの枠なので、塗らず、はみ出しも隠さない
-    fill: null,
+    fills: [],
     clipContent: false,
   }
 
@@ -398,9 +400,9 @@ export function placeInLayout<T extends Scene>(
 }
 
 /**
- * ids を、axis の向きに親いっぱいまで伸ばす（value が false ならやめる）。親が自動で並べていないものは変えない。
- * 伸ばせるように、まわりの設定も合わせる: 親がその向きを中身に合わせているなら固定にし、
- * テキストを横に伸ばすなら、幅に合わせて折り返すようにする。
+ * ids を、axis の向きに親いっぱいまで伸ばす（value が false なら固定の大きさに戻す）。親が自動で並べていないものは変えない。
+ * 伸ばせるように、親がその向きを中身に合わせているなら固定にする。
+ * テキストを横に伸ばすと幅に合わせて折り返す（sizing.width が hug でなくなるため）。テキストの高さは伸ばさない
  */
 export function setLayoutFill<T extends Scene>(
   scene: T,
@@ -413,13 +415,13 @@ export function setLayoutFill<T extends Scene>(
     const parent = node?.parentId === null || !node ? null : next.nodes[node.parentId]
     if (!node || parent?.type !== 'frame' || !parent.layout) return next
     if (node.type === 'text' && axis === 'height') return next
-    let changed = updateNode(next, id, { layoutFill: { ...node.layoutFill, [axis]: value } })
-    if (!value) return changed
-    if (node.type === 'text' && node.autoWidth) changed = updateNode(changed, id, { autoWidth: false })
-    const mode = axis === 'width' ? 'widthMode' : 'heightMode'
+    if (!value) {
+      return node.sizing[axis] === 'fill' ? updateNode(next, id, { sizing: { ...node.sizing, [axis]: 'fixed' } }) : next
+    }
+    let changed = updateNode(next, id, { sizing: { ...node.sizing, [axis]: 'fill' } })
     const along = (parent.layout.direction === 'horizontal') === (axis === 'width')
-    if (along && parent.layout[mode] === 'hug') {
-      changed = updateNode(changed, parent.id, { layout: { ...parent.layout, [mode]: 'fixed' } })
+    if (along && parent.sizing[axis] === 'hug') {
+      changed = updateNode(changed, parent.id, { sizing: { ...parent.sizing, [axis]: 'fixed' } })
     }
     return changed
   }, scene)
@@ -477,9 +479,10 @@ export function setLayoutPositioning<T extends Scene>(
     const parent = node?.parentId === null || !node ? null : next.nodes[node.parentId]
     if (parent?.type !== 'frame' || !parent.layout) return next
     // 並びから外したものは、親いっぱいに伸ばさない
+    const unfill = (sizing: SceneNode['sizing']['width']) => (sizing === 'fill' ? 'fixed' : sizing)
     return updateNode(next, id, {
       layoutPositioning: value,
-      ...(value === 'absolute' ? { layoutFill: { width: false, height: false } } : {}),
+      ...(value === 'absolute' ? { sizing: { width: unfill(node.sizing.width), height: unfill(node.sizing.height) } } : {}),
     })
   }, scene)
 }
@@ -491,9 +494,9 @@ export function setLayoutPositioning<T extends Scene>(
 export function setLayoutWrap<T extends Scene>(scene: T, ids: readonly NodeId[], value: boolean): T {
   return patchNodes(scene, ids, (node) => {
     if (node.type !== 'frame' || !node.layout) return null
-    const mode = node.layout.direction === 'horizontal' ? 'widthMode' : 'heightMode'
-    const fixed = value && node.layout[mode] === 'hug' ? { [mode]: 'fixed' as const } : {}
-    return { layout: { ...node.layout, wrap: value, ...fixed } }
+    const axis = node.layout.direction === 'horizontal' ? 'width' : 'height'
+    const fixed = value && node.sizing[axis] === 'hug' ? { sizing: { ...node.sizing, [axis]: 'fixed' as const } } : {}
+    return { layout: { ...node.layout, wrap: value }, ...fixed }
   })
 }
 
@@ -508,7 +511,25 @@ export function patchLayouts<T extends Scene>(scene: T, ids: readonly NodeId[], 
 export function setAutoLayoutEnabled<T extends Scene>(scene: T, ids: readonly NodeId[], enabled: boolean): T {
   return ids.reduce(
     (next, id) =>
-      enabled ? enableAutoLayout(next, id) : next.nodes[id]?.type === 'frame' ? updateNode(next, id, { layout: null }) : next,
+      enabled ? enableAutoLayout(next, id) : next.nodes[id]?.type === 'frame' ? disableAutoLayout(next, id) : next,
     scene,
   )
+}
+
+/**
+ * 自動で並べるフレーム ids の、axis の向きの大きさの決め方を変える（中身に合わせる・固定・親いっぱい）。
+ * 親いっぱいは setLayoutFill を通す（親の設定も合わせるため）
+ */
+export function setFrameSizing<T extends Scene>(scene: T, ids: readonly NodeId[], axis: 'width' | 'height', value: Sizing): T {
+  if (value === 'fill') return setLayoutFill(scene, ids.filter((id) => scene.nodes[id]?.type === 'frame'), axis, true)
+  return patchNodes(scene, ids, (node) =>
+    node.type === 'frame' && node.layout && node.sizing[axis] !== value ? { sizing: { ...node.sizing, [axis]: value } } : null,
+  )
+}
+
+/** 自動で並べるのをやめる。中身に合わせていた向きは、いまの大きさで固定にする */
+function disableAutoLayout<T extends Scene>(scene: T, id: NodeId): T {
+  const node = scene.nodes[id]
+  const unhug = (sizing: SceneNode['sizing']['width']) => (sizing === 'hug' ? 'fixed' : sizing)
+  return updateNode(scene, id, { layout: null, sizing: { width: unhug(node.sizing.width), height: unhug(node.sizing.height) } })
 }

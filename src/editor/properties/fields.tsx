@@ -5,10 +5,19 @@ import { MIXED, type Mixed } from './context.ts'
 
 // プロパティパネルの欄の部品。どれも、複数選択で値が揃っていないとき（MIXED）の出し方を持つ
 
-export function Section({ title, children }: { title: string; children: ReactNode }) {
+/** インスタンス（やその中身）で、元と違う値にしている欄に付ける印 */
+export function OverrideMark({ show = false }: { show?: boolean }) {
+  if (!show) return null
+  return <span className="override-mark" role="img" aria-label="上書き" title="このインスタンスだけ元と違う値にしています" />
+}
+
+export function Section({ title, overridden, children }: { title: string; overridden?: boolean; children: ReactNode }) {
   return (
     <section className="panel-section">
-      <h3 className="section-title">{title}</h3>
+      <h3 className="section-title">
+        {title}
+        <OverrideMark show={overridden} />
+      </h3>
       {children}
     </section>
   )
@@ -62,16 +71,20 @@ export function TextField({ label, value, onCommit }: TextFieldProps) {
 
 type SelectFieldProps<T extends string> = {
   label: string
+  overridden?: boolean
   value: T | Mixed
   /** [値, 表示名] の並び */
   options: readonly (readonly [T, string])[]
   onChange: (value: T) => void
 }
 
-export function SelectField<T extends string>({ label, value, options, onChange }: SelectFieldProps<T>) {
+export function SelectField<T extends string>({ label, overridden, value, options, onChange }: SelectFieldProps<T>) {
   return (
     <label className="field">
-      <span className="field-label">{label}</span>
+      <span className="field-label">
+        {label}
+        <OverrideMark show={overridden} />
+      </span>
       <select
         value={value === MIXED ? '' : value}
         onChange={(event) => {
@@ -123,6 +136,8 @@ type NumberFieldProps = {
   /** 上下キーで増減する量。Shift でその 10 倍 */
   step?: number
   disabled?: boolean
+  /** インスタンスで元と違う値にしている */
+  overridden?: boolean
   onCommit: (value: number) => void
   onClear?: () => void
 }
@@ -135,6 +150,7 @@ export function NumberField({
   max = Infinity,
   step = 1,
   disabled,
+  overridden,
   onCommit,
   onClear,
 }: NumberFieldProps) {
@@ -156,7 +172,10 @@ export function NumberField({
 
   return (
     <label className="field">
-      <span className="field-label">{label}</span>
+      <span className="field-label">
+        {label}
+        <OverrideMark show={overridden} />
+      </span>
       <input
         type="text"
         inputMode="decimal"

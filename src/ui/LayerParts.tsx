@@ -1,3 +1,4 @@
+import { nodeKind } from '../document/path.ts'
 import type { SceneNode } from '../document/types.ts'
 import { TypeIcon } from './icons.tsx'
 
@@ -32,7 +33,7 @@ export function LayerCaret({ node, open, onToggle }: CaretProps) {
 export function LayerIcon({ node }: { node: SceneNode }) {
   return (
     <span className="layer-icon">
-      <TypeIcon type={node.type} role={node.type === 'frame' ? node.component?.role : undefined} />
+      <TypeIcon type={nodeKind(node)} role={node.type === 'frame' ? node.component?.role : undefined} />
     </span>
   )
 }

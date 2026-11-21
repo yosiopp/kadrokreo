@@ -1,6 +1,8 @@
 import { type MainNode, findMain, isInstance, isMain } from '../../document/component.ts'
 import type { Page } from '../../document/types.ts'
 import {
+  type VariantProperty,
+  isBooleanProperty,
   isVariantSet,
   parseVariantName,
   propValue,
@@ -16,15 +18,23 @@ import {
   hasOverrides,
   listComponents,
   makeComponent,
-  overriddenKeys,
+  nestedInstanceOf,
   pushOverrides,
   resetOverrides,
   swapComponent,
+  swapNestedInstance,
 } from '../components.ts'
 import { fitTextNodes } from '../measure.ts'
-import { addVariant, renameVariantProperty, selectVariant, setVariantValue } from '../variants.ts'
+import {
+  addVariant,
+  addVariantProperty,
+  removeVariantProperty,
+  renameVariantProperty,
+  selectVariant,
+  setVariantValue,
+} from '../variants.ts'
 import { type PanelContext, MIXED } from './context.ts'
-import { Section, SelectField, TextField } from './fields.tsx'
+import { CheckField, OverrideMark, Section, SelectField, TextField } from './fields.tsx'
 
 /** 選んでいるインスタンスや中身の上書きを、戻す・元に書き込む */
 function overrideActions({ store, state, page, selection }: PanelContext) {
@@ -39,15 +49,30 @@ function overrideActions({ store, state, page, selection }: PanelContext) {
 
 /** インスタンスの中身（写し）を選んでいるときの節 */
 export function InstanceContentSection({ ctx }: { ctx: PanelContext }) {
-  const { state, page, nodes } = ctx
+  const { store, state, page, nodes } = ctx
   const { overridden, reset, push } = overrideActions(ctx)
   // 1 つだけ選んでいる中身が、元と違えている項目
-  const changedKeys = nodes.length === 1 ? overriddenKeys(state.document, page, nodes[0].id) : []
+  const changedKeys = [...ctx.overridden]
+  // 1 つだけ選んでいる中身が、元の中に置いたインスタンスの写しなら、別のコンポーネントに差し替えられる
+  const nested = nodes.length === 1 ? nestedInstanceOf(state.document, page, nodes[0].id) : null
   return (
     <Section title="インスタンスの中身">
       <p className="section-note">
         文言・塗り・線の色・表示・文字の書式・画像を、このインスタンスに限って変えられます。文言はダブルクリックで編集します。
       </p>
+      {nested && (
+        <ComponentSelect
+          label="元"
+          ariaLabel="入れ子のインスタンスの元"
+          ctx={ctx}
+          value={nested.componentId}
+          overridden={nested.componentId !== nested.originalId}
+          allowed={nested.allowed}
+          onChange={(componentId) =>
+            store.applyDocument((doc) => swapNestedInstance(doc, page.id, nodes[0].id, componentId))
+          }
+        />
+      )}
       {changedKeys.length > 0 && (
         <p className="section-note override-keys">
           元と違えている項目: {changedKeys.map((key) => OVERRIDE_LABELS[key]).join('・')}
@@ -114,17 +139,39 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
           <p className="section-note">
             中のコンポーネントを、名前の「プロパティ=値」で選び分けられます。プロパティ名を変えると、すべてのバリアントに反映されます。
           </p>
-          {variantProperties(page, variantSet.id).map(({ name, values }) => (
-            <TextField
-              key={name}
-              label={`${values.length} 値`}
-              value={name}
-              onCommit={(next) => store.apply((base) => renameVariantProperty(base, variantSet.id, name, next))}
-            />
+          {variantProperties(page, variantSet.id).map((property, _, all) => (
+            <div key={property.name} className="variant-property">
+              <TextField
+                label={isBooleanProperty(property) ? '真偽' : `${property.values.length} 値`}
+                value={property.name}
+                onCommit={(next) =>
+                  store.apply((base) => renameVariantProperty(base, variantSet.id, property.name, next))
+                }
+              />
+              <button
+                type="button"
+                className="icon-button"
+                title={all.length > 1 ? 'このプロパティを消す（すべてのバリアントの名前から外す）' : '最後のプロパティは消せません'}
+                aria-label={`プロパティ ${property.name} を消す`}
+                disabled={all.length <= 1}
+                onClick={() => store.apply((base) => removeVariantProperty(base, variantSet.id, property.name))}
+              >
+                ×
+              </button>
+            </div>
           ))}
-          <button type="button" onClick={() => addVariantOf(variantsIn(page, variantSet.id).at(-1)!.id)}>
-            バリアントを追加
-          </button>
+          <div className="variant-actions">
+            <button
+              type="button"
+              title="すべてのバリアントの名前に「プロパティ=標準」を書き足す"
+              onClick={() => store.apply((base) => addVariantProperty(base, variantSet.id).scene)}
+            >
+              プロパティを追加
+            </button>
+            <button type="button" onClick={() => addVariantOf(variantsIn(page, variantSet.id).at(-1)!.id)}>
+              バリアントを追加
+            </button>
+          </div>
         </Section>
       )}
 
@@ -143,14 +190,25 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
                   : 'このフレームが元です。変更すると、すべてのインスタンスに反映されます。'}
               </p>
               {variantMainSet &&
-                (parseVariantName(single.name) ?? []).map(([key, value]) => (
-                  <TextField
-                    key={key}
-                    label={key}
-                    value={value}
-                    onCommit={(next) => store.apply((base) => setVariantValue(base, single.id, key, next))}
-                  />
-                ))}
+                (parseVariantName(single.name) ?? []).map(([key, value]) =>
+                  booleanIn(variantProperties(page, variantMainSet.id), key) ? (
+                    <CheckField
+                      key={key}
+                      label={key}
+                      value={value === 'true'}
+                      onChange={(checked) =>
+                        store.apply((base) => setVariantValue(base, single.id, key, String(checked)))
+                      }
+                    />
+                  ) : (
+                    <TextField
+                      key={key}
+                      label={key}
+                      value={value}
+                      onCommit={(next) => store.apply((base) => setVariantValue(base, single.id, key, next))}
+                    />
+                  ),
+                )}
               <button type="button" onClick={() => addInstance(single.component!.id)}>
                 インスタンスを作る
               </button>
@@ -173,44 +231,41 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
               </p>
               {instanceMain &&
                 instanceSet &&
-                variantProperties(instanceMain.page, instanceSet.id).map(({ name, values }) => (
-                  <SelectField
-                    key={name}
-                    label={name}
-                    value={propValue(parseVariantName(instanceMain.node.name) ?? [], name) ?? MIXED}
-                    options={values.map((value) => [value, value] as const)}
-                    onChange={(value) =>
-                      store.applyDocument((doc) => selectVariant(doc, page.id, single.id, name, value))
-                    }
-                  />
-                ))}
-              <label className="field">
-                <span className="field-label">元</span>
-                <select
-                  aria-label="インスタンスの元"
-                  value={single.component.id}
-                  onChange={(event) => {
-                    const componentId = event.target.value
-                    store.applyDocument((doc) => swapComponent(doc, page.id, single.id, componentId))
-                    // フォーカスを残すとキーボードショートカットが効かなくなる
-                    event.target.blur()
-                  }}
-                >
-                  {listComponents(state.document).map(({ page: mainPage, node }) => (
-                    <option
-                      key={node.component.id}
-                      value={node.component.id}
-                      // 差し替えると、このインスタンスが入っている元を、新しい元が含むことになる
-                      disabled={
-                        single.parentId !== null &&
-                        !canHoldInstance(state.document, page, single.parentId, node.component.id)
-                      }
-                    >
-                      {optionName(mainPage, node)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                variantProperties(instanceMain.page, instanceSet.id).map((property) => {
+                  const { name, values } = property
+                  const current = propValue(parseVariantName(instanceMain.node.name) ?? [], name)
+                  const choose = (value: string) =>
+                    store.applyDocument((doc) => selectVariant(doc, page.id, single.id, name, value))
+                  return isBooleanProperty(property) ? (
+                    <CheckField
+                      key={name}
+                      label={name}
+                      value={current === undefined ? MIXED : current === 'true'}
+                      onChange={(checked) => choose(String(checked))}
+                    />
+                  ) : (
+                    <SelectField
+                      key={name}
+                      label={name}
+                      value={current ?? MIXED}
+                      options={values.map((value) => [value, value] as const)}
+                      onChange={choose}
+                    />
+                  )
+                })}
+              <ComponentSelect
+                label="元"
+                ariaLabel="インスタンスの元"
+                ctx={ctx}
+                value={single.component.id}
+                // 差し替えると、このインスタンスが入っている元を、新しい元が含むことになるものは選べない
+                allowed={(componentId) =>
+                  single.parentId === null || canHoldInstance(state.document, page, single.parentId, componentId)
+                }
+                onChange={(componentId) =>
+                  store.applyDocument((doc) => swapComponent(doc, page.id, single.id, componentId))
+                }
+              />
               <button type="button" onClick={() => selectMain(single.component!.id)}>
                 元を表示
               </button>
@@ -236,6 +291,55 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
         </Section>
       )}
     </>
+  )
+}
+
+/** プロパティ key が真偽値（値が true / false だけ）か */
+function booleanIn(properties: readonly VariantProperty[], key: string): boolean {
+  const property = properties.find((candidate) => candidate.name === key)
+  return property !== undefined && isBooleanProperty(property)
+}
+
+type ComponentSelectProps = {
+  label: string
+  ariaLabel: string
+  ctx: PanelContext
+  /** いまの元のコンポーネントの id */
+  value: string
+  overridden?: boolean
+  /** 選べるコンポーネントか（選べないものは灰色で出す） */
+  allowed: (componentId: string) => boolean
+  onChange: (componentId: string) => void
+}
+
+/** インスタンスの元を、ドキュメントにあるコンポーネントから選ぶ欄 */
+function ComponentSelect({ label, ariaLabel, ctx, value, overridden, allowed, onChange }: ComponentSelectProps) {
+  return (
+    <label className="field">
+      <span className="field-label">
+        {label}
+        <OverrideMark show={overridden} />
+      </span>
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value)
+          // フォーカスを残すとキーボードショートカットが効かなくなる
+          event.target.blur()
+        }}
+      >
+        {listComponents(ctx.state.document).map(({ page: mainPage, node }) => (
+          <option
+            key={node.component.id}
+            value={node.component.id}
+            disabled={node.component.id !== value && !allowed(node.component.id)}
+          >
+            {optionName(mainPage, node)}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hitTest, hitTestFrameLabel } from '../canvas/hitTest.ts'
 import { findFrameAt, nodesInMarquee } from './hitTest.ts'
+import { solid } from '../document/paint.ts'
 import { pathFromPoints } from '../document/path.ts'
 import { createEllipse, createFrame, createLine, createPath, createRect } from './nodes.ts'
 import { createPage, insertNode, updateNode } from './operations.ts'
@@ -46,8 +47,8 @@ describe('hitTest', () => {
   })
 
   it('直線は線の近くだけで当たる', () => {
-    const down = { ...createLine({ x: 0, y: 0, width: 100, height: 100 }, 'down'), strokeWidth: 4 }
-    const up = createLine({ x: 200, y: 0, width: 100, height: 100 }, 'up')
+    const down = { ...createLine({ x: 0, y: 0, width: 100, height: 100 }), strokeWidth: 4 }
+    const up = createLine({ x: 200, y: 0, width: 100, height: 100, points: [{ x: 0, y: 1 }, { x: 1, y: 0 }] })
     const flat = createLine({ x: 0, y: 200, width: 100, height: 0 })
     let doc = createPage()
     for (const line of [down, up, flat]) doc = insertNode(doc, line)
@@ -81,6 +82,25 @@ describe('hitTest', () => {
     // 枠の中でも、線から離れた所や、閉じていない辺では当たらない
     expect(hitTest(doc, { x: 30, y: 60 }, { tolerance: 3 })).toBeNull()
     expect(hitTest(doc, { x: 50, y: 50 }, { tolerance: 3 })).toBeNull()
+  })
+
+  it('曲線は曲がった線の近くで当たり、弦の上では当たらない', () => {
+    // 0,100 から 100,100 へ、上に膨らむ山形（いちばん上は y = 25）
+    const arch = createPath(
+      pathFromPoints([
+        { x: 0, y: 100, out: { x: 0, y: 0 } },
+        { x: 100, y: 100, in: { x: 100, y: 0 } },
+      ]),
+      false,
+    )
+    const doc = insertNode(createPage(), arch)
+    expect(arch).toMatchObject({ y: 25, height: 75 })
+    expect(hitTest(doc, { x: 50, y: 26 }, { tolerance: 3 })).toBe(arch.id)
+    expect(hitTest(doc, { x: 50, y: 98 }, { tolerance: 3 })).toBeNull()
+    // 閉じて塗れば、曲線の内側で当たる
+    const filled = insertNode(createPage(), { ...arch, closed: true, fills: solid('#d9d9d9') })
+    expect(hitTest(filled, { x: 50, y: 60 }, { tolerance: 3 })).toBe(arch.id)
+    expect(hitTest(filled, { x: 5, y: 30 }, { tolerance: 3 })).toBeNull()
   })
 
   it('回したノードは、回した後の形で当たる', () => {

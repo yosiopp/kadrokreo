@@ -3,6 +3,7 @@ import { frame, rect, sceneOf } from './testNodes.ts'
 import type { MainNode } from './component.ts'
 import {
   formatVariantName,
+  isBooleanProperty,
   isComponentPart,
   isVariantSet,
   parseVariantName,
@@ -69,5 +70,12 @@ describe('バリアントのまとまり', () => {
     expect(pickVariant(variants, current, '状態', '標準')?.id).toBe('b')
     expect(pickVariant(variants, parseVariantName('サイズ=小, 状態=標準')!, '状態', '押下')?.id).toBe('c')
     expect(pickVariant(variants, current, 'サイズ', '中')).toBeNull()
+  })
+
+  it('値が true / false だけのプロパティを真偽値とみなす', () => {
+    expect(isBooleanProperty({ name: '押下', values: ['false', 'true'] })).toBe(true)
+    expect(isBooleanProperty({ name: '押下', values: ['false'] })).toBe(true)
+    expect(isBooleanProperty({ name: '押下', values: ['true', 'はい'] })).toBe(false)
+    expect(isBooleanProperty({ name: '押下', values: ['True'] })).toBe(false)
   })
 })

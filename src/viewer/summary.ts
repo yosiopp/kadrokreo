@@ -1,4 +1,5 @@
-import type { NodeId, Scene, SceneNode, Shadow, TextNode } from '../document/types.ts'
+import type { Effect, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
+import { hasStroke } from '../document/paint.ts'
 import { formatColor } from './colors.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, type InspectSection, shadowCss } from './inspect.ts'
 
@@ -10,7 +11,7 @@ export type TextStyleUse = Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeigh
   count: number
   nodes: NodeId[]
 }
-export type ShadowUse = { shadow: Shadow; count: number; nodes: NodeId[] }
+export type ShadowUse = { shadow: Effect; count: number; nodes: NodeId[] }
 
 /**
  * 表示されているノードの塗りと線の色、テキストの書式を数える。
@@ -35,27 +36,30 @@ export function summarizePage(scene: Scene): {
       if (use.nodes.at(-1) !== node.id) use.nodes.push(node.id)
       colors.set(color, use)
     }
+    const countPaints = (paints: readonly Paint[]) => {
+      for (const paint of paints) {
+        if (paint.type === 'solid') countColor(paint.color)
+        else for (const stop of paint.stops) countColor(stop.color)
+      }
+    }
     if (node.type === 'text') {
-      countColor(node.fill)
+      countPaints(node.fills)
       const key = [node.fontFamily, node.fontSize, node.fontWeight, node.lineHeight].join('\n')
       const { fontFamily, fontSize, fontWeight, lineHeight } = node
       const style = textStyles.get(key) ?? { fontFamily, fontSize, fontWeight, lineHeight, count: 0, nodes: [] }
       style.count++
       style.nodes.push(node.id)
       textStyles.set(key, style)
-    } else if (node.type === 'line') {
-      countColor(node.stroke)
     } else if (node.type !== 'image') {
-      if (node.fillGradient) for (const stop of node.fillGradient.stops) countColor(stop.color)
-      else if (node.fill !== null) countColor(node.fill)
-      if (node.stroke !== null && node.strokeWidth > 0) countColor(node.stroke)
+      countPaints(node.fills)
+      if (hasStroke(node)) countPaints(node.strokes)
     }
-    if ('shadow' in node && node.shadow) {
-      const { x, y, blur, color, opacity } = node.shadow
+    for (const shadow of 'effects' in node ? node.effects : []) {
+      const { x, y, blur, color, opacity } = shadow
       const key = [x, y, blur, color.toLowerCase(), opacity].join('\n')
-      const use = shadows.get(key) ?? { shadow: node.shadow, count: 0, nodes: [] }
+      const use = shadows.get(key) ?? { shadow, count: 0, nodes: [] }
       use.count++
-      use.nodes.push(node.id)
+      if (use.nodes.at(-1) !== node.id) use.nodes.push(node.id)
       shadows.set(key, use)
     }
     if (node.type === 'frame') for (const id of node.children) visit(scene.nodes[id])

@@ -3,8 +3,8 @@ import { createCamera } from '../canvas/camera.ts'
 import { pngFileName, renderPng } from '../canvas/exportPng.ts'
 import type { Viewport } from '../canvas/viewport.ts'
 import { getContentBounds } from '../document/geometry.ts'
-import { IMAGE_MIME_TYPES, decodeKdr } from '../document/kdr.ts'
-import type { DesignDocument, PageId } from '../document/types.ts'
+import { IMAGE_MIME_TYPES, KDR_EXTENSION, decodeKdr } from '../document/kdr.ts'
+import type { DesignDocument, NodeId, PageId } from '../document/types.ts'
 import { Message } from '../ui/Message.tsx'
 import { Logo } from '../ui/Logo.tsx'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
@@ -17,15 +17,16 @@ import type { Tool } from './tools.ts'
 import { ComponentsPanel } from './ComponentsPanel.tsx'
 import { LayersPanel } from './LayersPanel.tsx'
 import { PagesPanel } from './PagesPanel.tsx'
-import { COMPONENT_DRAG_TYPE, placeInstance } from './placeInstance.ts'
+import { COMPONENT_DRAG_TYPE, draggedComponent, instanceDropTarget, placeInstance } from './placeInstance.ts'
 import { PropertiesPanel } from './PropertiesPanel.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
 import { RedoIcon, UndoIcon } from './icons.tsx'
 import { placeImage, readImageFile } from './importImage.ts'
+import { SVG_ACCEPT, convertSvgText, isSvgFile, placeSvg, readSvgFile, svgWarningMessage } from './importSvg.ts'
 import { fitTextNodes } from './measure.ts'
 import {
-  addAsset,
+  addOrReuseAsset,
   createDocument,
   patchNodes,
   renameDocument,
@@ -137,6 +138,8 @@ function Editor({ store }: { store: EditorStore }) {
   }
 
   async function openDocument(file: File) {
+    // SVG は開かずに、図形にして今のページへ取り込む
+    if (isSvgFile(file)) return importImages([file])
     if (!confirmDiscard()) return
     try {
       replaceDocument(await decodeKdr(file))
@@ -145,18 +148,41 @@ function Editor({ store }: { store: EditorStore }) {
     }
   }
 
+  /** 画像と SVG を置く。SVG は画像としてではなく、図形のノードに変換して取り込む */
   async function importImages(files: File[]) {
     setMessage(null)
     let placed = 0
+    const notices: string[] = []
     for (const file of files) {
       try {
-        placeImage(store, camera, await readImageFile(file), placed * 20)
+        if (isSvgFile(file)) {
+          const imported = await readSvgFile(file)
+          placeSvg(store, camera, imported, placed * 20)
+          const notice = svgWarningMessage(imported.name, imported.warnings)
+          if (notice) notices.push(notice)
+        } else {
+          placeImage(store, camera, await readImageFile(file), placed * 20)
+        }
         placed++
       } catch (error) {
-        showError(error, '画像を取り込めませんでした')
+        notices.push(error instanceof Error ? error.message : '画像を取り込めませんでした')
       }
     }
+    if (notices.length > 0) setMessage(notices.join('\n'))
     if (placed > 0) setTool('select')
+  }
+
+  /** クリップボードの SVG の文字（デザインツールの「SVG としてコピー」など）を取り込む */
+  function importSvgText(text: string) {
+    setMessage(null)
+    try {
+      const imported = convertSvgText(text, 'SVG')
+      placeSvg(store, camera, imported)
+      setMessage(svgWarningMessage('SVG', imported.warnings))
+      setTool('select')
+    } catch (error) {
+      showError(error, 'SVG を取り込めませんでした')
+    }
   }
 
   /**
@@ -167,21 +193,22 @@ function Editor({ store }: { store: EditorStore }) {
     setMessage(null)
     try {
       const image = await readImageFile(file)
-      const assetId = createId()
       const { page, selection } = store.getState()
-      store.applyDocument((doc) =>
-        updatePage(addAsset(doc, assetId, image.asset), page.id, (base) =>
+      store.applyDocument((doc) => {
+        // 同じ画像がすでにあれば、そのアセットを使う
+        const { document, assetId } = addOrReuseAsset(doc, image.asset, createId)
+        return updatePage(document, page.id, (base) =>
           patchNodes(base, selection, (node) => (node.type === 'image' ? { assetId } : null)),
-        ),
-      )
+        )
+      })
     } catch (error) {
       showError(error, '画像を差し替えられませんでした')
     }
   }
 
-  /** ドロップされたファイル。画像はキャンバスに置き、それ以外は kdr として開く */
+  /** ドロップされたファイル。画像と SVG はキャンバスに置き、それ以外は kdr として開く */
   function openFiles(files: File[]) {
-    const images = files.filter((file) => file.type.startsWith('image/'))
+    const images = files.filter((file) => file.type.startsWith('image/') || isSvgFile(file))
     if (images.length > 0) importImages(images)
     else openDocument(files[0])
   }
@@ -217,6 +244,8 @@ function Editor({ store }: { store: EditorStore }) {
   }
 
   const dragging = useFileDrop(openFiles)
+  // コンポーネントの一覧からドラッグしているとき、インスタンスが入るフレーム（ページ直下なら null）
+  const [dropTarget, setDropTarget] = useState<NodeId | null>(null)
 
   return (
     <div className="app" data-mode="editor">
@@ -230,8 +259,8 @@ function Editor({ store }: { store: EditorStore }) {
         <Toolbar tool={tool} onToolChange={setTool}>
           <OpenFileButton
             className="icon-button"
-            title="画像を配置"
-            accept={IMAGE_MIME_TYPES.join(',')}
+            title="画像・SVG を配置"
+            accept={[...IMAGE_MIME_TYPES, SVG_ACCEPT].join(',')}
             multiple
             onFiles={importImages}
           >
@@ -265,7 +294,9 @@ function Editor({ store }: { store: EditorStore }) {
         <button type="button" onClick={newDocument}>
           新規
         </button>
-        <OpenFileButton onFiles={(files) => openDocument(files[0])}>開く</OpenFileButton>
+        <OpenFileButton accept={`${KDR_EXTENSION},${SVG_ACCEPT}`} onFiles={(files) => openDocument(files[0])}>
+          開く
+        </OpenFileButton>
         <button type="button" className="primary" onClick={exportFile}>
           kdr に書き出し
         </button>
@@ -283,8 +314,17 @@ function Editor({ store }: { store: EditorStore }) {
             if (!event.dataTransfer.types.includes(COMPONENT_DRAG_TYPE)) return
             event.preventDefault()
             event.dataTransfer.dropEffect = 'copy'
+            const componentId = draggedComponent()
+            const rect = event.currentTarget.getBoundingClientRect()
+            const screen = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+            setDropTarget(componentId === null ? null : instanceDropTarget(store, camera, componentId, screen))
+          }}
+          onDragLeave={(event) => {
+            // 中の要素へ移っただけなら消さない
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null)
           }}
           onDrop={(event) => {
+            setDropTarget(null)
             const componentId = event.dataTransfer.getData(COMPONENT_DRAG_TYPE)
             if (!componentId) return
             event.preventDefault()
@@ -299,8 +339,10 @@ function Editor({ store }: { store: EditorStore }) {
             tool={tool}
             onToolChange={setTool}
             onPasteImages={importImages}
+            onPasteSvg={importSvgText}
+            dropTarget={dropTarget}
           />
-          {dragging && <div className="drop-overlay">画像または kdr ファイルをドロップ</div>}
+          {dragging && <div className="drop-overlay">画像・SVG または kdr ファイルをドロップ</div>}
         </main>
         <PropertiesPanel store={store} state={state} onExportPng={exportPng} onReplaceImage={replaceImage} />
       </div>

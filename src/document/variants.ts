@@ -88,6 +88,14 @@ export function variantProperties(scene: Scene, setId: NodeId): VariantProperty[
 }
 
 /**
+ * 値が `true` / `false` だけのプロパティか（既存のデザインツールの真偽値のプロパティと同じ書き方）。画面ではチェック欄で出す。
+ * 片方しか使っていなくても真偽値とみなす（「押下=false」だけのまとまりに true のバリアントを足す前など）
+ */
+export function isBooleanProperty(property: VariantProperty): boolean {
+  return property.values.length > 0 && property.values.every((value) => value === 'true' || value === 'false')
+}
+
+/**
  * いまのバリアント（current）から、プロパティ key を value に変えたときに選ぶバリアント。
  * key が value のもののうち、ほかのプロパティがいまと多く一致するもの（同じなら先にあるもの）。なければ null
  */

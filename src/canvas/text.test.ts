@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { wrapLine } from './text.ts'
+import { type TextStyle, layoutText, measureText, wrapLine } from './text.ts'
 
 // 半角は幅 1、全角は幅 2 として数える
 const measure = (text: string) =>
@@ -35,5 +35,38 @@ describe('wrapLine', () => {
 
   it('幅が極端に狭くても 1 文字ずつは置く', () => {
     expect(wrapLine('abc', 0, measure)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('measureText（中身に合わせる幅の上限）', () => {
+  // 1 文字の幅を 10 として測るだけの、描画しない context
+  const ctx = { font: '', measureText: (text: string) => ({ width: text.length * 10 }) } as unknown as CanvasRenderingContext2D
+  const style = (patch: Partial<TextStyle> = {}): TextStyle => ({
+    text: 'aaa bbb ccc',
+    fontSize: 10,
+    fontFamily: 'sans-serif',
+    fontWeight: 400,
+    lineHeight: 1,
+    sizing: { width: 'hug', height: 'hug' },
+    width: 0,
+    minWidth: null,
+    maxWidth: null,
+    ...patch,
+  })
+
+  it('上限がなければ折り返さない', () => {
+    expect(measureText(ctx, style())).toEqual({ width: 110, height: 10 })
+  })
+
+  it('上限を超えたら上限で折り返し、幅は折り返した行のいちばん長いもの', () => {
+    expect(layoutText(ctx, style({ maxWidth: 80 })).map((line) => line.text)).toEqual(['aaa bbb ', 'ccc'])
+    expect(measureText(ctx, style({ maxWidth: 80 }))).toEqual({ width: 70, height: 20 })
+    // 収まっていれば、上限があってもそのまま
+    expect(measureText(ctx, style({ maxWidth: 200 }))).toEqual({ width: 110, height: 10 })
+  })
+
+  it('下限より狭ければ下限まで広げる。上限より長い 1 語ははみ出し、幅は上限のまま', () => {
+    expect(measureText(ctx, style({ text: 'ab', minWidth: 50 }))).toEqual({ width: 50, height: 10 })
+    expect(measureText(ctx, style({ text: 'abcdefgh', maxWidth: 40 })).width).toBe(40)
   })
 })

@@ -3,6 +3,7 @@ import type { DesignDocument, NodeId, Page } from '../document/types.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
 import { copyText } from '../ui/clipboard.ts'
 import { TYPE_LABELS } from '../ui/labels.ts'
+import { nodeKind } from '../document/path.ts'
 import { COLOR_FORMAT_LABELS, type ColorFormat } from './colors.ts'
 import {
   type CodeStyle,
@@ -10,9 +11,9 @@ import {
   type InspectSection,
   inspectNode,
   inspectSelection,
-  nodeCss,
 } from './inspect.ts'
-import { nodeMarkup } from './markup.ts'
+import { CODE_FORMAT_LABELS, type CodeFormat } from './codeFormat.ts'
+import { nodeCode, nodeMarkup } from './markup.ts'
 import { inspectPage } from './summary.ts'
 import { findMain, instanceOf } from '../document/component.ts'
 
@@ -56,7 +57,7 @@ export function InspectPanel({
 }: Props) {
   // コピーした値の目印（どの行か）。少しのあいだ「コピーしました」と出す
   const [copied, setCopied] = useState<string | null>(null)
-  // 色の書き方と長さの単位。選び直しても、そのまま使う（ブラウザには保存しない）
+  // コードの形式・色の書き方・長さの単位。選び直しても、そのまま使う（ブラウザには保存しない）
   const [style, setStyle] = useState<CodeStyle>(DEFAULT_CODE_STYLE)
   // 打ち込み中の rem の基準。正の数になったときだけ style に入れる
   const [remText, setRemText] = useState(String(DEFAULT_CODE_STYLE.remBase))
@@ -72,6 +73,23 @@ export function InspectPanel({
 
   const settings = (
     <div className="inspect-settings" aria-label="表示の設定">
+      <label>
+        形式
+        <select
+          aria-label="コードの形式"
+          value={style.format}
+          onChange={(event) => {
+            setStyle({ ...style, format: event.target.value as CodeFormat })
+            event.target.blur()
+          }}
+        >
+          {Object.entries(CODE_FORMAT_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
       <label>
         色
         <select
@@ -215,17 +233,18 @@ export function InspectPanel({
     )
   }
 
-  const css = nodeCss(page, node.id, style)
+  const code = nodeCode(page, node.id, style)
   const cssKey = `${node.id}/css`
-  // 中身のあるフレームは、子孫までまとめた HTML と CSS も出す
+  // 中身のあるフレームは、子孫までまとめた HTML（形式が React なら JSX）と CSS も出す
   const markup =
     node.type === 'frame' && node.children.length > 0 ? nodeMarkup(page, node.id, { style, assets: document.assets }) : null
+  const markupName = style.format === 'html' ? 'HTML' : 'JSX'
   const instance = instanceOf(page, node.id)
   const main = instance ? findMain(document, instance.component.id) : null
   return (
     <aside className="panel inspect-panel" aria-label="インスペクト">
       <h2 className="panel-title">{node.name}</h2>
-      <p className="inspect-type">{TYPE_LABELS[node.type]}</p>
+      <p className="inspect-type">{TYPE_LABELS[nodeKind(node)]}</p>
       {settings}
       {sections(node.id, inspectNode(document, page, node.id, style.color))}
       {main && (
@@ -238,24 +257,28 @@ export function InspectPanel({
           元のコンポーネントへ移動
         </button>
       )}
-      <section className="panel-section" aria-label="CSS">
-        <h3 className="section-title">CSS</h3>
-        <pre className="inspect-code">{css}</pre>
-        <button type="button" onClick={() => copy(cssKey, css)}>
-          {copied === cssKey ? 'コピーしました' : 'CSS をコピー'}
+      <section className="panel-section" aria-label={code.title}>
+        <h3 className="section-title">{code.title}</h3>
+        <pre className="inspect-code">{code.code}</pre>
+        <button type="button" onClick={() => copy(cssKey, code.code)}>
+          {copied === cssKey ? 'コピーしました' : code.copyLabel}
         </button>
       </section>
       {markup && (
-        <section className="panel-section" aria-label="HTML">
-          <h3 className="section-title">HTML（中身を含む）</h3>
+        <section className="panel-section" aria-label={markupName}>
+          <h3 className="section-title">{markupName}（中身を含む）</h3>
           <pre className="inspect-code inspect-code-long">{markup.html}</pre>
           <button type="button" onClick={() => copy(`${node.id}/html`, markup.html)}>
-            {copied === `${node.id}/html` ? 'コピーしました' : 'HTML をコピー'}
+            {copied === `${node.id}/html` ? 'コピーしました' : `${markupName} をコピー`}
           </button>
-          <pre className="inspect-code inspect-code-long">{markup.css}</pre>
-          <button type="button" onClick={() => copy(`${node.id}/markup-css`, markup.css)}>
-            {copied === `${node.id}/markup-css` ? 'コピーしました' : 'CSS をコピー'}
-          </button>
+          {markup.css !== '' && (
+            <>
+              <pre className="inspect-code inspect-code-long">{markup.css}</pre>
+              <button type="button" onClick={() => copy(`${node.id}/markup-css`, markup.css)}>
+                {copied === `${node.id}/markup-css` ? 'コピーしました' : 'CSS をコピー'}
+              </button>
+            </>
+          )}
           <button type="button" title="画像を埋め込んだ HTML ファイルとして保存" onClick={() => onSaveHtml(style)}>
             HTML ファイルを保存
           </button>

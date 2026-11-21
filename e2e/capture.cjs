@@ -206,8 +206,13 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await page.locator('.properties-panel').evaluate((el) => el.scrollTo(0, 0))
   await shot(page, '3-editor-rotation.png')
 
+  // 頂点の編集。上の頂点をダブルクリックしてなめらかにし、制御点のハンドルを引き伸ばして曲線にする（撮ったら戻す）
   await page.mouse.dblclick(...at(760, 360))
+  await page.mouse.dblclick(...at(760, 300))
+  await drag([784, 302], [812, 296])
   await shot(page, '4-editor-path-vertices.png')
+  await page.keyboard.press('Meta+z')
+  await page.keyboard.press('Meta+z')
   await page.keyboard.press('Escape')
 
   // フレームの外に置いたインスタンス。一覧で中身を開いておく
@@ -264,12 +269,23 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await page.locator('button:text-is("バリアントを追加")').click()
   await set('種類', '選択中')
   await fill('#a5b4fc')
-  await row('種類=標準').click()
+  // 真偽値のプロパティ「無効」を足す（インスタンスではチェック欄になる）
+  await row('タグ').click()
+  await page.locator('button:text-is("プロパティを追加")').click()
+  await page.locator('.variant-property input').nth(1).fill('無効')
+  await page.locator('.variant-property input').nth(1).press('Enter')
+  await row('種類=標準, 無効=標準').click()
+  await set('無効', 'false')
+  await row('種類=選択中, 無効=標準').click()
+  await set('無効', 'false')
+  await row('種類=標準, 無効=false').click()
   await page.locator('button:text-is("インスタンスを作る")').click()
   // 2 ページ目の座標は、まとまりが (144, -317) あたりに来る。インスタンスはその下へ
   await set('X', 164)
   await set('Y', -220)
   await page.locator('.field:has(.field-label:text-is("種類")) select').selectOption('選択中')
+  // 一覧でまとまりを開き、バリアントを選んで置けることを見せる
+  await page.locator('.component-row:has(.component-name:text-is("タグ")) .component-toggle').click()
   await shot(page, '12-editor-variants.png')
 
   await browser.close()

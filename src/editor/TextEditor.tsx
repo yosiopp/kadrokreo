@@ -1,3 +1,4 @@
+import { paintColor, solidColor } from '../document/paint.ts'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import type { Camera } from '../canvas/camera.ts'
 import { worldToScreen } from '../canvas/viewport.ts'
@@ -42,7 +43,9 @@ export function TextEditor({ scene, camera, id, selectAll, onInput, onDone }: Pr
   const fontSize = node.fontSize * viewport.zoom
   // 幅が自動のときは、次の 1 文字が入る余白を足しておく。
   // 中央・右寄せでは、余白のぶん入力欄を左へずらして文字の位置を描画と合わせる
-  const slack = node.autoWidth ? fontSize * 2 : 0
+  // 上限（maxWidth）に届いて折り返しているときは、幅を決めたテキストと同じに扱う
+  const autoWidth = node.sizing.width === 'hug' && (node.maxWidth === null || node.width < node.maxWidth)
+  const slack = autoWidth ? fontSize * 2 : 0
   const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
   return (
     <textarea
@@ -57,13 +60,13 @@ export function TextEditor({ scene, camera, id, selectAll, onInput, onDone }: Pr
         // 回転したテキストは、描画と同じく枠の中心を軸に回す
         transform: rotation === 0 ? undefined : `rotate(${rotation}deg)`,
         transformOrigin: `${slack * align + width / 2}px ${height / 2}px`,
-        whiteSpace: node.autoWidth ? 'pre' : 'pre-wrap',
+        whiteSpace: autoWidth ? 'pre' : 'pre-wrap',
         fontSize,
         lineHeight: node.lineHeight,
         fontFamily: node.fontFamily,
         fontWeight: node.fontWeight,
         textAlign: node.textAlign,
-        color: node.fill,
+        color: solidColor(node.fills) ?? (node.fills[0] ? paintColor(node.fills[0]) : 'transparent'),
       }}
       onChange={(event) => onInput(event.target.value)}
       onBlur={onDone}

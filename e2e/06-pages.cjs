@@ -1,10 +1,8 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
 fs.mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -113,8 +111,8 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'pages.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
-  check('kdr に全ページが入る', json.version === 14 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
+  check('kdr に全ページが入る', json.version === 15 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -158,10 +156,6 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('viewer でフレームを PNG に書き出せる', framePng.suggestedFilename() === 'Frame 1.png' && png.readUInt32BE(16) === 300 && png.readUInt32BE(20) === 200, `${framePng.suggestedFilename()} ${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`)
   await viewer.screenshot({ path: path.join(OUT, '32-viewer-export.png') })
 
-  // 古い形式（1 ページ）のファイル
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v3.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 3 の kdr は 1 ページとして開ける', (await viewerPages()).join() === 'Page 1' && (await viewer.locator('.app-message').count()) === 0, (await viewerPages()).join())
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

@@ -1,10 +1,8 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
 fs.mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -64,7 +62,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.locator('[aria-label="グラデーションの終わりの色"]').fill('#0000ff')
   await set('角度', 0)
   let rect = await byName('Rectangle 1')
-  check('グラデーションが保存される', JSON.stringify(rect.fillGradient) === JSON.stringify({ angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }), JSON.stringify(rect.fillGradient))
+  check('グラデーションが保存される', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }]), JSON.stringify(rect.fills))
   await deselect()
   const left = await pixel(103, 150), right = await pixel(297, 150), middle = await pixel(200, 150)
   check('左から右へ色が変わる', reddish(left) && bluish(right) && middle[0] > 80 && middle[2] > 80, `${left} / ${middle} / ${right}`)
@@ -79,7 +77,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.mouse.click(...at(200, 150))
   await page.locator('.color-field input[type=color]').first().fill('#00ff00')
   rect = await byName('Rectangle 1')
-  check('塗りの色を変えると始まりの色も変わる', rect.fill === '#00ff00' && rect.fillGradient.stops[0].color === '#00ff00' && rect.fillGradient.stops[1].color === '#0000ff', JSON.stringify(rect.fillGradient))
+  check('塗りの色を変えると始まりの色も変わる', rect.fills[0].stops[0].color === '#00ff00' && rect.fills[0].stops[1].color === '#0000ff', JSON.stringify(rect.fills))
   await page.keyboard.press('Meta+z')
   await page.screenshot({ path: path.join(OUT, '29-gradient.png') })
 
@@ -144,9 +142,9 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'paint.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const nodes = Object.values(json.document.pages[0].nodes)
-  check('kdr にグラデーションと収め方が入る', json.version === 14 && nodes.some((n) => n.fillGradient) && nodes.some((n) => n.fit === 'contain'))
+  check('kdr にグラデーションと収め方が入る', json.version === 15 && nodes.some((n) => n.fills && n.fills.some((p) => p.type === 'linear')) && nodes.some((n) => n.fit === 'contain'))
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -165,9 +163,6 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   // ページ全体: 長方形の左端 100 から画像の右端 600、上端 100 から下端 500
   check('viewer でページを PNG に書き出せる', viewerPng.suggestedFilename() === 'Untitled - Page 1@2x.png' && viewerSize.signature && viewerSize.width === 1000 && viewerSize.height === 800, `${viewerPng.suggestedFilename()} ${JSON.stringify(viewerSize)}`)
   check('viewer に編集 UI がない', (await viewer.locator('.toolbar, .layers-panel, .properties-panel, .page-row').count()) === 0)
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v6.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 6 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0)
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

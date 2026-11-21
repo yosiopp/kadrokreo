@@ -15,7 +15,7 @@ fi
 # 1. 画面の枠と、上から順に並べる 5 つの区画
 "$KDR" new "スマホ ワイヤーフレーム" \
   + add frame --name Screen --id screen --width 375 --height 812 fill=#ffffff \
-  + auto-layout screen direction=vertical gap=0 padding=0 widthMode=fixed heightMode=fixed \
+  + auto-layout screen direction=vertical gap=0 padding=0 sizing.width=fixed sizing.height=fixed \
   + add frame --parent screen --name StatusBar --id status --height 44 fill=#e5e5e5 \
   + add frame --parent screen --name Header --id header fill=#ffffff \
   + add frame --parent screen --name Content --id content fill=#ffffff \

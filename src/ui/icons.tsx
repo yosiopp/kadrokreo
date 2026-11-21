@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { SceneNode } from '../document/types.ts'
+import type { NodeKind } from '../document/path.ts'
 
 // viewer と editor の両方が使うアイコン。編集でしか使わないものは editor/icons.tsx にある
 
@@ -21,7 +21,7 @@ export function Icon({ children }: { children: ReactNode }) {
   )
 }
 
-const TYPE_SHAPES: Record<SceneNode['type'], ReactNode> = {
+const TYPE_SHAPES: Record<NodeKind, ReactNode> = {
   frame: <path d="M5 2v12M11 2v12M2 5h12M2 11h12" />,
   rect: <rect x="2.5" y="3.5" width="11" height="9" />,
   ellipse: <circle cx="8" cy="8" r="5.5" />,
@@ -38,7 +38,7 @@ const TYPE_SHAPES: Record<SceneNode['type'], ReactNode> = {
 }
 
 /** role を渡すと、コンポーネントの元（ひし形 4 つ）かインスタンス（ひし形 1 つ）の印にする */
-export function TypeIcon({ type, role }: { type: SceneNode['type']; role?: 'main' | 'instance' }) {
+export function TypeIcon({ type, role }: { type: NodeKind; role?: 'main' | 'instance' }) {
   if (role === 'main') {
     return (
       <Icon>

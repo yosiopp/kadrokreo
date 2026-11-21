@@ -175,7 +175,8 @@ export default function ViewerApp() {
   function saveHtml(nodeId: NodeId, style: CodeStyle) {
     if (!doc || !page) return
     const node = page.nodes[nodeId]
-    const markup = nodeMarkup(page, nodeId, { style, assets: doc.assets, images: 'embed' })
+    // ファイルはブラウザで開いて見比べるためのものなので、出力形式によらず HTML + CSS にする
+    const markup = nodeMarkup(page, nodeId, { style: { ...style, format: 'html' }, assets: doc.assets, images: 'embed' })
     const file = new Blob([standaloneHtml(node.name, markup)], { type: 'text/html' })
     downloadBlob(file, `${safeFileName(node.name)}.html`)
   }

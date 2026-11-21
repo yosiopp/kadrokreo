@@ -42,7 +42,7 @@ export function useTextEditing(store: EditorStore, onToolChange: (tool: Tool) =>
     const template: TextNode = {
       ...createText({ x: 0, y: 0, width: width ?? 0, height: 0 }),
       name: nextName(page, 'text'),
-      autoWidth: width === undefined,
+      sizing: { width: width === undefined ? 'hug' : 'fixed', height: 'hug' },
     }
     const size = measureTextNode(template)
     const parentId = findFrameAt(page, world)

@@ -1,10 +1,9 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
-const zlib = require('zlib')
 
 const OUT = path.join(__dirname, 'out')
-const FIXTURES = path.join(__dirname, 'fixtures')
+const { lineDirection, lineFlipped } = require('./kdr.cjs')
 fs.mkdirSync(OUT, { recursive: true })
 const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
@@ -54,7 +53,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.keyboard.press('l')
   await page.keyboard.down('Shift'); await drag([300, 100], [100, 103]); await page.keyboard.up('Shift')
   let line = await byName('Line 1')
-  check('右から左へ引いた線は、右の端が始点', line.flipped === true && line.width === 200 && line.height === 0, JSON.stringify(line))
+  check('右から左へ引いた線は、右の端が始点', lineFlipped(line) && line.width === 200 && line.height === 0, JSON.stringify(line))
   await select('終点').selectOption('arrow')
   await page.locator('.field:has(.field-label:text-is("太さ")) input').fill('3')
   await page.locator('.field:has(.field-label:text-is("太さ")) input').press('Enter')
@@ -66,11 +65,11 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await click(200, 100)
   await drag([300, 100], [300, 200])
   line = await byName('Line 1')
-  check('始点を動かしても終点は動かない', line.x === 100 && line.y === 100 && line.width === 200 && line.height === 100 && line.flipped === true && line.direction === 'down' && line.endCap === 'arrow', JSON.stringify(line))
+  check('始点を動かしても終点は動かない', line.x === 100 && line.y === 100 && line.width === 200 && line.height === 100 && lineFlipped(line) && lineDirection(line) === 'down' && line.endCap === 'arrow', JSON.stringify(line))
   // 終点を始点より右へ動かすと、向きが入れ替わっても終点のまま
   await drag([100, 100], [420, 140])
   line = await byName('Line 1')
-  check('終点を反対側へ動かしても、始点と終点は入れ替わらない', line.x === 300 && line.width === 120 && line.flipped === false && line.direction === 'up' && line.endCap === 'arrow', JSON.stringify(line))
+  check('終点を反対側へ動かしても、始点と終点は入れ替わらない', line.x === 300 && line.width === 120 && !lineFlipped(line) && lineDirection(line) === 'up' && line.endCap === 'arrow', JSON.stringify(line))
   await deselect()
   check('矢印は動かした先の終点に付く', (await alpha(414, 143)) > 200, String(await alpha(414, 143)))
 
@@ -82,13 +81,13 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.keyboard.press('Enter')
   check('Enter で折れ線が確定し、選択ツールに戻る', (await layers())[0] === 'Path 1' && (await page.locator('[aria-label="選択"]').getAttribute('aria-pressed')) === 'true', (await layers()).join())
   let open = await byName('Path 1')
-  check('折れ線は塗りなしで、頂点は 3 つ', open.points.length === 3 && open.closed === false && open.fill === null && open.width === 100 && open.height === 100, JSON.stringify(open))
+  check('折れ線は塗りなしで、頂点は 3 つ', open.points.length === 3 && open.closed === false && open.fills.length === 0 && open.width === 100 && open.height === 100, JSON.stringify(open))
 
   // ── ペンツール: 多角形（最初の頂点をクリックして閉じる） ──
   await page.keyboard.press('p')
   await click(300, 300); await click(400, 300); await click(350, 380); await click(300, 300)
   const closed = await byName('Path 2')
-  check('最初の頂点をクリックすると閉じた形になる', closed.closed === true && closed.points.length === 3 && closed.fill === '#d9d9d9', JSON.stringify(closed))
+  check('最初の頂点をクリックすると閉じた形になる', closed.closed === true && closed.points.length === 3 && closed.fills[0].color === '#d9d9d9', JSON.stringify(closed))
   await deselect()
   await click(350, 330)
   check('塗った多角形は内側をクリックして選べる', (await page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()).join() === 'Path 2')
@@ -127,13 +126,57 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await deselect()
   await page.screenshot({ path: path.join(OUT, '27-pen-arrows.png') })
 
+  // ── ペンツール: 曲線（押したままドラッグして制御点を引き出す。既存のデザインツールと同じ） ──
+  await page.keyboard.press('p')
+  // 始点からは真上へ出て、終点には真上から入る山形。終点の制御点は反対側（真下）にも伸びる
+  await drag([500, 300], [500, 240])
+  await drag([700, 300], [700, 360])
+  await page.keyboard.press('Enter')
+  let curve = await byName('Path 3')
+  check(
+    'ドラッグで置いた頂点は制御点を持ち、枠は曲線そのものを囲む',
+    curve.points.length === 2 && curve.points[0].out && curve.points[1].in && curve.points[1].out &&
+      curve.x === 500 && curve.width === 200 && Math.abs(curve.y - 255) < 0.01 && Math.abs(curve.height - 45) < 0.01,
+    JSON.stringify(curve),
+  )
+  await deselect()
+  check('曲線を描き、弦の上には描かない', (await alpha(600, 255)) > 50 && (await alpha(600, 298)) === 0, `${await alpha(600, 255)} / ${await alpha(600, 298)}`)
+  await click(600, 256)
+  check('曲線の上をクリックして選べる', (await page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()).join() === 'Path 3')
+
+  // 頂点の編集: 頂点を選ぶと制御点のハンドルが出て、なめらかな頂点は反対側も一直線のまま回る
+  await page.mouse.dblclick(...at(600, 256))
+  await click(700, 300)
+  await drag([700, 240], [760, 240])
+  curve = await byName('Path 3')
+  const [, end] = curve.points
+  check(
+    '制御点のハンドルを動かせ、反対側の制御点も一直線に回る',
+    end.in.x > 0 && end.out.x < 0 && Math.abs(end.in.x * curve.width + end.out.x * curve.width) < 30,
+    JSON.stringify(end),
+  )
+  await page.screenshot({ path: path.join(OUT, '29-curve-handles.png') })
+  // 頂点をダブルクリックすると角に戻る
+  await page.mouse.dblclick(...at(700, 300))
+  curve = await byName('Path 3')
+  check('頂点をダブルクリックで角に切り替える', curve.points[1].in === undefined && curve.points[1].out === undefined, JSON.stringify(curve.points))
+  // 辺の上をダブルクリックすると頂点が増え、Delete で選んだ頂点を消せる
+  await page.mouse.dblclick(...at(600, 277.5))
+  curve = await byName('Path 3')
+  check('辺をダブルクリックで頂点を足す（形は変えない）', curve.points.length === 3 && curve.points[1].in && curve.points[1].out && curve.points[2].in === undefined, JSON.stringify(curve.points))
+  await page.keyboard.press('Delete')
+  curve = await byName('Path 3')
+  check('Delete で選んだ頂点だけを消す', curve && curve.points.length === 2, JSON.stringify(curve && curve.points))
+  await page.keyboard.press('Escape')
+  await deselect()
+
   // ── 書き出しと viewer ──
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'pen.kdr')
   await download.saveAs(kdrPath)
-  const json = JSON.parse(zlib.gunzipSync(fs.readFileSync(kdrPath)).toString('utf8'))
+  const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const types = Object.values(json.document.pages[0].nodes).map((n) => n.type).sort().join()
-  check('kdr にパスと矢印が入る', json.version === 14 && types === 'line,path,path', types)
+  check('kdr にパスと矢印が入る', json.version === 15 && types === 'path,path,path,path', types)
 
   const viewer = await context.newPage()
   viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
@@ -143,9 +186,6 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(300)
   await viewer.screenshot({ path: path.join(OUT, '28-viewer-pen.png') })
-  await viewer.locator('input[type=file]').setInputFiles(path.join(FIXTURES, 'sample-v5.kdr'))
-  await viewer.waitForTimeout(400)
-  check('version 5 の kdr も開ける', (await viewer.locator('.app-message').count()) === 0)
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

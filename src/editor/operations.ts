@@ -13,17 +13,19 @@ import {
   unionBounds,
 } from '../document/geometry.ts'
 import { MAX_DEPTH } from '../document/kdr.ts'
+import { isLine } from '../document/path.ts'
 import type {
   Asset,
   AssetId,
   DesignDocument,
-  Gradient,
+  Effect,
+  LinearGradient,
   NodeId,
   Page,
   PageId,
   Scene,
+  Paint,
   SceneNode,
-  Shadow,
 } from '../document/types.ts'
 import { createId } from './nodes.ts'
 
@@ -97,6 +99,30 @@ export function duplicatePage(
 
 export function addAsset(doc: DesignDocument, id: AssetId, asset: Asset): DesignDocument {
   return { ...doc, assets: { ...doc.assets, [id]: asset } }
+}
+
+/** 中身（形式と base64）が同じアセットの id。なければ null */
+export function findSameAsset(assets: Record<AssetId, Asset>, asset: Asset): AssetId | null {
+  for (const [id, existing] of Object.entries(assets)) {
+    // 長さが違えば中身を比べるまでもない。同じ長さのときだけ文字列全体を比べる
+    if (existing.data.length === asset.data.length && existing.mime === asset.mime && existing.data === asset.data) return id
+  }
+  return null
+}
+
+/**
+ * 画像を取り込むときのアセットの追加。中身が同じアセットがすでにあれば、新しく足さずにその id を使う
+ * （同じ画像を何度置いても kdr が大きくならない）。なければ newId で足す
+ */
+export function addOrReuseAsset(
+  doc: DesignDocument,
+  asset: Asset,
+  newId: () => AssetId,
+): { document: DesignDocument; assetId: AssetId } {
+  const same = findSameAsset(doc.assets, asset)
+  if (same !== null) return { document: doc, assetId: same }
+  const assetId = newId()
+  return { document: addAsset(doc, assetId, asset), assetId }
 }
 
 /** どのノードからも使われていないアセットを除く。保存や書き出しの前に呼ぶ */
@@ -190,56 +216,90 @@ export function updateNodes<T extends Scene>(
 // ── 塗り・影 ──
 
 /** index 番目（負なら後ろから）の色を変えたグラデーション */
-export function withStopColor(gradient: Gradient, index: number, color: string): Gradient {
+export function withStopColor(gradient: LinearGradient, index: number, color: string): LinearGradient {
   const at = index < 0 ? gradient.stops.length + index : index
   return { ...gradient, stops: gradient.stops.with(at, { ...gradient.stops[at], color }) }
 }
 
+/** いちばん上の塗りを paint に置き換える（null なら取り除く）。塗りがなければ足す */
+export function withTopPaint(paints: readonly Paint[], paint: Paint | null): Paint[] {
+  const below = paints.slice(0, -1)
+  return paint === null ? below : [...below, paint]
+}
+
+// プロパティパネルは、いちばん上の塗りと最初の影だけを編集する（複数の塗りや影を作る UI はまだない）
+
 /**
- * 塗りの色を変える（null で塗りをなくす）。グラデーションにしている図形は、始まりの色も一緒に変え、
+ * 塗りの色を変える（null で塗りをなくす）。いちばん上の塗りがグラデーションなら始まりの色を変え、
  * 塗りをなくすとグラデーションもやめる。テキストは塗りを消せないので、null なら変えない
  */
 export function setFill<T extends Scene>(scene: T, ids: readonly NodeId[], fill: string | null): T {
   return patchNodes(scene, ids, (node) => {
-    if (!('fill' in node)) return null
-    if (node.type === 'text') return fill === null ? null : { fill }
-    const fillGradient = fill !== null && node.fillGradient ? withStopColor(node.fillGradient, 0, fill) : null
-    return { fill, fillGradient }
+    if (!('fills' in node)) return null
+    if (fill === null) return node.type === 'text' || node.fills.length === 0 ? null : { fills: withTopPaint(node.fills, null) }
+    const top = node.fills.at(-1)
+    const paint: Paint = top?.type === 'linear' ? withStopColor(top, 0, fill) : { type: 'solid', color: fill }
+    return { fills: withTopPaint(node.fills, paint) }
   })
 }
 
 /**
- * 塗りをグラデーションにする（enabled が false ならやめる）。
+ * いちばん上の塗りをグラデーションにする（enabled が false なら始まりの色の単色に戻す）。
  * 新しく付けるときは上から下へ、いまの色から白へ。塗りのない図形とテキストは変えない
  */
 export function setGradientEnabled<T extends Scene>(scene: T, ids: readonly NodeId[], enabled: boolean): T {
   return patchNodes(scene, ids, (node) => {
-    if (!('fillGradient' in node) || node.fill === null) return null
-    if (!enabled) return { fillGradient: null }
-    if (node.fillGradient) return null
+    if (!('fills' in node) || node.type === 'text') return null
+    const top = node.fills.at(-1)
+    if (!top || (top.type === 'linear') === enabled) return null
+    if (top.type === 'linear') return { fills: withTopPaint(node.fills, { type: 'solid', color: top.stops[0].color }) }
     const stops = [
-      { offset: 0, color: node.fill },
+      { offset: 0, color: top.color },
       { offset: 1, color: '#ffffff' },
     ]
-    return { fillGradient: { angle: 90, stops } }
+    return { fills: withTopPaint(node.fills, { type: 'linear', angle: 90, stops }) }
   })
 }
 
-/** グラデーションにしている図形だけ、グラデーションを書き換える */
+/** いちばん上の塗りがグラデーションの図形だけ、グラデーションを書き換える */
 export function patchGradients<T extends Scene>(
   scene: T,
   ids: readonly NodeId[],
-  change: (gradient: Gradient) => Gradient,
+  change: (gradient: LinearGradient) => LinearGradient,
 ): T {
-  return patchNodes(scene, ids, (node) =>
-    'fillGradient' in node && node.fillGradient ? { fillGradient: change(node.fillGradient) } : null,
-  )
+  return patchNodes(scene, ids, (node) => {
+    const top = 'fills' in node ? node.fills.at(-1) : undefined
+    return top?.type === 'linear' && 'fills' in node ? { fills: withTopPaint(node.fills, change(top)) } : null
+  })
 }
 
-/** 影のある図形だけ、影の一部を書き換える */
-export function patchShadows<T extends Scene>(scene: T, ids: readonly NodeId[], patch: Partial<Shadow>): T {
+/**
+ * 線の色を変える（null で線をなくす）。いちばん上の線を単色に置き換える。
+ * テキストと画像は線を持たないので変えない
+ */
+export function setStroke<T extends Scene>(scene: T, ids: readonly NodeId[], stroke: string | null): T {
+  return patchNodes(scene, ids, (node) => {
+    if (!('strokes' in node)) return null
+    if (stroke === null) return node.strokes.length === 0 ? null : { strokes: withTopPaint(node.strokes, null) }
+    return { strokes: withTopPaint(node.strokes, { type: 'solid', color: stroke }) }
+  })
+}
+
+/** 影を付ける（null で外す）。最初の効果を置き換える */
+export function setShadow<T extends Scene>(scene: T, ids: readonly NodeId[], shadow: Effect | null): T {
+  return patchNodes(scene, ids, (node) => {
+    if (!('effects' in node)) return null
+    if (shadow === null) return node.effects.length === 0 ? null : { effects: node.effects.slice(1) }
+    return { effects: [shadow, ...node.effects.slice(1)] }
+  })
+}
+
+/** 影のある図形だけ、最初の影の一部を書き換える */
+export function patchShadows<T extends Scene>(scene: T, ids: readonly NodeId[], patch: Partial<Omit<Effect, 'type'>>): T {
   return patchNodes(scene, ids, (node) =>
-    'shadow' in node && node.shadow ? { shadow: { ...node.shadow, ...patch } } : null,
+    'effects' in node && node.effects.length > 0
+      ? { effects: node.effects.with(0, { ...node.effects[0], ...patch }) }
+      : null,
   )
 }
 
@@ -378,16 +438,14 @@ export function reshapeNode<T extends Scene>(scene: T, id: NodeId, box: Bounds):
  * （そうしないと、すぐ中身に合わせた大きさへ戻ってしまう）。
  */
 function sizePatch(node: SceneNode, width: number, height: number): NodePatch {
-  if (node.type === 'text') {
-    return width === node.width ? {} : { width, autoWidth: false }
-  }
-  if (node.type !== 'frame' || !node.layout) return { width, height }
-  const widthMode = width === node.width ? node.layout.widthMode : 'fixed'
-  const heightMode = height === node.height ? node.layout.heightMode : 'fixed'
-  if (widthMode === node.layout.widthMode && heightMode === node.layout.heightMode) {
-    return { width, height }
-  }
-  return { width, height, layout: { ...node.layout, widthMode, heightMode } }
+  if (node.type === 'text' && width === node.width) return {}
+  const unhug = (axis: 'width' | 'height', value: number) =>
+    node.sizing[axis] === 'hug' && value !== node[axis] ? 'fixed' : node.sizing[axis]
+  // テキストの高さは常に中身で決まる（hug のまま）
+  const sizing = { width: unhug('width', width), height: node.type === 'text' ? node.sizing.height : unhug('height', height) }
+  const size = node.type === 'text' ? { width } : { width, height }
+  if (sizing.width === node.sizing.width && sizing.height === node.sizing.height) return size
+  return { ...size, sizing }
 }
 
 /** 幅や高さを数値で指定する。指定しなかった向きは変えない */
@@ -418,7 +476,7 @@ export function resizeNodes<T extends Scene>(
   return patchNodes(scene, topLevelIds(scene, ids), (node) => {
     const { id } = node
     // 直線は水平・垂直にできるよう、幅や高さが 0 になってよい
-    const minSize = node.type === 'line' ? 0 : 1
+    const minSize = isLine(node) ? 0 : 1
     const rotation = normalizeAngle(getWorldRotation(scene, id))
     // ページ上では回っていなくても、親と逆向きに回して打ち消しているノードはこちらで扱う
     if (rotation !== 0 || node.rotation !== 0) {
@@ -688,7 +746,7 @@ function descendantsOf(pool: Record<NodeId, SceneNode>, root: SceneNode): Record
   while (stack.length > 0) {
     const node = pool[stack.pop()!]
     found[node.id] = node
-    if (node.type === 'frame') stack.push(...node.children)
+    if (node.type === 'frame') for (const child of node.children) stack.push(child)
   }
   return found
 }
@@ -704,7 +762,7 @@ function collectSubtrees(scene: Scene, ids: readonly NodeId[]): NodeId[] {
     seen.add(id)
     result.push(id)
     const node = scene.nodes[id]
-    if (node.type === 'frame') stack.push(...node.children.toReversed())
+    if (node.type === 'frame') for (const child of node.children.toReversed()) stack.push(child)
   }
   return result
 }

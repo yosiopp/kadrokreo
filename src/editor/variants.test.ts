@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { type InstanceNode, findMain } from '../document/component.ts'
 import type { FrameNode } from '../document/types.ts'
+import { solid } from '../document/paint.ts'
 import { variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
 import { createInstance, makeComponent, syncComponents } from './components.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
 import { createDocument, insertNode, updateNode, updatePage } from './operations.ts'
-import { addVariant, renameVariantProperty, selectVariant, setVariantValue } from './variants.ts'
+import {
+  addVariant,
+  addVariantProperty,
+  removeVariantProperty,
+  renameVariantProperty, selectVariant, setVariantValue } from './variants.ts'
 
 /** ボタン（背景とラベル）の元が 1 つあるドキュメント */
 function fixture() {
@@ -66,6 +71,32 @@ describe('プロパティの編集', () => {
     page = renameVariantProperty(page, set.id, '種類', '状態')
     expect(variantProperties(page, set.id)).toEqual([{ name: '状態', values: ['標準', '押下'] }])
   })
+
+  it('プロパティを足す・消すと、すべてのバリアントの名前を書き換える', () => {
+    const { doc, pageId, button } = fixture()
+    const { document } = addVariant(doc, pageId, button.id)
+    let page = document.pages[0]
+    const set = variantSetOf(page, button.id)!
+    const names = () => variantsIn(page, set.id).map((node) => node.name)
+
+    const added = addVariantProperty(page, set.id)
+    expect(added.name).toBe('プロパティ1')
+    page = added.scene
+    expect(names()).toEqual(['種類=標準, プロパティ1=標準', '種類=2, プロパティ1=標準'])
+    page = addVariantProperty(page, set.id, '押下', 'false').scene
+    expect(variantProperties(page, set.id).at(-1)).toEqual({ name: '押下', values: ['false'] })
+    // すでにある名前、使えない名前は足さない
+    expect(addVariantProperty(page, set.id, '押下').scene).toBe(page)
+    expect(addVariantProperty(page, set.id, 'a=b').name).toBeNull()
+
+    page = removeVariantProperty(page, set.id, 'プロパティ1')
+    expect(names()).toEqual(['種類=標準, 押下=false', '種類=2, 押下=false'])
+    page = removeVariantProperty(page, set.id, '種類')
+    expect(names()).toEqual(['押下=false', '押下=false'])
+    // 最後の 1 つは消せない（名前がバリアントの形でなくなる）
+    expect(removeVariantProperty(page, set.id, '押下')).toBe(page)
+    expect(removeVariantProperty(page, set.id, 'ない')).toBe(page)
+  })
 })
 
 describe('selectVariant', () => {
@@ -76,7 +107,7 @@ describe('selectVariant', () => {
     let next = updatePage(added.document, pageId, (page) => {
       const copy = page.nodes[added.id!] as FrameNode
       const copyLabel = copy.children.map((child) => page.nodes[child]).find((node) => node.name === label.name)!
-      let changed = updateNode(page, added.id!, { name: '種類=押下', fill: '#ff0000' })
+      let changed = updateNode(page, added.id!, { name: '種類=押下', fills: solid('#ff0000') })
       changed = updateNode(changed, copyLabel.id, { text: '押した' })
       return changed
     })
@@ -89,7 +120,7 @@ describe('selectVariant', () => {
     next = syncComponents(selectVariant(next, pageId, instanceId, '種類', '押下'))
     const instance = next.pages[0].nodes[instanceId] as InstanceNode
     expect(findMain(next, instance.component.id)?.node.id).toBe(added.id)
-    expect(instance).toMatchObject({ name: 'ボタン', fill: '#ff0000' })
+    expect(instance).toMatchObject({ name: 'ボタン', fills: solid('#ff0000') })
     // ない値なら変えない
     expect(selectVariant(next, pageId, instanceId, '種類', 'なし')).toBe(next)
   })

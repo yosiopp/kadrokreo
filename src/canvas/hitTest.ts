@@ -1,6 +1,6 @@
 import { isInstance } from '../document/component.ts'
 import { type Point, getAbsoluteBounds, toNodeSpace } from '../document/geometry.ts'
-import { lineEndpoints, pathPoints } from '../document/path.ts'
+import { flattenPath, pathPoints } from '../document/path.ts'
 import type { NodeId, Scene } from '../document/types.ts'
 import { FRAME_LABEL_HEIGHT } from './render.ts'
 import { type Viewport, worldToScreen } from './viewport.ts'
@@ -53,16 +53,11 @@ function hitSiblings(
       const dx = (local.x - node.width / 2) / rx
       const dy = (local.y - node.height / 2) / ry
       if (dx * dx + dy * dy <= 1) return node.id
-    } else if (node.type === 'line') {
-      // 細い線でもつかめるよう、太さによらず最低限の当たり幅を持たせる
-      const reach = Math.max(node.strokeWidth / 2, tolerance)
-      const [from, to] = lineEndpoints(node)
-      if (distanceToSegment(local, from, to) <= reach) return node.id
     } else if (node.type === 'path') {
-      const points = pathPoints(node)
-      // 塗ってある閉じた形は内側でも当たる。それ以外は線の近くだけ
-      const filled = node.fill !== null || node.fillGradient !== null
-      if (node.closed && filled && insidePolygon(local, points)) return node.id
+      // 曲線は細かい折れ線に直して調べる
+      const points = flattenPath(pathPoints(node), node.closed)
+      // 塗ってある閉じた形は内側でも当たる。それ以外（直線を含む）は線の近くだけ。細い線でもつかめるよう、最低限の当たり幅を持たせる
+      if (node.closed && node.fills.length > 0 && insidePolygon(local, points)) return node.id
       const reach = Math.max(node.strokeWidth / 2, tolerance)
       const last = node.closed ? points.length : points.length - 1
       for (let j = 0; j < last; j++) {

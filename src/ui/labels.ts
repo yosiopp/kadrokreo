@@ -1,8 +1,9 @@
-import type { AutoLayout, Cap, ImageNode, Override, SceneNode } from '../document/types.ts'
+import type { NodeKind } from '../document/path.ts'
+import type { AutoLayout, Cap, Constraint, ImageNode, Override, Sizing } from '../document/types.ts'
 
 // 設定の値の、画面での呼び名。editor のプロパティパネルと、viewer のインスペクトが同じ言葉で出す
 
-export const TYPE_LABELS: Record<SceneNode['type'], string> = {
+export const TYPE_LABELS: Record<NodeKind, string> = {
   frame: 'フレーム',
   rect: '長方形',
   ellipse: '楕円',
@@ -20,9 +21,22 @@ export const FIT_LABELS: Record<ImageNode['fit'], string> = {
 
 export const CAP_LABELS: Record<Cap, string> = { none: 'なし', arrow: '矢印' }
 
-export const SIZE_MODE_LABELS: Record<AutoLayout['widthMode'], string> = {
+export const SIZING_LABELS: Record<Sizing, string> = {
   hug: '中身に合わせる',
   fixed: '固定',
+  fill: '親いっぱい',
+}
+
+/** 折り返したときの行のまとまりの置き方 */
+export const ALIGN_CONTENT_LABELS: Record<AutoLayout['alignContent'], string> = {
+  auto: '揃えに従う',
+  'space-between': '均等に配る',
+}
+
+/** 親の大きさが変わったときの追従のしかた。横と縦で呼び名が違う */
+export const CONSTRAINT_LABELS: Record<'horizontal' | 'vertical', Record<Constraint, string>> = {
+  horizontal: { start: '左', end: '右', stretch: '左右', center: '中央', scale: '拡大縮小' },
+  vertical: { start: '上', end: '下', stretch: '上下', center: '中央', scale: '拡大縮小' },
 }
 
 /** 並べる向きと直交する向きの揃え方。縦に並べるなら左右、横に並べるなら上下になる */
@@ -39,12 +53,12 @@ export function optionsOf<T extends string>(labels: Record<T, string>): [T, stri
 /** インスタンスごとに上書きできる項目の名前 */
 export const OVERRIDE_LABELS: Record<keyof Override, string> = {
   text: '文言',
-  fill: '塗り',
-  fillGradient: 'グラデーション',
-  stroke: '線の色',
+  fills: '塗り',
+  strokes: '線',
   visible: '表示',
   fontSize: '文字の大きさ',
   fontFamily: '書体',
   fontWeight: '太さ',
   assetId: '画像',
+  componentId: '入れ子のインスタンスの元',
 }
