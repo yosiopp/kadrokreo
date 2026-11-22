@@ -78,6 +78,15 @@ function fakeContext(): CanvasRenderingContext2D {
         },
       }
     },
+    createConicGradient: (...args: number[]) => {
+      finite('createConicGradient', ...args)
+      return {
+        addColorStop(offset: number, _color: string) {
+          finite('addColorStop', offset)
+          if (offset < 0 || offset > 1) throw new RangeError('addColorStop: 0〜1 の範囲ではありません')
+        },
+      }
+    },
     createRadialGradient: (...args: number[]) => {
       finite('createRadialGradient', ...args)
       if (args[2] < 0 || args[5] < 0) throw new RangeError('createRadialGradient: 負の半径')
@@ -191,8 +200,8 @@ const PNG = fromBase64('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4
 const EXTREMES: unknown[] = [
   0, -0, 1, -1, 0.5, 2, 100, 400, 900, 1e21, 1e308, -1e308, Number.MAX_SAFE_INTEGER, 5e-324, 2 ** 31, -(2 ** 53),
   '', 'x', '#ff0000', '#FFF', '#gggggg', 'rect', 'frame', 'text', 'path', 'image', 'ellipse', 'hug', 'fill', 'fixed',
-  'main', 'instance', 'linear', 'radial', 'solid', 'drop-shadow', 'absolute', 'vertical', 'space-between', 'arrow', 'a\n'.repeat(50),
-  '__proto__', 'constructor', 'toString', true, false, null, [], {}, [1, 2], [[]], { x: 1, y: 2 }, { type: 'solid', color: '#000000' },
+  'main', 'instance', 'linear', 'radial', 'conic', 'solid', 'drop-shadow', 'inner-shadow', 'absolute', 'vertical', 'space-between', 'arrow', 'a\n'.repeat(50),
+  '__proto__', 'constructor', 'toString', true, false, null, [], {}, [1, 2], [[]], { x: 1, y: 2 }, { type: 'solid', color: '#000000', opacity: 1 },
 ]
 
 function randomNumber(r: Random, min: number, max: number): number {
@@ -201,9 +210,12 @@ function randomNumber(r: Random, min: number, max: number): number {
 }
 
 function randomPaint(r: Random) {
-  if (r.chance(0.6)) return { type: 'solid', color: r.pick(['#ff0000', '#00ff00', '#123456', '#abcdef']) }
+  if (r.chance(0.6)) return { type: 'solid', color: r.pick(['#ff0000', '#00ff00', '#123456', '#abcdef']), opacity: 1, visible: r.chance(0.8) }
   const count = r.int(2, 4)
   const stops = Array.from({ length: count }, (_, i) => ({ offset: i / (count - 1), color: r.pick(['#000000', '#ffffff', '#ff8800']) }))
+  if (r.chance(0.25)) {
+    return { type: 'conic', cx: randomNumber(r, -1, 2), cy: randomNumber(r, -1, 2), angle: randomNumber(r, -720, 720), stops }
+  }
   if (r.chance(0.5)) {
     return {
       type: 'radial',
@@ -214,12 +226,13 @@ function randomPaint(r: Random) {
       stops,
     }
   }
-  return { type: 'linear', angle: randomNumber(r, -720, 720), stops }
+  return { type: 'linear', x1: randomNumber(r, -1, 2), y1: randomNumber(r, -1, 2), x2: randomNumber(r, -1, 2), y2: randomNumber(r, -1, 2), stops, opacity: 1 }
 }
 
 function randomEffect(r: Random) {
   return {
-    type: 'drop-shadow',
+    type: r.pick(['drop-shadow', 'inner-shadow']),
+    ...(r.chance(0.2) ? { visible: false } : {}),
     x: randomNumber(r, -20, 20),
     y: randomNumber(r, -20, 20),
     blur: randomNumber(r, 0, 40),
@@ -737,10 +750,10 @@ describe('kdr の読み込みの極端な入力', () => {
 
   it('極端に大きい・回ったノードとグラデーションも描画で落ちない', () => {
     const big = 1e308
-    const gradient = { type: 'linear', angle: 45, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }] }
+    const gradient = { type: 'linear', x1: 0, y1: 0, x2: 1, y2: 1, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 1 }
     const children = [
-      { type: 'rect', id: 'a', name: 'A', x: -big, y: -big, width: big, height: big, rotation: 1e308, fills: [gradient], strokes: [gradient], strokeWidth: big, cornerRadius: big, effects: [{ type: 'drop-shadow', x: big, y: -big, blur: big, color: '#000000', opacity: 1 }] },
-      { type: 'ellipse', id: 'b', name: 'B', x: 0, y: 0, width: big, height: 5e-324, rotation: 33.3, fills: [gradient] },
+      { type: 'rect', id: 'a', name: 'A', x: -big, y: -big, width: big, height: big, rotation: 1e308, fills: [gradient], strokes: [gradient], strokeWidth: big, cornerRadius: big, effects: [{ type: 'drop-shadow', x: big, y: -big, blur: big, color: '#000000', opacity: 1 }, { type: 'inner-shadow', x: big, y: -big, blur: big, color: '#000000', opacity: 1 }] },
+      { type: 'ellipse', id: 'b', name: 'B', x: 0, y: 0, width: big, height: 5e-324, rotation: 33.3, fills: [gradient, { type: 'conic', cx: big, cy: -big, angle: big, stops: gradient.stops }] },
       { type: 'path', id: 'c', name: 'C', x: 0, y: 0, width: big, height: big, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], endCap: 'arrow', strokes: [gradient], strokeWidth: big },
       { type: 'text', id: 'd', name: 'D', x: 0, y: 0, width: big, height: 10, text: 'hello', fontSize: big, lineHeight: big, fontFamily: 'x', fills: [gradient] },
       { type: 'frame', id: 'e', name: 'E', x: big, y: big, width: big, height: big, opacity: 0.5, rotation: -1e300, fills: [gradient], layout: { gap: big, paddingTop: big }, sizing: { width: 'hug', height: 'hug' }, children: [{ type: 'rect', id: 'f', name: 'F', x: 0, y: 0, width: big, height: big, sizing: { width: 'fill' } }] },

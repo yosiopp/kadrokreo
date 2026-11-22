@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createRect, createText } from '../src/editor/nodes.ts'
 import { UsageError, parseArgs } from './args.ts'
-import { readImageInfo } from './image.ts'
+import { readImageInfo } from '../src/document/imageInfo.ts'
 import { estimateTextSize, estimateTextWidth } from './textMeasure.ts'
 import { buildPatch, parseValue } from './values.ts'
 
@@ -47,17 +47,25 @@ describe('values', () => {
   it('入れ子の項目と、塗り・線・影の略記', () => {
     const rect = createRect({ x: 0, y: 0, width: 10, height: 10 })
     expect(buildPatch(rect, [['shadow.blur', '4'], ['sizing.width', 'fill']])).toEqual({
-      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25 }],
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25, visible: true }],
       sizing: { width: 'fill', height: 'fixed' },
     })
     expect(buildPatch(rect, [['fill', '#ff0000'], ['stroke', 'null']])).toEqual({
-      fills: [{ type: 'solid', color: '#ff0000' }],
+      fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }],
       strokes: [],
     })
-    expect(buildPatch(rect, [['fills.0.color', '#00ff00']])).toEqual({ fills: [{ type: 'solid', color: '#00ff00' }] })
+    expect(buildPatch(rect, [['fills.0.color', '#00ff00']])).toEqual({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }] })
     expect(() => buildPatch(rect, [['text', 'a']])).toThrow(/rect には text がありません/)
     expect(() => buildPatch(rect, [['id', 'a']])).toThrow(/変えられません/)
     expect(() => buildPatch(rect, [['shadow.nope', '1']])).toThrow(/nope/)
+  })
+
+  it('破線の略記 dash=線の長さ,間隔（null で実線）', () => {
+    const rect = createRect({ x: 0, y: 0, width: 10, height: 10 })
+    expect(buildPatch(rect, [['dash', '4,2']])).toEqual({ strokeDashes: [4, 2] })
+    expect(buildPatch(rect, [['dash', '6']])).toEqual({ strokeDashes: [6] })
+    expect(buildPatch(rect, [['dash', 'null']])).toEqual({ strokeDashes: [] })
+    expect(() => buildPatch(rect, [['dash', '4,x']])).toThrow(/0 以上の数/)
   })
 })
 

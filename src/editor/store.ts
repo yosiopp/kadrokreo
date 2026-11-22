@@ -3,7 +3,11 @@ import { createHistory, pushHistory, redoHistory, undoHistory } from './history.
 import { type FitText, captureOverrides, syncComponents } from './components.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
+import { fitMovedVariants } from './variants.ts'
 import { updatePage } from './operations/document.ts'
+import { type GradientEdit, editedGradient } from './editorCanvas/gradientHandles.ts'
+import { pathContours } from '../document/path.ts'
+import { contourSegment, flatVertices } from './pathEdit.ts'
 
 export type EditorState = {
   document: DesignDocument
@@ -15,6 +19,8 @@ export type EditorState = {
   canRedo: boolean
   /** 頂点を編集中のパスと、選んでいる頂点・辺。そのパスだけを選んでいる間だけ有効（選択が変わると null に戻る） */
   vertexEdit: VertexEdit | null
+  /** キャンバスで動かしているグラデーション。そのノードだけを選んでいて、その塗りがグラデーションの間だけ有効 */
+  gradientEdit: GradientEdit | null
 }
 
 /**
@@ -36,6 +42,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   let pageId = initial.pages[0].id
   let selection: NodeId[] = []
   let vertexEdit: VertexEdit | null = null
+  let gradientEdit: GradientEdit | null = null
   let state = snapshot()
   const listeners = new Set<() => void>()
 
@@ -50,6 +57,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     const alive = selection.filter((id) => Object.hasOwn(page.nodes, id))
     if (alive.length !== selection.length) selection = alive
     vertexEdit = checkVertexEdit(page, vertexEdit)
+    gradientEdit = checkGradientEdit(page, gradientEdit)
     return {
       document,
       page,
@@ -57,7 +65,16 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
       canUndo: history.past.length > 0,
       canRedo: history.future.length > 0,
       vertexEdit,
+      gradientEdit,
     }
+  }
+
+  /** グラデーションの編集が今のページと選択に合っているか確かめ、合わなければ null、なくなった色は選ばない */
+  function checkGradientEdit(page: Page, edit: GradientEdit | null): GradientEdit | null {
+    if (!edit || selection.length !== 1 || selection[0] !== edit.id) return null
+    const gradient = editedGradient(page, edit)
+    if (!gradient) return null
+    return edit.stop !== null && edit.stop >= gradient.stops.length ? { ...edit, stop: null } : edit
   }
 
   /** 頂点の編集が今のページと選択に合っているか確かめ、合わなければ null、なくなった頂点・辺は外す */
@@ -65,10 +82,11 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     if (!edit) return null
     const node = page.nodes[edit.id]
     if (node?.type !== 'path' || selection.length !== 1 || selection[0] !== edit.id) return null
-    const count = node.points.length
+    // 頂点と辺の番号は、全部の輪郭をつないだ通し番号（pathEdit.ts）
+    const contours = pathContours(node)
+    const count = flatVertices(contours).length
     const vertices = edit.vertices.filter((index) => index < count)
-    const segments = node.closed ? count : count - 1
-    const segment = edit.segment !== null && edit.segment < segments ? edit.segment : null
+    const segment = edit.segment !== null && contourSegment(contours, edit.segment) ? edit.segment : null
     return vertices.length === edit.vertices.length && segment === edit.segment ? edit : { ...edit, vertices, segment }
   }
 
@@ -97,7 +115,8 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
    */
   function settle(before: DesignDocument, after: DesignDocument): DesignDocument {
     if (after === before) return after
-    let current = captureOverrides(before, after)
+    // まとまりの外へ出した・中へ入れたバリアントの名前を合わせてから、上書きを覚える
+    let current = captureOverrides(before, fitMovedVariants(before, after))
     let base = before
     // インスタンスを直すと大きさが変わって並べ直しが要る、ということがあるので、落ち着くまで繰り返す
     for (let pass = 0; pass < 4; pass++) {
@@ -211,6 +230,14 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     /** パスの頂点の編集に入る・選ぶ頂点や辺を変える（null で抜ける）。パスを 1 つだけ選んでいるときだけ有効 */
     editVertices(edit: VertexEdit | null) {
       vertexEdit = edit && { ...edit, vertices: [...new Set(edit.vertices)].sort((a, b) => a - b) }
+      if (vertexEdit) gradientEdit = null
+      emit()
+    },
+
+    /** キャンバスでグラデーションを動かし始める・選ぶ色を変える（null で抜ける）。そのノードを 1 つだけ選んでいるときだけ有効 */
+    editGradient(edit: GradientEdit | null) {
+      gradientEdit = edit
+      if (edit) vertexEdit = null
       emit()
     },
 

@@ -201,7 +201,10 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
 
   // ── キャプチャ ──
   await row('ヘッダー').click()
+  // グラデーションをキャンバスで動かすハンドルも見せる（撮ったら抜ける）
+  await page.locator('.properties-panel button[aria-pressed]:not(.icon-button)').first().click()
   await shot(page, '1-editor-gradient.png')
+  await page.keyboard.press('Escape')
 
   // 同じ名前のインスタンスがページ直下にもあるので、フレームの中にある元（一覧では下）を選ぶ
   await row('ボタン').last().click()

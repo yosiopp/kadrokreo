@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findGuides, snapMove, snapResize } from './snap.ts'
+import { findGuides, snapMove, snapResize, snapShape, toFrame } from './snap.ts'
 
 const target = { x: 100, y: 100, width: 100, height: 50 }
 
@@ -53,5 +53,35 @@ describe('findGuides', () => {
     const bounds = { x: 100, y: 300, width: 100, height: 30 }
     expect(findGuides(bounds, [target], 'e')).toEqual([{ axis: 'x', position: 200, from: 100, to: 330 }])
     expect(findGuides(bounds, [target], 's')).toEqual([])
+  })
+})
+
+describe('snapShape', () => {
+  const diamond = [
+    { x: 50, y: 0 },
+    { x: 100, y: 50 },
+    { x: 50, y: 100 },
+    { x: 0, y: 50 },
+  ]
+
+  it('斜めの図形は囲む矩形に加えて角も揃える線にする', () => {
+    const shape = snapShape([diamond])!
+    expect(shape).toMatchObject({ x: 0, y: 0, width: 100, height: 100 })
+    expect(shape.xs).toContain(50)
+    // 縦横に沿った図形の角は足さない
+    expect(snapShape([[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]])!.xs).toEqual([])
+  })
+
+  it('回した向きで見ると、同じ角度の図形は縦横の矩形になる', () => {
+    const shape = snapShape([diamond], 45)!
+    expect(shape.xs).toEqual([])
+    expect(shape.width).toBeCloseTo(Math.hypot(50, 50))
+    expect(toFrame({ x: 1, y: 0 }, 0)).toEqual({ x: 1, y: 0 })
+  })
+
+  it('動かす側の角が、相手の斜めの角に吸着する', () => {
+    const target = snapShape([diamond])!
+    // 左端 47 を、ひし形の上の角の x = 50 へ
+    expect(snapMove({ x: 47, y: 200, width: 20, height: 10 }, [target], 5).dx).toBe(3)
   })
 })

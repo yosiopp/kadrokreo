@@ -195,7 +195,7 @@ describe('曲線（制御点 in / out）', () => {
   })
 
   it('曲がった 2 点のパスは直線ではない', () => {
-    const node = { type: 'path', closed: false, points: pathFromPoints(arch).points } as PathNode
+    const node = { type: 'path', closed: false, contours: [] as PathNode['contours'], points: pathFromPoints(arch).points } as PathNode
     expect(isLine(node)).toBe(false)
     expect(isLine({ ...node, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] })).toBe(true)
   })

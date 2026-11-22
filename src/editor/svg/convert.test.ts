@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { kdrFile, parseKdr } from '../../document/kdr.ts'
 import { pathPoints } from '../../document/path.ts'
-import type { FrameNode, PathNode, SceneNode, TextNode } from '../../document/types.ts'
+import type { FrameNode, ImageNode, PathNode, SceneNode, TextNode } from '../../document/types.ts'
 import { createDocument, pasteIntoPage } from '../operations/document.ts'
 import { type SvgImport, convertSvg } from './convert.ts'
 import { parseTransform } from './values.ts'
@@ -68,7 +68,7 @@ describe('path の d', () => {
   it('曲線のコマンドを、制御点つきの頂点にする', () => {
     const result = convert('<svg><path id="wave" d="M0 0 C10 -10 20 -10 30 0 S50 10 60 0" fill="none" stroke="#ff0000"/></svg>')
     const path = children(result)[0] as PathNode
-    expect(path).toMatchObject({ type: 'path', name: 'wave', closed: false, fills: [], strokes: [{ type: 'solid', color: '#ff0000' }] })
+    expect(path).toMatchObject({ type: 'path', name: 'wave', closed: false, fills: [], strokes: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }] })
     const points = pathPoints(path).map((p) => ({ ...p, x: p.x + path.x, y: p.y + path.y }))
     expect(points).toHaveLength(3)
     // S の 1 つ目の制御点は、前の曲線の 2 つ目の制御点を折り返したもの
@@ -101,12 +101,25 @@ describe('path の d', () => {
     close(arc.height, 50)
   })
 
-  it('輪郭が複数ならパスに分けてフレームにまとめ、穴が塗りつぶされることを知らせる', () => {
-    const result = convert('<svg><path id="ring" d="M0 0 H100 V100 H0 Z M25 25 H75 V75 H25 Z"/></svg>')
-    const group = children(result)[0] as FrameNode
-    expect(group).toMatchObject({ type: 'frame', name: 'ring', x: 0, y: 0, width: 100, height: 100 })
-    expect(children(result, group).map((node) => node.name)).toEqual(['ring 1', 'ring 2'])
-    expect(labels(result).some((label) => label.includes('輪郭が複数'))).toBe(true)
+  it('輪郭が複数なら 1 つのパスの輪郭（contours）にし、fill-rule を写す', () => {
+    const result = convert(
+      '<svg><path id="ring" fill-rule="evenodd" d="M0 0 H100 V100 H0 Z M25 25 H75 V75 H25 Z"/>' +
+        '<path d="M0 0 H10 V10 Z m20 0 h10 v10 z"/></svg>',
+    )
+    const [ring, two] = children(result) as PathNode[]
+    expect(ring).toMatchObject({ type: 'path', name: 'ring', x: 0, y: 0, width: 100, height: 100, closed: true, fillRule: 'evenodd' })
+    expect(ring.contours).toEqual([
+      { points: [{ x: 0.25, y: 0.25 }, { x: 0.75, y: 0.25 }, { x: 0.75, y: 0.75 }, { x: 0.25, y: 0.75 }], closed: true },
+    ])
+    // fill-rule の既定は nonzero（向きの同じ輪郭は塗りつぶされ、逆向きなら穴になる）
+    expect(two).toMatchObject({ fillRule: 'nonzero', x: 0, width: 30 })
+    expect(two.contours).toHaveLength(1)
+    expect(labels(result)).toEqual([])
+  })
+
+  it('1 つの輪郭の polygon も fill-rule を写す（自分と交わる星形の真ん中が抜ける）', () => {
+    const result = convert('<svg><polygon fill-rule="evenodd" points="50,0 79,90 2,35 98,35 21,90"/></svg>')
+    expect(children(result)[0]).toMatchObject({ type: 'path', fillRule: 'evenodd', contours: [] })
   })
 
   it('読めない d は読み飛ばして知らせる', () => {
@@ -164,10 +177,10 @@ describe('塗りと線', () => {
       '<svg><g fill="red"><rect width="10" height="10" style="fill: #00f; stroke: rgb(0, 128, 0); stroke-width: 3" opacity="0.5"/><circle r="5" cx="5" cy="5"/></g></svg>',
     )
     const [rect, circle] = children(result, children(result)[0] as FrameNode)
-    expect(rect).toMatchObject({ fills: [{ type: 'solid', color: '#0000ff' }], strokes: [{ type: 'solid', color: '#008000' }], strokeWidth: 3, opacity: 0.5 })
+    expect(rect).toMatchObject({ fills: [{ type: 'solid', color: '#0000ff' }], strokes: [{ type: 'solid', color: '#008000' }], strokeWidth: 3, opacity: 0.5, visible: true })
     // 塗りは親から受け継ぐ。何も指定しなければ黒
-    expect(circle).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000' }], strokes: [] })
-    expect(children(convert('<svg><rect width="1" height="1"/></svg>'))[0]).toMatchObject({ fills: [{ type: 'solid', color: '#000000' }] })
+    expect(circle).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }], strokes: [] })
+    expect(children(convert('<svg><rect width="1" height="1"/></svg>'))[0]).toMatchObject({ fills: [{ type: 'solid', color: '#000000', opacity: 1, visible: true }] })
   })
 
   it('fill-opacity と半透明の色はノードの opacity に寄せる', () => {
@@ -177,7 +190,7 @@ describe('塗りと線', () => {
     expect(b.opacity).toBeCloseTo(0.25)
   })
 
-  it('linearGradient を直線状のグラデーションにし、始点と終点を色の位置に写す', () => {
+  it('linearGradient を直線状のグラデーションにし、始点と終点を枠に対する割合にする', () => {
     const result = convert(`<svg>
       <defs>
         <linearGradient id="g1"><stop offset="0" stop-color="#ff0000"/><stop offset="1" style="stop-color: #0000ff"/></linearGradient>
@@ -189,9 +202,10 @@ describe('塗りと線', () => {
       <rect width="100" height="50" fill="url(#g3)"/>
     </svg>`)
     const [a, b, c] = children(result) as Extract<SceneNode, { fills: unknown }>[]
-    expect(a.fills).toEqual([{ type: 'linear', angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }])
-    expect(b.fills).toEqual([{ type: 'linear', angle: 0, stops: [{ offset: 0.25, color: '#ff0000' }, { offset: 0.75, color: '#0000ff' }] }])
-    expect(c.fills).toEqual([{ type: 'linear', angle: 90, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }])
+    const stops = [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }]
+    expect(a.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 1, y2: 0, stops, opacity: 1, visible: true }])
+    expect(b.fills).toEqual([{ type: 'linear', x1: 0.25, y1: 0, x2: 0.75, y2: 0, stops, opacity: 1, visible: true }])
+    expect(c.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 0, y2: 1, stops, opacity: 1, visible: true }])
   })
 
   it('円形のグラデーションは、中心と半径を枠に対する割合にする', () => {
@@ -205,9 +219,9 @@ describe('塗りと線', () => {
     </svg>`)
     const [circle, rect, focal] = children(result) as Extract<SceneNode, { fills: unknown }>[]
     const stops = [{ offset: 0, color: '#ffd700' }, { offset: 1, color: '#000000' }]
-    expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops }])
-    expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops }])
-    expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops }])
+    expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true }])
+    expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops, opacity: 1, visible: true }])
+    expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true }])
     expect(labels(result)).toContain('円形のグラデーションの焦点（中心に寄せた）')
   })
 })
@@ -227,10 +241,10 @@ describe('危険なもの・表せないもの', () => {
     // 根のフレームと、外部の塗りの代わりの色を付けた矩形と、塗りのない矩形だけ
     expect(nodes.map((node) => node.type).sort()).toEqual(['frame', 'rect', 'rect'])
     const [fallback, empty] = children(result)
-    expect(fallback).toMatchObject({ fills: [{ type: 'solid', color: '#00ff00' }] })
+    expect(fallback).toMatchObject({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }] })
     expect(empty).toMatchObject({ fills: [] })
     expect(labels(result)).toEqual(
-      expect.arrayContaining(['スクリプト（<script>）', '埋め込み HTML（<foreignObject>）', '画像（<image>）', '外部への参照（読まなかった）']),
+      expect.arrayContaining(['スクリプト（<script>）', '埋め込み HTML（<foreignObject>）', '外部の画像（<image>。読まなかった）', '外部への参照（読まなかった）']),
     )
     expect(result.warnings.find((warning) => warning.label === 'スクリプト（<script>）')?.count).toBe(2)
     // SVG の文字そのものはどこにも残らない
@@ -251,15 +265,15 @@ describe('危険なもの・表せないもの', () => {
       <textPath/>
     </svg>`)
     expect(children(result).map((node) => node.type)).toEqual(['rect', 'rect', 'ellipse'])
-    expect(children(result)[1]).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000' }] })
+    expect(children(result)[1]).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }] })
     expect(children(result)[2]).toMatchObject({ fills: [] })
     expect(labels(result)).toEqual([
       'フィルタ',
-      'マスク',
-      'クリップパス',
+      'クリップパス（矩形・円でないもの。かけなかった）',
+      'マスク（矩形・円でないもの。かけなかった）',
       'パターンの塗り',
       'たどれない塗りの参照',
-      '対応していない要素（<textPath>）',
+      '線に沿った文字（<textPath>）',
     ])
   })
 
@@ -283,6 +297,173 @@ describe('危険なもの・表せないもの', () => {
   })
 })
 
+// 1x1 の透明な PNG
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+describe('CSS（<style>）', () => {
+  it('要素名・.class・#id のセレクタを詳細度と書いた順で重ね、style 属性と !important の優先を守る', () => {
+    const result = convert(`<svg>
+      <style><![CDATA[
+        /* Illustrator の書き出しの形 */
+        .st0 { fill: #ff0000; stroke: #000; stroke-width: 2 }
+        rect { fill: #00ff00 }
+        .st1, #special { fill: #0000ff }
+        rect.st0.big { stroke-width: 4 }
+        .strong { fill: #123456 !important }
+        g .nested { fill: #ffffff }
+        @media print { rect { fill: #999999 } }
+      ]]></style>
+      <rect class="st0" width="10" height="10"/>
+      <rect width="10" height="10" fill="#abcdef"/>
+      <rect id="special" class="st0" width="10" height="10"/>
+      <rect class="st0 big" width="10" height="10"/>
+      <rect class="st1" width="10" height="10" style="fill: #fedcba"/>
+      <rect class="strong" width="10" height="10" style="fill: #fedcba"/>
+    </svg>`)
+    const [st0, attribute, special, big, styled, strong] = children(result) as PathNode[]
+    // クラスは要素名より強い
+    expect(st0).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }], strokes: [{ type: 'solid', color: '#000000', opacity: 1, visible: true }], strokeWidth: 2 })
+    // CSS は属性より強い
+    expect(attribute.fills).toEqual([{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }])
+    // #id はクラスより強い
+    expect(special.fills).toEqual([{ type: 'solid', color: '#0000ff', opacity: 1, visible: true }])
+    expect(big.strokeWidth).toBe(4)
+    // style 属性は CSS より強く、!important は style 属性より強い
+    expect(styled.fills).toEqual([{ type: 'solid', color: '#fedcba', opacity: 1, visible: true }])
+    expect(strong.fills).toEqual([{ type: 'solid', color: '#123456', opacity: 1, visible: true }])
+    expect(labels(result)).toEqual(['CSS の複雑なセレクタ（読み飛ばした）', 'CSS の @ で始まる規則（読み飛ばした）'])
+  })
+
+  it('CSS の値は受け継がれ、グラデーションの色や不透明度・表示にも効く', () => {
+    const result = convert(`<svg>
+      <style>.parent { fill: #00ff00 } .s1 { stop-color: #ff0000 } .s2 { stop-color: #0000ff } .half { opacity: .5 } .gone { display: none }</style>
+      <linearGradient id="g"><stop class="s1" offset="0"/><stop class="s2" offset="1"/></linearGradient>
+      <g class="parent"><rect width="10" height="10"/></g>
+      <rect width="10" height="10" fill="url(#g)" class="half"/>
+      <rect width="10" height="10" class="gone"/>
+    </svg>`)
+    const [group, gradient] = children(result)
+    expect(children(result, group as FrameNode)[0]).toMatchObject({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }] })
+    expect(gradient).toMatchObject({ opacity: 0.5 })
+    expect((gradient as PathNode).fills[0]).toMatchObject({ type: 'linear', stops: [{ color: '#ff0000' }, { color: '#0000ff' }] })
+    expect(children(result)).toHaveLength(2)
+  })
+})
+
+describe('破線', () => {
+  it('stroke-dasharray を線の破線にし、奇数個なら繰り返し、拡大に合わせる', () => {
+    const result = convert(`<svg>
+      <line x2="100" stroke="#000" stroke-dasharray="4 2"/>
+      <rect width="10" height="10" stroke="#000" stroke-dasharray="3" transform="scale(2)"/>
+      <circle r="5" stroke="#000" style="stroke-dasharray: 1, 2, 3" stroke-dashoffset="2"/>
+      <line x2="100" stroke="#000" stroke-dasharray="4 -1"/>
+      <rect width="10" height="10" stroke-dasharray="4"/>
+    </svg>`)
+    const [line, rect, circle, invalid, noStroke] = children(result) as PathNode[]
+    expect(line.strokeDashes).toEqual([4, 2])
+    expect(rect).toMatchObject({ type: 'rect', strokeDashes: [6, 6] })
+    expect(circle.strokeDashes).toEqual([1, 2, 3, 1, 2, 3])
+    // 負の数は SVG と同じく実線、線のない図形には付けない
+    expect(invalid.strokeDashes).toEqual([])
+    expect(noStroke.strokeDashes).toEqual([])
+    expect(labels(result)).toEqual(['破線のずれ（stroke-dashoffset。0 にした）'])
+  })
+})
+
+describe('クリップとマスク', () => {
+  it('矩形の clip-path は切り取るフレームに、円は角丸のフレームにする', () => {
+    const result = convert(`<svg width="200" height="200">
+      <defs>
+        <clipPath id="box"><rect x="10" y="10" width="50" height="40" rx="5"/></clipPath>
+        <clipPath id="round"><circle cx="100" cy="100" r="20"/></clipPath>
+      </defs>
+      <g clip-path="url(#box)"><rect width="200" height="200" fill="red"/></g>
+      <rect x="50" y="50" width="200" height="200" style="clip-path: url(#round)"/>
+    </svg>`)
+    const [box, round] = children(result) as FrameNode[]
+    expect(box).toMatchObject({ type: 'frame', name: 'box', x: 10, y: 10, width: 50, height: 40, clipContent: true, cornerRadius: 5, fills: [] })
+    const group = children(result, box)[0] as FrameNode
+    expect(group).toMatchObject({ type: 'frame', x: -10, y: -10 })
+    expect(round).toMatchObject({ name: 'round', x: 80, y: 80, width: 40, height: 40, cornerRadius: 20 })
+    expect(children(result, round)[0]).toMatchObject({ type: 'rect', x: -30, y: -30 })
+    expect(labels(result)).toEqual([])
+  })
+
+  it('clip-path は図形の transform のあとの座標で、clipPath の transform も重ねる', () => {
+    const result = convert(`<svg>
+      <clipPath id="c" transform="translate(5 0)"><rect width="10" height="10"/></clipPath>
+      <rect width="100" height="100" transform="translate(20 20) scale(2)" clip-path="url(#c)"/>
+    </svg>`)
+    expect(children(result)[0]).toMatchObject({ type: 'frame', x: 30, y: 20, width: 20, height: 20 })
+  })
+
+  it('白い矩形のマスクは切り取り、灰色なら明るさを不透明度にする。表せないものはかけずに知らせる', () => {
+    const result = convert(`<svg>
+      <mask id="white"><rect width="50" height="50" fill="#fff"/></mask>
+      <mask id="gray"><rect width="50" height="50" fill="#808080"/></mask>
+      <mask id="tilted"><rect width="50" height="50" fill="#fff" transform="rotate(30)"/></mask>
+      <clipPath id="oval"><ellipse rx="20" ry="10"/></clipPath>
+      <rect width="100" height="100" mask="url(#white)"/>
+      <rect width="100" height="100" mask="url(#gray)"/>
+      <rect width="100" height="100" mask="url(#tilted)"/>
+      <rect width="100" height="100" clip-path="url(#oval)"/>
+      <rect width="100" height="100" clip-path="url(#nothing)"/>
+    </svg>`)
+    const [white, gray, tilted, oval, nothing] = children(result)
+    expect(white).toMatchObject({ type: 'frame', name: 'white', width: 50, height: 50, opacity: 1 })
+    expect(gray.type).toBe('frame')
+    expect(gray.opacity).toBeCloseTo(0.502, 2)
+    expect([tilted.type, oval.type, nothing.type]).toEqual(['rect', 'rect', 'rect'])
+    expect(labels(result)).toEqual([
+      'マスク（矩形・円でないもの。かけなかった）',
+      'クリップパス（矩形・円でないもの。かけなかった）',
+      'たどれないクリップパスの参照',
+    ])
+  })
+})
+
+describe('画像（<image>）', () => {
+  it('data URI の PNG を画像のノードにし、preserveAspectRatio を収め方にする', () => {
+    const result = convert(`<svg xmlns:xlink="http://www.w3.org/1999/xlink">
+      <image id="photo" x="10" y="20" width="40" height="30" xlink:href="data:image/png;base64,${PNG_BASE64}"/>
+      <image href="data:image/png;base64,${PNG_BASE64}" preserveAspectRatio="xMinYMax slice" transform="scale(3)"/>
+      <image href="data:image/png;base64,${PNG_BASE64}" width="10" height="10" preserveAspectRatio="none"/>
+    </svg>`)
+    const [photo, intrinsic, stretched] = children(result) as ImageNode[]
+    expect(photo).toMatchObject({ type: 'image', name: 'photo', x: 10, y: 20, width: 40, height: 30, fit: 'contain', positionX: 0.5, positionY: 0.5 })
+    // 大きさの指定がなければ元の大きさ（1 × 1）に拡大がかかる
+    expect(intrinsic).toMatchObject({ width: 3, height: 3, fit: 'cover', positionX: 0, positionY: 1 })
+    expect(stretched.fit).toBe('stretch')
+    // 同じ画像は 1 つのアセットにまとめ、id は中身の SHA-256
+    const ids = Object.keys(result.fragment.assets)
+    expect(ids).toHaveLength(1)
+    expect(ids[0]).toMatch(/^[0-9a-f]{64}$/)
+    expect(photo.assetId).toBe(ids[0])
+    expect(result.fragment.assets[ids[0]].mime).toBe('image/png')
+  })
+
+  it('外部の URL・SVG の画像・壊れた画像は読まずに知らせる', () => {
+    const result = convert(`<svg>
+      <image href="https://example.com/a.png" width="10" height="10"/>
+      <image href="data:image/svg+xml;utf8,%3Csvg%2F%3E" width="10" height="10"/>
+      <image href="data:image/png;base64,AAAA" width="10" height="10"/>
+    </svg>`)
+    expect(children(result)).toHaveLength(0)
+    expect(result.warnings).toEqual([
+      { label: '外部の画像（<image>。読まなかった）', count: 1 },
+      { label: 'PNG・JPEG・WebP・GIF でない画像（<image>。読み飛ばした）', count: 2 },
+    ])
+  })
+
+  it('取り込んだ画像は kdr に書き出して読み直せる', () => {
+    const result = convert(`<svg><image href="data:image/png;base64,${PNG_BASE64}" width="10" height="10"/></svg>`)
+    const doc = createDocument()
+    const pasted = pasteIntoPage(doc, doc.pages[0].id, result.fragment).document
+    const reread = parseKdr(JSON.parse(JSON.stringify(kdrFile(pasted))), pasted.assets)
+    expect(Object.values(reread.pages[0].nodes).some((node) => node.type === 'image')).toBe(true)
+  })
+})
+
 describe('テキスト', () => {
   it('基線と text-anchor から枠の位置を決め、tspan の改行を行にする', () => {
     const result = convert(
@@ -290,10 +471,18 @@ describe('テキスト', () => {
     )
     const text = children(result)[0] as TextNode
     expect(text).toMatchObject({ type: 'text', text: 'Hello\nWorld', fontSize: 20, fontFamily: 'Inter', fontWeight: 700, textAlign: 'center', name: 'Hello' })
-    expect(text.fills).toEqual([{ type: 'solid', color: '#333333' }])
+    expect(text.fills).toEqual([{ type: 'solid', color: '#333333', opacity: 1, visible: true }])
     // 幅 50（5 文字 × 20 × 0.5）の中央が x = 100
     close(text.x + text.width / 2, 100)
     expect(text.y).toBeLessThan(50 - 20 * 0.8)
+  })
+})
+
+describe('textPath', () => {
+  it('text の中の textPath は文字だけをまっすぐ並べて知らせる', () => {
+    const result = convert('<svg><path id="curve" d="M0 0 C50 -50 100 50 150 0"/><text><textPath href="#curve">Along</textPath></text></svg>')
+    expect(children(result)[1]).toMatchObject({ type: 'text', text: 'Along' })
+    expect(labels(result)).toEqual(['線に沿った文字（<textPath>。まっすぐ並べた）'])
   })
 })
 

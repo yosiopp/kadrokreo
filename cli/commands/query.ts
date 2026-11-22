@@ -1,6 +1,6 @@
 import { getAbsoluteBounds } from '../../src/document/geometry.ts'
 import { KDR_FORMAT, KDR_VERSION } from '../../src/document/kdr.ts'
-import { mapVertices, nodeKind, pathData, pathPoints } from '../../src/document/path.ts'
+import { contoursData, mapVertices, nodeKind, pathContours } from '../../src/document/path.ts'
 import type { NodeId, Scene, SceneNode } from '../../src/document/types.ts'
 import { listComponents } from '../../src/editor/components.ts'
 import { pruneAssets } from '../../src/editor/operations/document.ts'
@@ -58,7 +58,12 @@ function namePath(scene: Scene, id: NodeId): string {
 /** パスの形を SVG の path の d で表す。座標は親の座標系（回転は含めない。`add path --d` で同じ形に戻る） */
 function nodePathData(node: SceneNode): string {
   if (node.type !== 'path') throw new UsageError(`get: d はパスと直線だけにあります: ${node.id}`)
-  return pathData(mapVertices(pathPoints(node), (point) => ({ x: point.x + node.x, y: point.y + node.y })), node.closed)
+  // 輪郭が複数あれば、M で始まるまとまりを並べる
+  const moved = pathContours(node).map((contour) => ({
+    vertices: mapVertices(contour.vertices, (point) => ({ x: point.x + node.x, y: point.y + node.y })),
+    closed: contour.closed,
+  }))
+  return contoursData(moved)
 }
 
 export const info: Command = {

@@ -66,8 +66,8 @@ function fileNode(page: Page, index = 0): RawNode {
 }
 
 /** ファイルの形のノード 1 つを読んで、書き出し直した形 */
-function roundTrip(node: RawNode): RawNode {
-  return fileNode(parseKdr(kdrOf([node]), {}).pages[0])
+function roundTrip(node: RawNode, assets: Parameters<typeof parseKdr>[1] = {}): RawNode {
+  return fileNode(parseKdr(kdrOf([node]), assets).pages[0])
 }
 
 describe('kdr', () => {
@@ -294,6 +294,7 @@ describe('parseKdr', () => {
       fills: [],
       strokes: [],
       strokeWidth: 1,
+      strokeDashes: [],
       effects: [],
       cornerRadius: 0,
     })
@@ -313,13 +314,13 @@ describe('parseKdr', () => {
   })
 
   it('塗り・線・効果を検証する', () => {
-    const gradient = { type: 'linear', angle: 90, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }] }
+    const gradient = { type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 1 }
     const effect = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 }
-    const styled = rawNode({ fills: [{ type: 'solid', color: '#ff0000' }, gradient], strokes: [gradient], strokeWidth: 2, effects: [effect, effect] })
+    const styled = rawNode({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1 }, gradient], strokes: [gradient], strokeWidth: 2, effects: [effect, effect] })
     expect(parseOne(styled)).toMatchObject({ fills: styled.fills, strokes: styled.strokes, effects: styled.effects })
 
     expect(() => parseOne(rawNode({ fills: [{ type: 'image' }] }))).toThrow('fills[0].type')
-    expect(() => parseOne(rawNode({ fills: [{ type: 'solid', color: 'red' }] }))).toThrow('fills[0].color')
+    expect(() => parseOne(rawNode({ fills: [{ type: 'solid', color: 'red', opacity: 1 }] }))).toThrow('fills[0].color')
     expect(() => parseOne(rawNode({ fills: '#ff0000' }))).toThrow('fills')
     expect(() => parseOne(rawNode({ strokes: [{ ...gradient, stops: [gradient.stops[0]] }] }))).toThrow('色の数')
     expect(() => parseOne(rawNode({ fills: [{ ...gradient, stops: gradient.stops.toReversed() }] }))).toThrow('小さい順')
@@ -328,7 +329,7 @@ describe('parseKdr', () => {
     )
     expect(() => parseOne(rawNode({ effects: [{ ...effect, opacity: 2 }] }))).toThrow('effects[0].opacity')
     expect(() => parseOne(rawNode({ effects: [{ ...effect, type: 'blur' }] }))).toThrow('effects[0].type')
-    expect(() => parseOne(rawNode({ fills: Array(17).fill({ type: 'solid', color: '#000000' }) }))).toThrow('多すぎ')
+    expect(() => parseOne(rawNode({ fills: Array(17).fill({ type: 'solid', color: '#000000', opacity: 1 }) }))).toThrow('多すぎ')
   })
 
   it('円形のグラデーションを検証する', () => {
@@ -340,6 +341,49 @@ describe('parseKdr', () => {
     expect(() => parseOne(rawNode({ fills: [{ type: 'radial', cx: 0.5, cy: 0.5, ry: 0.5, stops }] }))).toThrow('fills[0].rx')
     // 書き出しても形は変わらない
     expect(roundTrip(rawNode({ fills: [radial] }))).toMatchObject({ fills: [radial] })
+  })
+
+  it('塗りごとの不透明度を検証する。省くと 1 で、1 なら書き出しで省く', () => {
+    const red = { type: 'solid', color: '#ff0000' }
+    const linear = { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }] }
+    expect(parseOne(rawNode({ fills: [red] }))).toMatchObject({ fills: [{ ...red, opacity: 1 }] })
+    expect(parseOne(rawNode({ fills: [{ ...red, opacity: 0.4 }], strokes: [{ ...linear, opacity: 0 }] }))).toMatchObject({
+      fills: [{ opacity: 0.4 }],
+      strokes: [{ opacity: 0 }],
+    })
+    expect(() => parseOne(rawNode({ fills: [{ ...red, opacity: 1.5 }] }))).toThrow('fills[0].opacity')
+    expect(() => parseOne(rawNode({ strokes: [{ ...linear, opacity: '50%' }] }))).toThrow('strokes[0].opacity')
+    expect(roundTrip(rawNode({ fills: [{ ...red, opacity: 1 }, { ...linear, opacity: 0.5 }] })).fills).toEqual([red, { ...linear, opacity: 0.5 }])
+  })
+
+  it('角度のグラデーションを検証する', () => {
+    const stops = [{ offset: 0, color: '#000000' }, { offset: 0.5, color: '#ff0000' }, { offset: 1, color: '#000000' }]
+    const conic = { type: 'conic', cx: 0.25, cy: 1.5, angle: -45, stops }
+    expect(parseOne(rawNode({ fills: [conic], strokes: [conic] }))).toMatchObject({ fills: [conic], strokes: [conic] })
+    expect(() => parseOne(rawNode({ fills: [{ ...conic, angle: '90deg' }] }))).toThrow('fills[0].angle')
+    expect(() => parseOne(rawNode({ fills: [{ type: 'conic', cy: 0.5, angle: 0, stops }] }))).toThrow('fills[0].cx')
+    expect(roundTrip(rawNode({ fills: [conic] })).fills).toEqual([conic])
+  })
+
+  it('塗り・効果ごとの表示を検証する。省くと表示で、表示なら書き出しで省く', () => {
+    const red = { type: 'solid', color: '#ff0000' }
+    const shadow = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 }
+    expect(parseOne(rawNode({ fills: [red], effects: [shadow] }))).toMatchObject({ fills: [{ visible: true }], effects: [{ visible: true }] })
+    expect(parseOne(rawNode({ fills: [{ ...red, visible: false }], effects: [{ ...shadow, visible: false }] }))).toMatchObject({
+      fills: [{ visible: false }],
+      effects: [{ visible: false }],
+    })
+    expect(() => parseOne(rawNode({ fills: [{ ...red, visible: 'no' }] }))).toThrow('fills[0].visible')
+    expect(() => parseOne(rawNode({ effects: [{ ...shadow, visible: 0 }] }))).toThrow('effects[0].visible')
+    const back = roundTrip(rawNode({ fills: [red, { ...red, visible: false }], effects: [shadow, { ...shadow, visible: false }] }))
+    expect(back.fills).toEqual([red, { ...red, visible: false }])
+    expect(back.effects).toEqual([shadow, { ...shadow, visible: false }])
+  })
+
+  it('内側の影を検証する', () => {
+    const inner = { type: 'inner-shadow', x: 2, y: -2, blur: 4, color: '#112233', opacity: 0.5 }
+    expect(parseOne(rawNode({ effects: [inner] }))).toMatchObject({ effects: [{ ...inner, visible: true }] })
+    expect(roundTrip(rawNode({ effects: [inner] })).effects).toEqual([inner])
   })
 
   it('角丸は数値か 4 隅の配列。0 なら書き出しで省く', () => {
@@ -361,6 +405,35 @@ describe('parseKdr', () => {
     // テキストの高さは常に hug
     const text = rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif', sizing: { width: 'hug', height: 'fixed' } })
     expect(parseOne(text)).toMatchObject({ sizing: { width: 'hug', height: 'hug' } })
+  })
+
+  it('破線と、パスの 2 つ目以降の輪郭・塗る範囲の決め方を検証する', () => {
+    expect(parseOne(rawNode({ strokeDashes: [4, 2] }))).toMatchObject({ strokeDashes: [4, 2] })
+    expect(() => parseOne(rawNode({ strokeDashes: [-1] }))).toThrow('strokeDashes[0]')
+    expect(() => parseOne(rawNode({ strokeDashes: [0, 0] }))).toThrow('strokeDashes')
+    expect(() => parseOne(rawNode({ strokeDashes: Array(17).fill(1) }))).toThrow('strokeDashes')
+    const path = (patch: RawNode = {}) =>
+      rawNode({ type: 'path', points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], closed: true, ...patch })
+    expect(parseOne(path())).toMatchObject({ contours: [], fillRule: 'nonzero' })
+    const hole = { points: [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.2, in: { x: 0, y: 0.1 } }], closed: true }
+    expect(parseOne(path({ contours: [hole], fillRule: 'evenodd' }))).toMatchObject({ contours: [hole], fillRule: 'evenodd' })
+    // closed は省くと開いた輪郭
+    expect(parseOne(path({ contours: [{ points: hole.points }] }))).toMatchObject({ contours: [{ points: hole.points, closed: false }] })
+    expect(() => parseOne(path({ fillRule: 'odd' }))).toThrow('fillRule')
+    expect(() => parseOne(path({ contours: [{ points: [{ x: 0, y: 0 }] }] }))).toThrow('contours[0].points')
+    expect(() => parseOne(path({ contours: [{ points: [{ x: 0, y: 'a' }, { x: 1, y: 1 }] }] }))).toThrow('contours[0].points[0].y')
+    expect(() => parseOne(path({ contours: [{ points: hole.points, closed: 1 }] }))).toThrow('contours[0].closed')
+  })
+
+  it('破線と輪郭は、既定値なら書き出しで省き、使っていれば書く', () => {
+    expect(fileNode(insertNode(createPage('p'), createRect({ x: 0, y: 0, width: 10, height: 10 })))).not.toHaveProperty('strokeDashes')
+    const node = createPath(pathFromPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], true), true)
+    const written = fileNode(insertNode(createPage('p'), node))
+    expect(written).not.toHaveProperty('contours')
+    expect(written).not.toHaveProperty('fillRule')
+    const contours = [{ points: [{ x: 0.5, y: 0.5 }, { x: 0.6, y: 0.6 }], closed: true }]
+    const holed = { ...node, strokeDashes: [3, 1], fillRule: 'evenodd' as const, contours }
+    expect(fileNode(insertNode(createPage('p'), holed))).toMatchObject({ strokeDashes: [3, 1], fillRule: 'evenodd', contours })
   })
 
   it('大きさの下限・上限と、並びから外す指定を検証する', () => {
@@ -492,7 +565,7 @@ describe('parseKdr', () => {
     })
     // targets は省けば空
     expect(parseOne(withMain({ properties: [{ name: 'a', type: 'text' }] }))).toMatchObject({
-      component: { properties: [{ name: 'a', type: 'text', targets: [] }] },
+      component: { properties: [{ name: 'a', type: 'text', targets: [], preferred: [] }] },
     })
     expect(() => parseOne(withMain({ description: 1 }))).toThrow('component.description')
     expect(() => parseOne(withMain({ properties: {} }))).toThrow('component.properties')
@@ -504,8 +577,20 @@ describe('parseKdr', () => {
     const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'main' as const, description: '', properties: [] } }
     const page = insertNode(createPage(), frame)
     expect(fileNode(page).component).toEqual({ id: 'c1', role: 'main' })
-    const described = insertNode(createPage(), { ...frame, component: { ...frame.component, description: 'x', properties: [{ name: 'a', type: 'text' as const, targets: [] }] } })
+    const described = insertNode(createPage(), { ...frame, component: { ...frame.component, description: 'x', properties: [{ name: 'a', type: 'text' as const, targets: [], preferred: [] }] } })
     expect(fileNode(described).component).toEqual({ id: 'c1', role: 'main', description: 'x', properties: [{ name: 'a', type: 'text', targets: [] }] })
+
+    // 差し替えの候補（preferred）: 省けば空、重なりはまとめる、空でなければ書き出す
+    expect(parseOne(withMain({ properties: [{ name: 'a', type: 'instance', preferred: ['c2', 'c3', 'c2'] }] }))).toMatchObject({
+      component: { properties: [{ name: 'a', type: 'instance', targets: [], preferred: ['c2', 'c3'] }] },
+    })
+    expect(parseOne(withMain({ properties: [{ name: 'a', type: 'instance' }] }))).toMatchObject({
+      component: { properties: [{ preferred: [] }] },
+    })
+    expect(() => parseOne(withMain({ properties: [{ name: 'a', type: 'instance', preferred: 'c2' }] }))).toThrow('properties[0].preferred')
+    expect(() => parseOne(withMain({ properties: [{ name: 'a', type: 'instance', preferred: ['../x'] }] }))).toThrow('properties[0].preferred[0]')
+    const preferred = insertNode(createPage(), { ...frame, component: { ...frame.component, properties: [{ name: 'a', type: 'instance' as const, targets: [], preferred: ['c2'] }] } })
+    expect(fileNode(preferred).component).toEqual({ id: 'c1', role: 'main', properties: [{ name: 'a', type: 'instance', targets: [], preferred: ['c2'] }] })
   })
 
   it('インスタンスごとの上書きを検証する', () => {
@@ -513,7 +598,7 @@ describe('parseKdr', () => {
     const overrides = {
       n1: { text: '送信', fills: solid('#ff0000'), visible: false },
       n2: { fills: [], strokes: [] },
-      n3: { fills: [{ type: 'linear', angle: 90, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }] }] },
+      n3: { fills: [{ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 1 }] },
       n4: { fontSize: 24, fontFamily: 'serif', fontWeight: 700 },
     }
     expect(parseOne(withOverrides(overrides))).toMatchObject({ component: { id: 'c1', role: 'instance', overrides } })
@@ -524,7 +609,7 @@ describe('parseKdr', () => {
     expect(parseOne(withOverrides(undefined))).toMatchObject({ component: { overrides: {} } })
 
     expect(() => parseOne(withOverrides({ n1: { fills: '#ff0000' } }))).toThrow('overrides.n1.fills')
-    expect(() => parseOne(withOverrides({ n1: { strokes: [{ type: 'solid', color: 'red' }] } }))).toThrow('overrides.n1.strokes')
+    expect(() => parseOne(withOverrides({ n1: { strokes: [{ type: 'solid', color: 'red', opacity: 1 }] } }))).toThrow('overrides.n1.strokes')
     expect(() => parseOne(withOverrides({ n1: { text: 1 } }))).toThrow('overrides.n1.text')
     expect(() => parseOne(withOverrides({ n1: { fontWeight: 450 } }))).toThrow('overrides.n1.fontWeight')
     expect(() => parseOne(withOverrides({ n1: { assetId: 'nothing' } }))).toThrow('上書きの画像データがありません')
@@ -542,8 +627,14 @@ describe('parseKdr', () => {
   it('画像は対応形式のバイト列で、データが揃っているものだけ受け付ける', () => {
     const image = rawNode({ type: 'image', assetId: 'a1' })
     expect(parseKdr(kdrOf([image]), { a1: PNG }).assets).toEqual({ a1: PNG })
-    expect(parseOne(image, { a1: PNG })).toMatchObject({ fit: 'cover', cornerRadius: 0, positionX: 0.5, positionY: 0.5 })
+    expect(parseOne(image, { a1: PNG })).toMatchObject({ fit: 'cover', cornerRadius: 0, positionX: 0.5, positionY: 0.5, scale: 1 })
     expect(parseOne({ ...image, positionX: 0, positionY: 1 }, { a1: PNG })).toMatchObject({ positionX: 0, positionY: 1 })
+    // 切り抜きの拡大は 1〜100。1 なら書き出しで省く
+    expect(parseOne({ ...image, scale: 2.5 }, { a1: PNG })).toMatchObject({ scale: 2.5 })
+    expect(() => parseOne({ ...image, scale: 0.5 }, { a1: PNG })).toThrow('scale')
+    expect(() => parseOne({ ...image, scale: 101 }, { a1: PNG })).toThrow('scale')
+    expect(roundTrip({ ...image, scale: 1 }, { a1: PNG })).not.toHaveProperty('scale')
+    expect(roundTrip({ ...image, scale: 3 }, { a1: PNG })).toMatchObject({ scale: 3 })
     expect(() => parseOne({ ...image, positionX: 1.5 }, { a1: PNG })).toThrow('positionX')
     expect(() => parseOne(image, {})).toThrow('画像データ')
     expect(() => parseOne(image, { a1: { ...PNG, mime: 'image/svg+xml' } })).toThrow('画像形式')

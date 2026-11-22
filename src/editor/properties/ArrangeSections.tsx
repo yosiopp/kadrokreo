@@ -1,11 +1,10 @@
 import { isLine } from '../../document/path.ts'
 import { followsConstraints, sizeLimited } from '../../document/autoLayout.ts'
-import { normalizeAngle } from '../../document/geometry.ts'
 import { AlignIcon } from '../icons.tsx'
 import { setLayoutFill, setLayoutPositioning } from '../layout.ts'
 import { fitTextNodes } from '../measure.ts'
 import { type Alignment, alignNodes, distributeNodes } from '../operations/arrange.ts'
-import { setSize } from '../operations/transform.ts'
+import { setRotation, setSize } from '../operations/transform.ts'
 import { patchNodes } from '../operations/tree.ts'
 import { type PanelContext, textsIn, common, mapValue } from './context.ts'
 import { CheckField, NumberField, Section, SelectField } from './fields.tsx'
@@ -118,7 +117,8 @@ export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
           <NumberField
             label="回転"
             value={common(nodes.map((n) => n.rotation))}
-            onCommit={(rotation) => apply({ rotation: normalizeAngle(rotation) })}
+            // 複数で角度が揃っていれば、選択範囲の中心を軸にまとめて回す
+            onCommit={(rotation) => store.apply((base) => setRotation(base, selection, rotation))}
           />
         </div>
       </Section>

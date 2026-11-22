@@ -1,5 +1,5 @@
 import { type Command } from './commands/common.ts'
-import { align, distribute, rotate } from './commands/arrange.ts'
+import { align, distribute, flip, rotate } from './commands/arrange.ts'
 import {
   component,
   describe_,
@@ -12,11 +12,16 @@ import {
   swap,
   variant,
   variantAdd,
+  variantPropAdd,
+  variantPropRename,
+  variantPropRm,
+  variantValueRename,
 } from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
+import { gradient } from './commands/paints.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
-import { css, html, json, png } from './commands/output.ts'
+import { css, html, json, png, svgOut } from './commands/output.ts'
 import { docName, newDocument, page, pageAdd, pageRename, pageRm } from './commands/pages.ts'
 import { bounds, componentList, find, get, info, ls } from './commands/query.ts'
 
@@ -38,6 +43,7 @@ const commands: Command[] = [
   componentList,
   // export
   png,
+  svgOut,
   // nav
   page,
   // edit: ドキュメントとページ
@@ -49,6 +55,7 @@ const commands: Command[] = [
   add,
   svg,
   set,
+  gradient,
   rm,
   mv,
   order,
@@ -57,6 +64,7 @@ const commands: Command[] = [
   align,
   distribute,
   rotate,
+  flip,
   // edit: オートレイアウト
   autoLayout,
   wrap,
@@ -70,6 +78,10 @@ const commands: Command[] = [
   overrideReset,
   variantAdd,
   variant,
+  variantPropAdd,
+  variantPropRename,
+  variantPropRm,
+  variantValueRename,
   describe_,
   propAdd,
   prop,

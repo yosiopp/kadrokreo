@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { getAbsoluteBounds, getCorners, getWorldCenter, getWorldRotation } from '../../document/geometry.ts'
-import { createFrame, createLine, createRect, createText } from '../nodes.ts'
+import { createFrame, createLine, createPath, createRect, createText } from '../nodes.ts'
 import { alignNodes } from './arrange.ts'
 import { copyFragment, pasteFragment } from './clipboard.ts'
 import { createPage } from './document.ts'
-import { reshapeNode, resizeNodes, rotateNodes, translateNodes } from './transform.ts'
-import { insertNode, moveNode, topLevelIds } from './tree.ts'
+import { flipNodes, reshapeNode, resizeNodes, rotateNodes, setRotation, translateNodes } from './transform.ts'
+import { insertNode, moveNode, topLevelIds, updateNode } from './tree.ts'
 
 const bounds = { x: 0, y: 0, width: 100, height: 100 }
 
@@ -185,5 +185,111 @@ describe('回転', () => {
     const doc = insertNode(insertNode(createPage(), a), b)
     const next = alignNodes(doc, [a.id, b.id], 'left')
     expect(getAbsoluteBounds(next, a.id).x).toBeCloseTo(getAbsoluteBounds(next, b.id).x)
+  })
+})
+
+describe('flipNodes', () => {
+  it('1 つなら中心はそのままで、角度の符号を変え、パスの頂点と制御点を映す', () => {
+    const path = {
+      ...createPath({ x: 10, y: 20, width: 100, height: 50, points: [{ x: 0, y: 0, out: { x: 0.2, y: 0.1 } }, { x: 1, y: 0.5 }] }, false),
+      rotation: 30,
+    }
+    let doc = createPage()
+    doc = insertNode(doc, path)
+    const next = flipNodes(doc, [path.id], 'horizontal')
+    expect(getWorldCenter(next, path.id)).toEqual(getWorldCenter(doc, path.id))
+    expect(next.nodes[path.id]).toMatchObject({
+      x: 10,
+      y: 20,
+      rotation: -30,
+      points: [{ x: 1, y: 0, out: { x: -0.2, y: 0.1 } }, { x: 0, y: 0.5 }],
+    })
+    // 2 回裏返すと元に戻る（2 つ目以降の輪郭も映す）
+    const holed = updateNode(doc, path.id, { contours: [{ points: [{ x: 0.25, y: 0.5 }, { x: 0.5, y: 0.75 }], closed: true }] })
+    expect(flipNodes(holed, [path.id], 'vertical').nodes[path.id]).toMatchObject({ contours: [{ points: [{ x: 0.25, y: 0.5 }, { x: 0.5, y: 0.25 }], closed: true }] })
+    expect(flipNodes(next, [path.id], 'horizontal').nodes[path.id]).toEqual(doc.nodes[path.id])
+  })
+
+  it('複数なら選択範囲の中心で映し、上下では y を映す', () => {
+    const a = createRect({ x: 0, y: 0, width: 10, height: 10 })
+    const b = createRect({ x: 0, y: 90, width: 10, height: 10 })
+    let doc = createPage()
+    doc = insertNode(doc, a)
+    doc = insertNode(doc, b)
+    const next = flipNodes(doc, [a.id, b.id], 'vertical')
+    expect(next.nodes[a.id]).toMatchObject({ x: 0, y: 90 })
+    expect(next.nodes[b.id]).toMatchObject({ x: 0, y: 0 })
+  })
+
+  it('フレームの子・角丸の 4 隅・グラデーション・影・固定の向きを映す', () => {
+    const frame = { ...createFrame({ x: 0, y: 0, width: 200, height: 100 }), cornerRadius: [1, 2, 3, 4] as [number, number, number, number] }
+    const child = {
+      ...createRect({ x: 10, y: 10, width: 30, height: 20 }),
+      rotation: 15,
+      constraints: { horizontal: 'start' as const, vertical: 'end' as const },
+      fills: [
+        { type: 'linear' as const, x1: 0.1, y1: 0.2, x2: 0.7, y2: 0.9, stops: [], opacity: 1, visible: true },
+        { type: 'radial' as const, cx: 0.2, cy: 0.3, rx: 0.5, ry: 0.5, stops: [], opacity: 1, visible: true },
+        { type: 'conic' as const, cx: 0.2, cy: 0.3, angle: 30, stops: [{ offset: 0, color: '#000000' }, { offset: 0.25, color: '#ffffff' }], opacity: 1, visible: true },
+      ],
+      effects: [{ type: 'drop-shadow' as const, x: 4, y: 6, blur: 2, color: '#000000', opacity: 0.5, visible: true }],
+    }
+    let doc = createPage()
+    doc = insertNode(doc, frame)
+    doc = insertNode(doc, child, frame.id)
+    const next = flipNodes(doc, [frame.id], 'horizontal')
+    expect(next.nodes[frame.id]).toMatchObject({ x: 0, cornerRadius: [2, 1, 4, 3] })
+    expect(next.nodes[child.id]).toMatchObject({
+      x: 160,
+      y: 10,
+      rotation: -15,
+      constraints: { horizontal: 'end', vertical: 'end' },
+      fills: [
+        { x1: 0.9, y1: 0.2, x2: 0.3, y2: 0.9 },
+        { cx: 0.8, cy: 0.3 },
+        // 角度は回る向きが逆になるので、色の並びも逆にする
+        { cx: 0.8, angle: 150, stops: [{ offset: 0.75, color: '#ffffff' }, { offset: 1, color: '#000000' }] },
+      ],
+      effects: [{ x: -4, y: 6 }],
+    })
+  })
+
+  it('テキストは位置と向きだけを映す', () => {
+    const text = { ...createText({ x: 0, y: 0, width: 50, height: 20 }, 'abc'), rotation: 10 }
+    const rect = createRect({ x: 150, y: 0, width: 50, height: 20 })
+    let doc = createPage()
+    doc = insertNode(doc, text)
+    doc = insertNode(doc, rect)
+    const next = flipNodes(doc, [text.id, rect.id], 'horizontal')
+    expect(next.nodes[text.id]).toMatchObject({ rotation: -10, text: 'abc', textAlign: text.textAlign })
+    // 中心どうしの左右が入れ替わる（鏡に映した位置）
+    const gap = (scene: typeof doc) => getWorldCenter(scene, text.id).x - getWorldCenter(scene, rect.id).x
+    expect(gap(next)).toBeCloseTo(-gap(doc))
+  })
+})
+
+describe('setRotation', () => {
+  it('角度の揃った複数は、選択範囲の中心を軸にまとめて回す', () => {
+    const a = createRect({ x: 0, y: 0, width: 10, height: 10 })
+    const b = createRect({ x: 90, y: 0, width: 10, height: 10 })
+    let doc = createPage()
+    doc = insertNode(doc, a)
+    doc = insertNode(doc, b)
+    const next = setRotation(doc, [a.id, b.id], 90)
+    expect(getWorldRotation(next, a.id)).toBe(90)
+    // 中心 (5, 5) と (95, 5) が、選択範囲の中心 (50, 5) のまわりで縦に並ぶ
+    expect(getWorldCenter(next, a.id)).toEqual({ x: 50, y: -40 })
+    expect(getWorldCenter(next, b.id)).toEqual({ x: 50, y: 50 })
+  })
+
+  it('1 つか、角度が揃っていなければ、それぞれの中心で回す', () => {
+    const a = createRect({ x: 0, y: 0, width: 10, height: 10 })
+    const b = { ...createRect({ x: 90, y: 0, width: 10, height: 10 }), rotation: 20 }
+    let doc = createPage()
+    doc = insertNode(doc, a)
+    doc = insertNode(doc, b)
+    const next = setRotation(doc, [a.id, b.id], 400)
+    expect(next.nodes[a.id]).toMatchObject({ x: 0, y: 0, rotation: 40 })
+    expect(next.nodes[b.id]).toMatchObject({ x: 90, y: 0, rotation: 40 })
   })
 })

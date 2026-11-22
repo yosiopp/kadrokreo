@@ -1,5 +1,5 @@
 import type { NodeKind } from '../document/path.ts'
-import type { AutoLayout, Cap, ComponentProperty, Constraint, ImageNode, Override, Paint, Sizing } from '../document/types.ts'
+import type { AutoLayout, Cap, ComponentProperty, Constraint, Effect, ImageNode, Override, Paint, Sizing } from '../document/types.ts'
 
 // 設定の値の、画面での呼び名。editor のプロパティパネルと、viewer のインスペクトが同じ言葉で出す
 
@@ -23,6 +23,12 @@ export const PAINT_TYPE_LABELS: Record<Paint['type'], string> = {
   solid: '単色',
   linear: '直線のグラデーション',
   radial: '円形のグラデーション',
+  conic: '角度のグラデーション',
+}
+
+export const EFFECT_TYPE_LABELS: Record<Effect['type'], string> = {
+  'drop-shadow': '落ち影',
+  'inner-shadow': '内側の影',
 }
 
 /** 文字の太さ（100〜900）の呼び名。CSS や書体の一般的な名前 */

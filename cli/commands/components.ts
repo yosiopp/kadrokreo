@@ -1,7 +1,7 @@
 import { canBindProperty, findMain, isInstance, isMain } from '../../src/document/component.ts'
 import { getWorldCenter } from '../../src/document/geometry.ts'
 import type { ComponentProperty, DesignDocument, NodeId, Scene } from '../../src/document/types.ts'
-import { parseVariantName, propValue } from '../../src/document/variants.ts'
+import { isVariantSet, parseVariantName, propValue, variantProperties, variantSetOf } from '../../src/document/variants.ts'
 import {
   createInstance,
   detachComponent,
@@ -22,7 +22,15 @@ import {
 } from '../../src/editor/componentProperties.ts'
 import { updatePage } from '../../src/editor/operations/document.ts'
 import { updateNode } from '../../src/editor/operations/tree.ts'
-import { addVariant, selectVariant, setVariantValue } from '../../src/editor/variants.ts'
+import {
+  addVariant,
+  addVariantProperty,
+  removeVariantProperty,
+  renameVariantProperty,
+  renameVariantValue,
+  selectVariant,
+  setVariantValue,
+} from '../../src/editor/variants.ts'
 import { UsageError } from '../args.ts'
 import { checkNewId, renameNodeId } from '../session.ts'
 import { fitTextEstimated } from '../textMeasure.ts'
@@ -334,5 +342,108 @@ export const prop: Command = {
         }, current)
       }, doc),
     )
+  },
+}
+
+/** まとまりか、まとまりの中のバリアントを指すセレクタを、まとまりの id にする */
+function resolveVariantSet(session: Parameters<Command['run']>[0]['session'], selector: string, name: string): NodeId {
+  const id = session.resolveOne(selector)
+  const page = session.page
+  if (isVariantSet(page, id)) return id
+  const set = variantSetOf(page, id)
+  if (set) return set.id
+  throw new UsageError(`${name}: ${selector} はバリアントのまとまりでも、その中のバリアントでもありません`)
+}
+
+function propertyNames(scene: Scene, setId: NodeId): string[] {
+  return variantProperties(scene, setId).map((property) => property.name)
+}
+
+function requireProperty(scene: Scene, setId: NodeId, key: string, name: string): void {
+  const names = propertyNames(scene, setId)
+  if (!names.includes(key)) throw new UsageError(`${name}: プロパティ ${key} がありません（あるもの: ${names.join(', ')}）`)
+}
+
+export const variantPropAdd: Command = {
+  name: 'variant-prop-add',
+  kind: 'edit',
+  usage: 'variant-prop-add まとまり 名前 [値]',
+  summary:
+    'バリアントのまとまりのすべてのバリアントにプロパティを足す（値を省くと「標準」）。まとまりの代わりに中のバリアントを指してもよい（editor のバリアントのプロパティの「＋」と同じ）',
+  run({ session }, step) {
+    checkStep(step, { positionals: 3 })
+    const setId = resolveVariantSet(session, positional(step, 0, 'まとまり'), step.name)
+    const key = positional(step, 1, '名前')
+    const value = step.positionals[2]
+    if (propertyNames(session.page, setId).includes(key.trim())) throw new UsageError(`${step.name}: プロパティ ${key} はもうあります`)
+    session.apply((page) => {
+      const result = addVariantProperty(page, setId, key, value)
+      if (result.name === null) throw new UsageError(`${step.name}: 名前と値は空でなく、「,」「=」を含まないものにしてください`)
+      return result.scene
+    })
+  },
+}
+
+export const variantPropRename: Command = {
+  name: 'variant-prop-rename',
+  kind: 'edit',
+  usage: 'variant-prop-rename まとまり 名前 新しい名前',
+  summary: 'バリアントのまとまりのプロパティの名前を、すべてのバリアントで変える。まとまりの代わりに中のバリアントを指してもよい',
+  run({ session }, step) {
+    checkStep(step, { positionals: 3 })
+    const setId = resolveVariantSet(session, positional(step, 0, 'まとまり'), step.name)
+    const from = positional(step, 1, '名前')
+    const to = positional(step, 2, '新しい名前')
+    requireProperty(session.page, setId, from, step.name)
+    if (from === to.trim()) return
+    if (propertyNames(session.page, setId).includes(to.trim())) throw new UsageError(`${step.name}: プロパティ ${to} はもうあります`)
+    session.apply((page) => {
+      const next = renameVariantProperty(page, setId, from, to)
+      if (next === page) throw new UsageError(`${step.name}: 名前は空でなく、「,」「=」を含まないものにしてください: ${to}`)
+      return next
+    })
+  },
+}
+
+export const variantPropRm: Command = {
+  name: 'variant-prop-rm',
+  kind: 'edit',
+  usage: 'variant-prop-rm まとまり 名前',
+  summary:
+    'バリアントのまとまりのすべてのバリアントからプロパティを消す。プロパティが 1 つもなくなるバリアントができるなら消さない。まとまりの代わりに中のバリアントを指してもよい',
+  run({ session }, step) {
+    checkStep(step, { positionals: 2 })
+    const setId = resolveVariantSet(session, positional(step, 0, 'まとまり'), step.name)
+    const key = positional(step, 1, '名前')
+    requireProperty(session.page, setId, key, step.name)
+    session.apply((page) => {
+      const next = removeVariantProperty(page, setId, key)
+      if (next === page) throw new UsageError(`${step.name}: ${key} を消すとプロパティが 1 つもないバリアントができます`)
+      return next
+    })
+  },
+}
+
+export const variantValueRename: Command = {
+  name: 'variant-value-rename',
+  kind: 'edit',
+  usage: 'variant-value-rename まとまり プロパティ 値 新しい値',
+  summary: 'バリアントのまとまりのプロパティの値を、その値を持つすべてのバリアントで変える。まとまりの代わりに中のバリアントを指してもよい',
+  run({ session }, step) {
+    checkStep(step, { positionals: 4 })
+    const setId = resolveVariantSet(session, positional(step, 0, 'まとまり'), step.name)
+    const key = positional(step, 1, 'プロパティ')
+    const from = positional(step, 2, '値')
+    const to = positional(step, 3, '新しい値')
+    requireProperty(session.page, setId, key, step.name)
+    const values = variantProperties(session.page, setId).find((property) => property.name === key)!.values
+    if (!values.includes(from)) throw new UsageError(`${step.name}: ${key} に値 ${from} がありません（あるもの: ${values.join(', ')}）`)
+    if (from === to.trim()) return
+    if (values.includes(to.trim())) throw new UsageError(`${step.name}: ${key} の値 ${to} はもうあります`)
+    session.apply((page) => {
+      const next = renameVariantValue(page, setId, key, from, to)
+      if (next === page) throw new UsageError(`${step.name}: 値は空でなく、「,」「=」を含まないものにしてください: ${to}`)
+      return next
+    })
   },
 }

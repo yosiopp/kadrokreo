@@ -1,5 +1,5 @@
 import { IMAGE_MIME_TYPES } from '../../src/document/kdr.ts'
-import { pathFromPoints } from '../../src/document/path.ts'
+import { pathFromContours, pathFromPoints } from '../../src/document/path.ts'
 import { PathDataError, parsePathData } from '../../src/document/pathData.ts'
 import type { NodeId, SceneNode } from '../../src/document/types.ts'
 import {
@@ -13,10 +13,10 @@ import {
   createText,
 } from '../../src/editor/nodes.ts'
 import { copyFragment } from '../../src/editor/operations/clipboard.ts'
-import { addOrReuseAsset, pasteIntoPage } from '../../src/editor/operations/document.ts'
+import { addOrReuseAsset, pasteIntoPage, updatePage } from '../../src/editor/operations/document.ts'
 import { insertNode } from '../../src/editor/operations/tree.ts'
 import { type Step, UsageError } from '../args.ts'
-import { readImageInfo } from '../image.ts'
+import { readImageInfo } from '../../src/document/imageInfo.ts'
 import { checkNewId } from '../session.ts'
 import { convertSvgFile, placeSvgFragment } from '../svg.ts'
 import { estimateTextSize } from '../textMeasure.ts'
@@ -97,7 +97,8 @@ async function buildNode(ctx: Context, step: Step, type: NodeType): Promise<Scen
 }
 
 /**
- * SVG の path の d から作るパス（曲線を含められる）。座標は親の座標系。輪郭は 1 つだけで、Z か --closed で閉じた形
+ * SVG の path の d から作るパス（曲線を含められる）。座標は親の座標系。Z か --closed で閉じた形。
+ * M で始まるまとまりが複数あれば、2 つ目以降は同じパスの輪郭（穴など。塗る範囲は fillRule で決まる）になる
  */
 function pathFromData(d: string, close: boolean): SceneNode {
   let subpaths
@@ -107,11 +108,11 @@ function pathFromData(d: string, close: boolean): SceneNode {
     if (error instanceof PathDataError) throw new UsageError(`add path: --d: ${error.message}`)
     throw error
   }
-  if (subpaths.length !== 1) throw new UsageError('add path: --d の輪郭（M で始まるまとまり）は 1 つだけです')
-  const vertices = subpaths[0].vertices
-  const closed = subpaths[0].closed || close
-  if (vertices.length < 2) throw new UsageError('add path: 頂点は 2 つ以上です')
-  return createPath(pathFromPoints(vertices, closed), closed)
+  if (subpaths.length === 0 || subpaths.some((subpath) => subpath.vertices.length < 2)) {
+    throw new UsageError('add path: 頂点は輪郭ごとに 2 つ以上です')
+  }
+  const shape = pathFromContours(subpaths.map((subpath) => ({ vertices: subpath.vertices, closed: subpath.closed || close })))
+  return { ...createPath(shape, shape.closed), contours: shape.contours }
 }
 
 async function runAdd(ctx: Context, step: Step): Promise<void> {
@@ -178,10 +179,15 @@ export const svg: Command = {
       throw error
     }
     let created: NodeId = ''
-    session.apply((page) => {
-      const result = placeSvgFragment(page, imported, parentId, at, { id, name: option(step, 'name') })
-      created = result.id
-      return result.page
+    // data URI の <image> から作った画像もドキュメントに足す。同じ id のものは中身も同じなので、あるものはそのまま使う
+    const assets = imported.fragment.assets
+    session.applyDocument((doc) => {
+      const placed = updatePage(doc, session.page.id, (page) => {
+        const result = placeSvgFragment(page, imported, parentId, at, { id, name: option(step, 'name') })
+        created = result.id
+        return result.page
+      })
+      return Object.keys(assets).length === 0 ? placed : { ...placed, assets: { ...assets, ...placed.assets } }
     })
     session.last = [created]
     for (const { label, count } of imported.warnings) ctx.warn(`svg: ${file}: 表せないので置き換えるか読み飛ばしました: ${label}${count > 1 ? ` ×${count}` : ''}`)

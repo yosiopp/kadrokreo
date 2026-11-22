@@ -110,8 +110,8 @@ cli(...(
   const mark = nodes.find((n) => n.name === 'Mark' && n.parentId === btn.id)
   check('元に説明文とプロパティが入る', btn.component.description === '主な操作に使う' &&
     JSON.stringify(btn.component.properties) === JSON.stringify([
-      { name: 'Label', type: 'text', targets: [label.id] },
-      { name: 'Mark', type: 'boolean', targets: [mark.id] },
+      { name: 'Label', type: 'text', targets: [label.id], preferred: [] },
+      { name: 'Mark', type: 'boolean', targets: [mark.id], preferred: [] },
     ]), JSON.stringify(btn.component))
   check('元のパネルにプロパティの一覧が出る', (await page.locator('.component-properties .variant-property').count()) === 2)
 

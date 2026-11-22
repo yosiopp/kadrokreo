@@ -1,7 +1,7 @@
-import { type Vertex, cappedStroke, isLine, pathData, pathOutline } from '../document/path.ts'
-import { gradientLine, paintColor } from '../document/paint.ts'
-import { type Point, tidy } from '../document/geometry.ts'
-import type { Asset, AssetId, NodeId, Paint, PathNode, Scene, SceneNode } from '../document/types.ts'
+import { tidy } from '../document/geometry.ts'
+import { withoutHidden } from '../document/paint.ts'
+import { dataUri, escapeXml as escapeHtml, pathSvg } from '../document/svgShapes.ts'
+import type { Asset, AssetId, NodeId, PathNode, Scene, SceneNode } from '../document/types.ts'
 import { formatColor } from './colors.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, nodeCss } from './inspect.ts'
 import { camelClass, componentName, jsxStyle, parseDeclarations, tailwindClasses } from './codeFormat.ts'
@@ -123,7 +123,7 @@ export function nodeMarkup(
         const asset = Object.hasOwn(assets, node.assetId) ? assets[node.assetId] : undefined
         const src =
           images === 'embed' && asset
-            ? `data:${asset.mime};base64,${toBase64(asset.bytes)}`
+            ? dataUri(asset)
             : `${slug(node.name) || 'image'}.${asset ? imageExtension(asset.mime) : 'png'}`
         lines.push(`${indent}<img ${attr} src="${escapeHtml(src)}" alt="${escapeHtml(node.name)}"${jsx ? ' />' : '>'}`)
         break
@@ -156,77 +156,24 @@ export function nodeMarkup(
 }
 
 /**
- * 直線とパスの SVG の中身。色や太さはクラスの CSS で付ける。直線は line、それ以外は path の d（曲線は C）で書く。
- * 角の丸めは曲線に直して書く。端の形があれば、描画と同じく線を矢印の分だけ短くし、端の図形は線の色で塗った多角形・円にする。
+ * 直線とパスの SVG の中身。色や太さはクラスの CSS で付ける（図形の書き方は SVG の書き出しと共有。document/svgShapes.ts）。
  * グラデーションの塗り・線は CSS の fill / stroke に書けない（CSS は始まりの色で代えている）ので、
  * linearGradient / radialGradient を defs に置き、要素の fill / stroke 属性で指す。CSS は外側の svg に付くので、中の要素の属性のほうが勝つ
  * （受け継いだ値より、要素自身の指定が優先）。id はクラス名から作る。jsx なら属性名を React の書き方（stopColor）にする
  */
-function svgShapes(node: PathNode, name: string, style: Partial<CodeStyle>, jsx = false): string {
-  const points = pathOutline(node)
+function svgShapes(path: PathNode, name: string, style: Partial<CodeStyle>, jsx = false): string {
+  // 隠した塗り・線は書かない
+  const node = withoutHidden(path)
   const colorStyle = style.color ?? DEFAULT_CODE_STYLE.color
-  const defs: string[] = []
-  const gradient = (paint: Paint | undefined, role: 'fill' | 'stroke'): string | null => {
-    if (paint === undefined || paint.type === 'solid') return null
-    const id = `${name}-${role}`
-    const stops = paint.stops
-      .map((stop) => `<stop offset="${tidy(stop.offset)}" ${jsx ? 'stopColor' : 'stop-color'}="${escapeHtml(formatColor(stop.color, colorStyle))}"/>`)
-      .join('')
-    if (paint.type === 'radial') {
-      // 半径 1 の円を、変換で枠に対する割合の楕円にする（描画と同じ）
-      const matrix = [paint.rx * node.width, 0, 0, paint.ry * node.height, paint.cx * node.width, paint.cy * node.height]
-      defs.push(
-        `<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(${matrix.map(tidy).join(' ')})">${stops}</radialGradient>`,
-      )
-      return `url(#${id})`
-    }
-    const [from, to] = gradientLine(paint, node)
-    defs.push(
-      `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${tidy(from.x)}" y1="${tidy(from.y)}" x2="${tidy(to.x)}" y2="${tidy(to.y)}">${stops}</linearGradient>`,
-    )
-    return `url(#${id})`
-  }
-  const line = isLine(node)
-  const closed = node.closed
-  const stroke = node.strokes.at(-1)
-  const fillUrl = line ? null : gradient(node.fills.at(-1), 'fill')
-  const strokeUrl = gradient(stroke, 'stroke')
-  // 要素ごとに付ける属性。fill / stroke のどちらを書くかは要素による
-  const inline = (decls: (string | null)[]) => decls.filter((decl) => decl !== null).map((decl) => ` ${decl}`).join('')
-  const fillDecl = fillUrl && `fill="${fillUrl}"`
-  const strokeDecl = strokeUrl && `stroke="${strokeUrl}"`
-  const lineElement = (ps: readonly Vertex[], extra: string) =>
-    `<line x1="${tidy(ps[0].x)}" y1="${tidy(ps[0].y)}" x2="${tidy(ps[1].x)}" y2="${tidy(ps[1].y)}"${extra}/>`
-  const pathElement = (ps: readonly Vertex[], isClosed: boolean, extra: string) =>
-    `<path d="${pathData(ps, isClosed)}"${extra}/>`
-
-  const parts: string[] = []
-  const capped = !closed && stroke !== undefined && (node.startCap !== 'none' || node.endCap !== 'none')
-  if (!capped) {
-    parts.push(line ? lineElement(points, inline([strokeDecl])) : pathElement(points, closed, inline([fillDecl, strokeDecl])))
-  } else {
-    const shortened = cappedStroke(points, node)
-    // 塗りは短くしない元の形で
-    if (!line && node.fills.length > 0) parts.push(pathElement(points, false, ` stroke="none"${inline([fillDecl])}`))
-    parts.push(
-      line
-        ? lineElement(shortened.line, inline([strokeDecl]))
-        : pathElement(shortened.line, false, ` fill="none"${inline([strokeDecl])}`),
-    )
-    const color = strokeUrl ?? escapeHtml(formatColor(paintColor(stroke), colorStyle))
-    for (const cap of shortened.caps) {
-      parts.push(
-        cap.kind === 'circle'
-          ? `<circle cx="${tidy(cap.center.x)}" cy="${tidy(cap.center.y)}" r="${tidy(cap.radius)}" fill="${color}" stroke="none"/>`
-          : `<polygon points="${list(cap.points)}" fill="${color}" stroke="none"/>`,
-      )
-    }
-  }
-  return (defs.length > 0 ? `<defs>${defs.join('')}</defs>` : '') + parts.join('')
-}
-
-function list(ps: readonly Point[]): string {
-  return ps.map((point) => `${tidy(point.x)},${tidy(point.y)}`).join(' ')
+  const { defs, elements } = pathSvg(node, {
+    id: name,
+    color: (hex) => formatColor(hex, colorStyle),
+    jsx,
+    fill: node.fills.at(-1) ?? null,
+    stroke: node.strokes.at(-1) ?? null,
+    standalone: false,
+  })
+  return (defs.length > 0 ? `<defs>${defs.join('')}</defs>` : '') + elements.join('')
 }
 
 /** そのままブラウザで開ける HTML ファイル。画像は埋め込む */
@@ -269,16 +216,3 @@ function escapeJsx(text: string): string {
   return escapeHtml(text).replace(/\{/g, '&#123;').replace(/\}/g, '&#125;')
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-/** data URI に埋め込むための base64 */
-function toBase64(bytes: Uint8Array): string {
-  let binary = ''
-  // 引数の数に上限があるので、少しずつ文字列にする
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  }
-  return btoa(binary)
-}

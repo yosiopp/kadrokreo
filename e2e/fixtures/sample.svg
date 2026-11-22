@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- e2e/16-svg-import.cjs が取り込む SVG。図形・グループ・曲線・グラデーション・テキストと、読み飛ばすもの（スクリプト・foreignObject・フィルタ・外部の画像）を含む -->
+<!-- e2e/16-svg-import.cjs が取り込む SVG。図形・グループ・曲線・グラデーション・テキスト・CSS・穴・破線・クリップ・data URI の画像と、読み飛ばすもの（スクリプト・foreignObject・フィルタ・外部の画像）を含む -->
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="fixture-root" width="240" height="160" viewBox="0 0 120 80" onload="window.svgPwned = 'onload'">
   <script>window.svgPwned = 'script'</script>
+  <style>.accent { fill: #8e4ec6 } #dashes { stroke-dasharray: 3 2 }</style>
   <defs>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#4f8ef7"/>
       <stop offset="1" stop-color="#ffffff"/>
     </linearGradient>
     <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
+    <clipPath id="porthole"><circle cx="10" cy="10" r="6"/></clipPath>
   </defs>
   <rect id="background" width="120" height="80" fill="url(#sky)"/>
   <g id="house" transform="translate(30 20)">
@@ -19,6 +21,10 @@
   <ellipse id="sun" cx="100" cy="15" rx="8" ry="8" style="fill: orange"/>
   <line id="ground" x1="0" y1="79" x2="120" y2="79" stroke="#222"/>
   <polyline id="bird" points="70,20 74,16 78,20 82,16 86,20" fill="none" stroke="#222"/>
+  <path id="ring" class="accent" fill-rule="evenodd" d="M22 2 H38 V18 H22 Z M26 6 H34 V14 H26 Z"/>
+  <line id="dashes" x1="0" y1="1" x2="120" y2="1" stroke="#222"/>
+  <g id="clipped" clip-path="url(#porthole)"><rect id="stripe" width="20" height="20" fill="#0090ff"/></g>
+  <image id="pixel" x="104" y="60" width="8" height="8" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg=="/>
   <text id="caption" x="60" y="76" font-size="6" text-anchor="middle" fill="#ffffff">Hello SVG</text>
   <foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml">html</div></foreignObject>
   <image href="https://example.com/a.png" width="10" height="10"/>

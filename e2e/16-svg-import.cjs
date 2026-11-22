@@ -40,7 +40,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await input.setInputFiles(SAMPLE)
   await page.waitForSelector('.app-message')
   const message = await page.locator('.app-message').textContent()
-  check('落としたものを知らせる', /sample\.svg/.test(message) && /スクリプト/.test(message) && /foreignObject/.test(message) && /フィルタ/.test(message) && /画像（<image>）/.test(message), message)
+  check('落としたものを知らせる', /sample\.svg/.test(message) && /スクリプト/.test(message) && /foreignObject/.test(message) && /フィルタ/.test(message) && /外部の画像/.test(message), message)
   await page.waitForTimeout(700)
   let doc = await saved()
   const root = byName(doc, 'sample')[0]
@@ -52,10 +52,26 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const hill = byName(doc, 'hill')[0]
   check('path の曲線は制御点つきの頂点になる', hill?.type === 'path' && hill.closed && hill.points.some((p) => p.in || p.out))
   const background = byName(doc, 'background')[0]
-  check('linearGradient は直線状のグラデーションになる', background?.fills[0]?.type === 'linear' && background.fills[0].angle === 90 && background.fills[0].stops[0].color === '#4f8ef7')
+  check('linearGradient は直線状のグラデーションになる', background?.fills[0]?.type === 'linear' && background.fills[0].x1 === background.fills[0].x2 && background.fills[0].y2 > background.fills[0].y1 && background.fills[0].stops[0].color === '#4f8ef7')
   const caption = byName(doc, 'caption')[0]
   check('text はテキストになる（中央揃え・白）', caption?.type === 'text' && caption.text === 'Hello SVG' && caption.textAlign === 'center' && caption.fills[0]?.color === '#ffffff' && caption.fontSize === 12)
   check('ほかの図形もノードになる', ['roof', 'window', 'sun', 'ground', 'bird'].every((name) => byName(doc, name).length === 1), (await layers()).join(','))
+  const ring = byName(doc, 'ring')[0]
+  check('輪郭が複数の path は穴のある 1 つのパスになり、CSS の塗りと fill-rule を写す', ring?.type === 'path' && ring.contours.length === 1 && ring.fillRule === 'evenodd' && ring.fills[0]?.color === '#8e4ec6', JSON.stringify(ring && { c: ring.contours.length, r: ring.fillRule }))
+  const dashes = byName(doc, 'dashes')[0]
+  check('CSS の stroke-dasharray は破線になる（viewBox の縮尺をかける）', dashes?.strokeDashes?.join(',') === '6,4', JSON.stringify(dashes?.strokeDashes))
+  const porthole = byName(doc, 'porthole')[0]
+  check('円の clip-path は角丸の切り取るフレームになる', porthole?.type === 'frame' && porthole.clipContent && porthole.width === 24 && porthole.cornerRadius === 12 && byName(doc, 'clipped')[0]?.parentId === porthole.id)
+  const pixel = byName(doc, 'pixel')[0]
+  const storedAsset = pixel && await page.evaluate((id) => new Promise((resolve) => {
+    const open = indexedDB.open('kadrokreo')
+    open.onsuccess = () => {
+      const request = open.result.transaction(['assets']).objectStore('assets').get(id)
+      request.onsuccess = () => resolve(request.result?.mime ?? null)
+      request.onerror = () => resolve(null)
+    }
+  }), pixel.assetId)
+  check('data URI の <image> は画像のノードになり、画像がドキュメントに入る', pixel?.type === 'image' && pixel.width === 16 && storedAsset === 'image/png', JSON.stringify({ type: pixel?.type, w: pixel?.width, storedAsset }))
   const pwned = await page.evaluate(() => window.svgPwned)
   check('SVG のスクリプトや onload は動かない', pwned === undefined, String(pwned))
   check('SVG を画面の DOM に入れない', (await page.locator('#fixture-root, foreignObject').count()) === 0)

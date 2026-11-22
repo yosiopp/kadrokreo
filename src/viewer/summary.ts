@@ -1,5 +1,5 @@
 import type { Effect, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
-import { hasStroke } from '../document/paint.ts'
+import { hasStroke, shownPaints } from '../document/paint.ts'
 import { colorAlpha, formatColor } from './colors.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, type InspectSection, shadowCss } from './inspect.ts'
 
@@ -15,15 +15,17 @@ export type ShadowUse = { shadow: Effect; count: number; nodes: NodeId[] }
 
 /** 下の塗りを隠すか。グラデーションも枠全体を覆う（端の色が外まで続く）ので、どの色も不透明なら隠す */
 function isOpaque(paint: Paint): boolean {
-  // 塗りごとの不透明度を足したら（backlog「塗りの残り」）、ここで見る
+  if (paint.opacity < 1) return false
   return paint.type === 'solid' ? colorAlpha(paint.color) >= 1 : paint.stops.every((stop) => colorAlpha(stop.color) >= 1)
 }
 
 /**
- * 重ねた塗り（下から順）のうち、見えるもの。上から見ていき、不透明な塗りより下は隠れるので数えない。
+ * 重ねた塗り（下から順）のうち、見えるもの。隠した塗り（visible が false）は数えない。
+ * 上から見ていき、不透明な塗りより下は隠れるので数えない。
  * seeThrough なら、塗りを 1 枚ずつ半透明で重ねて描くので、どれも透けて見える。
  */
-export function visiblePaints(paints: readonly Paint[], seeThrough = false): Paint[] {
+export function visiblePaints(all: readonly Paint[], seeThrough = false): Paint[] {
+  const paints = shownPaints(all)
   if (seeThrough) return [...paints]
   for (let i = paints.length - 1; i >= 0; i--) {
     if (isOpaque(paints[i])) return paints.slice(i)
@@ -42,7 +44,7 @@ function paintsSeeThrough(node: SceneNode): boolean {
 /**
  * 表示されているノードの、見えている塗りと線の色、テキストの書式を数える。
  * 不透明な塗りの下に重ねて隠れた塗りの色は数えない（visiblePaints）。隠れた色は一覧に出ないので、
- * そこから使っている図形は選べない。確かめるときは、図形を選んでインスペクトの「塗り」を見る（そこには重ねた塗りを全部出す）。
+ * そこから使っている図形は選べない。確かめるときは、図形を選んでインスペクトの「塗り」を見る（そこには重ねた塗りを全部出す。隠した塗りは出さない）。
  * 色は使われている数の多い順、文字は大きい順に並べる。影の色は、濃さを別に持つので数えない。
  */
 export function summarizePage(scene: Scene): {
@@ -83,9 +85,9 @@ export function summarizePage(scene: Scene): {
       countPaints(node.fills)
       if (hasStroke(node)) countPaints(node.strokes)
     }
-    for (const shadow of 'effects' in node ? node.effects : []) {
-      const { x, y, blur, color, opacity } = shadow
-      const key = [x, y, blur, color.toLowerCase(), opacity].join('\n')
+    for (const shadow of 'effects' in node ? shownPaints(node.effects) : []) {
+      const { type, x, y, blur, color, opacity } = shadow
+      const key = [type, x, y, blur, color.toLowerCase(), opacity].join('\n')
       const use = shadows.get(key) ?? { shadow, count: 0, nodes: [] }
       use.count++
       if (use.nodes.at(-1) !== node.id) use.nodes.push(node.id)

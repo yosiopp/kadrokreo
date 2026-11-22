@@ -7,11 +7,11 @@ import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import { isInstance, owningInstance } from '../document/component.ts'
 import { type Point, applyMatrix, getNodesBounds, invert, toLocal } from '../document/geometry.ts'
 import { type Vertex, isLine, mapVertices, pathFromPoints } from '../document/path.ts'
-import type { NodeId, PathNode, SceneNode } from '../document/types.ts'
+import type { Gradient, NodeId, PathNode, SceneNode } from '../document/types.ts'
 import { ContextMenu, type MenuItem } from './ContextMenu.tsx'
 import { TextEditor } from './TextEditor.tsx'
 import { makeComponent, withoutCopies } from './components.ts'
-import { type Gesture, createGesture, dragGesture, previewCreate, rotateGesture } from './editorCanvas/drag.ts'
+import { type Gesture, createGesture, dragGesture, moveGesture, previewCreate, rotateGesture } from './editorCanvas/drag.ts'
 import {
   DRAG_THRESHOLD,
   HANDLE_SIZE,
@@ -19,15 +19,25 @@ import {
   type SelectionBox,
   constrainAngle,
   distance,
-  editablePoints,
+  editableContours,
   handleAt,
   nextName,
   rotateHandleAt,
   roundPoint,
   selectionBoxOf,
-  visibleControls,
+  visibleContourControls,
 } from './editorCanvas/handles.ts'
 import { drawEditorOverlay } from './editorCanvas/overlay.ts'
+import {
+  type GradientEdit,
+  type GradientHandles,
+  editedGradient,
+  gradientPartAt,
+  offsetOnAxis,
+  stopMarkers,
+  worldGradientHandles,
+} from './editorCanvas/gradientHandles.ts'
+import { patchGradientAt, withStopAt, withStopRemoved } from './operations/paints.ts'
 import { useShortcuts } from './editorCanvas/useShortcuts.ts'
 import { useTextEditing } from './editorCanvas/useTextEditing.ts'
 import { findFrameAt } from './hitTest.ts'
@@ -35,13 +45,16 @@ import { isSelfOrAncestor } from './operations/tree.ts'
 import { createPath } from './nodes.ts'
 import { insertNode } from './operations/tree.ts'
 import {
-  deleteVertices,
+  deleteContourVertices,
+  editByContour,
+  flatVertices,
   insertVertex,
   moveVertices,
-  nearestOnPath,
+  nearestOnContours,
   openAtSegment,
-  reshapePath,
+  reshapeContours,
   toggleSmooth,
+  withFlatVertices,
 } from './pathEdit.ts'
 import { handleCursor } from './resize.ts'
 import type { EditorState, EditorStore } from './store.ts'
@@ -65,11 +78,13 @@ type Props = {
   /** クリップボードから画像が貼り付けられた */
   onPasteImages: (files: File[]) => void
   onPasteSvg: (text: string) => void
+  /** 選択中のものを SVG の文字にしてクリップボードへ入れる（右クリックメニューの「SVG としてコピー」） */
+  onCopySvg: () => void
   /** コンポーネントの一覧からドラッグしているインスタンスが入るフレーム（ページ直下なら null） */
   dropTarget?: NodeId | null
 }
 
-export function EditorCanvas({ store, camera, state, tool, onToolChange, onPasteImages, onPasteSvg, dropTarget = null }: Props) {
+export function EditorCanvas({ store, camera, state, tool, onToolChange, onPasteImages, onPasteSvg, onCopySvg, dropTarget = null }: Props) {
   const gestureRef = useRef<Gesture | null>(null)
   // ペンツールで描いている途中の頂点（ページ座標、制御点を含む）。cursor はポインタの位置
   const penRef = useRef<{ points: Vertex[]; cursor: Point | null } | null>(null)
@@ -90,6 +105,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   useEffect(() => {
     if (tool !== 'pen') penRef.current = null
     if (tool !== 'select' && store.getState().vertexEdit) store.editVertices(null)
+    if (tool !== 'select' && store.getState().gradientEdit) store.editGradient(null)
   }, [tool, store])
 
   /** 選択中のうち、インスタンスの中身（写し）でないもの。動かす・消す・複製するといった操作の対象になる */
@@ -124,6 +140,32 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     return node?.type === 'path' && node.id === store.getState().vertexEdit?.id && !node.locked ? node : null
   }
 
+  /** キャンバスで動かしているグラデーションと、そのハンドルの位置（ページ座標）。選択ツールで、そのノードだけを選んでいる間だけ */
+  function editedGradientHandles(): { edit: GradientEdit; gradient: Gradient; handles: GradientHandles } | null {
+    const node = soleSelected()
+    const { page, gradientEdit: edit } = store.getState()
+    if (!node || !edit || edit.id !== node.id) return null
+    const gradient = editedGradient(page, edit)
+    return gradient ? { edit, gradient, handles: worldGradientHandles(page, node.id, gradient) } : null
+  }
+
+  /** グラデーションのハンドルの画面座標。stops は色の印の位置（線の横に離す）、onLine は線の上の色の位置 */
+  function screenGradientHandles(handles: GradientHandles): GradientHandles & { onLine: Point[] } {
+    const viewport = camera.getViewport()
+    const toScreen = (point: Point) => worldToScreen(viewport, point)
+    const axis: [Point, Point] = [toScreen(handles.axis[0]), toScreen(handles.axis[1])]
+    const onLine = handles.stops.map(toScreen)
+    return { axis, radiusY: handles.radiusY && toScreen(handles.radiusY), stops: stopMarkers(axis, onLine), onLine }
+  }
+
+  /** screen の近くにある、グラデーションのハンドル */
+  function gradientPartNear(screen: Point) {
+    const edited = editedGradientHandles()
+    if (!edited) return null
+    const part = gradientPartAt(screenGradientHandles(edited.handles), edited.gradient, (point) => distance(point, screen) <= HANDLE_SIZE)
+    return part && { ...edited, part }
+  }
+
   /** 点をつかんで形を変えられるノード。直線は選ぶだけで、パスは頂点の編集に入ると対象になる（直線も入れる） */
   function pointTarget(): PathNode | null {
     return editedPath() ?? selectedLine()
@@ -151,11 +193,11 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (!node) return null
     const viewport = camera.getViewport()
     const near = (point: Point) => distance(worldToScreen(viewport, point), screen) <= HANDLE_SIZE
-    const vertices = editablePoints(store.getState().page, node)
-    for (const control of visibleControls(vertices, selectedVertices(), node.closed)) {
+    const contours = editableContours(store.getState().page, node)
+    for (const control of visibleContourControls(contours, selectedVertices())) {
       if (near(control.point)) return { id: node.id, index: control.index, part: control.part }
     }
-    for (const [index, vertex] of vertices.entries()) {
+    for (const [index, vertex] of flatVertices(contours).entries()) {
       if (near(vertex)) return { id: node.id, index, part: 'vertex' }
     }
     return null
@@ -182,7 +224,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
 
   /** リサイズと回転のハンドルを出す枠 */
   function selectionBox(): SelectionBox | null {
-    if (tool !== 'select' || editingRef.current || pointTarget()) return null
+    if (tool !== 'select' || editingRef.current || pointTarget() || editedGradientHandles()) return null
     return selectionBoxOf(store.getState().page, movableIds())
   }
 
@@ -258,6 +300,16 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       return
     }
 
+    // グラデーションを動かしている間は、そのハンドルを先に調べる。色の位置を押すとその色を選ぶ
+    const gradientPart = gradientPartNear(pointer.screen)
+    if (gradientPart) {
+      const { edit, gradient, part } = gradientPart
+      if (part.kind === 'stop') store.editGradient({ ...edit, stop: part.index })
+      gestureRef.current = { kind: 'gradient', edit: store.getState().gradientEdit ?? edit, part, base: gradient }
+      redraw()
+      return
+    }
+
     const grabbed = pointAt(pointer.screen)
     if (grabbed) {
       if (grabbed.part === 'vertex' && editedPath()) {
@@ -283,7 +335,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     // 頂点の編集中は、辺を押すとその辺を選び、空いた所や形の内側からのドラッグで頂点を範囲選択する
     const edited = editedPath()
     if (edited) {
-      const nearest = nearestOnPath(editablePoints(page, edited), edited.closed, pointer.world)
+      const nearest = nearestOnContours(editableContours(page, edited), pointer.world)
       if (nearest && nearest.distance * camera.getViewport().zoom <= HANDLE_SIZE) {
         selectVertices([], nearest.segment)
         return
@@ -320,6 +372,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         id: box.oriented,
         rotation: box.rotation,
         size: box.size,
+        matrix: box.matrix,
+        guides: [],
       }
       return
     }
@@ -379,7 +433,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       const viewport = camera.getViewport()
       const box = selectionBox()
       const handle = handleAt(viewport, box, pointer.screen)
-      const endpoint = pointAt(pointer.screen)
+      const endpoint = pointAt(pointer.screen) ?? gradientPartNear(pointer.screen)
       const rotating = rotateHandleAt(viewport, box, pointer.screen)
       const rotation = box?.rotation ?? 0
       setCursor(
@@ -397,7 +451,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
         gestureRef.current = null
         return
       }
-      gesture = gestureRef.current = { kind: 'move', world: gesture.world, ids, from, guides: [] }
+      gesture = gestureRef.current = moveGesture(store.getState().page, gesture.world, ids, from)
     }
 
     dragGesture(store, gesture, pointer, camera.getViewport().zoom)
@@ -434,6 +488,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       case 'resize':
       case 'reshape':
       case 'rotate':
+      case 'gradient':
         store.commitPreview()
         redraw()
         break
@@ -476,6 +531,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   function onDoubleClick(pointer: CanvasPointer) {
     if (tool === 'pen') return finishPen(false)
     if (tool !== 'select' || editingRef.current) return
+    if (addGradientStopAt(pointer)) return
     if (editVertexAt(pointer)) return
     const page = store.getState().page
     const tolerance = HIT_TOLERANCE / camera.getViewport().zoom
@@ -496,6 +552,22 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     }
   }
 
+  /** グラデーションを動かしている間のダブルクリック。色が並ぶ線の上なら、そこに色を足して選ぶ。扱ったら true */
+  function addGradientStopAt(pointer: CanvasPointer): boolean {
+    const edited = editedGradientHandles()
+    if (!edited) return false
+    if (gradientPartNear(pointer.screen)) return true
+    const { edit, handles } = edited
+    // 線からの距離はページ座標で測り、画面の距離に直して比べる
+    const axis = offsetOnAxis(handles, pointer.world)
+    if (axis.distance * camera.getViewport().zoom > HANDLE_SIZE) return false
+    const added = withStopAt(edited.gradient, Math.round(axis.offset * 1000) / 1000)
+    if (added.index === -1) return true
+    store.apply((base) => patchGradientAt(base, [edit.id], edit.key, edit.index, () => added.gradient))
+    store.editGradient({ ...edit, stop: added.index })
+    return true
+  }
+
   /**
    * 頂点の編集中のダブルクリック。頂点なら角となめらかを切り替え、辺の上なら形を変えずに頂点を足す。
    * 扱ったら true
@@ -505,17 +577,24 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (!node) return false
     const grabbed = pointAt(pointer.screen)
     if (grabbed?.part === 'vertex') {
-      store.apply((base) => reshapePath(base, node.id, (vertices, closed) => toggleSmooth(vertices, grabbed.index, closed)))
+      store.apply((base) =>
+        reshapeContours(base, node.id, (contours) =>
+          editByContour(contours, [grabbed.index], (vertices, closed, [index]) => toggleSmooth(vertices, index, closed)),
+        ),
+      )
       selectVertices([grabbed.index])
       return true
     }
     if (grabbed) return true
     // 辺の位置 t は、座標を変換しても変わらないので、ページ座標で探した位置をそのまま使える
     const page = store.getState().page
-    const nearest = nearestOnPath(editablePoints(page, node), node.closed, pointer.world)
+    const nearest = nearestOnContours(editableContours(page, node), pointer.world)
     if (!nearest || nearest.distance * camera.getViewport().zoom > HANDLE_SIZE) return false
+    // 足した頂点は辺の始まりの頂点の次に入るので、通し番号は segment + 1 になる（後ろの輪郭の番号は 1 つずつずれる）
     store.apply((base) =>
-      reshapePath(base, node.id, (vertices, closed) => insertVertex(vertices, closed, nearest.segment, nearest.t)),
+      reshapeContours(base, node.id, (contours) =>
+        editByContour(contours, [nearest.segment], (vertices, closed, [segment]) => insertVertex(vertices, closed, segment, nearest.t)),
+      ),
     )
     selectVertices([nearest.segment + 1])
     return true
@@ -526,15 +605,30 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
    * 頂点の編集中は、消せなくてもノードは消さない。扱ったら true
    */
   function onDeleteKey(): boolean {
+    // グラデーションを動かしている間は、選んでいる色を消す（2 色より減らさない）。ノードは消さない
+    const edited = editedGradientHandles()
+    if (edited) {
+      const { edit } = edited
+      if (edit.stop !== null && edited.gradient.stops.length > 2) {
+        const stop = edit.stop
+        store.apply((base) => patchGradientAt(base, [edit.id], edit.key, edit.index, (g) => withStopRemoved(g, stop)))
+        store.editGradient({ ...edit, stop: null })
+      }
+      return true
+    }
     const node = editedPath()
     if (!node) return false
     const indices = selectedVertices()
     const segment = selectedSegment()
     if (indices.length > 0) {
-      store.apply((base) => reshapePath(base, node.id, (vertices, closed) => deleteVertices(vertices, closed, indices)))
+      store.apply((base) => reshapeContours(base, node.id, (contours) => deleteContourVertices(contours, indices)))
       selectVertices([])
     } else if (segment !== null) {
-      store.apply((base) => reshapePath(base, node.id, (vertices, closed) => openAtSegment(vertices, closed, segment)))
+      store.apply((base) =>
+        reshapeContours(base, node.id, (contours) =>
+          editByContour(contours, [segment], (vertices, closed, [local]) => openAtSegment(vertices, closed, local)),
+        ),
+      )
       selectVertices([])
     }
     return true
@@ -545,7 +639,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const node = editedPath()
     const indices = selectedVertices()
     if (!node || indices.length === 0) return false
-    store.apply((base) => reshapePath(base, node.id, (vertices) => moveVertices(vertices, indices, dx, dy)))
+    store.apply((base) =>
+      reshapeContours(base, node.id, (contours) => withFlatVertices(contours, moveVertices(flatVertices(contours), indices, dx, dy))),
+    )
     return true
   }
 
@@ -556,6 +652,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     else if (penRef.current) finishPen(false)
     else if (tool !== 'select') onToolChange('select')
     else if (editedPath()) store.editVertices(null)
+    else if (editedGradientHandles()) store.editGradient(null)
     else store.select([])
     return true
   }
@@ -605,6 +702,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const otherPages = document.pages.filter((other) => other.id !== page.id)
     return [
       { label: 'コピー', shortcut: `${MOD}C`, disabled: none, onSelect: commands.copy },
+      { label: 'SVG としてコピー', onSelect: onCopySvg },
       { label: '貼り付け', shortcut: `${MOD}V`, disabled: !canPaste, onSelect: commands.paste },
       { label: '複製', shortcut: `${MOD}D`, disabled: none, onSelect: commands.duplicate },
       { label: '削除', shortcut: 'Delete', disabled: movableIds().length === 0, onSelect: commands.remove },
@@ -613,6 +711,9 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       { label: '前面へ', shortcut: `${MOD}]`, disabled: none, onSelect: () => commands.reorder('forward') },
       { label: '背面へ', shortcut: `${MOD}[`, disabled: none, onSelect: () => commands.reorder('backward') },
       { label: '最背面へ', shortcut: '[', disabled: none, onSelect: () => commands.reorder('back') },
+      'separator',
+      { label: '左右に反転', shortcut: `${SHIFT}H`, disabled: movableIds().length === 0, onSelect: () => commands.flip('horizontal') },
+      { label: '上下に反転', shortcut: `${SHIFT}V`, disabled: movableIds().length === 0, onSelect: () => commands.flip('vertical') },
       'separator',
       { label: 'フレームにまとめる（自動で並べる）', shortcut: `${SHIFT}A`, disabled: movableIds().length === 0, onSelect: commands.wrap },
       {
@@ -631,6 +732,19 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     ]
   }
 
+  /** 重ねて描くグラデーションのハンドル */
+  function gradientOverlay() {
+    const edited = editedGradientHandles()
+    return (
+      edited && {
+        handles: screenGradientHandles(edited.handles),
+        type: edited.gradient.type,
+        colors: edited.gradient.stops.map((stop) => stop.color),
+        selected: edited.edit.stop,
+      }
+    )
+  }
+
   function drawOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport) {
     drawEditorOverlay(ctx, viewport, {
       page: state.page,
@@ -641,6 +755,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       editedId: editedPath()?.id,
       selectedVertices: selectedVertices(),
       selectedSegment: selectedSegment(),
+      gradient: gradientOverlay(),
       pen: penRef.current,
       box: selectionBox(),
       dropTarget,

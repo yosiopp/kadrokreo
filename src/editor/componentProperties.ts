@@ -58,7 +58,7 @@ export function addComponentProperty<T extends Scene>(
   const { properties } = main.component
   const key = name?.trim() ?? freshName(properties, scene.nodes[targetId].name.trim() || DEFAULT_NAMES[type])
   if (!usable(key) || properties.some((property) => property.name === key)) return { scene, name: null }
-  return { scene: setProperties(scene, main, [...properties, { name: key, type, targets: [targetId] }]), name: key }
+  return { scene: setProperties(scene, main, [...properties, { name: key, type, targets: [targetId], preferred: [] }]), name: key }
 }
 
 /** プロパティ name に、targetId のノードも結ぶ。種類が合わない、すでに結んでいるなら変えない */
@@ -99,6 +99,36 @@ export function renameComponentProperty<T extends Scene>(scene: T, mainId: NodeI
     scene,
     main,
     main.component.properties.map((property) => (property.name === from ? { ...property, name } : property)),
+  )
+}
+
+/** プロパティ name を、並びの to 番目（0 が先頭）へ移す。インスタンスの欄もこの順に並ぶ */
+export function moveComponentProperty<T extends Scene>(scene: T, mainId: NodeId, name: string, to: number): T {
+  const main = scene.nodes[mainId]
+  if (!isMain(main)) return scene
+  const { properties } = main.component
+  const from = properties.findIndex((property) => property.name === name)
+  const index = Math.max(0, Math.min(properties.length - 1, to))
+  if (from < 0 || from === index) return scene
+  const rest = properties.filter((_, i) => i !== from)
+  return setProperties(scene, main, [...rest.slice(0, index), properties[from], ...rest.slice(index)])
+}
+
+/**
+ * 差し替えのプロパティ name の候補（preferred values）を componentIds にする。並びはそのまま候補の順。
+ * 差し替え以外のプロパティや、同じ並びなら変えない
+ */
+export function setPreferredComponents<T extends Scene>(scene: T, mainId: NodeId, name: string, componentIds: readonly string[]): T {
+  const main = scene.nodes[mainId]
+  if (!isMain(main)) return scene
+  const property = main.component.properties.find((candidate) => candidate.name === name)
+  const preferred = [...new Set(componentIds)]
+  if (property?.type !== 'instance') return scene
+  if (property.preferred.length === preferred.length && property.preferred.every((id, i) => id === preferred[i])) return scene
+  return setProperties(
+    scene,
+    main,
+    main.component.properties.map((other) => (other === property ? { ...other, preferred } : other)),
   )
 }
 

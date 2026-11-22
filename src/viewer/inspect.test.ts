@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { derivedId } from '../document/component.ts'
-import { solid } from '../document/paint.ts'
+import { linearFromAngle, solid } from '../document/paint.ts'
 import type { EllipseNode, ImageNode, PathNode, Scene } from '../document/types.ts'
 import { inspectNode, inspectSelection, nodeCss } from './inspect.ts'
 import { base, docOf, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
@@ -183,7 +183,7 @@ describe('nodeCss', () => {
       cornerRadius: 8,
       rotation: -30,
       opacity: 0.5,
-      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#102030', opacity: 0.25 }],
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#102030', opacity: 0.25, visible: true }],
     })
     expect(css(sceneOf(node), 'rect').slice(2)).toEqual([
       'transform: rotate(-30deg);',
@@ -201,7 +201,7 @@ describe('nodeCss', () => {
       { offset: 0, color: '#000000' },
       { offset: 1, color: '#ffffff' },
     ]
-    const gradient = (angle: number) => css(sceneOf(rect({ fills: [{ type: 'linear', angle, stops }] })), 'rect').at(-1)
+    const gradient = (angle: number) => css(sceneOf(rect({ fills: [{ type: 'linear', ...linearFromAngle(angle, rect()), stops, opacity: 1, visible: true }] })), 'rect').at(-1)
     // 0° は左から右、90° は上から下
     expect(gradient(0)).toBe('background: linear-gradient(90deg, #000000 0%, #ffffff 100%);')
     expect(gradient(90)).toBe('background: linear-gradient(180deg, #000000 0%, #ffffff 100%);')
@@ -214,10 +214,10 @@ describe('nodeCss', () => {
       { offset: 1, color: '#ffffff' },
     ]
     const node = rect({
-      fills: [{ type: 'solid', color: '#ff0000' }, { type: 'linear', angle: 0, stops }, { type: 'solid', color: '#00ff00' }],
+      fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }, { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops, opacity: 1, visible: true }, { type: 'solid', color: '#00ff00', opacity: 1, visible: true }],
       effects: [
-        { type: 'drop-shadow', x: 0, y: 1, blur: 2, color: '#000000', opacity: 0.5 },
-        { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 },
+        { type: 'drop-shadow', x: 0, y: 1, blur: 2, color: '#000000', opacity: 0.5, visible: true },
+        { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: true },
       ],
     })
     const lines = css(sceneOf(node), 'rect')
@@ -236,8 +236,69 @@ describe('nodeCss', () => {
       { offset: 0.5, color: '#ff0000' },
       { offset: 1, color: '#000000' },
     ]
-    const lines = css(sceneOf(rect({ fills: [{ type: 'radial', cx: 0.25, cy: 0.5, rx: 0.5, ry: 1, stops }] })), 'rect')
+    const lines = css(sceneOf(rect({ fills: [{ type: 'radial', cx: 0.25, cy: 0.5, rx: 0.5, ry: 1, stops, opacity: 1, visible: true }] })), 'rect')
     expect(lines).toContain('background: radial-gradient(50% 100% at 25% 50%, #ffffff 0%, #ff0000 50%, #000000 100%);')
+  })
+
+  it('直線の始点・終点を自由に置いたら、CSS の線に写した位置へ色の位置を移す', () => {
+    const stops = [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }]
+    // 枠（100 × 50）の左から 1/4 〜 3/4 で、横向き
+    const scene = sceneOf(rect({ fills: [{ type: 'linear', x1: 0.25, y1: 0.2, x2: 0.75, y2: 0.2, stops, opacity: 1, visible: true }] }))
+    expect(css(scene, 'rect')).toContain('background: linear-gradient(90deg, #000000 25%, #ffffff 75%);')
+    expect(rowsOf(scene, 'rect', '塗り')?.[0]).toBe('グラデーション=0°・25% 20% → 75% 20%')
+    // 枠の外へはみ出す線は、0% より前・100% より後ろになる
+    const wide = sceneOf(rect({ fills: [{ type: 'linear', x1: -0.5, y1: 0.5, x2: 1.5, y2: 0.5, stops, opacity: 1, visible: true }] }))
+    expect(css(wide, 'rect')).toContain('background: linear-gradient(90deg, #000000 -50%, #ffffff 150%);')
+  })
+
+  it('角度のグラデーションは conic-gradient にする（CSS の from は 0deg が真上）', () => {
+    const stops = [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }]
+    const scene = sceneOf(rect({ fills: [{ type: 'conic', cx: 0.25, cy: 0.5, angle: 0, stops, opacity: 1, visible: true }] }))
+    expect(css(scene, 'rect')).toContain('background: conic-gradient(from 90deg at 25% 50%, #ff0000 0%, #0000ff 100%);')
+    expect(rowsOf(scene, 'rect', '塗り')).toEqual(['角度のグラデーション=中心 25% 50%・0°から', '0%=#FF0000', '100%=#0000FF'])
+  })
+
+  it('内側の影は box-shadow の inset。パスの filter には書けないので省き、インスペクトで知らせる', () => {
+    const effects = [
+      { type: 'drop-shadow' as const, x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: true },
+      { type: 'inner-shadow' as const, x: 1, y: 2, blur: 3, color: '#000000', opacity: 0.5, visible: true },
+    ]
+    expect(css(sceneOf(rect({ effects })), 'rect')).toContain('box-shadow: inset 1px 2px 3px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.25);')
+    const path: PathNode = {
+      ...base,
+      ...paint,
+      id: 'path',
+      name: 'Path',
+      type: 'path',
+      effects,
+      points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 1 }],
+      closed: true,
+      startCap: 'none',
+      endCap: 'none',
+      capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
+    }
+    expect(css(sceneOf(path), 'path')).toContain('filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.25));')
+    expect(rowsOf(sceneOf(path), 'path', '影')).toContain('CSS=filter で表せないので、コードに含めていない')
+    expect(rowsOf(sceneOf(path), 'path', '影')).toContain('種類=内側の影')
+  })
+
+  it('隠した塗り・線・効果は CSS にもインスペクトにも出さない', () => {
+    const scene = sceneOf(
+      rect({
+        fills: [...solid('#ff0000'), { type: 'solid', color: '#00ff00', opacity: 1, visible: false }],
+        strokes: [{ type: 'solid', color: '#0000ff', opacity: 1, visible: false }],
+        strokeWidth: 2,
+        effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: false }],
+      }),
+    )
+    const lines = css(scene, 'rect')
+    expect(lines).toContain('background: #ff0000;')
+    expect(lines.join('\n')).not.toMatch(/outline|box-shadow|#00ff00/)
+    expect(rowsOf(scene, 'rect', '塗り')).toEqual(['色=#FF0000'])
+    expect(rowsOf(scene, 'rect', '線')).toBeUndefined()
+    expect(rowsOf(scene, 'rect', '影')).toBeUndefined()
   })
 
   it('4 隅の角丸は左上から時計回りに並べる', () => {
@@ -246,7 +307,7 @@ describe('nodeCss', () => {
   })
 
   it('テキストに重ねた塗りも、背景を文字の形で切り抜いて表す', () => {
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true }
     const lines = css(sceneOf(text({ fills: [...solid('#00ff00'), radial] })), 'text')
     expect(lines.slice(0, 2)).toEqual([
       'background: radial-gradient(50% 50% at 50% 50%, #ff0000 0%, #0000ff 100%), #00ff00;',
@@ -259,7 +320,7 @@ describe('nodeCss', () => {
       { offset: 0, color: '#ff0000' },
       { offset: 1, color: '#0000ff' },
     ]
-    const lines = css(sceneOf(text({ fills: [{ type: 'linear', angle: 90, stops }] })), 'text')
+    const lines = css(sceneOf(text({ fills: [{ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops, opacity: 1, visible: true }] })), 'text')
     expect(lines.slice(0, 3)).toEqual([
       'background: linear-gradient(180deg, #ff0000 0%, #0000ff 100%);',
       'background-clip: text;',
@@ -309,11 +370,11 @@ describe('nodeCss', () => {
       type: 'image',
       assetId: 'a1',
       cornerRadius: 4,
-      fit: 'stretch', positionX: 0.5, positionY: 0.5,
+      fit: 'stretch', positionX: 0.5, positionY: 0.5, scale: 1,
     }
     expect(css(sceneOf(image), 'image').slice(2)).toEqual(['object-fit: fill;', 'border-radius: 4px;'])
     // 切り抜く位置を寄せていれば object-position
-    expect(css(sceneOf({ ...image, fit: 'cover', positionX: 0, positionY: 0.25 }), 'image').slice(2)).toEqual([
+    expect(css(sceneOf({ ...image, fit: 'cover', positionX: 0, positionY: 0.25, scale: 1 }), 'image').slice(2)).toEqual([
       'object-fit: cover;',
       'object-position: 0% 25%;',
       'border-radius: 4px;',
@@ -326,6 +387,7 @@ describe('nodeCss', () => {
       fills: [],
       strokes: solid('#00ff00'),
       strokeWidth: 3,
+      strokeDashes: [],
       effects: [],
       points: [
         { x: 0, y: 0 },
@@ -335,6 +397,8 @@ describe('nodeCss', () => {
       startCap: 'none',
       endCap: 'arrow',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     expect(css(sceneOf(line), 'line').slice(2)).toEqual(['stroke: #00ff00;', 'stroke-width: 3px;'])
 
@@ -354,7 +418,9 @@ describe('nodeCss', () => {
       startCap: 'none',
       endCap: 'none',
       capSize: 0,
-      effects: [{ type: 'drop-shadow', x: 1, y: 2, blur: 0, color: '#000000', opacity: 1 }],
+      contours: [],
+      fillRule: 'nonzero',
+      effects: [{ type: 'drop-shadow', x: 1, y: 2, blur: 0, color: '#000000', opacity: 1, visible: true }],
     }
     expect(css(sceneOf(path), 'path').slice(2)).toEqual([
       'fill: none;',
@@ -374,7 +440,7 @@ describe('nodeCss', () => {
       cornerRadius: 6,
       strokes: solid('#000000'),
       strokeWidth: 1,
-      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }],
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true }],
     })
     const label = text({ parentId: 'frame', fontSize: 14 })
     const scene = sceneOf(parent, child, label)
@@ -412,7 +478,7 @@ describe('inspectNode', () => {
       { offset: 0, color: '#4f46e5' },
       { offset: 1, color: '#c026d3' },
     ]
-    const scene = sceneOf(rect({ fills: [{ type: 'linear', angle: 30, stops }] }))
+    const scene = sceneOf(rect({ fills: [{ type: 'linear', ...linearFromAngle(30, rect()), stops, opacity: 1, visible: true }] }))
     const section = inspectNode(docOf(scene), scene, 'rect').find((item) => item.title === '塗り')
     expect(section?.rows).toEqual([
       { label: 'グラデーション', value: '30°' },
@@ -420,16 +486,16 @@ describe('inspectNode', () => {
       { label: '100%', value: '#C026D3', color: '#c026d3' },
     ])
     expect(rowsOf(sceneOf(rect({ fills: [] })), 'rect', '塗り')).toBeUndefined()
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.75, stops }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.75, stops, opacity: 1, visible: true }
     expect(rowsOf(sceneOf(rect({ fills: [radial] })), 'rect', '塗り')?.[0]).toBe('円形のグラデーション=中心 50% 50%・半径 50% 75%')
   })
 
   it('線は、色があって太さが 0 でないときだけ出す。影は濃さも出す', () => {
     expect(rowsOf(sceneOf(rect({ strokes: solid('#000000'), strokeWidth: 0 })), 'rect', '線')).toBeUndefined()
-    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true }
     const scene = sceneOf(rect({ strokes: solid('#0000ff'), strokeWidth: 2, effects: [shadow] }))
     expect(rowsOf(scene, 'rect', '線')).toEqual(['色=#0000FF', '太さ=2'])
-    expect(rowsOf(scene, 'rect', '影')).toEqual(['横=0', '縦=4', 'ぼかし=12', '色=#000000 25%'])
+    expect(rowsOf(scene, 'rect', '影')).toEqual(['種類=落ち影', '横=0', '縦=4', 'ぼかし=12', '色=#000000 25%'])
   })
 
   it('テキストは内容と文字の設定を出す', () => {
@@ -492,8 +558,9 @@ describe('inspectNode', () => {
           role: 'main',
           description: '主な操作に使う',
           properties: [
-            { name: '文言', type: 'text', targets: ['label'] },
-            { name: '印', type: 'boolean', targets: ['label', 'gone'] },
+            { name: '文言', type: 'text', targets: ['label'], preferred: [] },
+            { name: '印', type: 'boolean', targets: ['label', 'gone'], preferred: [] },
+            { name: 'アイコン', type: 'instance', targets: [], preferred: ['c1', 'gone'] },
           ],
         },
       }),
@@ -502,7 +569,7 @@ describe('inspectNode', () => {
       text({ id: copy, parentId: 'instance', text: '送信' }),
     )
     expect(rowsOf(scene, 'main', 'コンポーネント')).toContain('説明=主な操作に使う')
-    expect(rowsOf(scene, 'main', 'プロパティ')).toEqual(['文言=文言（1 か所）', '印=表示の切り替え（1 か所）'])
+    expect(rowsOf(scene, 'main', 'プロパティ')).toEqual(['文言=文言（1 か所）', '印=表示の切り替え（1 か所）', "アイコン=インスタンスの差し替え（0 か所）・候補: ボタン"])
     expect(rowsOf(scene, 'instance', 'コンポーネント')).toContain('説明=主な操作に使う')
     expect(rowsOf(scene, 'instance', 'プロパティ')).toEqual(['文言（上書き）=送信', '印=表示'])
   })
@@ -592,8 +659,34 @@ describe('inspectNode', () => {
   })
 
   it('画像は収め方と形式を出す', () => {
-    const image: ImageNode = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5 }
+    const image: ImageNode = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
     expect(rowsOf(sceneOf(image), 'image', '画像')).toEqual(['収め方=枠を埋めて切り抜く', '形式=PNG'])
+    // 寄せる位置と切り抜きの拡大は、既定でなければ出す
+    expect(rowsOf(sceneOf({ ...image, positionX: 0, scale: 2 }), 'image', '画像')).toEqual([
+      '収め方=枠を埋めて切り抜く',
+      '寄せる位置=0% 50%',
+      '拡大=200%',
+      '形式=PNG',
+    ])
+  })
+
+  it('塗りごとの不透明度は、塗りの節に出し、CSS では色の alpha にする', () => {
+    const half = { type: 'solid' as const, color: '#ff0000', opacity: 0.5, visible: true }
+    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.25, visible: true }
+    const scene = sceneOf(rect({ fills: [half] }), rect({ id: 'g', fills: [fade], strokes: [{ ...half, color: '#00ff00' }], strokeWidth: 2 }))
+    expect(rowsOf(scene, 'rect', '塗り')).toEqual(['色=#FF0000', '不透明度=50%'])
+    expect(css(scene, 'rect')).toContain('background: rgba(255, 0, 0, 0.5);')
+    expect(css(scene, 'g')).toContain('background: linear-gradient(90deg, rgba(0, 0, 0, 0.25) 0%, rgba(255, 255, 255, 0.25) 100%);')
+    expect(css(scene, 'g')).toContain('outline: 2px solid rgba(0, 255, 0, 0.5);')
+    const label = text({ fills: [half] })
+    expect(css(sceneOf(label), label.id)).toContain('color: rgba(255, 0, 0, 0.5);')
+  })
+
+  it('切り抜きの拡大は object-view-box で、拡大した画像の寄せる位置まで描画と同じにする', () => {
+    const image: ImageNode = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 2 }
+    expect(css(sceneOf(image), 'image')).toContain('object-view-box: inset(25% 25% 25% 25%);')
+    expect(css(sceneOf({ ...image, positionX: 0, positionY: 1, scale: 4 }), 'image')).toContain('object-view-box: inset(75% 75% 0% 0%);')
+    expect(css(sceneOf({ ...image, scale: 1 }), 'image').join('\n')).not.toContain('object-view-box')
   })
 })
 
@@ -632,8 +725,8 @@ describe('inspectSelection', () => {
 })
 
 describe('色の書き方と rem の基準', () => {
-  const shadow = { type: 'drop-shadow' as const, x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25 }
-  const gradient = { type: 'linear' as const, angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }
+  const shadow = { type: 'drop-shadow' as const, x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25, visible: true }
+  const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true }
 
   it('CSS の色を RGB や HSL で書ける。影は透明度つき', () => {
     const scene = sceneOf(rect({ fills: solid('#4f46e5'), strokes: solid('#ffffff'), strokeWidth: 2, effects: [shadow] }))

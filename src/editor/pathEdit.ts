@@ -1,8 +1,10 @@
 import { type Point, applyMatrix, nodeMatrix } from '../document/geometry.ts'
 import {
+  type Contour,
   type Vertex,
   mapVertices,
-  pathFromPoints,
+  pathContours,
+  pathFromContours,
   pathPoints,
   pathSegments,
   segmentAt,
@@ -28,21 +30,45 @@ export function parentVertices(scene: Scene, id: NodeId): Vertex[] {
   return mapVertices(pathPoints(node), (point) => applyMatrix(matrix, point))
 }
 
+/** パスのすべての輪郭の頂点と制御点（親の座標系。ノードの回転を織り込んだもの）。先頭が最初の輪郭 */
+export function parentContours(scene: Scene, id: NodeId): Contour[] {
+  const node = scene.nodes[id]
+  if (node?.type !== 'path') return []
+  const matrix = nodeMatrix(node)
+  return pathContours(node).map((contour) => ({
+    vertices: mapVertices(contour.vertices, (point) => applyMatrix(matrix, point)),
+    closed: contour.closed,
+  }))
+}
+
 /**
- * パスの頂点を親の座標系で書き換える。edit が null を返したら何もしない（同じ参照を返す）。
- * closed を返せば、閉じているかも変えられる
+ * パスのすべての輪郭を親の座標系で書き換える。edit が null を返すか、輪郭が 1 つも残らなければ何もしない（同じ参照を返す）。
+ * 枠は全部の輪郭に合わせ直し、回転は 0 に戻して頂点に織り込む
+ */
+export function reshapeContours<T extends Scene>(scene: T, id: NodeId, edit: (contours: Contour[]) => Contour[] | null): T {
+  const node = scene.nodes[id]
+  if (node?.type !== 'path') return scene
+  const result = edit(parentContours(scene, id))
+  if (result === null || result.length === 0) return scene
+  return updateNode(scene, id, { ...pathFromContours(result), rotation: 0 })
+}
+
+/**
+ * パスの最初の輪郭の頂点を親の座標系で書き換える。edit が null を返したら何もしない（同じ参照を返す）。
+ * closed を返せば、閉じているかも変えられる。2 つ目以降の輪郭（穴など）はそのまま保つ。
+ * 全部の輪郭を通し番号で扱うときは reshapeContours と、下の「輪郭をまたぐ編集」の関数を使う
  */
 export function reshapePath<T extends Scene>(
   scene: T,
   id: NodeId,
   edit: (vertices: Vertex[], closed: boolean) => Vertex[] | { vertices: Vertex[]; closed: boolean } | null,
 ): T {
-  const node = scene.nodes[id]
-  if (node?.type !== 'path') return scene
-  const result = edit(parentVertices(scene, id), node.closed)
-  if (result === null) return scene
-  const { vertices, closed } = Array.isArray(result) ? { vertices: result, closed: node.closed } : result
-  return updateNode(scene, id, { ...pathFromPoints(vertices, closed), closed, rotation: 0 })
+  return reshapeContours(scene, id, ([first, ...others]) => {
+    const result = edit(first.vertices, first.closed)
+    if (result === null) return null
+    const changed = Array.isArray(result) ? { vertices: result, closed: first.closed } : result
+    return [changed, ...others]
+  })
 }
 
 /** 枠を、いまの頂点が描く形（角の丸めを含む）に合わせ直す。頂点の位置は変わらない（回転は頂点に織り込む） */
@@ -286,4 +312,125 @@ export function nearestOnPath(
     if (!best || distance < best.distance) best = { segment, t, distance }
   })
   return best
+}
+
+// 輪郭をまたぐ編集。頂点は全部の輪郭をつないだ通し番号（最初の輪郭の頂点が 0 から、次の輪郭がその続き）で扱う。
+// 辺も、その辺が始まる頂点の通し番号で呼ぶ（開いた輪郭の最後の頂点から始まる辺はない）。
+// ストアの頂点の選択（vertexEdit）やパネルは、この通し番号を持つ
+
+/** 全部の輪郭の頂点を、通し番号の順に並べる */
+export function flatVertices(contours: readonly Contour[]): Vertex[] {
+  return contours.flatMap((contour) => contour.vertices)
+}
+
+/** 通し番号 index の頂点が、何番目の輪郭の何番目の頂点か。範囲の外なら null */
+export function locateVertex(contours: readonly Contour[], index: number): { contour: number; local: number } | null {
+  if (index < 0) return null
+  let start = 0
+  for (const [contour, { vertices }] of contours.entries()) {
+    if (index < start + vertices.length) return { contour, local: index - start }
+    start += vertices.length
+  }
+  return null
+}
+
+/** 何番目の輪郭の最初の頂点の通し番号 */
+function contourStart(contours: readonly Contour[], contour: number): number {
+  return contours.slice(0, contour).reduce((sum, { vertices }) => sum + vertices.length, 0)
+}
+
+/** 通し番号で並べた頂点（数は変えない）を、輪郭ごとに切り分けて戻す。頂点を動かすなど、隣を見ない編集に使う */
+export function withFlatVertices(contours: readonly Contour[], vertices: readonly Vertex[]): Contour[] {
+  let start = 0
+  return contours.map((contour) => {
+    const part = vertices.slice(start, start + contour.vertices.length)
+    start += contour.vertices.length
+    return { vertices: part, closed: contour.closed }
+  })
+}
+
+/**
+ * 通し番号の indices を輪郭ごとに分け、その輪郭の頂点・閉じているか・輪郭の中の番号で edit を呼ぶ。
+ * indices を含まない輪郭はそのまま。edit が 1 つでも null を返したら全体を null にする
+ */
+export function editByContour(
+  contours: readonly Contour[],
+  indices: readonly number[],
+  edit: (vertices: Vertex[], closed: boolean, local: number[]) => Vertex[] | Contour | null,
+): Contour[] | null {
+  const groups = new Map<number, number[]>()
+  for (const index of indices) {
+    const at = locateVertex(contours, index)
+    if (at) groups.set(at.contour, [...(groups.get(at.contour) ?? []), at.local])
+  }
+  const result: Contour[] = []
+  for (const [i, contour] of contours.entries()) {
+    const local = groups.get(i)
+    if (!local) {
+      result.push(contour)
+      continue
+    }
+    const changed = edit(contour.vertices, contour.closed, local)
+    if (changed === null) return null
+    result.push(Array.isArray(changed) ? { vertices: changed, closed: contour.closed } : changed)
+  }
+  return result
+}
+
+/**
+ * 通し番号の indices の頂点をまとめて消す。輪郭が 2 つ以上あるとき、輪郭の頂点を全部選んでいれば、その輪郭ごと消す。
+ * 残りが開いた輪郭で 2 つ、閉じた輪郭で 3 つより少なくなる輪郭があれば null（何も消さない）
+ */
+export function deleteContourVertices(contours: readonly Contour[], indices: readonly number[]): Contour[] | null {
+  const removing = new Set(indices)
+  const whole = contours.map((contour, i) => {
+    const start = contourStart(contours, i)
+    return contour.vertices.every((_, local) => removing.has(start + local))
+  })
+  // 全部の輪郭を丸ごと選んでいても、パスそのものは消さない（ノードを消すのは頂点の編集の外で）
+  if (whole.every(Boolean)) return null
+  const kept = contours.filter((_, i) => !whole[i])
+  const rest = indices.filter((index) => {
+    const at = locateVertex(contours, index)
+    return at !== null && !whole[at.contour]
+  })
+  // 番号は消す前の並びで数えたもの。丸ごと消した輪郭を除いた並びに数え直す
+  const renumbered = rest.map((index) => {
+    const at = locateVertex(contours, index)!
+    const contour = contours.slice(0, at.contour).filter((_, i) => !whole[i]).length
+    return contourStart(kept, contour) + at.local
+  })
+  if (renumbered.length === 0) return kept
+  return editByContour(kept, renumbered, (vertices, closed, local) => deleteVertices(vertices, closed, local))
+}
+
+/** 全部の輪郭のうち point にいちばん近い辺（通し番号）と、その上の位置 t、距離 */
+export function nearestOnContours(
+  contours: readonly Contour[],
+  point: Point,
+): { segment: number; t: number; distance: number } | null {
+  let best: { segment: number; t: number; distance: number } | null = null
+  for (const [i, contour] of contours.entries()) {
+    const nearest = nearestOnPath(contour.vertices, contour.closed, point)
+    if (nearest && (!best || nearest.distance < best.distance)) {
+      best = { ...nearest, segment: contourStart(contours, i) + nearest.segment }
+    }
+  }
+  return best
+}
+
+/** 通し番号 segment の辺（その頂点から、同じ輪郭の次の頂点への辺）。ない辺なら undefined */
+export function contourSegment(contours: readonly Contour[], segment: number) {
+  const at = locateVertex(contours, segment)
+  if (!at) return undefined
+  const contour = contours[at.contour]
+  return pathSegments(contour.vertices, contour.closed)[at.local]
+}
+
+/** 通し番号 index の頂点の、同じ輪郭の中の手前の頂点（なければ次の頂点）。Shift で向きを揃える基準に使う */
+export function neighborVertex(contours: readonly Contour[], index: number): Vertex | undefined {
+  const at = locateVertex(contours, index)
+  if (!at) return undefined
+  const { vertices } = contours[at.contour]
+  return vertices[at.local === 0 ? 1 : at.local - 1]
 }

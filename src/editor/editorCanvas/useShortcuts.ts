@@ -8,7 +8,7 @@ import { flowParent, moveInLayout, wrapInAutoLayout } from '../layout.ts'
 import { type ReorderDirection, reorderNodes } from '../operations/arrange.ts'
 import { type Fragment, copyFragment, duplicateNodes } from '../operations/clipboard.ts'
 import { moveNodesToPage, pasteIntoPage } from '../operations/document.ts'
-import { translateNodes } from '../operations/transform.ts'
+import { type FlipDirection, flipNodes, translateNodes } from '../operations/transform.ts'
 import { removeNodes } from '../operations/tree.ts'
 import type { EditorStore } from '../store.ts'
 import { isSvgFile, looksLikeSvg } from '../importSvg.ts'
@@ -81,6 +81,8 @@ export function useShortcuts(options: Options) {
   const reorder = (direction: ReorderDirection) =>
     store.apply((base) => reorderNodes(base, ownIds(), direction))
   const remove = () => store.apply((base) => removeNodes(base, movableIds()))
+  /** 選んでいるものを、選択範囲の中心を通る線で左右・上下に裏返す */
+  const flip = (direction: FlipDirection) => store.apply((base) => flipNodes(base, movableIds(), direction))
 
   /** 複製して、元のすぐ上（重なり順で 1 つ前面）に少しずらして置き、複製したものを選ぶ */
   function duplicate() {
@@ -213,6 +215,8 @@ export function useShortcuts(options: Options) {
     }
 
     if (event.shiftKey && key === 'a') wrap()
+    else if (event.shiftKey && key === 'h') flip('horizontal')
+    else if (event.shiftKey && key === 'v') flip('vertical')
     else if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
     else if (event.shiftKey && event.code === 'Digit2') zoomToSelection()
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)
@@ -284,6 +288,7 @@ export function useShortcuts(options: Options) {
     duplicate,
     remove,
     reorder,
+    flip,
     wrap,
     componentize,
     zoomToSelection,

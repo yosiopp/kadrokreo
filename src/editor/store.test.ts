@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { pathFromPoints } from '../document/path.ts'
-import { createPath, createRect } from './nodes.ts'
+import { solid } from '../document/paint.ts'
+import { pathFromContours, pathFromPoints } from '../document/path.ts'
+import { createFrame, createPath, createRect } from './nodes.ts'
+import { makeComponent } from './components.ts'
+import { addVariant } from './variants.ts'
+import { variantSetOf } from '../document/variants.ts'
 import { addPage, createDocument, createPage, removePage, renameDocument } from './operations/document.ts'
-import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
+import { insertNode, moveNode, removeNodes, updateNode } from './operations/tree.ts'
 import { createEditorStore } from './store.ts'
 
 function setup() {
@@ -95,6 +99,58 @@ describe('createEditorStore', () => {
     expect(store.getState().vertexEdit).toBeNull()
   })
 
+  it('頂点の編集の番号は全部の輪郭の通し番号で、穴の頂点・辺も選んだままにする', () => {
+    const { store } = setup()
+    const square = (from: number, to: number) => [
+      { x: from, y: from },
+      { x: to, y: from },
+      { x: to, y: to },
+      { x: from, y: to },
+    ]
+    const shape = pathFromContours([
+      { vertices: square(0, 100), closed: true },
+      { vertices: square(30, 70), closed: false },
+    ])
+    const path = { ...createPath(shape, true), ...shape }
+    store.apply((doc) => insertNode(doc, path))
+    store.select([path.id])
+    store.editVertices({ id: path.id, vertices: [7], segment: null })
+    expect(store.getState().vertexEdit?.vertices).toEqual([7])
+    store.editVertices({ id: path.id, vertices: [], segment: 6 })
+    expect(store.getState().vertexEdit?.segment).toBe(6)
+    // 開いた穴の最後の頂点から始まる辺はない
+    store.editVertices({ id: path.id, vertices: [8], segment: 7 })
+    expect(store.getState().vertexEdit).toEqual({ id: path.id, vertices: [], segment: null })
+  })
+
+  it('グラデーションの編集は、そのノードだけを選び、その塗りがグラデーションの間だけ続く', () => {
+    const { store, rect } = setup()
+    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 0.5, color: '#888888' }, { offset: 1, color: '#ffffff' }], opacity: 1, visible: true }
+    store.apply((doc) => updateNode(doc, rect.id, { fills: [gradient] }))
+    store.select([rect.id])
+    store.editGradient({ id: rect.id, key: 'fills', index: 0, stop: 2 })
+    expect(store.getState().gradientEdit).toEqual({ id: rect.id, key: 'fills', index: 0, stop: 2 })
+    // なくなった色は選ばない
+    store.apply((doc) => updateNode(doc, rect.id, { fills: [{ ...gradient, stops: gradient.stops.slice(0, 2) }] }))
+    expect(store.getState().gradientEdit?.stop).toBeNull()
+    // 頂点の編集とは同時に入らない
+    store.editVertices({ id: rect.id, vertices: [], segment: null })
+    expect(store.getState().gradientEdit).toBeNull()
+    store.editGradient({ id: rect.id, key: 'fills', index: 0, stop: null })
+    // 単色にすると抜ける
+    store.apply((doc) => updateNode(doc, rect.id, { fills: solid('#ff0000') }))
+    expect(store.getState().gradientEdit).toBeNull()
+    // 選択が変わると抜ける
+    store.apply((doc) => updateNode(doc, rect.id, { fills: [gradient] }))
+    store.editGradient({ id: rect.id, key: 'fills', index: 0, stop: null })
+    store.select([])
+    expect(store.getState().gradientEdit).toBeNull()
+    // 線の番目がなければ入らない
+    store.select([rect.id])
+    store.editGradient({ id: rect.id, key: 'strokes', index: 0, stop: null })
+    expect(store.getState().gradientEdit).toBeNull()
+  })
+
   it('load で履歴と選択を捨てる', () => {
     const { store, rect } = setup()
     store.select([rect.id])
@@ -174,5 +230,23 @@ describe('createEditorStore', () => {
       store.undo()
       expect(store.getState().page.id).toBe(second)
     })
+  })
+
+  it('まとまりの外へ動かしたバリアントは、ドラッグ中（preview）も確定後も名前が変わり、Undo で戻る', () => {
+    const frame = { ...createFrame({ x: 0, y: 0, width: 50, height: 50 }), name: 'ボタン' }
+    const store = createEditorStore(createDocument())
+    store.apply((doc) => makeComponent(insertNode(doc, frame), frame.id))
+    store.applyDocument((doc) => addVariant(doc, doc.pages[0].id, frame.id).document)
+    const setId = variantSetOf(store.getState().page, frame.id)!.id
+    store.preview((page) => moveNode(page, frame.id, null))
+    expect(store.getState().page.nodes[frame.id].name).toBe('ボタン（標準）')
+    // 戻すとプレビュー前の名前のまま
+    store.preview((page) => moveNode(page, frame.id, setId))
+    expect(store.getState().page.nodes[frame.id].name).toBe('種類=標準')
+    store.preview((page) => moveNode(page, frame.id, null))
+    store.commitPreview()
+    expect(store.getState().page.nodes[frame.id].name).toBe('ボタン（標準）')
+    store.undo()
+    expect(store.getState().page.nodes[frame.id].name).toBe('種類=標準')
   })
 })

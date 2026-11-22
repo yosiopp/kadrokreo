@@ -10,7 +10,7 @@ export function nodeKind(node: SceneNode): NodeKind {
 
 /** 直線（2 つの頂点を持つ、曲がっていない開いたパス）か。editor は端を直接動かすハンドルを出し、一覧では「直線」と呼ぶ */
 export function isLine(node: SceneNode): boolean {
-  return node.type === 'path' && node.points.length === 2 && !node.closed && !node.points.some(hasControls)
+  return node.type === 'path' && node.points.length === 2 && !node.closed && node.contours.length === 0 && !node.points.some(hasControls)
 }
 
 function hasControls(point: PathPoint | Vertex): boolean {
@@ -47,6 +47,25 @@ export function pathPoints(path: Pick<PathNode, 'width' | 'height' | 'points'>):
     if (point.radius) vertex.radius = point.radius
     return vertex
   })
+}
+
+/** 輪郭 1 つ分の頂点（Vertex）と、閉じているか */
+export type Contour = { vertices: Vertex[]; closed: boolean }
+
+type ContourSource = Pick<PathNode, 'width' | 'height' | 'points' | 'closed' | 'contours'>
+
+/** パスのすべての輪郭の頂点と制御点（ノードの座標系）。先頭が最初の輪郭（points） */
+export function pathContours(path: ContourSource): Contour[] {
+  const { width, height } = path
+  return [
+    { vertices: pathPoints(path), closed: path.closed },
+    ...path.contours.map((contour) => ({ vertices: pathPoints({ width, height, points: contour.points }), closed: contour.closed })),
+  ]
+}
+
+/** すべての輪郭の描く形の頂点（角の丸めを曲線に直したもの）。先頭が最初の輪郭 */
+export function pathOutlines(path: ContourSource): Contour[] {
+  return pathContours(path).map((contour) => ({ vertices: roundCorners(contour.vertices, contour.closed), closed: contour.closed }))
 }
 
 /** パスの描く形の頂点（ノードの座標系）。角の丸めを曲線に直したもの。描画・当たり判定・SVG の出力が使う */
@@ -126,6 +145,43 @@ export function pathFromPoints(vertices: readonly Vertex[], closed = false): Bou
       return point
     }),
   }
+}
+
+/**
+ * いくつもの輪郭から、すべてを囲む枠と、枠に対する割合で表した頂点を作る。先頭の輪郭が points、残りが contours になる。
+ * 輪郭が 1 つなら pathFromPoints と同じ
+ */
+export function pathFromContours(contours: readonly Contour[]): Bounds & Pick<PathNode, 'points' | 'closed' | 'contours'> {
+  const [first, ...rest] = contours
+  if (rest.length === 0) return { ...pathFromPoints(first.vertices, first.closed), closed: first.closed, contours: [] }
+  const box = unionBox(contours.map((contour) => pathBounds(roundCorners(contour.vertices, contour.closed), contour.closed)))
+  const width = Math.max(1, box.width)
+  const height = Math.max(1, box.height)
+  const ratios = (vertices: readonly Vertex[]): PathPoint[] =>
+    vertices.map((vertex) => {
+      const point: PathPoint = { x: (vertex.x - box.x) / width, y: (vertex.y - box.y) / height }
+      if (vertex.in) point.in = { x: (vertex.in.x - vertex.x) / width, y: (vertex.in.y - vertex.y) / height }
+      if (vertex.out) point.out = { x: (vertex.out.x - vertex.x) / width, y: (vertex.out.y - vertex.y) / height }
+      if (vertex.radius) point.radius = vertex.radius
+      return point
+    })
+  return {
+    x: box.x,
+    y: box.y,
+    width,
+    height,
+    points: ratios(first.vertices),
+    closed: first.closed,
+    contours: rest.map((contour) => ({ points: ratios(contour.vertices), closed: contour.closed })),
+  }
+}
+
+function unionBox(boxes: readonly Bounds[]): Bounds {
+  const x = Math.min(...boxes.map((box) => box.x))
+  const y = Math.min(...boxes.map((box) => box.y))
+  const right = Math.max(...boxes.map((box) => box.x + box.width))
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height))
+  return { x, y, width: right - x, height: bottom - y }
 }
 
 /** 頂点から頂点への 1 本の辺。curved でなければ c1 / c2 は両端と同じ点 */
@@ -273,6 +329,11 @@ export function pathData(vertices: readonly Vertex[], closed: boolean): string {
   }
   tracePath(sink, vertices, closed)
   return parts.join(' ')
+}
+
+/** いくつもの輪郭をつないだ SVG の path の d */
+export function contoursData(contours: readonly Contour[]): string {
+  return contours.map((contour) => pathData(contour.vertices, contour.closed)).filter((d) => d !== '').join(' ')
 }
 
 /** 端の印（矢印・丸・ひし形）の大きさ。capSize が 0 なら線の太さから決める（細い線でも見えるように太さの 4 倍、最小 10） */

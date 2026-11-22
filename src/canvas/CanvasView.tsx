@@ -11,7 +11,7 @@ import type { Asset, AssetId, NodeId, Scene } from '../document/types.ts'
 import type { Camera } from './camera.ts'
 import { isTextInput } from './dom.ts'
 import { onImageLoad } from './images.ts'
-import { renderScene } from './render.ts'
+import { SceneCache } from './sceneCache.ts'
 import { type Viewport, screenToWorld } from './viewport.ts'
 
 export type CanvasPointer = {
@@ -76,6 +76,8 @@ export function CanvasView(props: Props) {
     const container = containerRef.current!
     const canvas = canvasRef.current!
     const ctx = canvas.getContext('2d')!
+    // ページの絵は取っておき、選択枠だけが変わったときやパンでは使い回す（sceneCache.ts）
+    const cache = new SceneCache()
     let frame = 0
 
     function draw() {
@@ -90,9 +92,12 @@ export function CanvasView(props: Props) {
         canvas.height = height
       }
 
+      // 大きさが決まる前（0 × 0）は描かない（drawImage が例外を投げる）
+      if (width === 0 || height === 0) return
       const viewport = camera.getViewport()
       const labelColor = getComputedStyle(container).getPropertyValue('--canvas-label')
-      renderScene(ctx, scene, assets, viewport, size, pixelRatio, { labelColor, hiddenId })
+      cache.render(ctx, { scene, assets, viewport, size, pixelRatio, labelColor, hiddenId })
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
       if (drawOverlay) {
         ctx.save()
         drawOverlay(ctx, viewport)
@@ -111,7 +116,13 @@ export function CanvasView(props: Props) {
     })
     observer.observe(container)
     const unsubscribe = camera.subscribe(requestDraw)
-    const unsubscribeImages = onImageLoad(requestDraw)
+    // 画像のデコードや書体の読み込みが済んだら、取っておいた絵は古い
+    const redrawAll = () => {
+      cache.invalidate()
+      requestDraw()
+    }
+    const unsubscribeImages = onImageLoad(redrawAll)
+    document.fonts?.addEventListener('loadingdone', redrawAll)
 
     function onWheel(event: WheelEvent) {
       event.preventDefault()
@@ -148,6 +159,7 @@ export function CanvasView(props: Props) {
       observer.disconnect()
       unsubscribe()
       unsubscribeImages()
+      document.fonts?.removeEventListener('loadingdone', redrawAll)
       container.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('keyup', onKey)

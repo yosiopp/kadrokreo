@@ -1,11 +1,11 @@
 import { getAbsoluteBounds, getWorldCenter, unionBounds } from '../../src/document/geometry.ts'
 import { type Alignment, alignNodes, distributeNodes } from '../../src/editor/operations/arrange.ts'
-import { rotateNodes } from '../../src/editor/operations/transform.ts'
+import { flipNodes, rotateNodes } from '../../src/editor/operations/transform.ts'
 import { topLevelIds } from '../../src/editor/operations/tree.ts'
 import { UsageError } from '../args.ts'
 import { type Command, checkStep, flag, option, point, positional } from './common.ts'
 
-// 並べるコマンド（整列・等間隔・回転）。中身は editor の整列ボタン・回転と同じ処理
+// 並べるコマンド（整列・等間隔・回転・反転）。中身は editor の整列ボタン・回転・反転と同じ処理
 
 const ALIGNMENTS: readonly Alignment[] = ['left', 'center', 'right', 'top', 'middle', 'bottom']
 
@@ -69,5 +69,21 @@ export const rotate: Command = {
       }
       return rotateNodes(page, ids, pivot, delta)
     })
+  },
+}
+
+export const flip: Command = {
+  name: 'flip',
+  kind: 'edit',
+  usage: 'flip horizontal|vertical ノード…',
+  summary: '全体を囲む矩形の中心で、左右か上下に裏返す（editor の Shift + H / V と同じ。テキストと画像は位置と向きだけ）',
+  run({ session }, step) {
+    checkStep(step, {})
+    const direction = positional(step, 0, '向き（horizontal / vertical）')
+    if (direction !== 'horizontal' && direction !== 'vertical') {
+      throw new UsageError(`flip: 向きは horizontal か vertical です: ${direction}`)
+    }
+    const ids = session.resolveAll(step.positionals.slice(1))
+    session.apply((page) => flipNodes(page, ids, direction))
   },
 }

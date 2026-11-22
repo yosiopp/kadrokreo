@@ -47,6 +47,7 @@ export function createRect(bounds: Bounds): RectNode {
     fills: solid('#d9d9d9'),
     strokes: [],
     strokeWidth: 1,
+    strokeDashes: [],
     effects: [],
     cornerRadius: 0,
   }
@@ -59,6 +60,7 @@ export function createEllipse(bounds: Bounds): EllipseNode {
     fills: solid('#d9d9d9'),
     strokes: [],
     strokeWidth: 1,
+    strokeDashes: [],
     effects: [],
   }
 }
@@ -82,10 +84,13 @@ export function createPath(shape: Bounds & Pick<PathNode, 'points'>, closed: boo
     fills: solid(closed ? '#d9d9d9' : null),
     strokes: solid('#000000'),
     strokeWidth: 1,
+    strokeDashes: [],
     effects: [],
     startCap: 'none',
     endCap: 'none',
     capSize: 0,
+    contours: [],
+    fillRule: 'nonzero',
   }
 }
 
@@ -105,7 +110,7 @@ export function createText(bounds: Bounds, text = ''): TextNode {
 }
 
 export function createImage(bounds: Bounds, assetId: AssetId): ImageNode {
-  return { ...base('Image', bounds), type: 'image', assetId, cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5 }
+  return { ...base('Image', bounds), type: 'image', assetId, cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
 }
 
 export function createFrame(bounds: Bounds): FrameNode {
@@ -115,6 +120,7 @@ export function createFrame(bounds: Bounds): FrameNode {
     fills: solid('#ffffff'),
     strokes: [],
     strokeWidth: 1,
+    strokeDashes: [],
     effects: [],
     children: [],
     clipContent: true,

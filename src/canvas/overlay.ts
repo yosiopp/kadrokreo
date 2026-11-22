@@ -33,18 +33,26 @@ export function strokePolyline(ctx: CanvasRenderingContext2D, points: readonly P
 
 const BADGE_HEIGHT = 18
 
-/** 色つきの札に、白い文字で text を入れる。center は札の中心 */
-export function drawBadge(ctx: CanvasRenderingContext2D, text: string, center: Point, color: string): void {
+/** 色つきの札に、白い文字で text を入れる。center は札の中心、angle は札を傾ける角度（度、時計回り） */
+export function drawBadge(ctx: CanvasRenderingContext2D, text: string, center: Point, color: string, angle = 0): void {
   ctx.font = '11px system-ui, sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   const width = ctx.measureText(text).width + 10
+  // 傾けるときは、中心を原点にして回してから描く（傾いた線に画素を揃えても意味がないので丸めない）
+  const tilted = angle !== 0
+  const origin = tilted ? { x: 0, y: 0 } : center
+  if (tilted) {
+    ctx.save()
+    ctx.translate(center.x, center.y)
+    ctx.rotate((angle * Math.PI) / 180)
+  }
+  const round = (value: number) => (tilted ? value : Math.round(value))
   ctx.fillStyle = color
   ctx.beginPath()
-  const left = Math.round(center.x - width / 2)
-  const top = Math.round(center.y - BADGE_HEIGHT / 2)
-  ctx.roundRect(left, top, width, BADGE_HEIGHT, 4)
+  ctx.roundRect(round(origin.x - width / 2), round(origin.y - BADGE_HEIGHT / 2), width, BADGE_HEIGHT, 4)
   ctx.fill()
   ctx.fillStyle = '#ffffff'
-  ctx.fillText(text, Math.round(center.x), Math.round(center.y) + 0.5)
+  ctx.fillText(text, round(origin.x), round(origin.y) + 0.5)
+  if (tilted) ctx.restore()
 }

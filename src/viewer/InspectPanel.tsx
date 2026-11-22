@@ -26,6 +26,10 @@ type Props = {
   onScaleChange: (scale: number) => void
   /** 選んでいるノードを PNG に書き出す（いくつも選んでいれば、まとめて 1 枚に） */
   onExport: () => void
+  /** 選んでいるノードを SVG に書き出す（いくつも選んでいれば、まとめて 1 つに） */
+  onExportSvg: () => void
+  /** 選んでいるノードを SVG の文字にしてクリップボードへ入れる */
+  onCopySvg: () => Promise<boolean>
   /** ノードを 1 つ選ぶ */
   onSelect: (id: NodeId) => void
   /** いくつものノードをまとめて選ぶ */
@@ -49,6 +53,8 @@ export function InspectPanel({
   scale,
   onScaleChange,
   onExport,
+  onExportSvg,
+  onCopySvg,
   onSelect,
   onSelectNodes,
   onSaveImage,
@@ -209,7 +215,7 @@ export function InspectPanel({
         </section>
         <section className="panel-section" aria-label="書き出し">
           <h3 className="section-title">書き出し</h3>
-          <ExportControls scale={scale} onScaleChange={onScaleChange} onExport={onExport}>
+          <ExportControls scale={scale} onScaleChange={onScaleChange} onExport={onExport} onExportSvg={onExportSvg} onCopySvg={onCopySvg}>
             まとめて PNG に
           </ExportControls>
         </section>
@@ -286,7 +292,7 @@ export function InspectPanel({
       )}
       <section className="panel-section" aria-label="書き出し">
         <h3 className="section-title">書き出し</h3>
-        <ExportControls scale={scale} onScaleChange={onScaleChange} onExport={onExport}>
+        <ExportControls scale={scale} onScaleChange={onScaleChange} onExport={onExport} onExportSvg={onExportSvg} onCopySvg={onCopySvg}>
           PNG に書き出し
         </ExportControls>
         {node.type === 'image' && Object.hasOwn(document.assets, node.assetId) && (

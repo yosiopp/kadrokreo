@@ -2,6 +2,7 @@
 // ブラウザ（editor）では DOMParser で解析し（parseSvgDom）、DOMParser のない Node（CLI と単体テスト）では
 // 自前の小さな XML の読み取り（parseSvgXml）を使う。どちらも同じ形の木を返し、変換（convert.ts）はこの木だけを読む。
 // 解析した結果を DOM に挿入したり表示したりはしない。スクリプトや foreignObject の中身は木に写さない（変換で落としたと知らせるため、要素の名前だけ残す）。
+// style の中身（CSS）は文字として写し、変換が単純なセレクタだけを読む。
 
 export type SvgNode = SvgElement | string
 
@@ -24,7 +25,7 @@ const MAX_ELEMENTS = 100_000
 const MAX_DEPTH = 256
 
 /** 中身を写さない要素。変換では「読み飛ばした」と知らせる */
-const OPAQUE = new Set(['script', 'foreignObject', 'style'])
+const OPAQUE = new Set(['script', 'foreignObject'])
 
 /**
  * 解析の前に確かめる。DOCTYPE の内部サブセット（ENTITY の定義）は、展開で大きくなる細工（billion laughs）や

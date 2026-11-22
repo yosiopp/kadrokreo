@@ -11,12 +11,31 @@ import {
   transformRect,
   unionBounds,
 } from '../../document/geometry.ts'
-import { gradientLine } from '../../document/paint.ts'
-import { type Vertex, mapVertices, pathBounds, pathFromPoints } from '../../document/path.ts'
+import { readImageInfo } from '../../document/imageInfo.ts'
+import { IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../../document/kdr.ts'
+import { angleLine, linearFromAngle } from '../../document/paint.ts'
+import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
-import type { Cap, ColorStop, FrameNode, NodeId, Paint, PathNode, SceneNode, Style, TextNode } from '../../document/types.ts'
-import { createEllipse, createFrame, createPath, createRect, createText } from '../nodes.ts'
+import { sha256Hex } from '../../document/sha256.ts'
+import type {
+  Asset,
+  AssetId,
+  Cap,
+  ColorStop,
+  Effect,
+  FrameNode,
+  ImageNode,
+  NodeId,
+  Paint,
+  PathNode,
+  SceneNode,
+  Style,
+  TextNode,
+} from '../../document/types.ts'
+import { createEllipse, createFrame, createImage, createPath, createRect, createText } from '../nodes.ts'
 import type { Fragment } from '../operations/clipboard.ts'
+import { type StyleSheet, matchedDeclarations, parseStyleSheet } from './css.ts'
+import { readShadowFilter } from './filters.ts'
 import type { SvgElement, SvgNode } from './xml.ts'
 import {
   type Rgba,
@@ -37,9 +56,13 @@ import {
 //   g のフレームは中身を囲む大きさで、回転しない。g の transform は、中の図形の形に焼き込む。
 // - rect / circle / ellipse は、かかっている変換が「回転と縦横の拡大」で表せれば矩形・楕円のノード（回転つき）に、
 //   歪めたり裏返したりしていればパスにする。line / polyline / polygon / path はパス。path の輪郭が複数あれば、
-//   輪郭ごとのパスをフレームにまとめる（kadrokreo のパスは輪郭を 1 つしか持てないので、穴は塗りつぶされる）。
+//   1 つのパスの輪郭（contours）にし、fill-rule を写す（穴が開く）。stroke-dasharray は線の破線にする。
 // - 塗りは単色と linearGradient・radialGradient。kadrokreo の塗りは不透明度を持たないので、fill-opacity などはノードの opacity に寄せる。
-// - スクリプト・foreignObject・外部参照は読まない。表せないもの（フィルタ・マスク・クリップパス・パターン・円形のグラデーションなど）は
+// - <style> の CSS は単純なセレクタ（要素名・#id・.class）だけ読み、属性 < CSS < style 属性 < CSS の !important の順に重ねる。
+// - clip-path / mask は、中身が矩形・円 1 つで、軸に沿って置かれているときだけ、切り取るフレーム（角丸）にする。
+// - <image> は data URI の PNG / JPEG / WebP / GIF だけを画像のノードにする（外部の URL は読まない）。
+// - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
+// - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターン・textPath など）は
 //   近い形に置き換えるか読み飛ばし、warnings で知らせる。
 
 export type SvgWarning = { label: string; count: number }
@@ -71,6 +94,12 @@ const MAX_USE_DEPTH = 16
 const MAX_PATH_POINTS = 10_000
 /** kdr のグラデーションの色の数の上限 */
 const MAX_STOPS = 16
+/** 効果の数の上限（kdr の読み込みと同じ） */
+const MAX_EFFECTS = 16
+/** 塗りと線を持つ図形の要素（影の filter を効果として読む） */
+const SHAPE_ELEMENTS = new Set(['rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path'])
+/** kdr の破線の数の上限 */
+const MAX_DASHES = 16
 
 /** 円を 4 つの 3 次ベジェ曲線で近似するときの制御点の長さ */
 const KAPPA = 0.5522847498
@@ -90,6 +119,10 @@ type Inherited = {
   visible: boolean
   /** stroke-linecap。開いたパスの両端の形になる */
   lineCap: string
+  fillRule: string
+  /** stroke-dasharray（そのままの文字。読むのは shape） */
+  dashArray: string
+  dashOffset: string
 }
 
 const ROOT_INHERITED: Inherited = {
@@ -105,6 +138,9 @@ const ROOT_INHERITED: Inherited = {
   textAnchor: 'start',
   visible: true,
   lineCap: 'butt',
+  fillRule: 'nonzero',
+  dashArray: 'none',
+  dashOffset: '0',
 }
 
 /** 要素を描かない（定義だけの）要素。黙って読み飛ばす */
@@ -128,15 +164,12 @@ const DEFINITIONS = new Set([
 const SKIPPED_ELEMENTS: Record<string, string> = {
   script: 'スクリプト（<script>）',
   foreignObject: '埋め込み HTML（<foreignObject>）',
-  style: 'CSS（<style>）',
-  image: '画像（<image>）',
+  textPath: '線に沿った文字（<textPath>）',
 }
 
 /** 図形に付いていたら落としたと知らせる属性 */
 const SKIPPED_REFERENCES: [string, string][] = [
   ['filter', 'フィルタ'],
-  ['mask', 'マスク'],
-  ['clip-path', 'クリップパス'],
   ['marker-start', 'マーカー'],
   ['marker-mid', 'マーカー'],
   ['marker-end', 'マーカー'],
@@ -160,6 +193,12 @@ class Converter {
   private viewport: Size = { width: 300, height: 150 }
   /** たどっている use の参照先（循環を止める） */
   private readonly using = new Set<string>()
+  /** <style> の CSS をまとめたもの */
+  private sheet: StyleSheet = { rules: [], skippedSelectors: 0, skippedAtRules: 0 }
+  /** 要素ごとの、属性・CSS・style 属性を重ねた値（declared） */
+  private readonly declaredCache = new Map<SvgElement, Record<string, string>>()
+  /** data URI の <image> から作った画像。id は中身の SHA-256 */
+  private readonly assets: Record<AssetId, Asset> = {}
 
   constructor(root: SvgElement, options: SvgImportOptions) {
     this.root = root
@@ -168,6 +207,7 @@ class Converter {
 
   run(): SvgImport {
     this.collectDefinitions(this.root)
+    this.collectStyles()
     const { size, matrix } = this.rootViewport(this.root)
     this.viewport = viewBoxSize(this.root) ?? size
     const inherited = this.inherit(this.root, ROOT_INHERITED)
@@ -179,13 +219,13 @@ class Converter {
       fills: [],
       // SVG はビューポートの外を描かない
       clipContent: true,
-      opacity: opacityOf(this.root),
+      opacity: this.opacityOf(this.root),
       children,
     }
     this.nodes[frame.id] = frame
     for (const child of children) this.nodes[child] = { ...this.nodes[child], parentId: frame.id }
     return {
-      fragment: { nodes: this.nodes, rootIds: [frame.id], assets: {} },
+      fragment: { nodes: this.nodes, rootIds: [frame.id], assets: this.assets },
       warnings: [...this.warnings].map(([label, count]) => ({ label, count })),
     }
   }
@@ -205,6 +245,44 @@ class Converter {
     const id = element.attributes.id
     if (id !== undefined && !this.definitions.has(id)) this.definitions.set(id, element)
     for (const child of element.children) if (typeof child !== 'string') this.collectDefinitions(child)
+  }
+
+  /** <style> の中身を読む。読めないセレクタや @ の規則は数えて知らせる */
+  private collectStyles(): void {
+    const texts: string[] = []
+    const walk = (element: SvgElement) => {
+      if (element.name === 'style') {
+        const type = element.attributes.type?.trim().toLowerCase()
+        if (type === undefined || type === '' || type === 'text/css') {
+          texts.push(element.children.filter((child): child is string => typeof child === 'string').join(''))
+        }
+        return
+      }
+      for (const child of element.children) if (typeof child !== 'string') walk(child)
+    }
+    walk(this.root)
+    if (texts.length === 0) return
+    this.sheet = parseStyleSheet(texts.join('\n'))
+    for (let i = 0; i < this.sheet.skippedSelectors; i++) this.warn('CSS の複雑なセレクタ（読み飛ばした）')
+    for (let i = 0; i < this.sheet.skippedAtRules; i++) this.warn('CSS の @ で始まる規則（読み飛ばした）')
+  }
+
+  /**
+   * 要素の見た目の値（presentation attribute・CSS・style 属性）を重ねたもの。名前は CSS のプロパティ名。
+   * 優先は 属性 < CSS < style 属性 < CSS の !important
+   */
+  private declared(element: SvgElement): Record<string, string> {
+    const cached = this.declaredCache.get(element)
+    if (cached) return cached
+    const { normal, important } = matchedDeclarations(this.sheet, element)
+    const result = { ...element.attributes, ...normal, ...parseStyle(element.attributes.style), ...important }
+    this.declaredCache.set(element, result)
+    return result
+  }
+
+  private opacityOf(element: SvgElement): number {
+    const value = parseFraction(this.declared(element).opacity)
+    return value === null ? 1 : clamp01(value)
   }
 
   private rootViewport(svg: SvgElement): { size: Size; matrix: Matrix } {
@@ -227,9 +305,9 @@ class Converter {
 
   /** 要素の値を、親から受け継いだ値に重ねる */
   private inherit(element: SvgElement, parent: Inherited): Inherited {
-    const style = parseStyle(element.attributes.style)
+    const declared = this.declared(element)
     const get = (name: string): string | undefined => {
-      const value = style[name] ?? element.attributes[name]
+      const value = declared[name]
       return value === undefined || value.trim() === 'inherit' ? undefined : value.trim()
     }
     const next = { ...parent }
@@ -262,6 +340,12 @@ class Converter {
     if (visibility !== undefined) next.visible = visibility === 'visible'
     const lineCap = get('stroke-linecap')
     if (lineCap !== undefined) next.lineCap = lineCap
+    const fillRule = get('fill-rule')
+    if (fillRule !== undefined) next.fillRule = fillRule
+    const dashArray = get('stroke-dasharray')
+    if (dashArray !== undefined) next.dashArray = dashArray
+    const dashOffset = get('stroke-dashoffset')
+    if (dashOffset !== undefined) next.dashOffset = dashOffset
     return next
   }
 
@@ -286,17 +370,26 @@ class Converter {
       this.warn(skipped)
       return []
     }
-    const style = parseStyle(attributes.style)
-    if ((style.display ?? attributes.display)?.trim() === 'none') return []
+    if (name === 'style') return []
+    const declared = this.declared(element)
+    if (declared.display?.trim() === 'none') return []
     const transform = parseTransform(attributes.transform)
     const matrix = transform ? multiply(parentMatrix, transform) : parentMatrix
     if (!transform) this.warn('読めない transform（無視した）')
     const inherited = this.inherit(element, parentInherited)
     for (const [attribute, label] of SKIPPED_REFERENCES) {
-      const value = style[attribute] ?? attributes[attribute]
+      const value = declared[attribute]
+      // 図形に付いた影の filter は効果として読む（shape）
+      if (attribute === 'filter' && SHAPE_ELEMENTS.has(name) && this.filterEffects(element, matrix) !== null) continue
       if (value !== undefined && value.trim() !== 'none') this.warn(label)
     }
+    const ids = this.convertShape(element, matrix, inherited, depth, uses)
+    return this.clipped(element, ids, matrix, depth)
+  }
 
+  /** 要素の種類ごとの変換（clip-path / mask は呼び出し側がかける） */
+  private convertShape(element: SvgElement, matrix: Matrix, inherited: Inherited, depth: number, uses: number): NodeId[] {
+    const { name, attributes } = element
     switch (name) {
       case 'g':
       case 'a':
@@ -323,7 +416,7 @@ class Converter {
       case 'line': {
         const from = { x: this.length(attributes.x1, 'width') ?? 0, y: this.length(attributes.y1, 'height') ?? 0 }
         const to = { x: this.length(attributes.x2, 'width') ?? 0, y: this.length(attributes.y2, 'height') ?? 0 }
-        return this.path(element, [from, to], false, matrix, inherited, 'Line')
+        return this.path(element, [{ vertices: [from, to], closed: false }], matrix, inherited, 'Line')
       }
       case 'polyline':
       case 'polygon': {
@@ -331,12 +424,14 @@ class Converter {
         const points: Point[] = []
         for (let i = 0; i + 1 < numbers.length; i += 2) points.push({ x: numbers[i], y: numbers[i + 1] })
         if (points.length < 2) return []
-        return this.path(element, points, name === 'polygon', matrix, inherited, 'Path')
+        return this.path(element, [{ vertices: points, closed: name === 'polygon' }], matrix, inherited, 'Path')
       }
       case 'path':
         return this.pathData(element, matrix, inherited)
       case 'text':
         return this.text(element, matrix, inherited)
+      case 'image':
+        return this.image(element, matrix, inherited)
       default:
         this.warn(`対応していない要素（<${name}>）`)
         return []
@@ -346,28 +441,139 @@ class Converter {
   /** g などをフレームにする。中身がなければ作らない。深すぎればフレームを作らずに中身を返す */
   private group(element: SvgElement, children: NodeId[], depth: number): NodeId[] {
     if (children.length === 0) return []
-    const opacity = opacityOf(element)
+    const opacity = this.opacityOf(element)
     if (depth > MAX_FRAME_DEPTH) {
       this.warn('深すぎるグループの入れ子（フレームにせずにまとめた）')
       for (const id of children) this.nodes[id] = { ...this.nodes[id], opacity: this.nodes[id].opacity * opacity }
       return children
     }
     const box = unionBounds(children.map((id) => outerBounds(this.nodes[id])))!
+    return [this.wrap(children, box, { name: element.attributes.id ?? 'Group', clipContent: false, opacity })]
+  }
+
+  /** children を box の位置のフレームにまとめる */
+  private wrap(children: NodeId[], box: Bounds, props: Partial<FrameNode>): NodeId {
     const frame: FrameNode = {
       ...createFrame({ x: box.x, y: box.y, width: Math.max(1, box.width), height: Math.max(1, box.height) }),
       id: this.id(),
-      name: element.attributes.id ?? 'Group',
       fills: [],
-      clipContent: false,
-      opacity,
+      ...props,
       children,
     }
-    // 子の座標は、ここまでは SVG 全体のフレームの座標。これからは g のフレームの左上が原点
+    // 子の座標は、ここまでは外側のフレームの座標。これからはこのフレームの左上が原点
     for (const id of children) {
       const child = this.nodes[id]
       this.nodes[id] = { ...child, parentId: frame.id, x: child.x - box.x, y: child.y - box.y }
     }
-    return [this.add(frame)]
+    return this.add(frame)
+  }
+
+  // ── クリップとマスク ──
+
+  /**
+   * clip-path / mask をかける。中身が矩形・円 1 つで軸に沿っていれば、それで切り取るフレーム（角丸）にまとめる。
+   * mask は、その図形の塗りの明るさ（と不透明度）をフレームの不透明度にする。表せなければ、かけずに知らせる
+   */
+  private clipped(element: SvgElement, ids: NodeId[], matrix: Matrix, depth: number): NodeId[] {
+    if (ids.length === 0) return ids
+    const declared = this.declared(element)
+    let result = ids
+    for (const [property, kind] of [['clip-path', 'clipPath'], ['mask', 'mask']] as const) {
+      const raw = declared[property]?.trim()
+      if (raw === undefined || raw === 'none' || raw === '') continue
+      const label = kind === 'clipPath' ? 'クリップパス' : 'マスク'
+      const url = /^url\(\s*['"]?([^'")]*)['"]?\s*\)$/.exec(raw)
+      if (!url || !url[1].trim().startsWith('#')) {
+        this.warn(url ? '外部への参照（読まなかった）' : `${label}（読めない指定。かけなかった）`)
+        continue
+      }
+      const target = this.definitions.get(url[1].trim().slice(1))
+      if (target?.name !== kind) {
+        this.warn(`たどれない${label}の参照`)
+        continue
+      }
+      const region = this.clipRegion(target, kind, matrix)
+      if (!region) {
+        this.warn(`${label}（矩形・円でないもの。かけなかった）`)
+        continue
+      }
+      if (depth > MAX_FRAME_DEPTH) {
+        this.warn('深すぎるグループの入れ子（フレームにせずにまとめた）')
+        continue
+      }
+      result = [
+        this.wrap(result, region.box, {
+          name: target.attributes.id ?? (kind === 'clipPath' ? 'Clip' : 'Mask'),
+          clipContent: true,
+          cornerRadius: round(region.radius),
+          opacity: region.alpha,
+        }),
+      ]
+    }
+    return result
+  }
+
+  /** clipPath / mask の中身が、軸に沿った矩形・円 1 つなら、その枠（外側のフレームの座標）と角の丸め */
+  private clipRegion(target: SvgElement, kind: 'clipPath' | 'mask', matrix: Matrix): { box: Bounds; radius: number; alpha: number } | null {
+    const units = kind === 'clipPath' ? target.attributes.clipPathUnits : target.attributes.maskContentUnits
+    if (units?.trim() === 'objectBoundingBox') return null
+    const shapes = target.children.filter(
+      (child): child is SvgElement => typeof child !== 'string' && child.name !== 'title' && child.name !== 'desc',
+    )
+    if (shapes.length !== 1) return null
+    const [shape] = shapes
+    if (shape.name !== 'rect' && shape.name !== 'circle' && shape.name !== 'ellipse') return null
+    const own = kind === 'clipPath' ? parseTransform(target.attributes.transform) : IDENTITY
+    const inner = parseTransform(shape.attributes.transform)
+    if (!own || !inner) return null
+    const m = multiply(multiply(matrix, own), inner)
+    const eps = 1e-9 * (Math.abs(m[0]) + Math.abs(m[1]) + Math.abs(m[2]) + Math.abs(m[3]))
+    const straight = Math.abs(m[1]) <= eps && Math.abs(m[2]) <= eps
+    const quarter = Math.abs(m[0]) <= eps && Math.abs(m[3]) <= eps
+    if (!straight && !quarter) return null
+    const a = shape.attributes
+    let userBox: Bounds
+    let rx: number
+    let ry: number
+    if (shape.name === 'rect') {
+      userBox = {
+        x: this.length(a.x, 'width') ?? 0,
+        y: this.length(a.y, 'height') ?? 0,
+        width: this.length(a.width, 'width') ?? 0,
+        height: this.length(a.height, 'height') ?? 0,
+      }
+      const rxRaw = this.length(a.rx, 'width')
+      const ryRaw = this.length(a.ry, 'height')
+      rx = Math.min(Math.max(0, rxRaw ?? ryRaw ?? 0), userBox.width / 2)
+      ry = Math.min(Math.max(0, ryRaw ?? rxRaw ?? 0), userBox.height / 2)
+    } else {
+      const cx = this.length(a.cx, 'width') ?? 0
+      const cy = this.length(a.cy, 'height') ?? 0
+      rx = shape.name === 'circle' ? (this.length(a.r, 'diagonal') ?? 0) : (this.length(a.rx, 'width') ?? this.length(a.ry, 'height') ?? 0)
+      ry = shape.name === 'circle' ? rx : (this.length(a.ry, 'height') ?? rx)
+      userBox = { x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2 }
+    }
+    if (!(userBox.width > 0 && userBox.height > 0)) return null
+    const box = transformRect(m, userBox)
+    // 角の丸めは、縦と横が同じ長さになるときだけ表せる（円は正方形の枠のときだけ）
+    const sx = Math.hypot(m[0], m[1])
+    const sy = Math.hypot(m[2], m[3])
+    const [pageRx, pageRy] = straight ? [rx * sx, ry * sy] : [ry * sy, rx * sx]
+    if (Math.abs(pageRx - pageRy) > 1e-6 * Math.max(1, pageRx)) return null
+    if (shape.name !== 'rect' && Math.abs(box.width - box.height) > 1e-6 * Math.max(1, box.width)) return null
+    let alpha = 1
+    if (kind === 'mask') {
+      // マスクの明るさ。中身の既定の塗りは黒（何も見えない）
+      const style = this.declared(shape)
+      const fill = (style.fill ?? 'black').trim()
+      const color = fill === 'none' ? null : parseColor(fill === 'currentColor' ? (style.color ?? 'black') : fill)
+      if (!color) return null
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.color.slice(i, i + 2), 16) / 255)
+      const luminance = 0.2125 * r + 0.7154 * g + 0.0721 * b
+      alpha = clamp01(luminance * color.alpha * (parseFraction(style['fill-opacity']) ?? 1) * this.opacityOf(shape))
+      if (alpha < 1e-3) return null
+    }
+    return { box, radius: Math.min(pageRx, box.width / 2, box.height / 2), alpha: round4(alpha) }
   }
 
   private use(element: SvgElement, matrix: Matrix, inherited: Inherited, depth: number, uses: number): NodeId[] {
@@ -429,7 +635,7 @@ class Converter {
       const node = this.placed(createRect({ x: 0, y: 0, width: 0, height: 0 }), userBox, matrix, pose)
       return this.shape({ ...node, cornerRadius: rx * pose.scaleX }, element, matrix, inherited, userBox)
     }
-    return this.path(element, roundedRect(userBox, rx, ry), true, matrix, inherited, 'Rectangle', userBox)
+    return this.path(element, [{ vertices: roundedRect(userBox, rx, ry), closed: true }], matrix, inherited, 'Rectangle', userBox)
   }
 
   private ellipse(element: SvgElement, matrix: Matrix, inherited: Inherited): NodeId[] {
@@ -453,7 +659,7 @@ class Converter {
       const node = this.placed(createEllipse({ x: 0, y: 0, width: 0, height: 0 }), userBox, matrix, pose)
       return this.shape(node, element, matrix, inherited, userBox)
     }
-    return this.path(element, ellipseVertices(cx, cy, rx, ry), true, matrix, inherited, 'Ellipse', userBox)
+    return this.path(element, [{ vertices: ellipseVertices(cx, cy, rx, ry), closed: true }], matrix, inherited, 'Ellipse', userBox)
   }
 
   /** SVG の座標での枠（userBox）を、回転つきのノードの位置と大きさにする */
@@ -469,22 +675,27 @@ class Converter {
     return { ...node, x: center.x - width / 2, y: center.y - height / 2, width, height, rotation: rotationOf(pose.rotation) }
   }
 
+  /** 輪郭（SVG の座標）をパスにする。輪郭が複数なら 2 つ目以降は contours になる */
   private path(
     element: SvgElement,
-    userVertices: Vertex[],
-    closed: boolean,
+    userContours: Contour[],
     matrix: Matrix,
     inherited: Inherited,
     fallbackName: string,
-    userBox: Bounds = pathBounds(userVertices, closed),
+    box?: Bounds,
   ): NodeId[] {
-    if (userVertices.length < 2) return []
-    if (userVertices.length > MAX_PATH_POINTS) {
+    const contours = userContours.filter((contour) => contour.vertices.length >= 2)
+    if (contours.length === 0) return []
+    // objectBoundingBox のグラデーションは、全部の輪郭を囲む枠にかかる
+    const userBox = box ?? unionBounds(contours.map((contour) => pathBounds(contour.vertices, contour.closed)))!
+    if (contours.reduce((sum, contour) => sum + contour.vertices.length, 0) > MAX_PATH_POINTS) {
       this.warn('頂点が多すぎるパス（読み飛ばした）')
       return []
     }
-    const vertices = mapVertices(userVertices, (point) => applyMatrix(matrix, point))
-    const node: PathNode = { ...createPath(pathFromPoints(vertices, closed), closed), name: fallbackName }
+    const shape = pathFromContours(
+      contours.map((contour) => ({ vertices: mapVertices(contour.vertices, (point) => applyMatrix(matrix, point)), closed: contour.closed })),
+    )
+    const node: PathNode = { ...createPath(shape, shape.closed), contours: shape.contours, name: fallbackName }
     return this.shape(node, element, matrix, inherited, userBox)
   }
 
@@ -499,28 +710,62 @@ class Converter {
       this.warn('読めない path の d（読み飛ばした）')
       return []
     }
-    subpaths = subpaths.filter((subpath) => subpath.vertices.length >= 2)
-    if (subpaths.length === 0) return []
-    // objectBoundingBox のグラデーションは、輪郭をすべて合わせた枠に対してかかる
-    const userBox = unionBounds(subpaths.map((subpath) => pathBounds(subpath.vertices, subpath.closed)))!
-    if (subpaths.length === 1) {
-      return this.path(element, subpaths[0].vertices, subpaths[0].closed, matrix, inherited, 'Path', userBox)
+    // 輪郭が複数あれば 1 つのパスの輪郭にする（穴は fill-rule で開く）。objectBoundingBox のグラデーションは全部の輪郭を囲む枠にかかる
+    return this.path(element, subpaths, matrix, inherited, 'Path')
+  }
+
+  /**
+   * data URI（PNG・JPEG・WebP・GIF）の <image> を画像のノードにする。外部の URL や、SVG の画像は読まない。
+   * preserveAspectRatio は収め方（meet → contain、slice → cover、none → stretch）と寄せる位置にする
+   */
+  private image(element: SvgElement, matrix: Matrix, inherited: Inherited): NodeId[] {
+    const a = element.attributes
+    const href = (a.href ?? a['xlink:href'])?.trim()
+    if (href === undefined || href === '') return []
+    if (!/^data:/i.test(href)) {
+      this.warn('外部の画像（<image>。読まなかった）')
+      return []
     }
-    const fill = inherited.fill.trim()
-    if (fill !== 'none' && subpaths.filter((subpath) => subpath.closed).length > 1) {
-      this.warn('輪郭が複数あるパス（輪郭ごとのパスに分けた。穴は塗りつぶされる）')
+    const bytes = decodeDataUri(href)
+    const info = bytes ? readImageInfo(bytes) : null
+    if (!bytes || !info || !IMAGE_MIME_TYPES.includes(info.mime)) {
+      this.warn('PNG・JPEG・WebP・GIF でない画像（<image>。読み飛ばした）')
+      return []
     }
-    const plain = { ...element, attributes: { ...element.attributes, id: '' } }
-    const parts = subpaths.flatMap((subpath, i) => {
-      const ids = this.path(plain, subpath.vertices, subpath.closed, matrix, inherited, `${element.attributes.id ?? 'Path'} ${i + 1}`, userBox)
-      return ids
-    })
-    return this.group({ name: 'g', attributes: { id: element.attributes.id ?? 'Path' }, children: [] }, parts, 0)
+    if (bytes.byteLength > KDR_MAX_ASSET_BYTES) {
+      this.warn('大きすぎる画像（<image>。読み飛ばした）')
+      return []
+    }
+    // 大きさの指定がなければ、画像の元の大きさ
+    const width = this.length(a.width, 'width') ?? info.width
+    const height = this.length(a.height, 'height') ?? info.height
+    if (!(width > 0 && height > 0)) return []
+    const userBox = { x: this.length(a.x, 'width') ?? 0, y: this.length(a.y, 'height') ?? 0, width, height }
+    let pose = decompose(matrix)
+    if (!pose) {
+      this.warn('歪めたり裏返したりした画像（回転と拡大だけにした）')
+      pose = { rotation: (Math.atan2(matrix[1], matrix[0]) * 180) / Math.PI, scaleX: Math.hypot(matrix[0], matrix[1]), scaleY: Math.hypot(matrix[2], matrix[3]) }
+    }
+    const assetId = sha256Hex(bytes)
+    this.assets[assetId] ??= { mime: info.mime, bytes }
+    const [align = 'xMidYMid', mode = 'meet'] = (a.preserveAspectRatio ?? 'xMidYMid meet').trim().split(/\s+/)
+    const fit: ImageNode['fit'] = align === 'none' ? 'stretch' : mode === 'slice' ? 'cover' : 'contain'
+    const node: ImageNode = {
+      ...this.placed(createImage({ x: 0, y: 0, width: 0, height: 0 }, assetId), userBox, matrix, pose),
+      name: a.id ?? 'Image',
+      fit,
+      positionX: align.startsWith('xMin') ? 0 : align.startsWith('xMax') ? 1 : 0.5,
+      positionY: align.endsWith('YMin') ? 0 : align.endsWith('YMax') ? 1 : 0.5,
+      visible: inherited.visible,
+      opacity: this.opacityOf(element),
+    }
+    return [this.add(node)]
   }
 
   private text(element: SvgElement, matrix: Matrix, inherited: Inherited): NodeId[] {
     const lines = textLines(element)
     if (lines.length === 0) return []
+    if (hasDescendant(element, 'textPath')) this.warn('線に沿った文字（<textPath>。まっすぐ並べた）')
     const a = element.attributes
     const x = (parseNumbers(a.x)?.[0] ?? 0) + (parseNumbers(a.dx)?.[0] ?? 0)
     const y = (parseNumbers(a.y)?.[0] ?? 0) + (parseNumbers(a.dy)?.[0] ?? 0)
@@ -551,7 +796,7 @@ class Converter {
       rotation: rotationOf(rotation),
       name: a.id ?? lines[0].slice(0, 40),
       visible: inherited.visible,
-      opacity: opacityOf(element),
+      opacity: this.opacityOf(element),
     }
     const userBox = { x, y: y - inherited.fontSize, width: size.width / (scale || 1), height: size.height / (scale || 1) }
     const fill = this.paint(inherited.fill, inherited.fillOpacity, inherited, matrix, userBox, node)
@@ -587,17 +832,68 @@ class Converter {
     // 線の端の形（stroke-linecap）は、開いたパスの両端に写す。閉じた形には端がない
     const cap: Cap | null = inherited.lineCap === 'round' || inherited.lineCap === 'square' ? inherited.lineCap : null
     const caps = node.type === 'path' && !node.closed && cap && stroke.paints.length > 0 ? { startCap: cap, endCap: cap } : {}
+    const fillRule = node.type === 'path' && inherited.fillRule === 'evenodd' ? { fillRule: 'evenodd' as const } : {}
+    const strokeDashes = stroke.paints.length > 0 ? this.dashes(inherited, lengthScale(matrix)) : []
     const named = {
       ...node,
       ...caps,
+      ...fillRule,
+      strokeDashes,
       name: id !== undefined && id !== '' ? id : node.name,
       fills: fill.paints,
       strokes: stroke.paints,
+      effects: this.filterEffects(element, matrix) ?? [],
       strokeWidth: stroke.paints.length > 0 ? round(strokeWidth) : node.strokeWidth,
       visible: inherited.visible,
-      opacity: opacityOf(element) * alpha,
+      opacity: this.opacityOf(element) * alpha,
     }
     return [this.add(named)]
+  }
+
+  /**
+   * 要素の filter が影だけの形（filters.ts）なら、kadrokreo の効果にする。読めなければ null（呼び出し側が知らせる）。
+   * ずれは要素の座標系からページの向きに直し（kadrokreo の影のずれは回転に従わない）、ぼかしは拡大の分だけ大きくする
+   */
+  private filterEffects(element: SvgElement, matrix: Matrix): Effect[] | null {
+    const raw = this.declared(element).filter?.trim()
+    if (raw === undefined || raw === 'none') return null
+    const url = /^url\(\s*['"]?#([^'")]*)['"]?\s*\)$/.exec(raw)
+    const target = url ? this.definitions.get(url[1].trim()) : undefined
+    if (target?.name !== 'filter') return null
+    const shadows = readShadowFilter(target, (part) => this.declared(part))
+    if (!shadows) return null
+    const scale = lengthScale(matrix)
+    return shadows.slice(0, MAX_EFFECTS).map((shadow) => ({
+      type: shadow.type,
+      x: round(matrix[0] * shadow.dx + matrix[2] * shadow.dy),
+      y: round(matrix[1] * shadow.dx + matrix[3] * shadow.dy),
+      blur: round(shadow.stdDeviation * 2 * scale),
+      color: shadow.color,
+      opacity: round4(shadow.opacity),
+      visible: true,
+    }))
+  }
+
+  /**
+   * stroke-dasharray を破線の並び（ページの px）にする。数が奇数なら 2 回繰り返す（SVG の決まり）。
+   * 負の数や読めない数があれば、SVG と同じく実線。すべて 0 も実線
+   */
+  private dashes(inherited: Inherited, scale: number): number[] {
+    const raw = inherited.dashArray.trim()
+    if (raw === 'none' || raw === '') return []
+    const diagonal = Math.hypot(this.viewport.width, this.viewport.height) / Math.SQRT2
+    const values = raw.split(/[\s,]+/).filter((part) => part !== '').map((part) => parseLength(part, diagonal))
+    if (values.length === 0 || values.some((value) => value === null || !Number.isFinite(value) || value < 0)) return []
+    let list = (values as number[]).map((value) => round(value * scale))
+    if (list.every((value) => value === 0)) return []
+    if (list.length % 2 === 1) list = [...list, ...list]
+    if (list.length > MAX_DASHES) {
+      this.warn(`${MAX_DASHES} を超える破線の並び（実線にした）`)
+      return []
+    }
+    const offset = parseLength(inherited.dashOffset, diagonal)
+    if (offset !== null && offset !== 0) this.warn('破線のずれ（stroke-dashoffset。0 にした）')
+    return list
   }
 
   private add(node: SceneNode): NodeId {
@@ -652,7 +948,7 @@ class Converter {
       return none
     }
     if (color.alpha === 0) return none
-    return { paints: [{ type: 'solid', color: color.color }], alpha: color.alpha * opacity }
+    return { paints: [{ type: 'solid', color: color.color, opacity: 1, visible: true }], alpha: color.alpha * opacity }
   }
 
   private color(value: string, inherited: Inherited): Rgba | null {
@@ -689,12 +985,12 @@ class Converter {
     let previous = 0
     for (const child of owner.children) {
       if (typeof child === 'string' || child.name !== 'stop') continue
-      const style = parseStyle(child.attributes.style)
+      const style = this.declared(child)
       const offset = Math.max(previous, clamp01(parseFraction(child.attributes.offset) ?? 0))
       previous = offset
-      const rawColor = (style['stop-color'] ?? child.attributes['stop-color'] ?? 'black').trim()
+      const rawColor = (style['stop-color'] ?? 'black').trim()
       const color = (rawColor === 'currentColor' ? parseColor(inherited.color) : parseColor(rawColor)) ?? { color: '#000000', alpha: 1 }
-      const opacity = parseFraction(style['stop-opacity'] ?? child.attributes['stop-opacity']) ?? 1
+      const opacity = parseFraction(style['stop-opacity']) ?? 1
       if (color.alpha * opacity < 1) translucent = true
       stops.push({ offset, color: color.color })
     }
@@ -708,8 +1004,7 @@ class Converter {
   }
 
   /**
-   * linearGradient を kadrokreo の直線状のグラデーションにする。kadrokreo のグラデーションは向き（angle）だけを持ち、
-   * 枠の角から角まで色が変わるので、SVG の始点と終点がその線のどこに当たるかを求め、色の位置をそこへ写す
+   * linearGradient を kadrokreo の直線状のグラデーションにする。始点と終点をノードの枠に対する割合に直す
    */
   private linearGradient(
     element: SvgElement,
@@ -720,7 +1015,7 @@ class Converter {
   ): Paint | null {
     const stops = this.stops(element, inherited)
     if (stops.length === 0) return null
-    if (stops.length === 1) return { type: 'solid', color: stops[0].color }
+    if (stops.length === 1) return { type: 'solid', color: stops[0].color, opacity: 1, visible: true }
     const chain = this.gradientChain(element)
     const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
     const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
@@ -737,16 +1032,35 @@ class Converter {
     if (userSpace) toPage = multiply(matrix, gradientTransform)
     else {
       // 枠に対する割合の座標。幅や高さが 0 の枠には SVG もグラデーションを描かない
-      if (userBox.width === 0 || userBox.height === 0) return { type: 'solid', color: stops[stops.length - 1].color }
+      if (userBox.width === 0 || userBox.height === 0) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
       toPage = multiply(multiply(matrix, [userBox.width, 0, 0, userBox.height, userBox.x, userBox.y]), gradientTransform)
     }
     const start = toNodeSpace(node, applyMatrix(toPage, p1))
     const end = toNodeSpace(node, applyMatrix(toPage, p2))
-    const dx = end.x - start.x
-    const dy = end.y - start.y
-    if (Math.hypot(dx, dy) < 1e-9) return { type: 'solid', color: stops[stops.length - 1].color }
-    const angle = round((Math.atan2(dy, dx) * 180) / Math.PI)
-    const [from, to] = gradientLine({ type: 'linear', angle, stops }, node)
+    if (Math.hypot(end.x - start.x, end.y - start.y) < 1e-9) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
+    // 始点・終点は枠に対する割合で持つ。幅や高さが 0 の向きは中央に置く
+    const ratio = (value: number, length: number) => (length > 0 ? round4(value / length) : 0.5)
+    const line = { x1: ratio(start.x, node.width), y1: ratio(start.y, node.height), x2: ratio(end.x, node.width), y2: ratio(end.y, node.height) }
+    if (!Object.values(line).every(Number.isFinite)) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
+    if (node.width === 0 || node.height === 0) {
+      // つぶれた枠では、SVG の向きの線を枠の割合で表せないので、向きの線に色の位置を写す
+      return this.projectedLinear(start, end, stops, node)
+    }
+    // 斜めに歪めたグラデーション（色が同じ線が始点・終点の線に垂直でない）は、垂直にした形になる
+    // SVG で色が同じ線は、グラデーションの座標系で始点・終点の線に垂直。ページに写しても垂直のままか確かめる
+    const linear = (v: Point) => ({ x: toPage[0] * v.x + toPage[2] * v.y, y: toPage[1] * v.x + toPage[3] * v.y })
+    const along = linear({ x: p2.x - p1.x, y: p2.y - p1.y })
+    const across = linear({ x: -(p2.y - p1.y), y: p2.x - p1.x })
+    if (Math.abs(along.x * across.x + along.y * across.y) > 1e-6 * Math.hypot(along.x, along.y) * Math.hypot(across.x, across.y)) {
+      this.warn('歪めた直線状のグラデーション（色の線を垂直にした）')
+    }
+    return { type: 'linear', ...line, stops, opacity: 1, visible: true }
+  }
+
+  /** 向き（度）だけの線に、SVG の始点・終点の位置を写した直線状のグラデーション（つぶれた枠のとき） */
+  private projectedLinear(start: Point, end: Point, stops: ColorStop[], node: SceneNode): Paint {
+    const angle = round((Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI)
+    const [from, to] = angleLine(angle, node)
     const lx = to.x - from.x
     const ly = to.y - from.y
     const length = lx * lx + ly * ly
@@ -759,7 +1073,7 @@ class Converter {
       previous = offset
       return { offset, color: stop.color }
     })
-    return { type: 'linear', angle, stops: mapped }
+    return { type: 'linear', ...linearFromAngle(angle, node), stops: mapped, opacity: 1, visible: true }
   }
 
   /**
@@ -775,8 +1089,8 @@ class Converter {
   ): Paint | null {
     const stops = this.stops(element, inherited)
     if (stops.length === 0) return null
-    const last: Paint = { type: 'solid', color: stops[stops.length - 1].color }
-    if (stops.length === 1) return { type: 'solid', color: stops[0].color }
+    const last: Paint = { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
+    if (stops.length === 1) return { type: 'solid', color: stops[0].color, opacity: 1, visible: true }
     const chain = this.gradientChain(element)
     const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
     const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
@@ -811,7 +1125,7 @@ class Converter {
     const values = [center.x / node.width, center.y / node.height, rx / node.width, ry / node.height].map(round4)
     if (!values.every(Number.isFinite)) return last
     const [cx, cy, rxRatio, ryRatio] = values
-    return { type: 'radial', cx, cy, rx: rxRatio, ry: ryRatio, stops }
+    return { type: 'radial', cx, cy, rx: rxRatio, ry: ryRatio, stops, opacity: 1, visible: true }
   }
 
   // ── 長さ ──
@@ -825,6 +1139,33 @@ class Converter {
 }
 
 // ── 部品 ──
+
+/** data URI の中身のバイト列。base64 と % の符号化の両方を読む。読めなければ null */
+function decodeDataUri(uri: string): Uint8Array<ArrayBuffer> | null {
+  const comma = uri.indexOf(',')
+  if (comma < 0) return null
+  const meta = uri.slice(5, comma)
+  const data = uri.slice(comma + 1)
+  try {
+    if (/;base64$/i.test(meta)) {
+      const binary = atob(data.replace(/\s+/g, ''))
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      return bytes
+    }
+    // %xx はそのバイト、それ以外の文字はその文字コードの下位 8 ビット
+    const out: number[] = []
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] === '%' && /^[0-9a-fA-F]{2}$/.test(data.slice(i + 1, i + 3))) {
+        out.push(parseInt(data.slice(i + 1, i + 3), 16))
+        i += 2
+      } else out.push(data.charCodeAt(i) & 0xff)
+    }
+    return new Uint8Array(out)
+  } catch {
+    return null
+  }
+}
 
 function positive(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
@@ -841,12 +1182,6 @@ function round4(value: number): number {
 function rotationOf(degrees: number): number {
   const value = round(degrees)
   return value === 0 || Object.is(value, -0) ? 0 : value
-}
-
-function opacityOf(element: SvgElement): number {
-  const raw = parseStyle(element.attributes.style).opacity ?? element.attributes.opacity
-  const value = parseFraction(raw)
-  return value === null ? 1 : clamp01(value)
 }
 
 function viewBoxOf(element: SvgElement): [number, number, number, number] | null {
@@ -936,6 +1271,10 @@ function fontWeightOf(raw: string): number {
   return Math.min(900, Math.max(100, Math.round(value / 100) * 100))
 }
 
+function hasDescendant(element: SvgElement, name: string): boolean {
+  return element.children.some((child) => typeof child !== 'string' && (child.name === name || hasDescendant(child, name)))
+}
+
 /**
  * text の中身を行に分ける。x か dy を持つ tspan（2 つ目以降）は新しい行とみなす。
  * 空白は XML の既定（xml:space="default"）どおり 1 つにまとめる
@@ -948,7 +1287,7 @@ function textLines(element: SvgElement): string[] {
         lines[lines.length - 1] += node
         continue
       }
-      if (node.name !== 'tspan' && node.name !== 'a') continue
+      if (node.name !== 'tspan' && node.name !== 'a' && node.name !== 'textPath') continue
       const breaks = node.attributes.x !== undefined || node.attributes.dy !== undefined
       if (breaks && lines[lines.length - 1].trim() !== '') lines.push('')
       walk(node.children)

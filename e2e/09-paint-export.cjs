@@ -12,6 +12,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true })
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (e) => errors.push(String(e)))
@@ -63,7 +64,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.locator('[aria-label="塗りの2 番目の色"]').fill('#0000ff')
   await set('角度', 0)
   let rect = await byName('Rectangle 1')
-  check('グラデーションが保存される', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', angle: 0, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }]), JSON.stringify(rect.fills))
+  check('グラデーションが保存される', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true }]), JSON.stringify(rect.fills))
   await deselect()
   const left = await pixel(103, 150), right = await pixel(297, 150), middle = await pixel(200, 150)
   check('左から右へ色が変わる', reddish(left) && bluish(right) && middle[0] > 80 && middle[2] > 80, `${left} / ${middle} / ${right}`)
@@ -154,7 +155,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.locator('[aria-label="塗りの2 番目の色を消す"]').click()
   await page.locator('[aria-label="塗りの1 番目の色"]').fill('#ff0000')
   rect = await byName('Rectangle 1')
-  check('直線に戻して色を消せる', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', angle: 90, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }] }]), JSON.stringify(rect.fills))
+  check('直線に戻して色を消せる', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true }]), JSON.stringify(rect.fills))
   await page.screenshot({ path: path.join(OUT, '29-gradient.png') })
 
   // ── PNG 書き出し ──
@@ -174,6 +175,36 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
     return { top: at(200, 4), bottom: at(200, 195), corner: at(0, 0) }
   }, fs.readFileSync(selectionPath).toString('base64'))
   check('書き出した PNG にグラデーションが写り、選択枠は写らない', reddish(exported.top) && bluish(exported.bottom) && reddish(exported.corner), JSON.stringify(exported))
+
+  // SVG 書き出し: 同じ選択を SVG に。グラデーションは linearGradient で、ブラウザで開いても同じ色になる
+  const [selectionSvg] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("SVG に")').click()])
+  const selectionSvgPath = path.join(OUT, 'export-selection.svg')
+  await selectionSvg.saveAs(selectionSvgPath)
+  const svgText = fs.readFileSync(selectionSvgPath, 'utf8')
+  const svgPixels = await page.evaluate(async (text) => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }))
+    const img = new Image(); img.src = url; await img.decode()
+    const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
+    const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0)
+    URL.revokeObjectURL(url)
+    const at = (x, y) => [...ctx.getImageData(x, y, 1, 1).data]
+    return { width: canvas.width, height: canvas.height, top: at(100, 2), bottom: at(100, 97) }
+  }, svgText)
+  check('選択したものを SVG に書き出せる（ブラウザで開くと PNG と同じ向きのグラデーション）',
+    selectionSvg.suggestedFilename() === 'Rectangle 1.svg' && svgText.includes('<linearGradient') &&
+      svgPixels.width === 200 && svgPixels.height === 100 && reddish(svgPixels.top) && bluish(svgPixels.bottom),
+    `${selectionSvg.suggestedFilename()} ${JSON.stringify(svgPixels)}`)
+  // 「SVG をコピー」と右クリックメニューの「SVG としてコピー」は、書き出すファイルと同じ文字をクリップボードへ入れる
+  const clipboard = (target) => target.evaluate(() => navigator.clipboard.readText())
+  await page.evaluate(() => navigator.clipboard.writeText(''))
+  await page.locator('button:text-is("SVG をコピー")').click()
+  check('editor の「SVG をコピー」で書き出しと同じ SVG がクリップボードに入る',
+    (await clipboard(page)) === svgText && (await page.locator('button:text-is("コピーしました")').count()) === 1)
+  await page.evaluate(() => navigator.clipboard.writeText(''))
+  await page.mouse.click(...at(200, 150), { button: 'right' })
+  await page.locator('.context-menu-item:has-text("SVG としてコピー")').click()
+  await page.waitForTimeout(100)
+  check('右クリックメニューの「SVG としてコピー」でも同じ SVG が入る', (await clipboard(page)) === svgText)
 
   // 何も選んでいなければページ全体
   await page.keyboard.press('o'); await drag([400, 150], [460, 250])
@@ -253,6 +284,15 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const viewerSize = pngSize(viewerPath)
   // ページ全体: 長方形の左端 100 から画像の右端 600、上端 100 から下端 500
   check('viewer でページを PNG に書き出せる', viewerPng.suggestedFilename() === 'Untitled - Page 1@2x.png' && viewerSize.signature && viewerSize.width === 1000 && viewerSize.height === 800, `${viewerPng.suggestedFilename()} ${JSON.stringify(viewerSize)}`)
+  const [viewerSvg] = await Promise.all([viewer.waitForEvent('download'), viewer.locator('button:text-is("SVG に")').click()])
+  const viewerSvgPath = path.join(OUT, 'export-viewer.svg')
+  await viewerSvg.saveAs(viewerSvgPath)
+  const viewerSvgText = fs.readFileSync(viewerSvgPath, 'utf8')
+  check('viewer でページを SVG に書き出せる（画像は埋め込み）',
+    viewerSvg.suggestedFilename() === 'Untitled - Page 1.svg' && viewerSvgText.includes('viewBox="100 100 500 400"') && viewerSvgText.includes('href="data:image/png;base64,'),
+    `${viewerSvg.suggestedFilename()} ${viewerSvgText.slice(0, 200)}`)
+  await viewer.locator('button:text-is("SVG をコピー")').click()
+  check('viewer の「SVG をコピー」でページの SVG がクリップボードに入る', (await clipboard(viewer)) === viewerSvgText)
   check('viewer に編集 UI がない', (await viewer.locator('.toolbar, .layers-panel, .properties-panel, .page-row').count()) === 0)
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))

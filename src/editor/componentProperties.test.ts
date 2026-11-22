@@ -4,10 +4,12 @@ import type { DesignDocument, FrameNode } from '../document/types.ts'
 import {
   addComponentProperty,
   bindComponentProperty,
+  moveComponentProperty,
   removeComponentProperty,
   renameComponentProperty,
   setComponentDescription,
   setInstanceProperty,
+  setPreferredComponents,
   unbindComponentProperty,
 } from './componentProperties.ts'
 import { createInstance, makeComponent, pushOverrides, syncComponents } from './components.ts'
@@ -61,9 +63,6 @@ describe('説明文とプロパティの定義', () => {
     expect(canBindProperty(page, button.id, 'text', mark.id)).toBe(false)
     expect(canBindProperty(page, button.id, 'instance', iconId)).toBe(true)
     expect(canBindProperty(page, button.id, 'boolean', button.id)).toBe(false)
-    // 入れ子のインスタンスの中身（写し）には結べない
-    const iconCopy = (page.nodes[iconId] as FrameNode).children[0]
-    expect(iconCopy === undefined || !canBindProperty(page, button.id, 'boolean', iconCopy)).toBe(true)
 
     const text = addComponentProperty(page, button.id, 'text', label.id)
     expect(text.name).toBe('ラベル')
@@ -79,7 +78,7 @@ describe('説明文とプロパティの定義', () => {
     let page = addComponentProperty(doc.pages[0], button.id, 'boolean', label.id, '表示').scene
     page = bindComponentProperty(page, button.id, '表示', mark.id)
     const properties = () => mainOf({ ...doc, pages: [page] }, button.id).component.properties
-    expect(properties()).toEqual([{ name: '表示', type: 'boolean', targets: [label.id, mark.id] }])
+    expect(properties()).toEqual([{ name: '表示', type: 'boolean', targets: [label.id, mark.id], preferred: [] }])
     expect(bindComponentProperty(page, button.id, '表示', mark.id)).toBe(page)
     page = unbindComponentProperty(page, button.id, '表示', label.id)
     expect(properties()[0].targets).toEqual([mark.id])
@@ -88,6 +87,83 @@ describe('説明文とプロパティの定義', () => {
     expect(renameComponentProperty(page, button.id, '印を出す', ' ')).toBe(page)
     page = removeComponentProperty(page, button.id, '印を出す')
     expect(properties()).toEqual([])
+  })
+})
+
+describe('並べ替えと差し替えの候補', () => {
+  it('プロパティを並べ替える。範囲の外は端に、同じ位置なら変えない', () => {
+    const { doc, button, label, mark, iconId } = fixture()
+    let page = addComponentProperty(doc.pages[0], button.id, 'text', label.id, 'A').scene
+    page = addComponentProperty(page, button.id, 'boolean', mark.id, 'B').scene
+    page = addComponentProperty(page, button.id, 'instance', iconId, 'C').scene
+    const names = () => mainOf({ ...doc, pages: [page] }, button.id).component.properties.map((p) => p.name)
+    page = moveComponentProperty(page, button.id, 'C', 0)
+    expect(names()).toEqual(['C', 'A', 'B'])
+    page = moveComponentProperty(page, button.id, 'C', 9)
+    expect(names()).toEqual(['A', 'B', 'C'])
+    expect(moveComponentProperty(page, button.id, 'A', 0)).toBe(page)
+    expect(moveComponentProperty(page, button.id, 'ない', 1)).toBe(page)
+  })
+
+  it('差し替えのプロパティにだけ候補を持てる。重なりはまとめる', () => {
+    const { doc, button, label, iconId, circleComponent, squareComponent } = fixture()
+    let page = addComponentProperty(doc.pages[0], button.id, 'instance', iconId, 'アイコン').scene
+    page = addComponentProperty(page, button.id, 'text', label.id, '文言').scene
+    page = setPreferredComponents(page, button.id, 'アイコン', [squareComponent, circleComponent, squareComponent])
+    const properties = () => mainOf({ ...doc, pages: [page] }, button.id).component.properties
+    expect(properties()[0].preferred).toEqual([squareComponent, circleComponent])
+    expect(setPreferredComponents(page, button.id, 'アイコン', [squareComponent, circleComponent])).toBe(page)
+    expect(setPreferredComponents(page, button.id, '文言', [squareComponent])).toBe(page)
+  })
+})
+
+describe('入れ子のインスタンスの中のノード', () => {
+  /** ボタンの元を入れたカードの元と、カードのインスタンス */
+  function cardFixture() {
+    const base = fixture()
+    const card = { ...createFrame({ x: 0, y: 200, width: 200, height: 100 }), name: 'カード' }
+    let doc = updatePage(base.doc, base.pageId, (page) => makeComponent(insertNode(page, card), card.id))
+    const buttonComponent = mainOf(doc, base.button.id).component.id
+    const nested = createInstance(doc, base.pageId, buttonComponent, { center: { x: 100, y: 250 }, parentId: card.id })
+    doc = syncComponents(nested.document)
+    const cardInstance = createInstance(doc, base.pageId, mainOf(doc, card.id).component.id)
+    doc = syncComponents(cardInstance.document)
+    return { ...base, doc, card, nestedId: nested.id!, cardInstanceId: cardInstance.id! }
+  }
+
+  it('入れ子のインスタンスの中身に文言・表示を結び、インスタンスで値を変えられる', () => {
+    const { doc, pageId, card, label, mark, nestedId, cardInstanceId } = cardFixture()
+    const labelCopy = derivedId(nestedId, label.id)
+    const markCopy = derivedId(nestedId, mark.id)
+    const page = doc.pages[0]
+    expect(canBindProperty(page, card.id, 'text', labelCopy)).toBe(true)
+    expect(canBindProperty(page, card.id, 'boolean', markCopy)).toBe(true)
+    // 写しの中には、入れ子の差し替えのプロパティは結べない。ボタンの元のプロパティにもならない
+    expect(canBindProperty(page, card.id, 'instance', derivedId(nestedId, (page.nodes[nestedId] as FrameNode).children.at(-1)!))).toBe(false)
+    expect(canBindProperty(page, label.id, 'text', labelCopy)).toBe(false)
+
+    let next = updatePage(doc, pageId, (scene) => {
+      let bound = addComponentProperty(scene, card.id, 'text', labelCopy, 'ボタンの文言').scene
+      bound = addComponentProperty(bound, card.id, 'boolean', markCopy, '印').scene
+      return bound
+    })
+    next = syncComponents(next)
+    const states = () => instanceProperties(next, next.pages[0], instanceOf(next, cardInstanceId))
+    expect(states().map(({ value }) => value)).toEqual(['OK', true])
+
+    next = syncComponents(setInstanceProperty(next, pageId, cardInstanceId, 'ボタンの文言', '送信'))
+    next = syncComponents(setInstanceProperty(next, pageId, cardInstanceId, '印', false))
+    expect(instanceOf(next, cardInstanceId).component.overrides).toEqual({
+      [labelCopy]: { text: '送信' },
+      [markCopy]: { visible: false },
+    })
+    expect(next.pages[0].nodes[derivedId(cardInstanceId, labelCopy)]).toMatchObject({ text: '送信' })
+    expect(next.pages[0].nodes[derivedId(cardInstanceId, markCopy)]).toMatchObject({ visible: false })
+    expect(states().map(({ value, overridden }) => [value, overridden])).toEqual([['送信', true], [false, true]])
+    // ボタンの元の文言を変えると、上書きしていないカードの値（既定値）もついてくる
+    next = syncComponents(setInstanceProperty(next, pageId, cardInstanceId, 'ボタンの文言', 'OK'))
+    next = syncComponents(updatePage(next, pageId, (scene) => ({ ...scene, nodes: { ...scene.nodes, [label.id]: { ...scene.nodes[label.id], text: '決定' } as typeof scene.nodes[string] } })))
+    expect(states()[0]).toMatchObject({ value: '決定', overridden: false })
   })
 })
 

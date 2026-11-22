@@ -112,14 +112,16 @@ function checkPlan(commands: readonly Command[], steps: readonly Step[], global:
     throw new UsageError('入力の kdr がありません。-f で指定するか、標準入力へ渡してください')
   }
   const edits = source || commands.some((command) => command.kind === 'edit')
-  // png --to - は標準出力へバイト列を出すので、文字の出力とも kdr とも、別の png とも一緒にできない
-  const pngToStdout = steps.filter((step, i) => commands[i].kind === 'export' && step.options.get('to') === '-').length
+  // png / svg-out の --to - は標準出力へファイルの中身を出すので、文字の出力とも kdr とも、別の書き出しとも一緒にできない
+  const exportsToStdout = steps.filter((step, i) => commands[i].kind === 'export' && step.options.get('to') === '-')
+  const pngToStdout = exportsToStdout.length
   const queries = commands.some((command) => command.kind === 'query') || pngToStdout > 0
   const toStdout = global.out === '-' || (global.out === null && !global.write && edits)
   if (pngToStdout > 1 || (pngToStdout > 0 && commands.some((command) => command.kind === 'query'))) {
-    throw new UsageError('標準出力（--to -）へ出す png は、ほかの標準出力への出力と一緒にできません')
+    throw new UsageError('標準出力（--to -）へ出す png / svg-out は、ほかの標準出力への出力と一緒にできません')
   }
-  if (pngToStdout > 0 && io.stdoutIsTTY) {
+  // SVG は文字なので端末に出してよい。PNG はバイト列なので出さない
+  if (exportsToStdout.some((step) => step.name === 'png') && io.stdoutIsTTY) {
     throw new UsageError('PNG を端末には出力しません。--to でファイルを指定するか、パイプでつないでください')
   }
   if (toStdout && queries) {

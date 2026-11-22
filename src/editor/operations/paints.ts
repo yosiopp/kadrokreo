@@ -1,5 +1,6 @@
 import { isLine } from '../../document/path.ts'
-import { compactRadius, cornerRadii } from '../../document/paint.ts'
+import { normalizeAngle } from '../../document/geometry.ts'
+import { compactRadius, cornerRadii, linearAngle, linearFromAngle } from '../../document/paint.ts'
 import type { ColorStop, Effect, Gradient, NodeId, Paint, Scene, SceneNode } from '../../document/types.ts'
 import { patchNodes } from './tree.ts'
 
@@ -47,16 +48,35 @@ export function withStopAdded<G extends Gradient>(gradient: G): G {
   return { ...gradient, stops: stops.toSpliced(at + 1, 0, { offset, color }) }
 }
 
+/** offset（0〜1）の位置に、そこでの色を 1 つ足したグラデーション。上限なら変えない。足した色の番号も返す */
+export function withStopAt<G extends Gradient>(gradient: G, offset: number): { gradient: G; index: number } {
+  const { stops } = gradient
+  const at = Math.min(1, Math.max(0, offset))
+  if (stops.length >= MAX_STOPS) return { gradient, index: -1 }
+  // 位置の後ろにある最初の色。その手前に入れる
+  const next = stops.findIndex((stop) => stop.offset > at)
+  const index = next === -1 ? stops.length : next
+  const before = stops[index - 1]
+  const after = stops[index]
+  const color =
+    before === undefined
+      ? after.color
+      : after === undefined
+        ? before.color
+        : mixColor(before.color, after.color, after.offset === before.offset ? 0.5 : (at - before.offset) / (after.offset - before.offset))
+  return { gradient: { ...gradient, stops: stops.toSpliced(index, 0, { offset: at, color }) }, index }
+}
+
 /** index 番目の色を取り除いたグラデーション。2 色より減らさない */
 export function withStopRemoved<G extends Gradient>(gradient: G, index: number): G {
   if (gradient.stops.length <= 2) return gradient
   return { ...gradient, stops: gradient.stops.toSpliced(index, 1) }
 }
 
-/** 2 つの #rrggbb の中間の色 */
-function mixColor(a: string, b: string): string {
+/** 2 つの #rrggbb を t（0 なら a、1 なら b）の割合で混ぜた色。既定は中間 */
+function mixColor(a: string, b: string, t = 0.5): string {
   const channel = (color: string, i: number) => parseInt(color.slice(1 + i * 2, 3 + i * 2), 16)
-  return `#${[0, 1, 2].map((i) => Math.round((channel(a, i) + channel(b, i)) / 2).toString(16).padStart(2, '0')).join('')}`
+  return `#${[0, 1, 2].map((i) => Math.round(channel(a, i) + (channel(b, i) - channel(a, i)) * t).toString(16).padStart(2, '0')).join('')}`
 }
 
 /**
@@ -65,7 +85,8 @@ function mixColor(a: string, b: string): string {
  */
 export function convertPaint(paint: Paint, type: PaintType): Paint {
   if (paint.type === type) return paint
-  if (type === 'solid') return { type, color: paint.type === 'solid' ? paint.color : paint.stops[0].color }
+  const { opacity, visible } = paint
+  if (type === 'solid') return { type, color: paint.type === 'solid' ? paint.color : paint.stops[0].color, opacity, visible }
   const stops =
     paint.type === 'solid'
       ? [
@@ -73,7 +94,17 @@ export function convertPaint(paint: Paint, type: PaintType): Paint {
           { offset: 1, color: '#ffffff' },
         ]
       : paint.stops
-  return type === 'linear' ? { type, angle: 90, stops } : { type, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops }
+  // 中心を持つものどうし（円形と角度）は中心を受け継ぐ
+  const center = paint.type === 'radial' || paint.type === 'conic' ? { cx: paint.cx, cy: paint.cy } : { cx: 0.5, cy: 0.5 }
+  switch (type) {
+    case 'linear':
+      // 角度からは、その向きの線（正方形の枠として）。ほかは上から下
+      return { type, ...linearFromAngle(paint.type === 'conic' ? paint.angle : 90, { width: 1, height: 1 }), stops, opacity, visible }
+    case 'radial':
+      return { type, ...center, rx: 0.5, ry: 0.5, stops, opacity, visible }
+    case 'conic':
+      return { type, ...center, angle: paint.type === 'linear' ? linearAngle(paint, { width: 1, height: 1 }) : 0, stops, opacity, visible }
+  }
 }
 
 /** from 番目の塗りを to 番目へ動かす */
@@ -108,15 +139,22 @@ export function updatePaints<T extends Scene>(
   })
 }
 
-/** index 番目（配列の番号。先頭が一番下）の塗りを change で書き換える。その番目がないノードは変えない */
+/**
+ * index 番目（配列の番号。先頭が一番下）の塗りを change で書き換える。その番目がないノードは変えない。
+ * change にはノードも渡す（直線のグラデーションの向きのように、枠の大きさで決まる値のため）
+ */
 export function patchPaintAt<T extends Scene>(
   scene: T,
   ids: readonly NodeId[],
   key: PaintKey,
   index: number,
-  change: (paint: Paint) => Paint,
+  change: (paint: Paint, node: SceneNode) => Paint,
 ): T {
-  return updatePaints(scene, ids, key, (paints) => (index < paints.length ? paints.with(index, change(paints[index])) : null))
+  return patchNodes(scene, ids, (node) => {
+    if (!(key in node)) return null
+    const paints = (node as unknown as Record<PaintKey, Paint[]>)[key]
+    return index < paints.length ? { [key]: paints.with(index, change(paints[index], node)) } : null
+  })
 }
 
 /** index 番目の塗りがグラデーションのノードだけ、そのグラデーションを書き換える */
@@ -125,9 +163,14 @@ export function patchGradientAt<T extends Scene>(
   ids: readonly NodeId[],
   key: PaintKey,
   index: number,
-  change: (gradient: Gradient) => Gradient,
+  change: (gradient: Gradient, node: SceneNode) => Gradient,
 ): T {
-  return patchPaintAt(scene, ids, key, index, (paint) => (paint.type === 'solid' ? paint : change(paint)))
+  return patchPaintAt(scene, ids, key, index, (paint, node) => (paint.type === 'solid' ? paint : change(paint, node)))
+}
+
+/** 直線のグラデーションを、向き（度）だけを決めた線にする（枠の中心を通り、枠の角が両端の色。ノードの大きさで決まる） */
+export function withLinearAngle(gradient: Gradient, node: SceneNode, angle: number): Gradient {
+  return gradient.type === 'linear' ? { ...gradient, ...linearFromAngle(normalizeAngle(angle), node) } : gradient
 }
 
 /** いちばん上の塗りを paint に置き換える（null なら取り除く）。塗りがなければ足す */
@@ -144,7 +187,7 @@ export function setFill<T extends Scene>(scene: T, ids: readonly NodeId[], fill:
   return updatePaints(scene, ids, 'fills', (fills) => {
     if (fill === null) return withTopPaint(fills, null)
     const top = fills.at(-1)
-    return withTopPaint(fills, top && top.type !== 'solid' ? withStopColor(top, 0, fill) : { type: 'solid', color: fill })
+    return withTopPaint(fills, top && top.type !== 'solid' ? withStopColor(top, 0, fill) : { type: 'solid', color: fill, opacity: top?.opacity ?? 1, visible: true })
   })
 }
 
@@ -156,7 +199,7 @@ export function setStroke<T extends Scene>(scene: T, ids: readonly NodeId[], str
   return patchNodes(scene, ids, (node) => {
     if (!('strokes' in node)) return null
     if (stroke === null) return node.strokes.length === 0 ? null : { strokes: withTopPaint(node.strokes, null) }
-    return { strokes: withTopPaint(node.strokes, { type: 'solid', color: stroke }) }
+    return { strokes: withTopPaint(node.strokes, { type: 'solid', color: stroke, opacity: node.strokes.at(-1)?.opacity ?? 1, visible: node.strokes.at(-1)?.visible ?? true }) }
   })
 }
 
@@ -181,12 +224,12 @@ export function setShadow<T extends Scene>(scene: T, ids: readonly NodeId[], sha
   })
 }
 
-/** index 番目の影があるノードだけ、その影の一部を書き換える */
+/** index 番目の影があるノードだけ、その影の一部（種類・表示も）を書き換える */
 export function patchEffectAt<T extends Scene>(
   scene: T,
   ids: readonly NodeId[],
   index: number,
-  patch: Partial<Omit<Effect, 'type'>>,
+  patch: Partial<Effect>,
 ): T {
   return updateEffects(scene, ids, (effects) =>
     index < effects.length ? effects.with(index, { ...effects[index], ...patch }) : null,

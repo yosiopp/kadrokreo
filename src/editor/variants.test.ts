@@ -7,10 +7,11 @@ import { createInstance, makeComponent, syncComponents } from './components.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
 import { createDocument, updatePage } from './operations/document.ts'
-import { insertNode, updateNode } from './operations/tree.ts'
+import { insertNode, moveNode, updateNode } from './operations/tree.ts'
 import {
   addVariant,
   addVariantProperty,
+  fitMovedVariants,
   addVariantValue,
   moveVariantProperty,
   moveVariantValue,
@@ -182,5 +183,63 @@ describe('selectVariant', () => {
     expect(instance).toMatchObject({ name: 'ボタン', fills: solid('#ff0000') })
     // ない値なら変えない
     expect(selectVariant(next, pageId, instanceId, '種類', 'なし')).toBe(next)
+  })
+})
+
+describe('まとまりの外・中へ動かしたバリアント（fitMovedVariants）', () => {
+  /** バリアントが 3 つ（小・中・大）のまとまりと、ふつうのフレーム、ふつうの元 */
+  function moved() {
+    const base = fixture()
+    let doc = addVariant(base.doc, base.pageId, base.button.id).document
+    const set = variantSetOf(doc.pages[0], base.button.id)!
+    doc = updatePage(doc, base.pageId, (page) => updateNode(page, set.id, { name: 'ボタン' }))
+    doc = addVariant(doc, base.pageId, base.button.id).document
+    const box = { ...createFrame({ x: 600, y: 0, width: 300, height: 300 }), name: '置き場' }
+    const icon = { ...createFrame({ x: 600, y: 400, width: 20, height: 20 }), name: 'アイコン' }
+    doc = updatePage(doc, base.pageId, (page) => makeComponent(insertNode(insertNode(page, box), icon), icon.id))
+    const variants = variantsIn(doc.pages[0], set.id)
+    return { ...base, doc, setId: set.id, boxId: box.id, iconId: icon.id, variants: variants.map((v) => v.id) }
+  }
+  const move = (doc: ReturnType<typeof moved>['doc'], id: string, parentId: string | null) =>
+    updatePage(doc, doc.pages[0].id, (page) => moveNode(page, id, parentId))
+
+  it('まとまりの外へ出すと、プロパティの形でない名前になり、入れた先はまとまりにならない', () => {
+    const { doc, setId, boxId, variants } = moved()
+    const out = move(doc, variants[1], boxId)
+    const fitted = fitMovedVariants(doc, out)
+    expect(fitted.pages[0].nodes[variants[1]].name).toBe('ボタン（3）')
+    expect(variantsIn(fitted.pages[0], boxId)).toEqual([])
+    expect(variantsIn(fitted.pages[0], setId).map((v) => v.name)).toEqual(['種類=標準', '種類=2'])
+    // ページの直下へ出しても同じ
+    expect(fitMovedVariants(doc, move(doc, variants[1], null)).pages[0].nodes[variants[1]].name).toBe('ボタン（3）')
+  })
+
+  it('まとまりへ入れると、まとまりのプロパティの形の名前にする。組み合わせが重なれば新しい値', () => {
+    const { doc, setId, iconId, variants } = moved()
+    const joined = fitMovedVariants(doc, move(doc, iconId, setId))
+    expect(joined.pages[0].nodes[iconId].name).toBe('種類=アイコン')
+    // 出して戻すと、もとの値が空いていればその値に戻る
+    const out = fitMovedVariants(doc, move(doc, variants[1], null))
+    const back = fitMovedVariants(out, move(out, variants[1], setId))
+    expect(back.pages[0].nodes[variants[1]].name).toBe('種類=ボタン（3）')
+  })
+
+  it('別のまとまりのバリアントを入れると、ない値は最初のバリアントの値、重なれば番号', () => {
+    const { doc, pageId, setId, variants } = moved()
+    // もう 1 つのまとまり（サイズ=小）を作り、ボタンのまとまりの「種類=2」を入れる
+    const other = { ...createFrame({ x: 0, y: 600, width: 50, height: 50 }), name: 'サイズ=小' }
+    let next = updatePage(doc, pageId, (page) => makeComponent(insertNode(page, other), other.id))
+    next = addVariant(next, pageId, other.id).document
+    const otherSet = variantSetOf(next.pages[0], other.id)!
+    const before = next
+    next = fitMovedVariants(before, move(before, variants[1], otherSet.id))
+    expect(next.pages[0].nodes[variants[1]].name).toBe('サイズ=小 2')
+    expect(variantsIn(next.pages[0], setId)).toHaveLength(2)
+  })
+
+  it('同じまとまりの中での並べ替えや、名前の変更では変えない', () => {
+    const { doc, setId, variants } = moved()
+    const reordered = updatePage(doc, doc.pages[0].id, (page) => moveNode(page, variants[2], setId, 0))
+    expect(fitMovedVariants(doc, reordered)).toBe(reordered)
   })
 })

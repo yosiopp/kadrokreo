@@ -41,6 +41,7 @@ function box(id: string, parentId: string | null, x: number, y: number, rotation
     fills: [],
     strokes: [],
     strokeWidth: 1,
+    strokeDashes: [],
     effects: [],
     children,
     clipContent: false,

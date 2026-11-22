@@ -7,21 +7,25 @@ import {
   strokePolyline,
 } from '../../canvas/overlay.ts'
 import { type Viewport, worldToScreen } from '../../canvas/viewport.ts'
-import { type Point, applyMatrix, boundsFromPoints, getCorners, normalizeAngle } from '../../document/geometry.ts'
-import type { NodeId, PathNode, Scene } from '../../document/types.ts'
-import { type Vertex, isLine, mapVertices, pathSegments, roundCorners, tracePath } from '../../document/path.ts'
+import { type Point, applyMatrix, boundsFromPoints, getCorners, normalizeAngle, rotateVector } from '../../document/geometry.ts'
+import { labelEdge } from '../../canvas/labels.ts'
+import type { Gradient, NodeId, PathNode, Scene } from '../../document/types.ts'
+import { type Vertex, isLine, mapVertices, roundCorners, tracePath } from '../../document/path.ts'
+import { contourSegment, flatVertices } from '../pathEdit.ts'
 import { isVariantSet } from '../../document/variants.ts'
 import { handlePoint } from '../resize.ts'
 import { drawConstraintMarks } from './constraintMarks.ts'
 import type { Gesture } from './drag.ts'
+import type { GradientHandles } from './gradientHandles.ts'
 import {
   HANDLE_SIZE,
   type SelectionBox,
   boxToScreen,
+  editableContours,
   editablePoints,
   rotateHandlePoint,
   toScreenBounds,
-  visibleControls,
+  visibleContourControls,
   visibleHandles,
 } from './handles.ts'
 
@@ -40,6 +44,8 @@ export type OverlayState = {
   selectedVertices: readonly number[]
   /** 頂点の編集中に選んでいる辺 */
   selectedSegment: number | null
+  /** キャンバスで動かしているグラデーションのハンドル（画面座標。stops は色の印、onLine は線の上の色の位置）と、色の並び・選んでいる色 */
+  gradient: { handles: GradientHandles & { onLine: Point[] }; type: Gradient['type']; colors: string[]; selected: number | null } | null
   /** ペンツールで描いている途中の頂点（ページ座標、制御点を含む）と、ポインタの位置 */
   pen: { points: Vertex[]; cursor: Point | null } | null
   /** リサイズと回転のハンドルを出す枠 */
@@ -50,7 +56,7 @@ export type OverlayState = {
 
 /** 選択の枠・ハンドル・ガイド・範囲選択の枠などを描く */
 export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport, overlay: OverlayState) {
-  const { page, selection, hover, gesture, pointed, editedId, selectedVertices, selectedSegment, pen, box, dropTarget } = overlay
+  const { page, selection, hover, gesture, pointed, editedId, selectedVertices, selectedSegment, gradient, pen, box, dropTarget } = overlay
   // コンポーネントのもの（元・インスタンス・その中身）だけを選んでいれば、枠を紫にする
   const accent = overlayColor(page, selection)
   ctx.strokeStyle = accent
@@ -128,12 +134,14 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
 
   const current = pointed && page.nodes[pointed.id]
   if (current?.type === 'path') {
-    const vertices = editablePoints(page, current)
-    // 頂点を編集中のパスは、形そのもの（角の丸めを含む）をなぞって見せる
-    if (!isLine(current)) curve(roundCorners(vertices, current.closed), current.closed)
+    // 頂点の番号は全部の輪郭をつないだ通し番号（pathEdit.ts）
+    const contours = editableContours(page, current)
+    const vertices = flatVertices(contours)
+    // 頂点を編集中のパスは、形そのもの（角の丸めを含む）を輪郭ごとになぞって見せる
+    if (!isLine(current)) for (const contour of contours) curve(roundCorners(contour.vertices, contour.closed), contour.closed)
     const editing = current.id === editedId
     // 選んでいる辺は太くなぞる
-    const segment = editing && selectedSegment !== null ? pathSegments(vertices, current.closed)[selectedSegment] : undefined
+    const segment = editing && selectedSegment !== null ? contourSegment(contours, selectedSegment) : undefined
     if (segment) {
       ctx.save()
       ctx.lineWidth = 3
@@ -145,7 +153,7 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
     }
     ctx.fillStyle = '#ffffff'
     const selected = editing ? selectedVertices : []
-    for (const control of visibleControls(vertices, selected, current.closed)) {
+    for (const control of visibleContourControls(contours, selected)) {
       drawControl(vertices[control.index], control.point)
     }
     vertices.forEach((vertex, index) => {
@@ -154,6 +162,8 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
       drawHandle(worldToScreen(viewport, vertex))
     })
   }
+
+  if (gradient) drawGradientHandles(ctx, gradient, accent)
 
   // ペンツールで描いている途中の線。最後の頂点からポインタまでも結ぶ。最後の頂点の制御点も見せる
   if (pen && pen.points.length > 0) {
@@ -192,20 +202,27 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
       gesture?.kind === 'rotate'
         ? `${normalizeAngle(gesture.baseRotation + gesture.delta)}°`
         : `${Math.round(w)} × ${Math.round(h)}`
-    const screen = toScreenBounds(viewport, box.bounds)
-    const below = { x: screen.x + screen.width / 2, y: screen.y + screen.height + 17 }
-    drawBadge(ctx, label, below, accent)
+    // 回した枠では、画面で下にある辺に沿わせて傾ける（読める向きに近い辺を選ぶ）
+    const edge = labelEdge(w, h, box.rotation, 'bottom')
+    const middle = boxToScreen(viewport, box, { x: (edge.from.x + edge.to.x) / 2, y: (edge.from.y + edge.to.y) / 2 })
+    const outward = rotateVector({ x: 0, y: 17 }, edge.angle)
+    drawBadge(ctx, label, { x: middle.x + outward.x, y: middle.y + outward.y }, accent, edge.angle)
   }
 
-  if (gesture?.kind === 'move' || gesture?.kind === 'resize') {
+  if (gesture?.kind === 'move' || gesture?.kind === 'resize' || gesture?.kind === 'reshape') {
     ctx.strokeStyle = OVERLAY_GUIDE
     ctx.beginPath()
     for (const guide of gesture.guides) {
       const along = guide.axis === 'x' ? 'y' : 'x'
-      const from = worldToScreen(viewport, { x: 0, y: 0, [guide.axis]: guide.position, [along]: guide.from })
-      const to = worldToScreen(viewport, { x: 0, y: 0, [guide.axis]: guide.position, [along]: guide.to })
-      ctx.moveTo(Math.round(from.x) + 0.5, Math.round(from.y) + 0.5)
-      ctx.lineTo(Math.round(to.x) + 0.5, Math.round(to.y) + 0.5)
+      // 回した図形の向きに沿ったガイドは、その向きの座標からページ座標に戻す
+      const toScreen = (value: number) =>
+        worldToScreen(viewport, rotateVector({ x: 0, y: 0, [guide.axis]: guide.position, [along]: value }, guide.rotation ?? 0))
+      const from = toScreen(guide.from)
+      const to = toScreen(guide.to)
+      // 縦横の線は画素に揃えてくっきり引く
+      const snap = (value: number) => (guide.rotation ? value : Math.round(value) + 0.5)
+      ctx.moveTo(snap(from.x), snap(from.y))
+      ctx.lineTo(snap(to.x), snap(to.y))
     }
     ctx.stroke()
     ctx.strokeStyle = accent
@@ -218,4 +235,67 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
     ctx.strokeStyle = OVERLAY_ACCENT
     ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.width, b.height)
   }
+}
+
+/**
+ * グラデーションのハンドル（画面座標で受け取る）。色が並ぶ線と、両端（直線の始点・終点、円形の中心と半径の先）の小さな丸、
+ * 線の横に離して並べた色の印（その色で塗った丸。線の上の位置と細い線で結ぶ）を出す。円形は楕円も破線でなぞる。選んでいる色は太い縁で囲む
+ */
+function drawGradientHandles(ctx: CanvasRenderingContext2D, gradient: NonNullable<OverlayState['gradient']>, accent: string) {
+  const { handles, type, colors, selected } = gradient
+  const [from, to] = handles.axis
+  ctx.save()
+  // 背景が何色でも見えるよう、白い線の上に暗い細い線を重ねる
+  const line = (points: Point[], dash: number[] = []) => {
+    for (const [color, width] of [['#ffffff', 3], ['rgba(0, 0, 0, 0.6)', 1]] as const) {
+      ctx.setLineDash(dash)
+      ctx.strokeStyle = color
+      ctx.lineWidth = width
+      strokePolyline(ctx, points, false)
+    }
+  }
+  line([from, to])
+  if (type === 'radial' && handles.radiusY) {
+    const center = from
+    const ry = handles.radiusY
+    line([center, ry])
+    // 楕円は、中心から 2 つの半径の先への向きを軸にした形（回したノードでも合う）
+    const ellipse = Array.from({ length: 65 }, (_, i) => {
+      const t = (i / 64) * Math.PI * 2
+      return {
+        x: center.x + (to.x - center.x) * Math.cos(t) + (ry.x - center.x) * Math.sin(t),
+        y: center.y + (to.y - center.y) * Math.cos(t) + (ry.y - center.y) * Math.sin(t),
+      }
+    })
+    line(ellipse, [4, 3])
+  }
+  if (type === 'conic') {
+    // 角度は中心のまわりを 1 周するので、向きの先を通る円を点線で出す
+    const radius = Math.hypot(to.x - from.x, to.y - from.y)
+    const circle = Array.from({ length: 65 }, (_, i) => {
+      const t = (i / 64) * Math.PI * 2
+      return { x: from.x + radius * Math.cos(t), y: from.y + radius * Math.sin(t) }
+    })
+    line(circle, [4, 3])
+  }
+  ctx.setLineDash([])
+  // 色の印と、線の上の位置を結ぶ細い線
+  handles.stops.forEach((marker, i) => line([handles.onLine[i], marker]))
+  const knob = (point: Point, radius: number, fill: string, ring: string, ringWidth: number) => {
+    ctx.beginPath()
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2)
+    ctx.fillStyle = fill
+    ctx.fill()
+    ctx.lineWidth = ringWidth
+    ctx.strokeStyle = ring
+    ctx.stroke()
+  }
+  const ends = type === 'radial' && handles.radiusY ? [from, to, handles.radiusY] : [from, to]
+  for (const end of ends) knob(end, 4, '#ffffff', 'rgba(0, 0, 0, 0.6)', 1)
+  handles.stops.forEach((marker, i) => {
+    // 外側に白い縁、内側にその色
+    knob(marker, HANDLE_SIZE / 2 + 2, '#ffffff', i === selected ? accent : 'rgba(0, 0, 0, 0.6)', i === selected ? 2 : 1)
+    knob(marker, HANDLE_SIZE / 2 - 1, colors[i], 'rgba(0, 0, 0, 0.2)', 1)
+  })
+  ctx.restore()
 }

@@ -69,9 +69,9 @@ describe('kadrokreo CLI', () => {
     const doc = await h.doc('out.kdr')
     expect(doc.name).toBe('Demo')
     const card = doc.pages[0].nodes.card as FrameNode
-    expect(card).toMatchObject({ type: 'frame', width: 320, fills: [{ type: 'solid', color: '#f5f5ff' }], cornerRadius: 12 })
+    expect(card).toMatchObject({ type: 'frame', width: 320, fills: [{ type: 'solid', color: '#f5f5ff', opacity: 1, visible: true }], cornerRadius: 12 })
     const btn = nodeByName(doc, 'Btn')
-    expect(btn).toMatchObject({ parentId: 'card', x: 16, y: 60, fills: [{ type: 'solid', color: '#5b4cf5' }] })
+    expect(btn).toMatchObject({ parentId: 'card', x: 16, y: 60, fills: [{ type: 'solid', color: '#5b4cf5', opacity: 1, visible: true }] })
     expect(card.children).toEqual([btn.id])
   })
 
@@ -212,8 +212,21 @@ describe('kadrokreo CLI', () => {
     const bad = harness()
     expect(await bad.run(['new', '+', 'add', 'path', '--d', 'M0 0 C1 1'])).not.toBe(0)
     expect(bad.stderr).toContain('C の数値が足りません')
-    expect(await bad.run(['new', '+', 'add', 'path', '--d', 'M0 0 L1 1 M2 2 L3 3'])).not.toBe(0)
+    expect(await bad.run(['new', '+', 'add', 'path', '--d', 'M0 0 L1 1 M2 2'])).not.toBe(0)
     expect(bad.stderr).toContain('輪郭')
+
+    // M のまとまりが複数あれば、穴のあるパス（2 つ目以降の輪郭）になる。fillRule は set で変えられ、d で同じ形に戻る
+    const holed = harness()
+    const square = 'M0 0 L100 0 L100 100 L0 100 Z M25 25 L75 25 L75 75 L25 75 Z'
+    expect(await holed.run(['new', '-o', 'h.kdr', '+', 'add', 'path', '--name', 'Ring', '--d', square, '+', 'set', 'Ring', 'fillRule=evenodd'])).toBe(0)
+    const ring = nodeByName(await holed.doc('h.kdr'), 'Ring')
+    expect(ring).toMatchObject({ width: 100, height: 100, closed: true, fillRule: 'evenodd' })
+    expect(ring.type === 'path' && ring.contours).toEqual([
+      { points: [{ x: 0.25, y: 0.25 }, { x: 0.75, y: 0.25 }, { x: 0.75, y: 0.75 }, { x: 0.25, y: 0.75 }], closed: true },
+    ])
+    await holed.run(['-f', 'h.kdr', 'get', 'Ring', 'd'])
+    expect(holed.stdout.trim()).toBe(square)
+    expect(await holed.run(['-f', 'h.kdr', 'set', 'Ring', 'fillRule=odd'])).not.toBe(0)
   })
 
   it('svg で SVG を図形のノードに変換して置き、落としたものを標準エラーに出す', async () => {
@@ -237,6 +250,23 @@ describe('kadrokreo CLI', () => {
     const bad = harness({ 'x.svg': new TextEncoder().encode('<svg><g></svg>') })
     expect(await bad.run(argv('new + svg x.svg -o out.kdr'))).not.toBe(0)
     expect(bad.stderr).toContain('x.svg')
+  })
+
+  it('svg の data URI の画像は kdr の画像になり、CSS・破線・穴も写す', async () => {
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+    const svg = new TextEncoder().encode(
+      '<svg width="100" height="100"><style>.dash { stroke: #000; stroke-dasharray: 4 2 }</style>' +
+        `<image id="pic" width="20" height="20" href="data:image/png;base64,${png}"/>` +
+        '<path id="ring" class="dash" fill-rule="evenodd" d="M0 0 H100 V100 H0 Z M25 25 H75 V75 H25 Z"/></svg>',
+    )
+    const h = harness({ 'a.svg': svg })
+    const code = await h.run(argv('new + svg a.svg + svg a.svg -o out.kdr'))
+    expect(h.stderr).toBe('')
+    expect(code).toBe(0)
+    const doc = await h.doc('out.kdr')
+    expect(Object.keys(doc.assets)).toEqual([createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex')])
+    expect(nodeByName(doc, 'pic')).toMatchObject({ type: 'image', width: 20, height: 20 })
+    expect(nodeByName(doc, 'ring')).toMatchObject({ type: 'path', fillRule: 'evenodd', strokeDashes: [4, 2] })
   })
 
   it('オートレイアウトとまとめる操作は editor と同じく並べ直す', async () => {
@@ -265,7 +295,7 @@ describe('kadrokreo CLI', () => {
     expect(h.stderr).toBe('')
     const doc = await h.doc('a.kdr')
     const instance = doc.pages[1].nodes.b2 as FrameNode
-    expect(instance).toMatchObject({ x: 200, fills: [{ type: 'solid', color: '#123456' }] })
+    expect(instance).toMatchObject({ x: 200, fills: [{ type: 'solid', color: '#123456', opacity: 1, visible: true }] })
     expect(instance.component?.role).toBe('instance')
     const label = doc.pages[1].nodes[instance.children[0]] as TextNode
     expect(label.text).toBe('Cancel')
@@ -319,6 +349,20 @@ describe('kadrokreo CLI', () => {
     expect(await bad.run(argv('-f a.kdr align middle a'))).toBe(2)
     expect(await bad.run(argv('-f a.kdr distribute vertical a b'))).toBe(2)
     expect(await bad.run(argv('-f a.kdr rotate x a'))).toBe(2)
+  })
+
+  it('flip は editor の反転と同じく裏返す', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add rect --id a --x 0 --y 0 --width 10 --height 10 + add rect --id b --x 90 --y 0 --width 10 --height 10 + set b rotation=30' +
+        ' + flip horizontal a b -o a.kdr',
+    ))
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    expect(nodes.b.rotation).toBe(-30)
+    expect(nodes.a.x).toBeGreaterThan(nodes.b.x)
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr flip diagonal a'))).toBe(2)
   })
 
   it('上書きを元に反映・元に戻す、インスタンスの元の差し替え', async () => {
@@ -382,8 +426,8 @@ describe('kadrokreo CLI', () => {
       role: 'main',
       description: '主な操作に使う',
       properties: [
-        { name: '文言', type: 'text', targets: ['label'] },
-        { name: 'Mark', type: 'boolean', targets: ['mark'] },
+        { name: '文言', type: 'text', targets: ['label'], preferred: [] },
+        { name: 'Mark', type: 'boolean', targets: ['mark'], preferred: [] },
       ],
     })
     expect((nodes.i1 as FrameNode).component).toMatchObject({ overrides: { label: { text: '送信' }, mark: { visible: false } } })
@@ -426,6 +470,134 @@ describe('kadrokreo CLI', () => {
     const bad = harness(Object.fromEntries(fixed.fs))
     expect(await bad.run(['-f', 'a.kdr', 'variant', 'i1', '種類=ない'])).toBe(2)
     expect(await bad.run(['-f', 'a.kdr', 'variant-add', 'i1'])).toBe(2)
+  })
+
+  it('variant-prop-add / -rename / -rm と variant-value-rename でバリアントのプロパティを変える', async () => {
+    const h = harness()
+    expect(
+      await h.run([
+        ...argv('new + add frame --name Button --id btn + component btn + variant-add btn --id big'),
+        '種類=大',
+        ...argv('+ instance big --id i1 --y 300'),
+        ...['+', 'variant-prop-add', 'btn', 'サイズ', 'M'],
+        ...['+', 'variant-prop-rename', 'big', '種類', 'スタイル'],
+        ...['+', 'variant-value-rename', 'btn', 'スタイル', '大', '強調'],
+        '-o',
+        'a.kdr',
+      ]),
+    ).toBe(0)
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    expect(nodes.btn.name).toBe('スタイル=標準, サイズ=M')
+    expect(nodes.big.name).toBe('スタイル=強調, サイズ=M')
+    // まとまりを直接指して消す
+    const setId = nodes.btn.parentId!
+    const rm = harness(Object.fromEntries(h.fs))
+    expect(await rm.run(['-f', 'a.kdr', 'variant-prop-rm', setId, 'サイズ', '-o', 'b.kdr'])).toBe(0)
+    const after = (await rm.doc('b.kdr')).pages[0].nodes
+    expect(after.btn.name).toBe('スタイル=標準')
+    expect(after.big.name).toBe('スタイル=強調')
+
+    const bad = harness(Object.fromEntries(rm.fs))
+    expect(await bad.run(['-f', 'b.kdr', 'variant-prop-rm', 'btn', 'スタイル'])).toBe(2) // 1 つもなくなる
+    expect(await bad.run(['-f', 'b.kdr', 'variant-prop-rm', 'btn', 'ない'])).toBe(2)
+    expect(await bad.run(['-f', 'b.kdr', 'variant-prop-add', 'btn', 'スタイル'])).toBe(2) // もうある
+    expect(await bad.run(['-f', 'b.kdr', 'variant-prop-add', 'btn', 'a,b'])).toBe(2)
+    expect(await bad.run(['-f', 'b.kdr', 'variant-prop-add', 'i1', '色'])).toBe(2) // インスタンス
+    expect(await bad.run(['-f', 'b.kdr', 'variant-prop-rename', 'btn', 'スタイル', 'a=b'])).toBe(2)
+    expect(await bad.run(['-f', 'b.kdr', 'variant-value-rename', 'btn', 'スタイル', '強調', '標準'])).toBe(2) // もうある
+    expect(await bad.run(['-f', 'b.kdr', 'variant-value-rename', 'btn', 'スタイル', 'ない', 'x'])).toBe(2)
+  })
+
+  it('gradient で直線・円形、3 色以上、塗りごとの不透明度のグラデーションを作る', async () => {
+    const h = harness()
+    expect(
+      await h.run([
+        ...argv('new + add rect --id a + add ellipse --id b + add rect --id c'),
+        ...argv('+ gradient linear a --colors #f00,#00ff00@25%,#00f,#fff --angle -90 --opacity 0.5'),
+        ...argv('+ gradient radial b --colors #000,#fff --center 0.3,40% --radius 0.8 --stroke'),
+        ...argv('+ set c fill=#123456 + gradient radial c --add --colors #000@0.2,#fff + gradient linear c --index 0'),
+        '-o',
+        'a.kdr',
+      ]),
+    ).toBe(0)
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    const a = nodes.a as unknown as { fills: unknown[] }
+    expect(a.fills).toEqual([
+      {
+        type: 'linear',
+        x1: 0.5,
+        y1: 1,
+        x2: 0.5,
+        y2: 0,
+        opacity: 0.5,
+        visible: true,
+        stops: [
+          { offset: 0, color: '#ff0000' },
+          { offset: 0.25, color: '#00ff00' },
+          { offset: 0.625, color: '#0000ff' },
+          { offset: 1, color: '#ffffff' },
+        ],
+      },
+    ])
+    const b = nodes.b as unknown as { strokes: unknown[] }
+    expect(b.strokes).toEqual([
+      {
+        type: 'radial',
+        cx: 0.3,
+        cy: 0.4,
+        rx: 0.8,
+        ry: 0.8,
+        opacity: 1,
+        visible: true,
+        stops: [
+          { offset: 0, color: '#000000' },
+          { offset: 1, color: '#ffffff' },
+        ],
+      },
+    ])
+    // 下の単色を直線に変え（色は受け継ぐ）、上に円形を重ねた
+    const c = nodes.c as unknown as { fills: { type: string; stops?: { color: string; offset: number }[] }[] }
+    expect(c.fills.map((paint) => paint.type)).toEqual(['linear', 'radial'])
+    expect(c.fills[0].stops?.[0].color).toBe('#123456')
+    expect(c.fills[1].stops?.[0].offset).toBe(0.2)
+
+    // --colors を省くと、いまのグラデーションの色のまま種類と向きだけ変える
+    const edit = harness(Object.fromEntries(h.fs))
+    expect(await edit.run(argv('-f a.kdr gradient radial a --radius 50%,25% -o b.kdr'))).toBe(0)
+    const changed = (await edit.doc('b.kdr')).pages[0].nodes.a as unknown as { fills: { type: string; ry: number; stops: unknown[]; opacity: number }[] }
+    expect(changed.fills[0].type).toBe('radial')
+    expect(changed.fills[0].ry).toBe(0.25)
+    expect(changed.fills[0].stops).toHaveLength(4)
+    expect(changed.fills[0].opacity).toBe(0.5)
+
+    // 角度のグラデーション: 中心と最初の色の向き。--hidden で隠す（消さずに残す）
+    const conic = harness(Object.fromEntries(h.fs))
+    expect(await conic.run(argv('-f a.kdr gradient conic a --center 25%,0.75 --angle 450 + gradient linear c --index 0 --hidden -o d.kdr'))).toBe(0)
+    const turned = (await conic.doc('d.kdr')).pages[0].nodes
+    expect((turned.a as unknown as { fills: unknown[] }).fills[0]).toMatchObject({ type: 'conic', cx: 0.25, cy: 0.75, angle: 90, opacity: 0.5, visible: true })
+    expect((turned.a as unknown as { fills: { stops: unknown[] }[] }).fills[0].stops).toHaveLength(4)
+    expect((turned.c as unknown as { fills: unknown[] }).fills[0]).toMatchObject({ type: 'linear', visible: false })
+    // 直線の始点・終点を自由に置く
+    expect(await conic.run(argv('-f d.kdr gradient linear c --index 0 --from 10%,0.2 --to 0.9,120% -o e.kdr'))).toBe(0)
+    expect(((await conic.doc('e.kdr')).pages[0].nodes.c as unknown as { fills: unknown[] }).fills[0]).toMatchObject({ x1: 0.1, y1: 0.2, x2: 0.9, y2: 1.2 })
+    expect(await conic.run(argv('-f d.kdr gradient linear c --angle 45 --from 0,0'))).toBe(2)
+    expect(await conic.run(argv('-f d.kdr gradient radial c --to 0,0'))).toBe(2)
+
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr gradient spiral a --colors #000,#fff'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient conic a --radius 0.5'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient linear a --colors #000'))).toBe(2) // 1 色
+    expect(await bad.run(argv('-f a.kdr gradient linear a --colors #000@60%,#fff@30%'))).toBe(2) // 位置が戻る
+    expect(await bad.run(argv('-f a.kdr gradient linear a --colors red,#fff'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient linear a --center 0.5,0.5'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient radial a --angle 45'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient linear a --index 3'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient linear a --index 0 --add'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient linear a --opacity 2'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr add text --text hi --id t + gradient linear t --stroke --colors #000,#fff'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr add rect --id e + set e fill=null + gradient linear e'))).toBe(2) // 塗りがなく色もない
   })
 
   it('dup・mv・order・rm と「@」', async () => {
@@ -554,17 +726,17 @@ describe('kadrokreo CLI', () => {
     const h = harness()
     await h.run([
       'new', '+', 'add', 'rect', '--name', 'Box', 'stroke=#112233', 'strokeWidth=2', 'shadow.blur=4',
-      '+', 'add', 'ellipse', '--name', 'Dot', 'fills=[{"type":"linear","angle":0,"stops":[{"offset":0,"color":"#000000"},{"offset":1,"color":"#ffffff"}]}]',
+      '+', 'add', 'ellipse', '--name', 'Dot', 'fills=[{"type":"linear","x1":0,"y1":0.5,"x2":1,"y2":0.5,"stops":[{"offset":0,"color":"#000000"},{"offset":1,"color":"#ffffff"}]}]',
       '-o', 'a.kdr',
     ])
     expect(h.stderr).toBe('')
     const doc = await h.doc('a.kdr')
     expect(nodeByName(doc, 'Box')).toMatchObject({
-      strokes: [{ type: 'solid', color: '#112233' }],
+      strokes: [{ type: 'solid', color: '#112233', opacity: 1, visible: true }],
       strokeWidth: 2,
-      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25 }],
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25, visible: true }],
     })
-    expect(nodeByName(doc, 'Dot')).toMatchObject({ fills: [{ type: 'linear', angle: 0 }] })
+    expect(nodeByName(doc, 'Dot')).toMatchObject({ fills: [{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, opacity: 1, visible: true }] })
     await h.run(argv('-f a.kdr -w set Box fill=null shadow=null'))
     expect(nodeByName(await h.doc('a.kdr'), 'Box')).toMatchObject({ fills: [], effects: [] })
     const file = (await readKdrArchive(new Blob([new Uint8Array(h.fs.get('a.kdr')!)]))).document as { document: { pages: { children: { name: string }[] }[] } }
@@ -584,13 +756,18 @@ describe('kadrokreo CLI', () => {
     ])
     expect(h.stderr).toBe('')
     const doc = await h.doc('a.kdr')
-    expect(nodeByName(doc, 'Tab')).toMatchObject({ cornerRadius: [8, 8, 0, 0], fills: [{ type: 'radial', rx: 0.5 }] })
+    expect(nodeByName(doc, 'Tab')).toMatchObject({ cornerRadius: [8, 8, 0, 0], fills: [{ type: 'radial', rx: 0.5, opacity: 1, visible: true }] })
     expect(nodeByName(doc, 'Label')).toMatchObject({ fontWeight: 300 })
     await h.run(argv('-f a.kdr -w set Tab cornerRadius=4'))
     expect(nodeByName(await h.doc('a.kdr'), 'Tab')).toMatchObject({ cornerRadius: 4 })
     expect(await h.run(argv('-f a.kdr -w set Tab cornerRadius=1,2,3'))).toBe(2)
     expect(h.stderr).toMatch(/左上,右上,右下,左下/)
     expect(await h.run(argv('-f a.kdr -w set Label fontWeight=350'))).toBe(1)
+    // 塗りごとの不透明度は番号でつないで書く
+    expect(await h.run(argv('-f a.kdr -w set Tab fills.0.opacity=0.5'))).toBe(0)
+    expect(nodeByName(await h.doc('a.kdr'), 'Tab')).toMatchObject({ fills: [{ opacity: 0.5 }] })
+    expect(await h.run(argv('-f a.kdr -w set Tab fills.0.opacity=2'))).toBe(1)
+    expect(h.stderr).toMatch(/fills\[0\]\.opacity/)
   })
 
   it('--help と help コマンド', async () => {

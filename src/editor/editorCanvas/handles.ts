@@ -10,7 +10,7 @@ import {
   getWorldRotation,
   normalizeAngle,
 } from '../../document/geometry.ts'
-import { type NodeKind, type Vertex, mapVertices, nodeKind, pathPoints } from '../../document/path.ts'
+import { type Contour, type NodeKind, type Vertex, mapVertices, nodeKind, pathContours, pathPoints } from '../../document/path.ts'
 import type { NodeId, PathNode, Scene } from '../../document/types.ts'
 import { HANDLES, type Handle, handlePoint } from '../resize.ts'
 
@@ -74,6 +74,29 @@ export function distance(a: Point, b: Point): number {
 export function editablePoints(page: Scene, node: PathNode): Vertex[] {
   const matrix = getWorldMatrix(page, node.id)
   return mapVertices(pathPoints(node), (point) => applyMatrix(matrix, point))
+}
+
+/** パスのすべての輪郭の頂点と制御点（ページ座標）。先頭が最初の輪郭。頂点は輪郭をつないだ通し番号で扱う（pathEdit.ts） */
+export function editableContours(page: Scene, node: PathNode): Contour[] {
+  const matrix = getWorldMatrix(page, node.id)
+  return pathContours(node).map((contour) => ({
+    vertices: mapVertices(contour.vertices, (point) => applyMatrix(matrix, point)),
+    closed: contour.closed,
+  }))
+}
+
+/** visibleControls を輪郭ごとに出し、番号を通し番号にしたもの */
+export function visibleContourControls(
+  contours: readonly Contour[],
+  selected: readonly number[],
+): { index: number; part: 'in' | 'out'; point: Point }[] {
+  let start = 0
+  return contours.flatMap(({ vertices, closed }) => {
+    const local = selected.map((index) => index - start).filter((index) => index >= 0 && index < vertices.length)
+    const controls = visibleControls(vertices, local, closed).map((control) => ({ ...control, index: control.index + start }))
+    start += vertices.length
+    return controls
+  })
 }
 
 /** つかんだ点が頂点そのものか、その制御点か */

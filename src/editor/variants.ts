@@ -1,5 +1,5 @@
-import { findMain, isInstance, isMain, owningInstance } from '../document/component.ts'
-import type { DesignDocument, NodeId, PageId, Scene } from '../document/types.ts'
+import { type MainNode, findMain, isInstance, isMain, mainsOf, owningInstance } from '../document/component.ts'
+import type { DesignDocument, NodeId, Page, PageId, Scene } from '../document/types.ts'
 import {
   type VariantProps,
   formatVariantName,
@@ -283,4 +283,74 @@ export function addVariantValue(
   if (added.id === null) return added
   const id = added.id
   return { document: updatePage(added.document, pageId, (base) => setVariantValue(base, id, key, text)), id }
+}
+
+/**
+ * 親が変わったコンポーネントの元の名前を、入った先・出た先に合わせる（ストアが変更のたびにかける）。
+ * まとまりは名前で決まるので、名前を変えないと、まとまりから出したバリアントを入れた先のフレームがまとまりになってしまう。
+ * - ほかのバリアントがあるまとまりへ入れたら、そのまとまりのプロパティでバリアントの名前を付ける（入れた元にある値は使い、
+ *   ないものは最初のバリアントの値。組み合わせが重なれば最初のプロパティを新しい値にする）
+ * - まとまりから出したバリアントは、まとまりの名前と値をつないだ、プロパティの形でない名前にする（「ボタン（大, 押下）」）
+ * 変わらなければ同じ参照を返す
+ */
+export function fitMovedVariants(before: DesignDocument, after: DesignDocument): DesignDocument {
+  if (before === after) return after
+  let changed = false
+  const pages = after.pages.map((page) => {
+    if (before.pages.includes(page)) return page
+    const prior = before.pages.find((candidate) => candidate.id === page.id)
+    if (!prior) return page
+    const moved = [...mainsOf(page).values()].filter((main) => {
+      const old = prior.nodes[main.id]
+      return old !== undefined && old.parentId !== main.parentId
+    })
+    if (moved.length === 0) return page
+    let scene: Page = page
+    // まだ名前を合わせていない、動かした元（入った先のまとまりのバリアントとしては数えない）
+    const pending = new Set(moved.map((main) => main.id))
+    for (const main of moved) {
+      pending.delete(main.id)
+      const others = main.parentId === null ? [] : variantsIn(scene, main.parentId).filter((v) => v.id !== main.id && !pending.has(v.id))
+      const oldSet = variantSetOf(prior, main.id)
+      let name: string | null = null
+      if (others.length > 0) name = joinedVariantName(scene.nodes[main.id].name, others)
+      else if (oldSet) name = leftVariantName(oldSet.name, parseVariantName(prior.nodes[main.id].name) ?? [])
+      if (name !== null && name !== scene.nodes[main.id].name) scene = updateNode(scene, main.id, { name })
+    }
+    if (scene !== page) changed = true
+    return scene
+  })
+  return changed ? { ...after, pages } : after
+}
+
+/** 名前に使うと形が崩れる文字（カンマと等号）を空白にする */
+function plain(text: string): string {
+  return text.replace(/[,=]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/** まとまりから出したバリアントの名前。まとまりの名前と値をつないだもの（プロパティの形ではない） */
+function leftVariantName(setName: string, props: VariantProps): string {
+  const values = props.map(([, value]) => plain(value)).join(', ')
+  const base = plain(setName) || 'コンポーネント'
+  return values === '' ? base : `${base}（${values}）`
+}
+
+/** まとまり（バリアントは others）へ入れた元の名前。まとまりのプロパティの形に揃える */
+function joinedVariantName(name: string, others: readonly MainNode[]): string {
+  const own = parseVariantName(name)
+  const properties: { name: string; first: string }[] = []
+  for (const variant of others) {
+    for (const [key, value] of parseVariantName(variant.name) ?? []) {
+      if (!properties.some((property) => property.name === key)) properties.push({ name: key, first: value })
+    }
+  }
+  const props: [string, string][] = properties.map(({ name: key, first }) => [key, (own && propValue(own, key)) ?? first])
+  const taken = new Set(others.map((variant) => formatVariantName(parseVariantName(variant.name) ?? [])))
+  if (!taken.has(formatVariantName(props))) return formatVariantName(props)
+  // 組み合わせが重なるので、最初のプロパティを新しい値にする。名前がプロパティの形でなければ、その名前を値に
+  const base = (own ? props[0][1] : plain(name)) || props[0][1]
+  for (let n = own ? 2 : 1; ; n++) {
+    props[0] = [props[0][0], n === 1 ? base : `${base} ${n}`]
+    if (!taken.has(formatVariantName(props))) return formatVariantName(props)
+  }
 }

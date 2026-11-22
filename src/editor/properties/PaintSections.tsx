@@ -1,6 +1,8 @@
 import { normalizeAngle } from '../../document/geometry.ts'
+import { linearAngle } from '../../document/paint.ts'
 import type { Effect, Gradient, NodeId, Paint, SceneNode } from '../../document/types.ts'
-import { PAINT_TYPE_LABELS, optionsOf } from '../../ui/labels.ts'
+import { EFFECT_TYPE_LABELS, PAINT_TYPE_LABELS, optionsOf } from '../../ui/labels.ts'
+import { EyeIcon } from '../icons.tsx'
 import {
   MAX_PAINTS,
   MAX_STOPS,
@@ -15,17 +17,19 @@ import {
   withStopAdded,
   withStopColor,
   withStopOffset,
+  withLinearAngle,
   withStopRemoved,
 } from '../operations/paints.ts'
 import type { EditorStore } from '../store.ts'
+import type { GradientEdit } from '../editorCanvas/gradientHandles.ts'
 import { type Mixed, MIXED, common, mapValue } from './context.ts'
 import { CheckField, ColorField, NumberField, Section, SelectField } from './fields.tsx'
 
-// 塗り・線・影を複数重ねる欄。選んでいるノードで数と種類が揃っていれば、番目ごとに並べて、
+// 塗り・線・影（落ち影・内側の影）を複数重ねる欄。行ごとに目のボタンで表示を切り替えられる。選んでいるノードで数と種類が揃っていれば、番目ごとに並べて、
 // 番目ごとの値は揃っていなければ「混在」で出す（色を選ぶと、全部のその番目に当たる）。
 // 数や種類が揃っていなければ、まとめて置き換えるボタンだけを出す
 
-const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25 }
+const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true }
 
 /** 割合（0〜1）を % の欄の値に */
 const toPercent = (value: number | Mixed) => mapValue(value, (v) => Math.round(v * 1000) / 10)
@@ -43,12 +47,25 @@ type PaintListProps = {
   /** 空にできない（テキストの塗り・直線の線） */
   required: boolean
   overridden?: boolean
+  /** キャンバスで動かしているグラデーション */
+  gradientEdit: GradientEdit | null
   /** 線の太さなど、節の下に足す欄 */
   children?: React.ReactNode
 }
 
 /** 塗り（または線）の配列を編集する節。上に見えるもの（配列の最後）から並べる */
-export function PaintListSection({ store, selection, nodes, paintKey, title, fallback, required, overridden, children }: PaintListProps) {
+export function PaintListSection({
+  store,
+  selection,
+  nodes,
+  paintKey,
+  title,
+  fallback,
+  required,
+  overridden,
+  gradientEdit,
+  children,
+}: PaintListProps) {
   const lists = nodes.map((node) => (node as unknown as Record<PaintKey, Paint[]>)[paintKey])
   const count = common(lists.map((list) => list.length))
   // 番目ごとの種類が揃っているか
@@ -56,7 +73,7 @@ export function PaintListSection({ store, selection, nodes, paintKey, title, fal
     count !== MIXED && Array.from({ length: count }, (_, i) => common(lists.map((list) => list[i].type))).every((t) => t !== MIXED)
   const update = (change: (paints: readonly Paint[]) => Paint[] | null) =>
     store.apply((base) => updatePaints(base, selection, paintKey, change))
-  const solidPaint: Paint = { type: 'solid', color: fallback }
+  const solidPaint: Paint = { type: 'solid', color: fallback, opacity: 1, visible: true }
   const canAdd = lists.every((list) => list.length < MAX_PAINTS)
 
   const addButton = (
@@ -85,7 +102,7 @@ export function PaintListSection({ store, selection, nodes, paintKey, title, fal
           fallback={fallback}
           onPreview={() => {}}
           onCommit={() => {}}
-          onSet={(color) => color !== null && update(() => [{ type: 'solid', color }])}
+          onSet={(color) => color !== null && update(() => [{ type: 'solid', color, opacity: 1, visible: true }])}
         />
       ) : (
         Array.from({ length: count }, (_, k) => count - 1 - k).map((index) => (
@@ -95,10 +112,14 @@ export function PaintListSection({ store, selection, nodes, paintKey, title, fal
             selection={selection}
             paintKey={paintKey}
             paints={lists.map((list) => list[index])}
+            nodes={nodes}
             index={index}
             count={count}
             label={index === count - 1 ? title : `${title} ${count - index}`}
             removable={!required || count > 1}
+            gradientEdit={
+              gradientEdit && gradientEdit.key === paintKey && gradientEdit.index === index && selection.length === 1 ? gradientEdit : null
+            }
             onUpdate={update}
           />
         ))
@@ -114,19 +135,23 @@ type PaintRowProps = {
   paintKey: PaintKey
   /** 選んでいるノードの、この番目の塗り（種類は揃っている） */
   paints: Paint[]
+  /** paints と同じ順の、選んでいるノード（直線の向きは枠の大きさで決まる） */
+  nodes: SceneNode[]
   /** 配列の番号（先頭が一番下） */
   index: number
   count: number
   label: string
   removable: boolean
+  /** この行のグラデーションをキャンバスで動かしているなら、その状態 */
+  gradientEdit: GradientEdit | null
   onUpdate: (change: (paints: readonly Paint[]) => Paint[] | null) => void
 }
 
-function PaintRow({ store, selection, paintKey, paints, index, count, label, removable, onUpdate }: PaintRowProps) {
+function PaintRow({ store, selection, paintKey, paints, nodes, index, count, label, removable, gradientEdit, onUpdate }: PaintRowProps) {
   const type = paints[0].type
   const patch = (change: (paint: Paint) => Paint) => store.apply((base) => patchPaintAt(base, selection, paintKey, index, change))
   const preview = (change: (paint: Paint) => Paint) => store.preview((base) => patchPaintAt(base, selection, paintKey, index, change))
-  const patchGradient = (change: (gradient: Gradient) => Gradient) =>
+  const patchGradient = (change: (gradient: Gradient, node: SceneNode) => Gradient) =>
     store.apply((base) => patchGradientAt(base, selection, paintKey, index, change))
   const previewGradient = (change: (gradient: Gradient) => Gradient) =>
     store.preview((base) => patchGradientAt(base, selection, paintKey, index, change))
@@ -141,6 +166,11 @@ function PaintRow({ store, selection, paintKey, paints, index, count, label, rem
           value={type}
           options={optionsOf(PAINT_TYPE_LABELS)}
           onChange={(next) => patch((paint) => convertPaint(paint, next))}
+        />
+        <VisibilityButton
+          label={label}
+          visible={common(paints.map((paint) => paint.visible))}
+          onChange={(visible) => patch((paint) => ({ ...paint, visible }))}
         />
         {count > 1 && (
           <>
@@ -185,18 +215,83 @@ function PaintRow({ store, selection, paintKey, paints, index, count, label, rem
           value={common(paints.map((paint) => (paint.type === 'solid' ? paint.color : '')))}
           nullable={false}
           fallback="#000000"
-          onPreview={(color) => preview(() => ({ type: 'solid', color }))}
+          onPreview={(color) => preview((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible }))}
           onCommit={store.commitPreview}
-          onSet={(color) => color !== null && patch(() => ({ type: 'solid', color }))}
+          onSet={(color) => color !== null && patch((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible }))}
         />
       )}
 
+      <NumberField
+        label="不透明度 %"
+        value={toPercent(common(paints.map((paint) => paint.opacity)))}
+        min={0}
+        max={100}
+        onCommit={(percent) => patch((paint) => ({ ...paint, opacity: percent / 100 }))}
+      />
+
+      {type !== 'solid' && selection.length === 1 && (
+        <div className="variant-actions">
+          <button
+            type="button"
+            aria-pressed={gradientEdit !== null}
+            title="キャンバスで始点・終点（円形は中心と半径、角度は中心と向き）と色の位置をつかんで動かす。線の上のダブルクリックで色を足し、Delete で選んだ色を消す"
+            onClick={() =>
+              store.editGradient(gradientEdit ? null : { id: selection[0], key: paintKey, index, stop: null })
+            }
+          >
+            {gradientEdit ? 'キャンバスでの編集を終える' : 'キャンバスで動かす'}
+          </button>
+        </div>
+      )}
+
       {type === 'linear' && (
-        <NumberField
-          label="角度"
-          value={common(gradients.map((gradient) => (gradient.type === 'linear' ? gradient.angle : 0)))}
-          onCommit={(angle) => patchGradient((g) => (g.type === 'linear' ? { ...g, angle: normalizeAngle(angle) } : g))}
-        />
+        <>
+          <NumberField
+            label="角度"
+            value={common(paints.map((paint, i) => (paint.type === 'linear' ? linearAngle(paint, nodes[i]) : 0)))}
+            onCommit={(angle) => patchGradient((g, node) => withLinearAngle(g, node, angle))}
+          />
+          <div className="field-grid">
+            {(
+              [
+                ['x1', '始点 横 %'],
+                ['y1', '始点 縦 %'],
+                ['x2', '終点 横 %'],
+                ['y2', '終点 縦 %'],
+              ] as const
+            ).map(([key, name]) => (
+              <NumberField
+                key={key}
+                label={name}
+                value={toPercent(common(gradients.map((gradient) => (gradient.type === 'linear' ? gradient[key] : 0))))}
+                onCommit={(percent) => patchGradient((g) => (g.type === 'linear' ? { ...g, [key]: percent / 100 } : g))}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {type === 'conic' && (
+        <div className="field-grid">
+          {(
+            [
+              ['cx', '中心 横 %'],
+              ['cy', '中心 縦 %'],
+            ] as const
+          ).map(([key, name]) => (
+            <NumberField
+              key={key}
+              label={name}
+              value={toPercent(common(gradients.map((gradient) => (gradient.type === 'conic' ? gradient[key] : 0))))}
+              onCommit={(percent) => patchGradient((g) => (g.type === 'conic' ? { ...g, [key]: percent / 100 } : g))}
+            />
+          ))}
+          <NumberField
+            label="始まりの角度"
+            value={common(gradients.map((gradient) => (gradient.type === 'conic' ? gradient.angle : 0)))}
+            onCommit={(angle) => patchGradient((g) => (g.type === 'conic' ? { ...g, angle: normalizeAngle(angle) } : g))}
+          />
+        </div>
       )}
 
       {type === 'radial' && (
@@ -226,7 +321,7 @@ function PaintRow({ store, selection, paintKey, paints, index, count, label, rem
         ) : (
           <>
             {gradients[0].stops.map((_, j) => (
-              <div key={j} className="stop-row">
+              <div key={j} className={gradientEdit?.stop === j ? 'stop-row selected' : 'stop-row'}>
                 <ColorField
                   label={`${label}の${j + 1} 番目`}
                   value={common(gradients.map((gradient) => gradient.stops[j].color))}
@@ -299,13 +394,23 @@ export function EffectListSection({ store, selection, nodes }: EffectListProps) 
         Array.from({ length: count }, (_, index) => {
           const shadows = lists.map((list) => list[index])
           const label = index === 0 ? '影' : `影 ${index + 1}`
-          const patch = (values: Partial<Omit<Effect, 'type'>>) =>
-            store.apply((base) => patchEffectAt(base, selection, index, values))
+          const patch = (values: Partial<Effect>) => store.apply((base) => patchEffectAt(base, selection, index, values))
+          const kind = common(shadows.map((shadow) => shadow.type))
           return (
             <div key={index} className="paint-row">
-              {count > 1 && (
-                <div className="paint-row-head">
-                  <span className="section-title">{label}</span>
+              <div className="paint-row-head">
+                <SelectField
+                  label={`${label}の種類`}
+                  value={kind}
+                  options={optionsOf(EFFECT_TYPE_LABELS)}
+                  onChange={(type) => patch({ type })}
+                />
+                <VisibilityButton
+                  label={label}
+                  visible={common(shadows.map((shadow) => shadow.visible))}
+                  onChange={(visible) => patch({ visible })}
+                />
+                {count > 1 && (
                   <button
                     type="button"
                     className="icon-button"
@@ -315,8 +420,8 @@ export function EffectListSection({ store, selection, nodes }: EffectListProps) 
                   >
                     −
                   </button>
-                </div>
-              )}
+                )}
+              </div>
               <div className="field-grid">
                 <NumberField label="横" value={common(shadows.map((shadow) => shadow.x))} onCommit={(x) => patch({ x })} />
                 <NumberField label="縦" value={common(shadows.map((shadow) => shadow.y))} onCommit={(y) => patch({ y })} />
@@ -358,5 +463,25 @@ export function EffectListSection({ store, selection, nodes }: EffectListProps) 
         </div>
       )}
     </Section>
+  )
+}
+
+/**
+ * 塗り・線・影の表示を切り替える目のボタン（既存のデザインツールの目のアイコン）。隠しても消さずに残る。
+ * 選んだもので揃っていなければ（混在）、押すと全部を表示にする
+ */
+function VisibilityButton({ label, visible, onChange }: { label: string; visible: boolean | Mixed; onChange: (visible: boolean) => void }) {
+  const shown = visible === true
+  return (
+    <button
+      type="button"
+      className="icon-button"
+      aria-label={shown ? `${label}を隠す` : `${label}を表示する`}
+      aria-pressed={!shown}
+      title={shown ? '隠す（消さずに残す）' : '表示する'}
+      onClick={() => onChange(!shown)}
+    >
+      <EyeIcon off={!shown} />
+    </button>
   )
 }

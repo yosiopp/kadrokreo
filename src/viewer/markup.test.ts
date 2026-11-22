@@ -55,6 +55,7 @@ describe('nodeMarkup', () => {
       fills: [],
       strokes: solid('#000000'),
       strokeWidth: 2,
+      strokeDashes: [],
       effects: [],
       points: [
         { x: 0, y: 0 },
@@ -64,6 +65,8 @@ describe('nodeMarkup', () => {
       startCap: 'none',
       endCap: 'none',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     const path: PathNode = {
       ...base,
@@ -81,6 +84,8 @@ describe('nodeMarkup', () => {
       startCap: 'none',
       endCap: 'none',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     const image: ImageNode = {
       ...base,
@@ -90,7 +95,7 @@ describe('nodeMarkup', () => {
       type: 'image',
       assetId: 'a1',
       cornerRadius: 0,
-      fit: 'cover', positionX: 0.5, positionY: 0.5,
+      fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1,
     }
     const scene = sceneOf(frame({ children: ['line', 'path', 'image'] }), line, path, image)
     const assets = { a1: { mime: 'image/jpeg', bytes: new Uint8Array([0, 0, 0]) } }
@@ -113,6 +118,7 @@ describe('nodeMarkup', () => {
       fills: solid('#000000'),
       strokes: [],
       strokeWidth: 1,
+      strokeDashes: [],
       effects: [],
       points: [
         { x: 0, y: 0, radius: 10 },
@@ -123,6 +129,8 @@ describe('nodeMarkup', () => {
       startCap: 'none',
       endCap: 'none',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     const html = nodeMarkup(sceneOf(path), 'path').html
     expect(html).toMatch(/<path d="M17\.07 17\.07 C[^"]* 24\.14 0 L100 0 L100 100 Z"\/>/)
@@ -139,6 +147,7 @@ describe('nodeMarkup', () => {
       fills: [],
       strokes: solid('#ff0000'),
       strokeWidth: 2,
+      strokeDashes: [],
       effects: [],
       points: [
         { x: 0, y: 0 },
@@ -148,6 +157,8 @@ describe('nodeMarkup', () => {
       startCap: 'none',
       endCap: 'arrow',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     // 矢印の長さは max(2 × 4, 10) = 10。線は 10 × 0.8 = 8 手前で止める
     expect(nodeMarkup(sceneOf(line), 'line').html).toBe(
@@ -178,6 +189,8 @@ describe('nodeMarkup', () => {
       startCap: 'arrow',
       endCap: 'none',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     const html = nodeMarkup(sceneOf(path), 'path', { style: { color: 'rgb' } }).html
     // 塗りは元の形のまま、線は始点側を短くする
@@ -206,6 +219,8 @@ describe('nodeMarkup', () => {
       startCap: 'none',
       endCap: 'none',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     expect(nodeMarkup(sceneOf(path), 'path').html).toBe(
       '<svg class="curve" viewBox="0 0 100 100"><path d="M0 0 C100 0 100 0 100 100"/></svg>',
@@ -220,11 +235,16 @@ describe('nodeMarkup', () => {
   it('グラデーションの塗りと線は linearGradient で書き、要素の fill / stroke で指す', () => {
     const gradient = {
       type: 'linear' as const,
-      angle: 0,
+      x1: 0,
+      y1: 0.5,
+      x2: 1,
+      y2: 0.5,
       stops: [
         { offset: 0, color: '#ff0000' },
         { offset: 1, color: '#0000ff' },
       ],
+      opacity: 1,
+      visible: true,
     }
     const path: PathNode = {
       ...base,
@@ -245,6 +265,8 @@ describe('nodeMarkup', () => {
       startCap: 'none',
       endCap: 'none',
       capSize: 0,
+      contours: [],
+      fillRule: 'nonzero',
     }
     const html = nodeMarkup(sceneOf(path), 'path').html
     expect(html).toContain(
@@ -253,8 +275,12 @@ describe('nodeMarkup', () => {
     )
     expect(html).toContain('<linearGradient id="blob-stroke"')
     expect(html).toContain('<path d="M0 0 L100 0 L50 50 Z" fill="url(#blob-fill)" stroke="url(#blob-stroke)"/>')
+    // 塗りの不透明度は、どの色にも stop-opacity で付ける
+    expect(nodeMarkup(sceneOf({ ...path, fills: [{ ...gradient, opacity: 0.5 }] }), 'path').html).toContain(
+      '<stop offset="0" stop-color="#ff0000" stop-opacity="0.5"/><stop offset="1" stop-color="#0000ff" stop-opacity="0.5"/>',
+    )
     // 円形のグラデーションは、半径 1 の円を変換で枠に合わせた楕円にする
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: gradient.stops }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: gradient.stops, opacity: 1, visible: true }
     expect(nodeMarkup(sceneOf({ ...path, fills: [radial] }), 'path').html).toContain(
       '<radialGradient id="blob-fill" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(50 0 0 25 50 25)">',
     )
@@ -306,6 +332,8 @@ describe('nodeMarkup の出力形式', () => {
         startCap: 'none',
         endCap: 'none',
         capSize: 0,
+        contours: [],
+        fillRule: 'nonzero',
       } satisfies PathNode,
     )
 
@@ -375,7 +403,7 @@ describe('nodeMarkup の出力形式', () => {
   })
 
   it('画像は JSX では閉じた img にする', () => {
-    const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5 }
+    const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
     const { html } = nodeMarkup(sceneOf(image), 'image', { style: { format: 'react' } })
     expect(html).toContain(`<img style={{ width: 100, height: 50, objectFit: 'cover' }} src="photo.png" alt="Photo" />`)
   })

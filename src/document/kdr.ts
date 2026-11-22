@@ -12,6 +12,7 @@ import type {
   Page,
   CornerRadius,
   Paint,
+  PathContour,
   PathPoint,
   Scene,
   SceneNode,
@@ -267,18 +268,22 @@ const DEFAULTS = {
   fills: [],
   strokes: [],
   strokeWidth: 1,
+  strokeDashes: [],
   effects: [],
   cornerRadius: 0,
   closed: false,
   startCap: 'none',
   endCap: 'none',
   capSize: 0,
+  contours: [],
+  fillRule: 'nonzero',
   fontWeight: 400,
   textAlign: 'left',
   lineHeight: 1.2,
   fit: 'cover',
   positionX: 0.5,
   positionY: 0.5,
+  scale: 1,
   clipContent: true,
   layout: null,
   component: null,
@@ -345,6 +350,7 @@ function parseNode(
     fills: optional('fills', paints),
     strokes: optional('strokes', paints),
     strokeWidth: optional('strokeWidth', size),
+    strokeDashes: optional('strokeDashes', dashes),
     effects: optional('effects', effects),
   })
   const cornerRadius = () => optional('cornerRadius', parseCornerRadius)
@@ -368,6 +374,8 @@ function parseNode(
         startCap: optional('startCap', (v, p) => oneOf(v, CAPS, p)),
         endCap: optional('endCap', (v, p) => oneOf(v, CAPS, p)),
         capSize: optional('capSize', size),
+        contours: optional('contours', contours),
+        fillRule: optional('fillRule', (v, p) => oneOf(v, ['nonzero', 'evenodd'] as const, p)),
       }
     }
     case 'text':
@@ -393,6 +401,7 @@ function parseNode(
         fit: optional('fit', (v, p) => oneOf(v, ['stretch', 'cover', 'contain'] as const, p)),
         positionX: optional('positionX', ratio),
         positionY: optional('positionY', ratio),
+        scale: optional('scale', imageScale),
       }
     }
     case 'frame':
@@ -434,6 +443,32 @@ function parseConstraints(value: unknown, path: string): { horizontal: Constrain
   const axis = (key: 'horizontal' | 'vertical'): Constraint =>
     raw[key] === undefined ? 'start' : oneOf(raw[key], CONSTRAINTS, `${path}.${key}`)
   return { horizontal: axis('horizontal'), vertical: axis('vertical') }
+}
+
+const MAX_CONTOURS = 1_000
+const MAX_DASHES = 16
+
+/** 線の破線の並び。0 以上の数で、すべて 0 は受け付けない（描けない） */
+function dashes(value: unknown, path: string): number[] {
+  const list = array(value, path).map((item, i) => size(item, `${path}[${i}]`))
+  if (list.length > MAX_DASHES) throw new KdrError(`${path}: 破線の数が多すぎます`)
+  if (list.length > 0 && list.every((item) => item === 0)) throw new KdrError(`${path}: 長さがすべて 0 です`)
+  return list
+}
+
+/** パスの 2 つ目以降の輪郭。頂点の数は最初の輪郭と合わせて MAX_PATH_POINTS まで */
+function contours(value: unknown, path: string): PathContour[] {
+  const list = array(value, path)
+  if (list.length > MAX_CONTOURS) throw new KdrError(`${path}: 輪郭の数が多すぎます`)
+  let total = 0
+  return list.map((item, i) => {
+    const at = `${path}[${i}]`
+    const raw = record(item, at)
+    const points = array(raw.points, `${at}.points`).map((point, j) => parsePoint(point, `${at}.points[${j}]`))
+    total += points.length
+    if (points.length < 2 || total > MAX_PATH_POINTS) throw new KdrError(`${at}.points: 頂点の数が不正です`)
+    return { points, closed: raw.closed === undefined ? false : boolean(raw.closed, `${at}.closed`) }
+  })
 }
 
 /** パスの頂点。制御点 in / out（頂点からのずれ）と角の丸め radius は省略でき、なければ書かない（角の頂点） */
@@ -479,6 +514,11 @@ function parseProperty(value: unknown, path: string): ComponentProperty {
     name,
     type: oneOf(raw.type, ['text', 'boolean', 'instance'] as const, `${path}.type`),
     targets: raw.targets === undefined ? [] : array(raw.targets, `${path}.targets`).map((id, i) => nodeId(id, `${path}.targets[${i}]`)),
+    // 重なりは 1 つにまとめる（どのコンポーネントがあるかは使うときに確かめる）
+    preferred:
+      raw.preferred === undefined
+        ? []
+        : [...new Set(array(raw.preferred, `${path}.preferred`).map((id, i) => nodeId(id, `${path}.preferred[${i}]`)))],
   }
 }
 
@@ -541,10 +581,22 @@ function parseCornerRadius(value: unknown, path: string): CornerRadius {
   return [a, b, c, d]
 }
 
+/** 画像の切り抜きの拡大の上限 */
+export const MAX_IMAGE_SCALE = 100
+
+function imageScale(value: unknown, path: string): number {
+  const n = number(value, path)
+  if (n < 1 || n > MAX_IMAGE_SCALE) throw new KdrError(`${path}: 1〜${MAX_IMAGE_SCALE} の範囲ではありません`)
+  return n
+}
+
 function parsePaint(value: unknown, path: string): Paint {
   const raw = record(value, path)
-  const type = oneOf(raw.type, ['solid', 'linear', 'radial'] as const, `${path}.type`)
-  if (type === 'solid') return { type, color: color(raw.color, `${path}.color`) }
+  const type = oneOf(raw.type, ['solid', 'linear', 'radial', 'conic'] as const, `${path}.type`)
+  // 塗りの不透明度は 1 なら、表示は true なら省く（paintFile）
+  const opacity = raw.opacity === undefined ? 1 : ratio(raw.opacity, `${path}.opacity`)
+  const visible = raw.visible === undefined ? true : boolean(raw.visible, `${path}.visible`)
+  if (type === 'solid') return { type, color: color(raw.color, `${path}.color`), opacity, visible }
   const stops = array(raw.stops, `${path}.stops`).map((stop, i): ColorStop => {
     const rawStop = record(stop, `${path}.stops[${i}]`)
     return {
@@ -564,9 +616,31 @@ function parsePaint(value: unknown, path: string): Paint {
       rx: size(raw.rx, `${path}.rx`),
       ry: size(raw.ry, `${path}.ry`),
       stops,
+      opacity,
+      visible,
     }
   }
-  return { type, angle: number(raw.angle, `${path}.angle`), stops }
+  if (type === 'conic') {
+    return {
+      type,
+      cx: number(raw.cx, `${path}.cx`),
+      cy: number(raw.cy, `${path}.cy`),
+      angle: number(raw.angle, `${path}.angle`),
+      stops,
+      opacity,
+      visible,
+    }
+  }
+  return {
+    type,
+    x1: number(raw.x1, `${path}.x1`),
+    y1: number(raw.y1, `${path}.y1`),
+    x2: number(raw.x2, `${path}.x2`),
+    y2: number(raw.y2, `${path}.y2`),
+    stops,
+    opacity,
+    visible,
+  }
 }
 
 function effects(value: unknown, path: string): Effect[] {
@@ -576,12 +650,14 @@ function effects(value: unknown, path: string): Effect[] {
     const at = `${path}[${i}]`
     const raw = record(item, at)
     return {
-      type: oneOf(raw.type, ['drop-shadow'] as const, `${at}.type`),
+      type: oneOf(raw.type, ['drop-shadow', 'inner-shadow'] as const, `${at}.type`),
       x: number(raw.x, `${at}.x`),
       y: number(raw.y, `${at}.y`),
       blur: size(raw.blur, `${at}.blur`),
       color: color(raw.color, `${at}.color`),
       opacity: ratio(raw.opacity, `${at}.opacity`),
+      // 表示は true なら省く（nodeFile）
+      visible: raw.visible === undefined ? true : boolean(raw.visible, `${at}.visible`),
     }
   })
 }
@@ -613,7 +689,14 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
   for (const [key, value] of Object.entries(node)) {
     if (DERIVED_KEYS.has(key)) continue
     if (Object.hasOwn(DEFAULTS, key) && sameValue(value, DEFAULTS[key as keyof typeof DEFAULTS])) continue
-    out[key] = key === 'layout' && value !== null ? omitDefaults(value as AutoLayout, LAYOUT_DEFAULTS) : value
+    out[key] =
+      key === 'layout' && value !== null
+        ? omitDefaults(value as AutoLayout, LAYOUT_DEFAULTS)
+        : PAINT_KEYS.has(key)
+          ? (value as Paint[]).map(paintFile)
+          : key === 'effects'
+            ? (value as Effect[]).map(effectFile)
+            : value
   }
   // 大きさの決め方は fixed でない向きだけ。テキストの高さは常に hug なので書かない
   const sizing: Partial<Record<'width' | 'height', Sizing>> = {}
@@ -626,9 +709,18 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
   if (node.constraints.vertical !== 'start') constraints.vertical = node.constraints.vertical
   if (Object.keys(constraints).length > 0) out.constraints = constraints
   if (node.type === 'frame') {
-    if (out.component && (out.component as ComponentLink).role === 'instance' && Object.keys((out.component as { overrides: object }).overrides).length === 0) {
-      const { overrides: _overrides, ...link } = out.component as { overrides: object }
-      out.component = link
+    if (out.component && (out.component as ComponentLink).role === 'instance') {
+      const { overrides, ...link } = out.component as { overrides: Record<NodeId, Override> }
+      // 上書きの塗りも、不透明度が 1 なら省く
+      const written = Object.fromEntries(
+        Object.entries(overrides).map(([id, override]) => [
+          id,
+          Object.fromEntries(
+            Object.entries(override).map(([key, value]) => [key, PAINT_KEYS.has(key) ? (value as Paint[]).map(paintFile) : value]),
+          ),
+        ]),
+      )
+      out.component = Object.keys(written).length === 0 ? link : { ...link, overrides: written }
     }
     // 元の説明文とプロパティは、空なら書かない
     if (out.component && (out.component as ComponentLink).role === 'main') {
@@ -636,12 +728,30 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
       out.component = {
         ...link,
         ...(description === '' ? {} : { description }),
-        ...(properties.length === 0 ? {} : { properties }),
+        // 差し替えの候補（preferred）も、空なら書かない
+        ...(properties.length === 0
+          ? {}
+          : { properties: properties.map(({ preferred, ...property }) => (preferred.length === 0 ? property : { ...property, preferred })) }),
       }
     }
     if (node.children.length > 0) out.children = node.children.map((childId) => nodeFile(scene, childId))
   }
   return out
+}
+
+/** 塗りの配列を持つ項目（ノードと上書きで同じ名前） */
+const PAINT_KEYS = new Set(['fills', 'strokes'])
+
+/** ファイルに書く塗り。不透明度は 1 なら、表示は true なら省く */
+function paintFile(paint: Paint): Partial<Paint> {
+  const { opacity, visible, ...rest } = paint
+  return { ...rest, ...(opacity === 1 ? {} : { opacity }), ...(visible ? {} : { visible }) }
+}
+
+/** ファイルに書く効果。表示は true なら省く */
+function effectFile(effect: Effect): Partial<Effect> {
+  const { visible, ...rest } = effect
+  return visible ? rest : effect
 }
 
 function omitDefaults<T extends object>(value: T, defaults: Partial<Record<keyof T, unknown>>): Partial<T> {

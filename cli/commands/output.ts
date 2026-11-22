@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { pngBaseName, pngFileName } from '../../src/canvas/exportPng.ts'
 import { kdrFile } from '../../src/document/kdr.ts'
+import { exportSvg, svgFileName } from '../../src/document/svgExport.ts'
 import { pruneAssets } from '../../src/editor/operations/document.ts'
 import { CODE_FORMAT_LABELS, type CodeFormat, componentName } from '../../src/viewer/codeFormat.ts'
 import { type ColorFormat } from '../../src/viewer/colors.ts'
@@ -10,6 +11,7 @@ import { safeFileName } from '../../src/ui/download.ts'
 import { nodeCode, nodeMarkup, slug, standaloneHtml } from '../../src/viewer/markup.ts'
 import { type Step, UsageError } from '../args.ts'
 import { encodePng } from '../png.ts'
+import { estimateTextLines } from '../textMeasure.ts'
 import { type Command, checkStep, flag, numberOption, option, positional } from './common.ts'
 
 // 書き出すコマンド（CSS・HTML・kdr の JSON を標準出力に出す）
@@ -102,6 +104,59 @@ export const png: Command = {
       ctx.warn(`PNG を書き出しました: ${path}`)
     }
   },
+}
+
+export const svgOut: Command = {
+  name: 'svg-out',
+  kind: 'export',
+  usage: 'svg-out [ノード…] [--to ファイル.svg | - ] [--each] [--no-ids] [--background #rrggbb]',
+  summary:
+    'viewer の SVG 書き出しと同じ SVG ファイルを書き出す（取り込みの svg とは逆向き）。ノードなしならページ全体、ノードならそれらを囲む範囲。' +
+    '--to を省くと viewer と同じ名前で今のフォルダへ（- は標準出力）。--each はノードごとに別のファイルにする（--to はフォルダ）。' +
+    '--no-ids はレイヤー名から作る id を付けない、--background は範囲全体に背景の色を敷く。' +
+    'テキストの折り返しと基線は見積もった字幅・高さで決める',
+  flags: ['each', 'no-ids'],
+  async run(ctx, step) {
+    checkStep(step, { options: ['to', 'each', 'no-ids', 'background'] })
+    const { session } = ctx
+    const page = session.page
+    const to = option(step, 'to')
+    const each = flag(step, 'each')
+    const background = svgBackground(option(step, 'background'))
+    const whole = step.positionals.length === 0
+    const targets = whole ? page.rootIds : paintOrder(page, session.resolveAll(step.positionals))
+    if (targets.length === 0) throw new UsageError('svg-out: 書き出すものがありません（ページが空です）')
+    if (each && whole) throw new UsageError('svg-out: --each にはノードを指定してください')
+    if (each && to === '-') throw new UsageError('svg-out: --each のときは --to に標準出力（-）を使えません')
+
+    const groups = each ? targets.map((id) => [id]) : [targets]
+    for (const group of groups) {
+      const svg = exportSvg(page, group, {
+        assets: session.document.assets,
+        textLines: estimateTextLines,
+        ids: !flag(step, 'no-ids'),
+        ...(background === undefined ? {} : { background }),
+      })
+      const bytes = new TextEncoder().encode(svg)
+      if (to === '-') {
+        ctx.stdout(bytes)
+        continue
+      }
+      const name = svgFileName(safeFileName(pngBaseName(session.document, page, group, whole)))
+      const path = to === undefined ? name : each ? join(to, name) : to
+      await ctx.writeFile(path, bytes)
+      ctx.warn(`SVG を書き出しました: ${path}`)
+    }
+  },
+}
+
+/** svg-out の --background。#rrggbb か #rgb を小文字の #rrggbb にする */
+function svgBackground(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined
+  const text = raw.trim().toLowerCase()
+  if (/^#[0-9a-f]{6}$/.test(text)) return text
+  if (/^#[0-9a-f]{3}$/.test(text)) return `#${[...text.slice(1)].map((c) => c + c).join('')}`
+  throw new UsageError(`svg-out: --background は #rrggbb か #rgb です: ${raw}`)
 }
 
 /** markup.ts が JSX の先頭で import する CSS のファイル名に合わせる */

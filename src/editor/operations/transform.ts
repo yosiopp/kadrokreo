@@ -3,6 +3,7 @@ import {
   type Point,
   applyMatrix,
   getAbsoluteBounds,
+  getNodesBounds,
   getWorldCenter,
   getWorldMatrix,
   getWorldRotation,
@@ -12,7 +13,8 @@ import {
   tidy,
 } from '../../document/geometry.ts'
 import { isLine } from '../../document/path.ts'
-import type { NodeId, Scene, SceneNode } from '../../document/types.ts'
+import { isInstance } from '../../document/component.ts'
+import type { CornerRadius, NodeId, Paint, PathPoint, Scene, SceneNode } from '../../document/types.ts'
 import { type NodePatch, patchNodes, topLevelIds, updateNode } from './tree.ts'
 
 // 移動・回転・大きさの変更
@@ -152,4 +154,139 @@ export function resizeNodes<T extends Scene>(
     const height = Math.max(minSize, bottom - top)
     return { ...position, ...sizePatch(node, width, height) }
   })
+}
+
+/**
+ * プロパティパネルの「回転」に角度を入れたとき。1 つなら枠の中心を軸にその角度にする。
+ * 複数で角度が揃っていれば、選択範囲の中心を軸にまとめて差の分だけ回す（ハンドルで回したのと同じ）。
+ * 揃っていなければ、回す量が 1 つに決まらないので、それぞれを枠の中心を軸にその角度にする。
+ */
+export function setRotation<T extends Scene>(scene: T, ids: readonly NodeId[], rotation: number): T {
+  const target = normalizeAngle(rotation)
+  const tops = topLevelIds(scene, ids)
+  const angles = new Set(tops.map((id) => scene.nodes[id].rotation))
+  const bounds = getNodesBounds(scene, tops)
+  if (tops.length > 1 && angles.size === 1 && bounds) {
+    const [current] = angles
+    const pivot = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
+    return rotateNodes(scene, tops, pivot, normalizeAngle(target - current))
+  }
+  return patchNodes(scene, ids, () => ({ rotation: target }))
+}
+
+export type FlipDirection = 'horizontal' | 'vertical'
+
+/**
+ * 選択範囲の中心を通る線で、左右（horizontal）か上下（vertical）に裏返す。
+ * kdr は裏返しを持たないので、形に焼き込む: 位置を鏡に映し、角度の符号を変え、
+ * 中身（パスの頂点（輪郭すべて）・フレームの子・角丸の 4 隅・グラデーション・影のずれ・親の辺への固定）を鏡に映す。
+ * テキストと画像は字や絵を裏返せないので、位置と向きだけを映す。インスタンスも中身は元のまま（位置と向きだけ）。
+ * 自動で並べるフレームの並びの順は入れ替えない（並びから外した子は映す）。
+ */
+export function flipNodes<T extends Scene>(scene: T, ids: readonly NodeId[], direction: FlipDirection): T {
+  const tops = topLevelIds(scene, ids)
+  const bounds = getNodesBounds(scene, tops)
+  if (!bounds) return scene
+  const horizontal = direction === 'horizontal'
+  const axis: Axis = horizontal ? 'x' : 'y'
+  const middle = horizontal ? bounds.x + bounds.width / 2 : bounds.y + bounds.height / 2
+  const patches = new Map<NodeId, NodePatch>()
+  const add = (id: NodeId, patch: NodePatch) => patches.set(id, { ...patches.get(id), ...patch })
+
+  for (const id of tops) {
+    const node = scene.nodes[id]
+    const center = getWorldCenter(scene, id)
+    const mirrored = horizontal ? { x: 2 * middle - center.x, y: center.y } : { x: center.x, y: 2 * middle - center.y }
+    const pose = poseInParent(scene, node.parentId, mirrored, -getWorldRotation(scene, id), node)
+    add(id, { x: pose.x, y: pose.y, rotation: pose.rotation })
+    // 親の中での固定の向き。親がページに対して 90° 回っていれば、ページの左右は親の上下になる
+    const parentAngle = Math.abs(normalizeAngle(getWorldRotation(scene, node.parentId))) % 180
+    if (parentAngle === 0 || parentAngle === 90) {
+      const parentAxis: Axis = parentAngle === 0 ? axis : axis === 'x' ? 'y' : 'x'
+      add(id, { constraints: swapConstraint(node.constraints, parentAxis) })
+    }
+    mirrorContent(scene, node, axis, add)
+  }
+  return patchNodes(scene, patches.keys(), (node) => patches.get(node.id) ?? null)
+}
+
+type Axis = 'x' | 'y'
+
+/** node の座標系で axis の向きに中身を鏡に映すパッチを add へ積む。子孫もたどる */
+function mirrorContent(scene: Scene, node: SceneNode, axis: Axis, add: (id: NodeId, patch: NodePatch) => void) {
+  // 字・絵・インスタンスの中身（元の写し）は映せない
+  if (node.type === 'text' || node.type === 'image' || isInstance(node)) return
+  // 影のずれはページの向きで持つが、裏返す向きはどの深さでもページの同じ向きになる（回転の符号が変わるだけ）
+  const patch: Record<string, unknown> = {
+    fills: node.fills.map((paint) => mirrorPaint(paint, axis)),
+    strokes: node.strokes.map((paint) => mirrorPaint(paint, axis)),
+    effects: node.effects.map((effect) => ({ ...effect, [axis]: -effect[axis] || 0 })),
+  }
+  if (node.type === 'rect' || node.type === 'frame') patch.cornerRadius = mirrorRadius(node.cornerRadius, axis)
+  if (node.type === 'path') {
+    // 頂点は枠に対する割合なので 1 から引き、制御点は頂点からのずれなので符号を変える
+    const flip = <P extends { x: number; y: number }>(p: P, offset: boolean): P =>
+      axis === 'x' ? { ...p, x: offset ? -p.x || 0 : tidy(1 - p.x) } : { ...p, y: offset ? -p.y || 0 : tidy(1 - p.y) }
+    const mirrorPoints = (points: readonly PathPoint[]) =>
+      points.map((point): PathPoint => {
+        const next = flip(point, false)
+        if (point.in) next.in = flip(point.in, true)
+        if (point.out) next.out = flip(point.out, true)
+        return next
+      })
+    patch.points = mirrorPoints(node.points)
+    // 2 つ目以降の輪郭（穴など）も同じ枠に対する割合なので、同じく映す
+    patch.contours = node.contours.map((contour) => ({ ...contour, points: mirrorPoints(contour.points) }))
+  }
+  add(node.id, patch as NodePatch)
+  if (node.type !== 'frame') return
+  for (const childId of node.children) {
+    const child = scene.nodes[childId]
+    // 自動で並べるフレームの並びの中の子は、位置をフレームが決めるので中身だけ映す
+    if (!node.layout || child.layoutPositioning === 'absolute') {
+      const size = axis === 'x' ? node.width : node.height
+      add(childId, {
+        [axis]: tidy(size - child[axis] - (axis === 'x' ? child.width : child.height)),
+        rotation: tidy(normalizeAngle(-child.rotation)),
+        constraints: swapConstraint(child.constraints, axis),
+      })
+    }
+    mirrorContent(scene, child, axis, add)
+  }
+}
+
+function mirrorPaint(paint: Paint, axis: Axis): Paint {
+  if (paint.type === 'linear') {
+    return axis === 'x' ? { ...paint, x1: tidy(1 - paint.x1), x2: tidy(1 - paint.x2) } : { ...paint, y1: tidy(1 - paint.y1), y2: tidy(1 - paint.y2) }
+  }
+  if (paint.type === 'radial') return axis === 'x' ? { ...paint, cx: tidy(1 - paint.cx) } : { ...paint, cy: tidy(1 - paint.cy) }
+  if (paint.type === 'conic') {
+    // 鏡に映すと回る向きが逆になるので、始まりの向きを映し、色の並びを逆にする（位置 t の色は 1 - t へ）
+    const angle = axis === 'x' ? 180 - paint.angle : -paint.angle
+    const stops = paint.stops.toReversed().map((stop) => ({ ...stop, offset: tidy(1 - stop.offset) }))
+    return {
+      ...paint,
+      ...(axis === 'x' ? { cx: tidy(1 - paint.cx) } : { cy: tidy(1 - paint.cy) }),
+      angle: tidy(normalizeAngle(angle)),
+      stops,
+    }
+  }
+  return paint
+}
+
+/** 左上・右上・右下・左下の 4 隅を鏡に映す */
+function mirrorRadius(radius: CornerRadius, axis: Axis): CornerRadius {
+  if (typeof radius === 'number') return radius
+  const [tl, tr, br, bl] = radius
+  return axis === 'x' ? [tr, tl, bl, br] : [bl, br, tr, tl]
+}
+
+function swapConstraint(
+  constraints: SceneNode['constraints'],
+  axis: Axis,
+): SceneNode['constraints'] {
+  const key = axis === 'x' ? 'horizontal' : 'vertical'
+  const value = constraints[key]
+  const swapped = value === 'start' ? 'end' : value === 'end' ? 'start' : value
+  return swapped === value ? constraints : { ...constraints, [key]: swapped }
 }

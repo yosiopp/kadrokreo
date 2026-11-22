@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { isInstance } from '../../document/component.ts'
-import { IMAGE_MIME_TYPES } from '../../document/kdr.ts'
+import { IMAGE_MIME_TYPES, MAX_IMAGE_SCALE } from '../../document/kdr.ts'
 import { cornerRadii } from '../../document/paint.ts'
 import { OpenFileButton } from '../../ui/OpenFile.tsx'
 import { CAP_LABELS, FIT_LABELS, optionsOf } from '../../ui/labels.ts'
+import { DEFAULT_DASHES, evenDashes, formatDashes, parseDashes, withDashAt } from '../dashes.ts'
 import { setCornerRadius } from '../operations/paints.ts'
+import type { SceneNode, Style } from '../../document/types.ts'
+import { updateNode } from '../operations/tree.ts'
 import { type PanelContext, linesIn, shapesIn, textsIn, MIXED, common, mapValue } from './context.ts'
-import { CheckField, NumberField, Section, SelectField } from './fields.tsx'
+import { CheckField, NumberField, Section, SelectField, TextField } from './fields.tsx'
 import { EffectListSection, PaintListSection } from './PaintSections.tsx'
 import { PathSection } from './PathSection.tsx'
 import { isMarkerCap } from '../../document/path.ts'
@@ -51,6 +54,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
           nodes={filled}
           paintKey="fills"
           title="塗り"
+          gradientEdit={ctx.state.gradientEdit}
           fallback="#d9d9d9"
           // テキストは塗りを消せない
           required={texts.length > 0}
@@ -68,7 +72,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
               onChange={(fit) => apply({ fit })}
             />
           )}
-          {!inner && fits !== 'stretch' && (
+          {!inner && (fits !== 'stretch' || images.some((node) => node.scale !== 1)) && (
             <div className="field-grid">
               <NumberField
                 label="横の位置 %"
@@ -86,6 +90,16 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
               />
             </div>
           )}
+          {!inner && (
+            // 切り抜きの拡大。100% は拡大しない。どこを残すかは上の位置で決める
+            <NumberField
+              label="拡大 %"
+              value={mapValue(common(images.map((node) => node.scale)), (v) => Math.round(v * 1000) / 10)}
+              min={100}
+              max={MAX_IMAGE_SCALE * 100}
+              onCommit={(percent) => apply({ scale: percent / 100 })}
+            />
+          )}
           <OpenFileButton accept={IMAGE_MIME_TYPES.join(',')} onFiles={(files) => onReplaceImage(files[0])}>
             画像を差し替え
           </OpenFileButton>
@@ -99,6 +113,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
           nodes={stroked}
           paintKey="strokes"
           title="線"
+          gradientEdit={ctx.state.gradientEdit}
           fallback="#000000"
           // 直線は線を消せない
           required={lines.length > 0}
@@ -112,6 +127,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
               onCommit={(strokeWidth) => apply({ strokeWidth })}
             />
           )}
+          {!limited && <DashFields ctx={ctx} nodes={stroked} />}
         </PaintListSection>
       )}
 
@@ -179,6 +195,48 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
       )}
 
       {onlyShapes && !limited && <EffectListSection store={store} selection={selection} nodes={shapes} />}
+    </>
+  )
+}
+
+/**
+ * 破線にするかと、破線の線の長さ・間隔。並びが 3 つ以上（SVG から取り込んだものなど）なら、並び全体の欄も出す。
+ * 並びは CSS・SVG の stroke-dasharray と同じ（dashes.ts）
+ */
+function DashFields({ ctx, nodes }: { ctx: PanelContext; nodes: (SceneNode & Style)[] }) {
+  const { store, apply } = ctx
+  const dashes = nodes.map((node) => node.strokeDashes)
+  const style = common(dashes.map((list) => (list.length > 0 ? 'dashed' : 'solid')))
+  const dashed = style === 'dashed'
+  const even = dashes.map(evenDashes)
+  const pattern = common(dashes.map(formatDashes))
+  const complex = dashed && even.some((list) => list.length > 2)
+  // 長さ・間隔を変えると、選んでいるノードごとにその番目だけを変える（ほかの番目は保つ）
+  const setAt = (index: number, value: number) =>
+    store.apply((base) =>
+      nodes.reduce((scene, node) => updateNode(scene, node.id, { strokeDashes: withDashAt(node.strokeDashes, index, value) }), base),
+    )
+  return (
+    <>
+      <CheckField
+        label="破線"
+        value={style === MIXED ? MIXED : dashed}
+        onChange={(checked) => apply({ strokeDashes: checked ? [...DEFAULT_DASHES] : [] })}
+      />
+      {dashed && (
+        <NumberField label="破線の長さ" value={common(even.map((list) => list[0]))} min={0} onCommit={(value) => setAt(0, value)} />
+      )}
+      {dashed && <NumberField label="間隔" value={common(even.map((list) => list[1]))} min={0} onCommit={(value) => setAt(1, value)} />}
+      {complex && (
+        <TextField
+          label="破線の並び"
+          value={pattern === MIXED ? '' : pattern}
+          onCommit={(text) => {
+            const parsed = parseDashes(text)
+            if (parsed) apply({ strokeDashes: parsed })
+          }}
+        />
+      )}
     </>
   )
 }

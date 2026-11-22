@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
 import { pngBaseName, pngFileName, renderPng } from '../canvas/exportPng.ts'
+import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
+import { svgFileName } from '../document/svgExport.ts'
 import { assetBlob } from '../canvas/images.ts'
 import { getAbsoluteBounds, getContentBounds, getNodesBounds } from '../document/geometry.ts'
 import { decodeKdr } from '../document/kdr.ts'
@@ -153,6 +155,33 @@ export default function ViewerApp() {
     }
   }
 
+  /** ノード（いくつでも）、または表示中のページ全体を SVG として保存する。範囲とファイル名は PNG と同じ決め方 */
+  function exportSvg(nodeIds?: readonly NodeId[]) {
+    if (!doc || !page) return
+    const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
+    const name = pngBaseName(doc, page, targets, !nodeIds)
+    try {
+      downloadBlob(renderSvg(page, doc.assets, targets), svgFileName(safeFileName(name)))
+      setMessage(null)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'SVG の書き出しに失敗しました')
+    }
+  }
+
+  /** ノード（いくつでも）、または表示中のページ全体を SVG の文字にしてクリップボードへ入れる。中身は「SVG に」と同じ */
+  async function copySvg(nodeIds?: readonly NodeId[]): Promise<boolean> {
+    if (!doc || !page) return false
+    const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
+    try {
+      const copied = await copyText(svgMarkup(page, doc.assets, targets))
+      setMessage(copied ? null : 'クリップボードへコピーできませんでした')
+      return copied
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'SVG のコピーに失敗しました')
+      return false
+    }
+  }
+
   /** 画像のノードに埋め込んである、元のファイルを保存する */
   function saveImage(nodeId: NodeId) {
     const node = page?.nodes[nodeId]
@@ -266,6 +295,15 @@ export default function ViewerApp() {
                       >
                         PNG
                       </button>
+                      <button
+                        type="button"
+                        className="frame-export"
+                        title="このフレームを SVG に書き出し"
+                        aria-label={`${frame.name} を SVG に書き出し`}
+                        onClick={() => exportSvg([frame.id])}
+                      >
+                        SVG
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -273,7 +311,7 @@ export default function ViewerApp() {
             )}
             <section className="panel-section" aria-label="書き出し">
               <h3 className="section-title">書き出し</h3>
-              <ExportControls scale={scale} onScaleChange={setScale} onExport={() => exportPng()}>
+              <ExportControls scale={scale} onScaleChange={setScale} onExport={() => exportPng()} onExportSvg={() => exportSvg()} onCopySvg={() => copySvg()}>
                 ページを PNG に
               </ExportControls>
             </section>
@@ -311,6 +349,8 @@ export default function ViewerApp() {
             scale={scale}
             onScaleChange={setScale}
             onExport={() => exportPng(selection)}
+            onExportSvg={() => exportSvg(selection)}
+            onCopySvg={() => copySvg(selection)}
             onSelect={selectAndReveal}
             onSelectNodes={selectNodes}
             onSaveImage={() => selectedId && saveImage(selectedId)}

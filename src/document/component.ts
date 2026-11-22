@@ -105,16 +105,21 @@ export type PropertyValue = string | boolean
 /** インスタンスでのプロパティの値と、元と違えているか */
 export type PropertyState = { property: ComponentProperty; value: PropertyValue; overridden: boolean }
 
-/** プロパティを結べるノードか（元 main の中にあり、元そのものでも写しでもなく、種類が合う） */
+/**
+ * プロパティを結べるノードか（元 main の中にあり、元そのものでなく、種類が合う）。
+ * main の中に置いた入れ子のインスタンスの中身（写し）にも、文言と表示は結べる（上書きのキーは元の側の写しの id で、入れ子の中の上書きと同じ形）。
+ * 差し替えは、main の中に直接置いたインスタンスだけ（写しの中のインスタンスは、元が分からないため）
+ */
 export function canBindProperty(scene: Scene, mainId: NodeId, type: ComponentProperty['type'], targetId: NodeId): boolean {
   const target = scene.nodes[targetId]
-  if (!target || targetId === mainId || owningInstance(scene, targetId)) return false
+  if (!target || targetId === mainId) return false
+  const copy = owningInstance(scene, targetId) !== null
   // いちばん近い元が main であること（間に別の元があれば、そちらのプロパティになる）
   let current = target.parentId
   while (current !== null && current !== mainId && !isMain(scene.nodes[current])) current = scene.nodes[current].parentId
   if (current !== mainId) return false
   if (type === 'text') return target.type === 'text'
-  if (type === 'instance') return isInstance(target)
+  if (type === 'instance') return !copy && isInstance(target)
   return true
 }
 

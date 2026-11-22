@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { pngFileName, renderPng } from '../canvas/exportPng.ts'
+import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
+import { copyText } from '../ui/clipboard.ts'
+import { svgFileName } from '../document/svgExport.ts'
 import type { Viewport } from '../canvas/viewport.ts'
 import { getContentBounds } from '../document/geometry.ts'
 import { IMAGE_MIME_TYPES, KDR_EXTENSION, decodeKdr } from '../document/kdr.ts'
@@ -219,8 +222,8 @@ function Editor({ store }: { store: EditorStore }) {
     }
   }
 
-  /** 選択中のもの（何も選んでいなければ表示中のページ全体）を PNG に書き出す */
-  async function exportPng(scale: number) {
+  /** 書き出す範囲（重なり順）とファイル名（拡張子の前）。選択中のもの、何も選んでいなければ表示中のページ全体 */
+  function exportTargets() {
     const { document, page, selection } = store.getState()
     // 親子を一緒に選んでいたら親だけにして、重なり順に並べる
     const targets =
@@ -228,11 +231,40 @@ function Editor({ store }: { store: EditorStore }) {
     // 1 つだけ選んでいればその名前、そうでなければ「ドキュメント名 - ページ名」をファイル名にする
     const name =
       selection.length === 1 ? page.nodes[selection[0]].name : `${document.name} - ${page.name}`
+    return { document, page, targets, name: safeFileName(name) }
+  }
+
+  /** 選択中のもの（何も選んでいなければ表示中のページ全体）を PNG に書き出す */
+  async function exportPng(scale: number) {
+    const { document, page, targets, name } = exportTargets()
     try {
       const png = await renderPng(page, document.assets, targets, scale)
-      downloadBlob(png, pngFileName(safeFileName(name), scale))
+      downloadBlob(png, pngFileName(name, scale))
     } catch (error) {
       showError(error, 'PNG の書き出しに失敗しました')
+    }
+  }
+
+  /** 選択中のもの（何も選んでいなければ表示中のページ全体）を SVG に書き出す */
+  function exportSvg() {
+    const { document, page, targets, name } = exportTargets()
+    try {
+      downloadBlob(renderSvg(page, document.assets, targets), svgFileName(name))
+    } catch (error) {
+      showError(error, 'SVG の書き出しに失敗しました')
+    }
+  }
+
+  /** 選択中のもの（何も選んでいなければ表示中のページ全体）を SVG の文字にしてクリップボードへ入れる（「SVG に」と同じ中身） */
+  async function copySvg(): Promise<boolean> {
+    const { document, page, targets } = exportTargets()
+    try {
+      const copied = await copyText(svgMarkup(page, document.assets, targets))
+      if (!copied) setMessage('クリップボードへコピーできませんでした')
+      return copied
+    } catch (error) {
+      showError(error, 'SVG のコピーに失敗しました')
+      return false
     }
   }
 
@@ -333,11 +365,12 @@ function Editor({ store }: { store: EditorStore }) {
             onToolChange={setTool}
             onPasteImages={importImages}
             onPasteSvg={importSvgText}
+            onCopySvg={copySvg}
             dropTarget={dropTarget}
           />
           {dragging && <div className="drop-overlay">画像・SVG または kdr ファイルをドロップ</div>}
         </main>
-        <PropertiesPanel store={store} state={state} onExportPng={exportPng} onReplaceImage={replaceImage} />
+        <PropertiesPanel store={store} state={state} onExportPng={exportPng} onExportSvg={exportSvg} onCopySvg={copySvg} onReplaceImage={replaceImage} />
       </div>
     </div>
   )

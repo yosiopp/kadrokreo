@@ -1,5 +1,6 @@
 import { solid } from '../src/document/paint.ts'
 import type { Effect, PathPoint, SceneNode } from '../src/document/types.ts'
+import { parseDashes } from '../src/editor/dashes.ts'
 import type { NodePatch } from '../src/editor/operations/tree.ts'
 import { UsageError } from './args.ts'
 
@@ -8,10 +9,10 @@ import { UsageError } from './args.ts'
 // 入れ子の項目は . でつなぐ（layout.gap=8、sizing.width=fill）。配列の要素は番号でつなぐ（effects.0.blur=4）。
 // よく使うものには略記がある: fill=色 / stroke=色（単色 1 つの塗り・線にする。null で外す）、
 // shadow.blur=4 など（最初の影。なければ既定の影を付けてから変える）、shadow=null（影を外す）、
-// cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、radius=8（パスの頂点の角の丸め。頂点ごとならカンマで並べる）。
+// cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、dash=4,2（破線。null で実線）、radius=8（パスの頂点の角の丸め。頂点ごとならカンマで並べる）。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
 
-const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 }
+const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: true }
 
 /** 略記を、本来の項目の「名前=値」に直す。直せないもの（そのノードにない項目）はそのまま返す */
 function expandShorthand(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): [string, unknown] | null {
@@ -28,6 +29,12 @@ function expandShorthand(node: SceneNode, path: string, raw: string, draft: Reco
     if (values.length === 1) return [head, values[0]]
     if (values.length !== 4) throw new UsageError(`${path}: 数値 1 つか、左上,右上,右下,左下 の 4 つを指定してください`)
     return [head, values]
+  }
+  if (head === 'dash' && rest.length === 0 && Object.hasOwn(node, 'strokeDashes')) {
+    // 破線。「線の長さ,間隔」（3 つ以上も可。stroke-dasharray と同じ並び）。null・none・0 で実線
+    const dashes = parseDashes(raw)
+    if (dashes === null) throw new UsageError(`${path}: 0 以上の数をカンマで並べてください（null で実線）`)
+    return ['strokeDashes', dashes]
   }
   if (head === 'radius' && rest.length === 0 && node.type === 'path') {
     // パスの頂点の角の丸め。数値 1 つなら全部の頂点、カンマで並べれば頂点ごと（0 は丸めない）

@@ -43,6 +43,14 @@ export function estimateTextWidth(text: string, fontSize: number, fontWeight: nu
   return total * fontSize * (fontWeight >= 700 && !mono ? BOLD_RATIO : 1)
 }
 
+/** canvas/text.ts の layoutText と同じ決まりで、見積もった幅を使って行に分ける（SVG の書き出しのテキスト） */
+export function estimateTextLines(style: Style): { text: string }[] {
+  const measure = (text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily)
+  const paragraphs = style.text.split('\n')
+  const wrapAt = wrapWidth(style)
+  return (wrapAt === null ? paragraphs : paragraphs.flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure))).map((text) => ({ text }))
+}
+
 /** canvas/text.ts の measureText と同じ決まりで、見積もった幅を使って大きさを出す */
 export function estimateTextSize(style: Style): { width: number; height: number } {
   const measure = (text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily)

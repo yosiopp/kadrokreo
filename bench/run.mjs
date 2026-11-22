@@ -156,6 +156,50 @@ function screenMapper(document, box) {
 
 const center = (bounds) => ({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 })
 
+/**
+ * レイヤーの一覧が rows 行ぶんの高さになったか。一覧は見えている行だけを作る（仮想スクロール）ので、行の要素は数えず、
+ * 作っていない行の余白を含めた一覧の高さ（1 行 28px、src/ui/virtualRows.ts の ROW_HEIGHT）で見る。itemSelector は行の要素（editor は .layer-row、viewer は .inspect-layer）
+ */
+function listHasRows([itemSelector, rows]) {
+  const list = [...document.querySelectorAll('.layer-list')].find((element) => element.querySelector(itemSelector))
+  // 一覧の下の余白（12px）を除いた高さ
+  return list !== undefined && list.getBoundingClientRect().height - 12 >= rows * 28
+}
+
+/** 一覧に出ている行の数（作っていない行も含む） */
+function listRowCount(itemSelector) {
+  const list = [...document.querySelectorAll('.layer-list')].find((element) => element.querySelector(itemSelector))
+  return list ? Math.round((list.getBoundingClientRect().height - 12) / 28) : 0
+}
+
+/** 名前が name の行が作られるまで、一覧を上からスクロールしていく（見えている行しか作らないので） */
+async function revealRow(page, itemSelector, name) {
+  await page.evaluate(async ([itemSelector, name]) => {
+    const find = () => [...document.querySelectorAll(`${itemSelector} .layer-name`)].find((element) => element.textContent === name)
+    const list = [...document.querySelectorAll('.layer-list')].find((element) => element.querySelector(itemSelector))
+    let scroller = list.parentElement
+    while (scroller && !['auto', 'scroll'].includes(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    // 探す行（DragTarget・Background）は一覧の終わりのほうにあるので、まずいちばん下、次にいちばん上から順に見る
+    if (!find()) {
+      scroller.scrollTop = scroller.scrollHeight
+      await frame()
+    }
+    if (!find()) {
+      scroller.scrollTop = 0
+      await frame()
+    }
+    while (!find()) {
+      const before = scroller.scrollTop
+      scroller.scrollTop += scroller.clientHeight
+      await frame()
+      if (scroller.scrollTop === before) break
+    }
+    find()?.scrollIntoView({ block: 'center' })
+    await frame()
+  }, [itemSelector, name])
+}
+
 /** kdr を開くまで: ファイルを渡してから、レイヤーの行が出て描画が 1 回終わるまで */
 async function measureOpen(browser, url, kdrPath, rowSelector, rows) {
   const walls = []
@@ -168,11 +212,7 @@ async function measureOpen(browser, url, kdrPath, rowSelector, rows) {
     const before = await session.busy()
     const start = Date.now()
     await input.setInputFiles(kdrPath)
-    await session.page.waitForFunction(
-      ([selector, count]) => document.querySelectorAll(selector).length >= count,
-      [rowSelector, rows],
-      { polling: 'raf', timeout: 120_000 },
-    )
+    await session.page.waitForFunction(listHasRows, [rowSelector, rows], { polling: 'raf', timeout: 120_000 })
     await session.frames()
     walls.push(Date.now() - start)
     tasks.push((await session.busy()) - before)
@@ -202,11 +242,20 @@ async function benchEditor(browser, url, caseName, kdrPath, document, meta) {
   const session = await openPage(browser, url)
   const { page, measure, frames } = session
   await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(kdrPath)
-  await page.waitForFunction((count) => document.querySelectorAll('.layer-row').length >= count, meta.layerRows, { timeout: 120_000 })
+  await page.waitForFunction(listHasRows, ['.layer-row', meta.layerRows], { timeout: 120_000 })
   await frames()
   const box = await page.locator('.canvas-view').boundingBox()
   const toScreen = screenMapper(document, box)
-  const selectedNames = () => page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()
+  // レイヤーの一覧は見えている行しか作らないので、選んだ数はプロパティの欄の見出しで数える（何も選んでいなければ「プロパティ」、
+  // 1 つなら種類の名前、2 つ以上なら「N 個を選択中」）。名前は、その行を一覧に出してから読む
+  const selectedCount = async () => {
+    const title = await page.locator('.properties-panel .panel-title').first().textContent()
+    return title === 'プロパティ' ? 0 : Number(title.match(/^(\d+) 個を選択中$/)?.[1] ?? 1)
+  }
+  const selectedNames = async (name) => {
+    await revealRow(page, '.layer-row', name)
+    return page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()
+  }
   /** 操作が狙いどおりに効いたか。外れていれば、その値は意味がないので結果に残して知らせる */
   const checks = []
   const check = (name, ok) => ok || checks.push(name)
@@ -233,38 +282,41 @@ async function benchEditor(browser, url, caseName, kdrPath, document, meta) {
   // レイヤーパネルを開いた状態（フレームは開き、インスタンスは閉じた既定のまま）で図形をドラッグ
   const target = toScreen(center(meta.dragTarget))
   results.dragLayersOpen = await drag(target, { x: 3, y: 2 }, `${caseName}-editor-drag`)
-  check('ドラッグで DragTarget を選んでいない', (await selectedNames()).join() === 'DragTarget')
+  check('ドラッグで DragTarget を選んでいない', (await selectedCount()) === 1 && (await selectedNames('DragTarget')).includes('DragTarget'))
   await page.keyboard.press('Meta+z')
   // 比べるために、ページ直下のフレームを閉じて行を減らした状態でも測る
   for (const name of ['Tree', 'Instances', 'Images']) {
+    await revealRow(page, '.layer-row', name)
     const caret = page.locator(`.layer-row:has(.layer-name:text-is("${name}")) .layer-caret[aria-label="閉じる"]`).first()
     if ((await caret.count()) > 0) await caret.click()
   }
   results.dragLayersClosed = await drag(target, { x: 3, y: 2 }, `${caseName}-editor-drag-closed`)
-  results.dragLayersClosed.rows = await page.locator('.layer-row').count()
+  results.dragLayersClosed.rows = await page.evaluate(listRowCount, '.layer-row')
   results.dragLayersOpen.rows = meta.layerRows
   await page.keyboard.press('Meta+z')
   // 閉じたフレームを開き直す
   for (const name of ['Tree', 'Instances', 'Images']) {
+    await revealRow(page, '.layer-row', name)
     const caret = page.locator(`.layer-row:has(.layer-name:text-is("${name}")) .layer-caret[aria-label="開く"]`).first()
     if ((await caret.count()) > 0) await caret.click()
   }
-  await page.waitForFunction((count) => document.querySelectorAll('.layer-row').length >= count, meta.layerRows)
+  await page.waitForFunction(listHasRows, ['.layer-row', meta.layerRows])
 
   // 範囲選択の途中（何もない場所から、木のほうへ）
   await page.keyboard.press('Escape')
   results.marquee = await drag(toScreen(center(meta.empty)), { x: 12, y: -4 }, `${caseName}-editor-marquee`, true)
-  check('範囲選択で何も選んでいない', (await selectedNames()).length > 0)
+  check('範囲選択で何も選んでいない', (await selectedCount()) > 0)
   await page.keyboard.press('Escape')
   // 範囲選択の途中で、選択が変わらない動き（何もない場所の中で行き来する）
   results.marqueeSame = await drag(toScreen(center(meta.empty)), { x: 2, y: 1 }, `${caseName}-editor-marquee-same`)
-  check('何もない場所の範囲選択で何か選んだ', (await selectedNames()).length === 0)
+  check('何もない場所の範囲選択で何か選んだ', (await selectedCount()) === 0)
   await page.keyboard.press('Escape')
 
   // コンポーネントの元の色を変えたときの同期（色の欄に打ち込む = preview と確定）
+  await revealRow(page, '.layer-row', 'Background')
   await page.locator('.layer-row:has(.layer-name:text-is("Background"))').first().click()
   const color = page.locator('[aria-label="塗りの色"]').first()
-  check('Background を選べていない', (await selectedNames()).join() === 'Background')
+  check('Background を選べていない', (await selectedCount()) === 1 && (await selectedNames('Background')).includes('Background'))
   results.componentSync = await measure(Math.min(args.runs, 10), (i) => color.fill(i % 2 === 0 ? '#fde68a' : '#f8fafc'))
   check('元の色を変えられていない', (await color.inputValue()) === '#f8fafc')
   await page.keyboard.press('Escape')
@@ -282,11 +334,12 @@ async function benchViewer(browser, url, kdrPath, meta) {
   const session = await openPage(browser, url)
   const { page, frames } = session
   await page.locator('input[type=file]').setInputFiles(kdrPath)
-  await page.waitForFunction((count) => document.querySelectorAll('.inspect-layer').length >= count, meta.layerRows, { timeout: 120_000 })
+  await page.waitForFunction(listHasRows, ['.inspect-layer', meta.layerRows], { timeout: 120_000 })
   await frames()
   const box = await page.locator('.canvas-view').boundingBox()
 
   // 一覧（色・文字・影）は何も選んでいないときに出る。選んでから Escape で外したときの描き直し
+  await revealRow(page, '.inspect-layer', 'DragTarget')
   const row = page.locator('.inspect-layer:has(.layer-name:text-is("DragTarget"))').first()
   // 選ぶ側の時間は含めず、外した側だけを数える
   const deselect = []

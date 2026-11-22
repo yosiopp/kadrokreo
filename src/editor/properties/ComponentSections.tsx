@@ -25,10 +25,12 @@ import { OVERRIDE_LABELS, PROPERTY_TYPE_LABELS } from '../../ui/labels.ts'
 import {
   addComponentProperty,
   bindComponentProperty,
+  moveComponentProperty,
   removeComponentProperty,
   renameComponentProperty,
   setComponentDescription,
   setInstanceProperty,
+  setPreferredComponents,
   unbindComponentProperty,
 } from '../componentProperties.ts'
 import {
@@ -375,7 +377,7 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
         </Section>
       )}
 
-      {!inner && single && <PropertyBindingSection ctx={ctx} />}
+      {single && <PropertyBindingSection ctx={ctx} />}
     </>
   )
 }
@@ -408,7 +410,7 @@ function DescriptionField({ value, onCommit }: { value: string; onCommit: (value
   )
 }
 
-/** 元のプロパティの一覧（名前を変える・消す）。結ぶのは、元の中のノードを選んだときの節で */
+/** 元のプロパティの一覧（名前を変える・並べ替える・消す、差し替えの候補を選ぶ）。結ぶのは、元の中のノードを選んだときの節で */
 function MainPropertiesList({ ctx, main }: { ctx: PanelContext; main: MainNode }) {
   const { store, page } = ctx
   const { properties } = main.component
@@ -418,37 +420,106 @@ function MainPropertiesList({ ctx, main }: { ctx: PanelContext; main: MainNode }
       {properties.length === 0 && (
         <p className="section-note">元の中のノードを選ぶと、文言・表示・入れ子のインスタンスの元をプロパティにできます。</p>
       )}
-      {properties.map((property) => {
+      {properties.map((property, index) => {
         const targets = property.targets.filter((id) => canBindProperty(page, main.id, property.type, id))
         return (
-          <div key={property.name} className="variant-property">
-            <TextField
-              label={PROPERTY_TYPE_LABELS[property.type]}
-              value={property.name}
-              onCommit={(next) => store.apply((base) => renameComponentProperty(base, main.id, property.name, next))}
+          <div key={property.name} className="component-property-block">
+            <div className="variant-property">
+              <TextField
+                label={SHORT_TYPE_LABELS[property.type]}
+                value={property.name}
+                onCommit={(next) => store.apply((base) => renameComponentProperty(base, main.id, property.name, next))}
+              />
+              <MoveButtons
+                label={`プロパティ ${property.name}`}
+                index={index}
+                count={properties.length}
+                onMove={(to) => store.apply((base) => moveComponentProperty(base, main.id, property.name, to))}
+              />
+              <button
+                type="button"
+                className="icon-button"
+                title={`結んだノード（${targets.length} か所）を選ぶ`}
+                aria-label={`プロパティ ${property.name} を結んだノードを選ぶ`}
+                disabled={targets.length === 0}
+                onClick={() => store.select(targets)}
+              >
+                {targets.length}
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                title="このプロパティを消す（インスタンスの値は、ふつうの上書きとして残る）"
+                aria-label={`プロパティ ${property.name} を消す`}
+                onClick={() => store.apply((base) => removeComponentProperty(base, main.id, property.name))}
+              >
+                ×
+              </button>
+            </div>
+            {property.type === 'instance' && <PreferredList ctx={ctx} main={main} property={property} />}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * 差し替えのプロパティの候補（既存のデザインツールの preferred values）。インスタンスで選ぶ欄の先頭に、この順で出る。
+ * 足す欄では、結んだ入れ子のインスタンスと循環しないコンポーネントだけを選べる
+ */
+function PreferredList({ ctx, main, property }: { ctx: PanelContext; main: MainNode; property: ComponentProperty }) {
+  const { store, state } = ctx
+  const components = listComponents(state.document)
+  const preferred = property.preferred.flatMap((id) => {
+    const found = components.find(({ node }) => node.component.id === id)
+    return found ? [found] : []
+  })
+  const set = (ids: string[]) => store.apply((base) => setPreferredComponents(base, main.id, property.name, ids))
+  const ids = preferred.map(({ node }) => node.component.id)
+  // 元そのものや、元を含むコンポーネントを候補にすると循環する
+  const addable = components.filter(
+    ({ node }) => !ids.includes(node.component.id) && canHoldInstance(state.document, ctx.page, main.id, node.component.id),
+  )
+  return (
+    <div className="preferred-components" aria-label={`${property.name} の候補`}>
+      <ul>
+        {preferred.map(({ page: mainPage, node }, index) => (
+          <li key={node.component.id} className="variant-property">
+            <span className="property-bound">{optionName(mainPage, node)}</span>
+            <MoveButtons
+              label={`候補 ${node.name}`}
+              index={index}
+              count={preferred.length}
+              onMove={(to) => {
+                const next = ids.filter((id) => id !== node.component.id)
+                next.splice(to, 0, node.component.id)
+                set(next)
+              }}
             />
             <button
               type="button"
               className="icon-button"
-              title={`結んだノード（${targets.length} か所）を選ぶ`}
-              aria-label={`プロパティ ${property.name} を結んだノードを選ぶ`}
-              disabled={targets.length === 0}
-              onClick={() => store.select(targets)}
-            >
-              {targets.length}
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              title="このプロパティを消す（インスタンスの値は、ふつうの上書きとして残る）"
-              aria-label={`プロパティ ${property.name} を消す`}
-              onClick={() => store.apply((base) => removeComponentProperty(base, main.id, property.name))}
+              title="候補から外す"
+              aria-label={`候補 ${node.name} を外す`}
+              onClick={() => set(ids.filter((id) => id !== node.component.id))}
             >
               ×
             </button>
-          </div>
-        )
-      })}
+          </li>
+        ))}
+      </ul>
+      <SelectField<string>
+        label="候補"
+        value=""
+        options={[
+          ['', preferred.length === 0 ? '候補を足す（なければすべて）' : '候補を足す…'],
+          ...addable.map(({ page: mainPage, node }) => [node.component.id, optionName(mainPage, node)] as const),
+        ]}
+        onChange={(id) => {
+          if (id !== '') set([...ids, id])
+        }}
+      />
     </div>
   )
 }
@@ -496,6 +567,7 @@ function InstancePropertyFields({ ctx, instance }: { ctx: PanelContext; instance
             ctx={ctx}
             value={String(value)}
             overridden={overridden}
+            preferred={property.preferred}
             allowed={(componentId) => nested?.allowed(componentId) ?? false}
             onChange={(componentId) => set(property.name, componentId)}
           />
@@ -563,6 +635,9 @@ function PropertyBindingSection({ ctx }: { ctx: PanelContext }) {
   )
 }
 
+/** 元のプロパティの一覧で、名前の欄に添える種類の短い呼び名（並べ替えのボタンが並ぶので、欄が狭くならないように） */
+const SHORT_TYPE_LABELS: Record<ComponentProperty['type'], string> = { text: '文言', boolean: '表示', instance: '差し替え' }
+
 const CREATE_LABELS: Record<ComponentProperty['type'], string> = {
   text: '文言をプロパティに',
   boolean: '表示をプロパティに',
@@ -611,13 +686,27 @@ type ComponentSelectProps = {
   /** いまの元のコンポーネントの id */
   value: string
   overridden?: boolean
+  /** 先頭にまとめて出すコンポーネントの id（差し替えのプロパティの候補）。空ならすべてを 1 つの並びで */
+  preferred?: readonly string[]
   /** 選べるコンポーネントか（選べないものは灰色で出す） */
   allowed: (componentId: string) => boolean
   onChange: (componentId: string) => void
 }
 
-/** インスタンスの元を、ドキュメントにあるコンポーネントから選ぶ欄 */
-function ComponentSelect({ label, ariaLabel, ctx, value, overridden, allowed, onChange }: ComponentSelectProps) {
+/** インスタンスの元を、ドキュメントにあるコンポーネントから選ぶ欄。候補があれば先頭に「候補」、残りを「そのほか」に分けて出す */
+function ComponentSelect({ label, ariaLabel, ctx, value, overridden, preferred = [], allowed, onChange }: ComponentSelectProps) {
+  const components = listComponents(ctx.state.document)
+  const option = ({ page: mainPage, node }: { page: Page; node: MainNode }) => (
+    <option
+      key={node.component.id}
+      value={node.component.id}
+      disabled={node.component.id !== value && !allowed(node.component.id)}
+    >
+      {optionName(mainPage, node)}
+    </option>
+  )
+  const first = preferred.flatMap((id) => components.filter(({ node }) => node.component.id === id))
+  const rest = components.filter(({ node }) => !preferred.includes(node.component.id))
   return (
     <label className="field">
       <span className="field-label">
@@ -633,15 +722,14 @@ function ComponentSelect({ label, ariaLabel, ctx, value, overridden, allowed, on
           event.target.blur()
         }}
       >
-        {listComponents(ctx.state.document).map(({ page: mainPage, node }) => (
-          <option
-            key={node.component.id}
-            value={node.component.id}
-            disabled={node.component.id !== value && !allowed(node.component.id)}
-          >
-            {optionName(mainPage, node)}
-          </option>
-        ))}
+        {first.length === 0 ? (
+          components.map(option)
+        ) : (
+          <>
+            <optgroup label="候補">{first.map(option)}</optgroup>
+            {rest.length > 0 && <optgroup label="そのほか">{rest.map(option)}</optgroup>}
+          </>
+        )}
       </select>
     </label>
   )

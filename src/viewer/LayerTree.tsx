@@ -3,6 +3,7 @@ import { isComponentPart } from '../document/variants.ts'
 import { isOpen, layerRows, toggleFolding } from '../document/layers.ts'
 import type { NodeId, Scene, SceneNode } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'
+import { useVirtualRows } from '../ui/virtualRows.ts'
 import { TYPE_LABELS } from '../ui/labels.ts'
 import { nodeKind } from '../document/path.ts'
 import { searchLayers } from './traverse.ts'
@@ -55,6 +56,9 @@ export function LayerTree({ scene, selection, onSelect }: Props) {
   const rows = searching
     ? searchLayers(scene, needle).map((id) => ({ node: scene.nodes[id], depth: 0 }))
     : layerRows(scene, folding)
+  // 行は見えている分だけ作る（数千行あっても、開いたときに全部を作らない）
+  const listRef = useRef<HTMLUListElement>(null)
+  const visible = useVirtualRows(listRef, rows.length)
 
   return (
     <>
@@ -72,8 +76,8 @@ export function LayerTree({ scene, selection, onSelect }: Props) {
         }}
       />
       {searching && rows.length === 0 && <p className="panel-hint">見つかりません。</p>}
-      <ul className="layer-list">
-        {rows.map(({ node, depth }) => (
+      <ul ref={listRef} className="layer-list" style={{ paddingTop: visible.before, paddingBottom: `calc(12px + ${visible.after}px)` }}>
+        {rows.slice(visible.start, visible.end).map(({ node, depth }) => (
           <LayerTreeItem
             key={node.id}
             node={node}

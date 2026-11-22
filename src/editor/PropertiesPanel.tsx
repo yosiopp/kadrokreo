@@ -20,6 +20,10 @@ type Props = {
   state: EditorState
   /** 選択中のもの（何も選んでいなければページ全体）を PNG に書き出す */
   onExportPng: (scale: number) => void
+  /** 選択中のもの（何も選んでいなければページ全体）を SVG に書き出す */
+  onExportSvg: () => void
+  /** 選択中のもの（何も選んでいなければページ全体）を SVG の文字にしてクリップボードへ入れる */
+  onCopySvg: () => Promise<boolean>
   /** 選んでいる画像を、選んだファイルの画像に差し替える */
   onReplaceImage: (file: File) => void
 }
@@ -35,7 +39,7 @@ const SHORTCUTS = [
   ['] / [', '最前面 / 最背面へ'],
 ]
 
-export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: Props) {
+export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopySvg, onReplaceImage }: Props) {
   const { page, selection } = state
   const nodes = selection.map((id) => page.nodes[id])
 
@@ -53,7 +57,7 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
             </div>
           ))}
         </dl>
-        <ExportSection label="このページを PNG に書き出し" onExport={onExportPng} />
+        <ExportSection label="このページを PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
       </aside>
     )
   }
@@ -84,7 +88,7 @@ export function PropertiesPanel({ store, state, onExportPng, onReplaceImage }: P
       <AppearanceSections ctx={ctx} onReplaceImage={onReplaceImage} />
       <FrameSections ctx={ctx} />
       <TextSection ctx={ctx} />
-      <ExportSection label="PNG に書き出し" onExport={onExportPng} />
+      <ExportSection label="PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
     </aside>
   )
 }

@@ -9,16 +9,16 @@ import {
   instanceOf,
   isMain,
 } from '../document/component.ts'
-import { getCorners, getNodesBounds, tidy } from '../document/geometry.ts'
+import { type Point, type Size, getCorners, getNodesBounds, tidy } from '../document/geometry.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
 import { followsConstraints, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf } from '../document/variants.ts'
-import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Effect, Gradient, NodeId, Override, Paint, Scene, SceneNode } from '../document/types.ts'
-import { hasStroke, isGradient, isRounded, paintColor } from '../document/paint.ts'
+import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Effect, Gradient, ImageNode, NodeId, Override, Paint, Scene, SceneNode } from '../document/types.ts'
+import { angleLine, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, isLine, isMarkerCap } from '../document/path.ts'
-import { ALIGN_CONTENT_LABELS, CAP_LABELS, CONSTRAINT_LABELS, FIT_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
+import { ALIGN_CONTENT_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
 
@@ -53,7 +53,8 @@ export function inspectNode(
   id: NodeId,
   format: ColorFormat = 'hex',
 ): InspectSection[] {
-  const node = scene.nodes[id]
+  // 隠した塗り・線・効果は出さない
+  const node = withoutHidden(scene.nodes[id])
   const hex = (color: string) => formatColor(color, format, { upper: true })
   const sections: InspectSection[] = []
   const add = (title: string, rows: (InspectRow | false | null)[]) => {
@@ -113,25 +114,36 @@ export function inspectNode(
 
   // 塗りが重なっていれば、上（手前）のものから並べる
   const paintRows = (paints: readonly Paint[]): InspectRow[] =>
-    paints.toReversed().flatMap((paint) =>
+    paints.toReversed().flatMap((paint): InspectRow[] => [
+      ...paintRowsOf(paint),
+      ...(paint.opacity < 1 ? [{ label: '不透明度', value: percent(paint.opacity) }] : []),
+    ])
+  const paintRowsOf = (paint: Paint): InspectRow[] =>
       paint.type === 'solid'
         ? [{ label: '色', value: hex(paint.color), color: paint.color }]
         : [
             paint.type === 'linear'
-              ? { label: 'グラデーション', value: `${num(paint.angle)}°` }
-              : {
-                  label: '円形のグラデーション',
-                  value: `中心 ${percent(paint.cx)} ${percent(paint.cy)}・半径 ${percent(paint.rx)} ${percent(paint.ry)}`,
-                },
+              ? {
+                  label: 'グラデーション',
+                  value: isAngleLine(paint, node)
+                    ? `${num(linearAngle(paint, node))}°`
+                    : `${num(linearAngle(paint, node))}°・${percent(paint.x1)} ${percent(paint.y1)} → ${percent(paint.x2)} ${percent(paint.y2)}`,
+                }
+              : paint.type === 'conic'
+                ? { label: '角度のグラデーション', value: `中心 ${percent(paint.cx)} ${percent(paint.cy)}・${num(paint.angle)}°から` }
+                : {
+                    label: '円形のグラデーション',
+                    value: `中心 ${percent(paint.cx)} ${percent(paint.cy)}・半径 ${percent(paint.rx)} ${percent(paint.ry)}`,
+                  },
             ...paint.stops.map((stop) => ({ label: percent(stop.offset), value: hex(stop.color), color: stop.color })),
-          ],
-    )
+          ]
   if ('fills' in node) add('塗り', paintRows(node.fills))
 
   if ('strokes' in node && hasStroke(node)) {
     add('線', [
       ...paintRows(node.strokes),
       { label: '太さ', value: num(node.strokeWidth) },
+      node.strokeDashes.length > 0 && { label: '破線', value: node.strokeDashes.map(num).join(', ') },
       'startCap' in node && node.startCap !== 'none' && { label: '始点', value: CAP_LABELS[node.startCap] },
       'endCap' in node && node.endCap !== 'none' && { label: '終点', value: CAP_LABELS[node.endCap] },
       node.type === 'path' && !node.closed && (isMarkerCap(node.startCap) || isMarkerCap(node.endCap)) && {
@@ -145,6 +157,9 @@ export function inspectNode(
     add(
       '影',
       node.effects.flatMap((shadow) => [
+        { label: '種類', value: EFFECT_TYPE_LABELS[shadow.type] },
+        // パスの影は CSS の filter の drop-shadow で書くが、内側の影はそれで表せない
+        shadow.type === 'inner-shadow' && node.type === 'path' && { label: 'CSS', value: 'filter で表せないので、コードに含めていない' },
         { label: '横', value: num(shadow.x) },
         { label: '縦', value: num(shadow.y) },
         { label: 'ぼかし', value: num(shadow.blur) },
@@ -165,6 +180,11 @@ export function inspectNode(
     const asset = doc.assets[node.assetId]
     add('画像', [
       { label: '収め方', value: FIT_LABELS[node.fit] },
+      node.fit !== 'stretch' && (node.positionX !== 0.5 || node.positionY !== 0.5) && {
+        label: '寄せる位置',
+        value: `${percent(node.positionX)} ${percent(node.positionY)}`,
+      },
+      node.scale !== 1 && { label: '拡大', value: percent(node.scale) },
       asset !== undefined && { label: '形式', value: asset.mime.replace('image/', '').toUpperCase() },
     ])
   }
@@ -181,9 +201,14 @@ export function inspectNode(
       'プロパティ',
       node.component.properties.map((property) => {
         const targets = property.targets.filter((target) => canBindProperty(scene, node.id, property.type, target))
+        // 差し替えの候補（preferred values）があれば、名前を書き添える
+        const preferred =
+          property.type === 'instance'
+            ? property.preferred.flatMap((componentId) => (findMain(doc, componentId) ? [propertyText(doc, 'instance', componentId)] : []))
+            : []
         return {
           label: property.name,
-          value: `${PROPERTY_TYPE_LABELS[property.type]}（${targets.length} か所）`,
+          value: `${PROPERTY_TYPE_LABELS[property.type]}（${targets.length} か所）${preferred.length > 0 ? `・候補: ${preferred.join(' / ')}` : ''}`,
           nodes: targets,
         }
       }),
@@ -277,8 +302,8 @@ function overrideRow(label: string, override: Override | undefined): InspectRow 
  */
 export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = {}): string {
   const style = { ...DEFAULT_CODE_STYLE, ...options }
-  const color = (value: string) => formatColor(value, style.color)
-  const node = scene.nodes[id]
+  // 隠した塗り・線・効果は書かない
+  const node = withoutHidden(scene.nodes[id])
   const parent = node.parentId === null ? null : scene.nodes[node.parentId]
   const lines: string[] = []
   const add = (property: string, value: string) => lines.push(`${property}: ${value};`)
@@ -396,10 +421,10 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     const top = node.fills.at(-1)
     if (node.fills.some(isGradient)) {
       // 文字のグラデーション（や重ねた塗り）は、背景を文字の形で切り抜いて表す
-      add('background', backgroundCss(node.fills, style)!)
+      add('background', backgroundCss(node.fills, style, node)!)
       add('background-clip', 'text')
       add('color', 'transparent')
-    } else if (top?.type === 'solid') add('color', color(top.color))
+    } else if (top?.type === 'solid') add('color', topColorCss(top, style))
     add('font-family', node.fontFamily)
     add('font-size', px(node.fontSize))
     add('font-weight', String(node.fontWeight))
@@ -415,22 +440,27 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     if (node.fit !== 'stretch' && (node.positionX !== 0.5 || node.positionY !== 0.5)) {
       add('object-position', `${percent(node.positionX)} ${percent(node.positionY)}`)
     }
+    if (node.scale !== 1) add('object-view-box', imageViewBox(node))
   } else if (node.type === 'path') {
     // SVG の fill や stroke にはグラデーションを直接書けないので、いちばん上の塗りの始まりの色で代える
     const fill = node.fills.at(-1)
     const stroke = node.strokes.at(-1)
-    if (!isLine(node)) add('fill', fill ? color(paintColor(fill)) : 'none')
-    add('stroke', stroke ? color(paintColor(stroke)) : 'none')
+    if (!isLine(node)) add('fill', fill ? topColorCss(fill, style) : 'none')
+    add('stroke', stroke ? topColorCss(stroke, style) : 'none')
     if (stroke) add('stroke-width', px(node.strokeWidth))
+    if (stroke && node.strokeDashes.length > 0) add('stroke-dasharray', node.strokeDashes.map(px).join(' '))
+    if (fill && node.fillRule === 'evenodd') add('fill-rule', 'evenodd')
   } else {
-    const background = backgroundCss(node.fills, style)
+    const background = backgroundCss(node.fills, style, node)
     if (background !== null) add('background', background)
     const stroke = node.strokes.at(-1)
     if (stroke && hasStroke(node)) {
       // 線は枠の辺の上に、内と外へ半分ずつ引く（描画と同じ）。border だと box-sizing しだいで内か外に寄り、
       // 中身の置き場所も狭まるので、場所を取らない outline を、太さの半分だけ内側へずらして使う。
       // outline は色を 1 つしか持てないので、いちばん上の線の色（グラデーションなら始まりの色）で代える
-      add('outline', `${px(node.strokeWidth)} solid ${color(paintColor(stroke))}`)
+      // 破線は CSS の dashed で代える（線と空きの長さは指定できない）
+      const lineStyle = node.strokeDashes.length > 0 ? 'dashed' : 'solid'
+      add('outline', `${px(node.strokeWidth)} ${lineStyle} ${topColorCss(stroke, style)}`)
       add('outline-offset', px(-node.strokeWidth / 2))
     }
   }
@@ -438,11 +468,12 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   if (node.type === 'ellipse') add('border-radius', '50%')
   else if ('cornerRadius' in node && isRounded(node.cornerRadius)) add('border-radius', radiusText(node.cornerRadius, px))
   if ('effects' in node && node.effects.length > 0) {
-    // CSS は先に書いた影が手前。効果は先頭が奥なので、逆に並べる
-    const shadows = node.effects.toReversed().map((shadow) => shadowCss(shadow, style))
-    // パスの影は、枠ではなく形に沿って落ちる
-    if (node.type === 'path') add('filter', shadows.map((shadow) => `drop-shadow(${shadow})`).join(' '))
-    else add('box-shadow', shadows.join(', '))
+    // CSS は先に書いた影が手前。効果は先頭が奥なので、逆に並べる。内側の影は inset（box-shadow ではどの落ち影よりも手前に描かれる）
+    if (node.type === 'path') {
+      // パスの影は、枠ではなく形に沿って落ちる。filter の drop-shadow には内側の影がないので、落ち影だけ
+      const drops = splitEffects(node.effects).drop.toReversed()
+      if (drops.length > 0) add('filter', drops.map((shadow) => `drop-shadow(${shadowCss(shadow, style)})`).join(' '))
+    } else add('box-shadow', node.effects.toReversed().map((shadow) => shadowCss(shadow, style)).join(', '))
   }
   if (node.type === 'frame' && node.clipContent && node.children.length > 0) add('overflow', 'hidden')
 
@@ -450,17 +481,61 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
 }
 
 /**
+ * グラデーションの CSS。size はノードの枠。
  * ドキュメントの角度は 0° が左から右、90° が上から下。CSS は 0deg が下から上、90deg が左から右なので、90° ずれる。
- * 色が変わる区間の長さは、描画（canvas/render.ts）も CSS も「枠の角がちょうど両端の色になる長さ」で同じ。
+ * CSS の linear-gradient は枠の中心を通り「枠の角がちょうど両端の色になる」線に色を並べる。直線の始点・終点がその線と違えば、
+ * 始点・終点をその線に写した位置へ色の位置を移す（0% より前や 100% より後ろにもなる）。色が同じ線はどちらも向きに垂直なので、見た目は同じ
  */
-function gradientCss(gradient: Gradient, style: CodeStyle): string {
-  const stops = gradient.stops.map((stop) => `${formatColor(stop.color, style.color)} ${percent(stop.offset)}`)
+function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
+  const stopList = (offset: (value: number) => number) =>
+    gradient.stops.map((stop) => `${paintCssColor(stop.color, gradient.opacity, style)} ${percent(offset(stop.offset))}`)
+  const stops = stopList((offset) => offset)
+  if (gradient.type === 'conic') {
+    // CSS の from は 0deg が真上。ドキュメントは 0° が右なので 90° ずれる
+    return `conic-gradient(from ${num((((gradient.angle + 90) % 360) + 360) % 360)}deg at ${percent(gradient.cx)} ${percent(gradient.cy)}, ${stops.join(', ')})`
+  }
   if (gradient.type === 'radial') {
     // 楕円の大きさの % は、CSS も枠の幅・高さに対する割合
     const { cx, cy, rx, ry } = gradient
     return `radial-gradient(${percent(rx)} ${percent(ry)} at ${percent(cx)} ${percent(cy)}, ${stops.join(', ')})`
   }
-  return `linear-gradient(${num((((gradient.angle + 90) % 360) + 360) % 360)}deg, ${stops.join(', ')})`
+  const angle = linearAngle(gradient, size)
+  const [start, end] = gradientLine(gradient, size)
+  if (start.x === end.x && start.y === end.y) {
+    // 始点と終点が重なると、色は最後の色だけになる（描画と同じ）
+    const last = paintCssColor(gradient.stops[gradient.stops.length - 1].color, gradient.opacity, style)
+    return `linear-gradient(${last}, ${last})`
+  }
+  const [from, to] = angleLine(angle, size)
+  const lx = to.x - from.x
+  const ly = to.y - from.y
+  const length = lx * lx + ly * ly
+  const along = (point: Point) => (length === 0 ? 0 : ((point.x - from.x) * lx + (point.y - from.y) * ly) / length)
+  const t1 = along(start)
+  const t2 = along(end)
+  const css = (((angle + 90) % 360) + 360) % 360
+  return `linear-gradient(${num(css)}deg, ${stopList((offset) => t1 + offset * (t2 - t1)).join(', ')})`
+}
+
+/**
+ * 切り抜きの拡大を表す object-view-box。画像のうち 1 / scale の大きさの範囲を positionX / positionY の割合の位置で切り出すと、
+ * object-fit と object-position で枠に収めたとき、描画（paint.ts の imageRect）と同じ置き方になる
+ */
+function imageViewBox(node: ImageNode): string {
+  const rest = 1 - 1 / node.scale
+  const top = rest * node.positionY
+  const left = rest * node.positionX
+  return `inset(${[top, rest - left, rest - top, left].map(percent).join(' ')})`
+}
+
+/** 塗りの色の CSS。塗りの不透明度が 1 未満なら、色の alpha にする */
+function paintCssColor(color: string, opacity: number, style: CodeStyle): string {
+  return formatColor(color, style.color, opacity < 1 ? { alpha: opacity } : {})
+}
+
+/** 塗りの代表の色（単色ならその色、グラデーションなら始まりの色）の CSS。不透明度も含める */
+function topColorCss(paint: Paint, style: CodeStyle): string {
+  return paintCssColor(paintColor(paint), paint.opacity, style)
 }
 
 /** 角丸の値。4 隅が同じなら 1 つ、違えば左上・右上・右下・左下 */
@@ -472,13 +547,13 @@ function radiusText(radius: CornerRadius, format: (value: number) => string): st
  * 塗りを CSS の background で表す。塗りがなければ null。
  * CSS は先に書いたものが手前で、色だけの層は一番下にしか置けないので、重ねる単色は同じ色のグラデーションにする
  */
-function backgroundCss(fills: readonly Paint[], style: CodeStyle): string | null {
+function backgroundCss(fills: readonly Paint[], style: CodeStyle, size: Size): string | null {
   if (fills.length === 0) return null
   return fills
     .toReversed()
     .map((paint, i, all) => {
-      if (paint.type !== 'solid') return gradientCss(paint, style)
-      const color = formatColor(paint.color, style.color)
+      if (paint.type !== 'solid') return gradientCss(paint, style, size)
+      const color = paintCssColor(paint.color, paint.opacity, style)
       return i === all.length - 1 ? color : `linear-gradient(${color}, ${color})`
     })
     .join(', ')
@@ -538,10 +613,11 @@ function paddingCss(layout: AutoLayout, px: (value: number) => string): string |
   return values.every((value) => value === 0) ? null : values.map(px).join(' ')
 }
 
-/** CSS の box-shadow の値 */
+/** CSS の box-shadow の値。内側の影は inset を付ける */
 export function shadowCss(shadow: Effect, style: CodeStyle = DEFAULT_CODE_STYLE): string {
   const color = formatColor(shadow.color, style.color, { alpha: shadow.opacity })
-  return `${length(shadow.x, style)} ${length(shadow.y, style)} ${length(shadow.blur, style)} ${color}`
+  const inset = shadow.type === 'inner-shadow' ? 'inset ' : ''
+  return `${inset}${length(shadow.x, style)} ${length(shadow.y, style)} ${length(shadow.blur, style)} ${color}`
 }
 
 /** rem は、基準が 16px なら 1px = 0.0625rem なので、小数 4 桁まで出す */

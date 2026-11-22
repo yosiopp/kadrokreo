@@ -49,7 +49,8 @@ export function layoutText(ctx: CanvasRenderingContext2D, style: TextStyle): Tex
   const lines = wrapAt === null
     ? paragraphs.map((text) => ({ text, width: measure(text) }))
     : paragraphs
-        .flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure))
+        // 詰めのずれは 1 文字ぶんより十分小さいので、文字の大きさを余裕に取る
+        .flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure, style.fontSize))
         .map((text) => ({ text, width: measure(text.trimEnd()) }))
   layoutCache.set(style, lines)
   return lines
@@ -71,6 +72,12 @@ const TOKENS = /\s+|[^\s　-ヿ㐀-鿿豈-﫿＀-￯]+|./gsu
 const NO_LINE_START = new Set([...'、。，．,.:;?!！？：；・…‥ー〜～)]}）］｝〕〉》」』】〙〗〟’”»ゝゞヽヾ々〻ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ゠–'])
 const NO_LINE_END = new Set([...'([{（［｛〔〈《「『【〘〖〝‘“«'])
 
+const firstChar = (text: string) => String.fromCodePoint(text.codePointAt(0)!)
+function lastChar(text: string): string {
+  const low = text.charCodeAt(text.length - 1)
+  return low >= 0xdc00 && low <= 0xdfff && text.length >= 2 ? text.slice(-2) : text.slice(-1)
+}
+
 /**
  * 折り返してよい単位に分ける。TOKENS の区切りのうち、禁則に当たるもの（行頭禁則の文字の前・行末禁則の文字の後）では切らず、
  * 前後の単位とつなげる（「う。」「「あ」が 1 つの単位になる）。収まらないときは、つないだ単位ごと次の行へ追い出す
@@ -79,8 +86,9 @@ export function breakUnits(text: string): string[] {
   const units: string[] = []
   for (const token of text.match(TOKENS) ?? []) {
     const prev = units[units.length - 1]
+    // つないだ単位は長くなりうるので、[...prev] で全部を分けずに端の 1 文字だけを見る（分けると長さの 2 乗かかる）
     const joins = prev !== undefined && prev.trim() !== '' && token.trim() !== ''
-      && (NO_LINE_START.has([...token][0]) || NO_LINE_END.has([...prev].at(-1)!))
+      && (NO_LINE_START.has(firstChar(token)) || NO_LINE_END.has(lastChar(prev)))
     if (joins) units[units.length - 1] = prev + token
     else units.push(token)
   }
@@ -90,38 +98,69 @@ export function breakUnits(text: string): string[] {
 /**
  * 1 段落を maxWidth に収まる行に分ける。CSS の折り返しに合わせて、
  * 行末の空白ははみ出してよく、1 語が幅に収まらないときだけ語の途中で切る。禁則処理は breakUnits。
+ *
+ * 行の幅は、足した単位の幅の足し算で見積もる（行全体を測り直すと、行の長さの 2 乗かかる）。
+ * 足し算は単位の境目の詰め（カーニング）の分だけ実際の幅とずれうるので、見積もりが maxWidth の前後 slack 以内に入ったときだけ
+ * 行全体を測り直して決め、見積もりもその値に合わせる。slack を詰めのずれより大きく取っておけば、毎回測り直すのと同じ結果になる
  */
 export function wrapLine(
   text: string,
   maxWidth: number,
   measure: (text: string) => number,
+  slack = 0,
 ): string[] {
   const lines: string[] = []
   let line = ''
+  let width = 0
+
+  // line に next（幅 nextWidth）を足して収まるなら足した後の幅、収まらなければ null
+  const fitsWith = (next: string, nextWidth: number): number | null => {
+    const estimate = width + nextWidth
+    if (estimate <= maxWidth - slack) return estimate
+    if (estimate > maxWidth + slack) return null
+    const exact = measure(line + next)
+    return exact <= maxWidth ? exact : null
+  }
+  const push = () => {
+    lines.push(line)
+    line = ''
+    width = 0
+  }
 
   for (const token of breakUnits(text)) {
+    const tokenWidth = measure(token)
     if (token.trim() === '') {
       line += token
+      width += tokenWidth
       continue
     }
-    if (measure(line + token) <= maxWidth) {
+    const joined = fitsWith(token, tokenWidth)
+    if (joined !== null) {
       line += token
+      width = joined
       continue
     }
     if (line.trim() !== '') {
-      lines.push(line)
-      line = ''
-      if (measure(token) <= maxWidth) {
+      push()
+      if (tokenWidth <= maxWidth) {
         line = token
+        width = tokenWidth
         continue
       }
     }
     for (const char of token) {
-      if (line !== '' && measure(line + char) > maxWidth) {
-        lines.push(line)
-        line = ''
+      const charWidth = measure(char)
+      if (line !== '') {
+        const next = fitsWith(char, charWidth)
+        if (next === null) push()
+        else {
+          line += char
+          width = next
+          continue
+        }
       }
       line += char
+      width += charWidth
     }
   }
 

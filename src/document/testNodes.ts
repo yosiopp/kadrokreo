@@ -1,4 +1,4 @@
-import type { DesignDocument, FrameNode, RectNode, Scene, SceneNode, Style, TextNode } from './types.ts'
+import type { DesignDocument, EllipseNode, FrameNode, PathNode, RectNode, Scene, SceneNode, Style, TextNode } from './types.ts'
 
 // テストで使うノードの組み立て。editor の側にあるノードの生成（nodes.ts）は、共通側や viewer のテストからは使えない
 
@@ -21,7 +21,7 @@ export const base = {
   minHeight: null,
   maxHeight: null,
 }
-export const paint: Style = { fills: [{ type: 'solid', color: '#ff0000' }], strokes: [], strokeWidth: 1, effects: [] }
+export const paint: Style = { fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }], strokes: [], strokeWidth: 1, strokeDashes: [], effects: [] }
 
 export const rect = (patch: Partial<RectNode> = {}): RectNode => ({
   ...base,
@@ -29,6 +29,32 @@ export const rect = (patch: Partial<RectNode> = {}): RectNode => ({
   id: 'rect',
   type: 'rect',
   cornerRadius: 0,
+  ...patch,
+})
+export const ellipse = (patch: Partial<EllipseNode> = {}): EllipseNode => ({
+  ...base,
+  ...paint,
+  id: 'ellipse',
+  type: 'ellipse',
+  ...patch,
+})
+/** パス。既定は塗りのない、黒い線の開いた形。枠と頂点は pathFromPoints で作ったものを patch に渡す */
+export const path = (patch: Partial<PathNode> = {}): PathNode => ({
+  ...base,
+  id: 'path',
+  type: 'path',
+  points: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+  closed: false,
+  fills: [],
+  strokes: [{ type: 'solid', color: '#000000', opacity: 1, visible: true }],
+  strokeWidth: 1,
+  strokeDashes: [],
+  effects: [],
+  startCap: 'none',
+  endCap: 'none',
+  capSize: 0,
+  contours: [],
+  fillRule: 'nonzero',
   ...patch,
 })
 export const frame = (patch: Partial<FrameNode> = {}): FrameNode => ({
@@ -50,7 +76,7 @@ export const text = (patch: Partial<TextNode> = {}): TextNode => ({
   text: 'こんにちは',
   fontSize: 16,
   fontFamily: 'sans-serif',
-  fills: [{ type: 'solid', color: '#111111' }],
+  fills: [{ type: 'solid', color: '#111111', opacity: 1, visible: true }],
   sizing: { width: 'hug', height: 'hug' },
   fontWeight: 400,
   textAlign: 'left',

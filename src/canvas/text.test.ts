@@ -54,6 +54,60 @@ describe('wrapLine', () => {
   })
 })
 
+describe('wrapLine の幅の見積もり', () => {
+  // 境目の詰め: "AV" が隣り合うと 0.3 狭くなる（足し算の見積もりと実際の幅がずれる）
+  const kerned = (text: string) => measure(text) - 0.3 * (text.match(/AV/g)?.length ?? 0)
+  // 毎回行全体を測る、もとの書き方
+  function naive(text: string, maxWidth: number, m: (text: string) => number): string[] {
+    const lines: string[] = []
+    let line = ''
+    for (const token of breakUnits(text)) {
+      if (token.trim() === '' || m(line + token) <= maxWidth) line += token
+      else if (line.trim() !== '' && m(token) <= maxWidth) {
+        lines.push(line)
+        line = token
+      } else {
+        if (line.trim() !== '') {
+          lines.push(line)
+          line = ''
+        }
+        for (const char of token) {
+          if (line !== '' && m(line + char) > maxWidth) {
+            lines.push(line)
+            line = ''
+          }
+          line += char
+        }
+      }
+    }
+    lines.push(line)
+    return lines
+  }
+
+  it('詰めでずれても、余裕を取れば毎回測り直すのと同じ結果になる', () => {
+    const text = 'A VA V AVAVAV xA Vx あAVい AV AAAAVVVV VAVAVA A V'.repeat(5)
+    for (let maxWidth = 1; maxWidth < 40; maxWidth += 0.5) {
+      expect(wrapLine(text, maxWidth, kerned, 2)).toEqual(naive(text, maxWidth, kerned))
+    }
+  })
+
+  it('長い段落でも測る文字数は段落の長さに比例する', () => {
+    let measured = 0
+    const counting = (text: string) => {
+      measured += text.length
+      return measure(text)
+    }
+    const words = Array.from({ length: 20000 }, (_, i) => `w${i % 97}`).join(' ')
+    const lines = wrapLine(words, 100000, counting, 2)
+    expect(lines).toHaveLength(1)
+    expect(measured).toBeLessThan(words.length * 4)
+    measured = 0
+    const kana = 'あ'.repeat(20000)
+    expect(wrapLine(kana, 100000, counting, 2)).toEqual([kana])
+    expect(measured).toBeLessThan(kana.length * 4)
+  })
+})
+
 describe('breakUnits', () => {
   it('禁則に当たる区切りだけをつなぐ', () => {
     expect(breakUnits('「これは、test」です。')).toEqual(['「こ', 'れ', 'は、', 'test」', 'で', 'す。'])

@@ -60,30 +60,47 @@ export type ColorStop = { offset: number; color: string }
 
 /**
  * 塗り（面・線・文字に使う）。色は #rrggbb。
- * linear は直線状のグラデーションで、angle は色が変わっていく向き（度）。0 が左から右、90 が上から下。
+ * linear は直線状のグラデーションで、始点 x1 / y1 と終点 x2 / y2 は枠の左上からの位置（枠の幅・高さに対する割合。0〜1 の外にも置ける）。
+ * 始点が最初の色、終点が最後の色で、色が同じ線は始点から終点への線に（ピクセルで）垂直、外側は両端の色のまま（SVG の linearGradient と同じ）。
+ * 向き（度）は始点から終点への向きで、0 が左から右、90 が上から下。向きだけを決めたときは、枠の中心を通り、枠の角がちょうど両端の色になる線にする
+ * （paint.ts の linearFromAngle。CSS の linear-gradient の角度と同じ線）。
  * radial は円形（楕円）のグラデーションで、中心 cx / cy は枠の左上からの位置、半径 rx / ry は横・縦の半径で、
  * どれも枠の幅・高さに対する割合（SVG の objectBoundingBox、CSS の radial-gradient の % と同じ）。
  * 中心が最初の色、半径の楕円の上が最後の色で、その外は最後の色のまま。既定（枠に内接する楕円）は 0.5 が 4 つ。
- * 種類を足すとき（角度のグラデーションなど）は type を増やす
+ * conic は角度のグラデーション（CSS の conic-gradient）で、中心 cx / cy は radial と同じく枠に対する割合。
+ * angle は最初の色を置く向き（度）で、直線の向きと同じく 0 が右、90 が下（時計回り）。CSS の `from` は angle + 90 になる。
+ * 色の位置 0〜1 が、その向きから時計回りに 1 周する角度に当たる。
+ * 円は枠の大きさによらず正円（ピクセルで角度を測る）。
+ * opacity（0〜1）は塗りごとの不透明度で、色（グラデーションならすべての色）にかける。ノードの opacity とは別に重なる。
+ * visible は塗りごとの表示（既存のデザインツールの目のアイコン）。false の塗りは描かず、CSS・SVG・色の一覧にも出さないが、消さずに残す。
+ * 種類を足すときは type を増やす
  */
 export type Paint =
-  | { type: 'solid'; color: string }
-  | { type: 'linear'; angle: number; stops: ColorStop[] }
-  | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; stops: ColorStop[] }
+  | { type: 'solid'; color: string; opacity: number; visible: boolean }
+  | { type: 'linear'; x1: number; y1: number; x2: number; y2: number; stops: ColorStop[]; opacity: number; visible: boolean }
+  | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; stops: ColorStop[]; opacity: number; visible: boolean }
+  | { type: 'conic'; cx: number; cy: number; angle: number; stops: ColorStop[]; opacity: number; visible: boolean }
 
 export type LinearGradient = Extract<Paint, { type: 'linear' }>
 export type RadialGradient = Extract<Paint, { type: 'radial' }>
+export type ConicGradient = Extract<Paint, { type: 'conic' }>
 /** 色の位置を持つ塗り（グラデーション） */
-export type Gradient = LinearGradient | RadialGradient
+export type Gradient = LinearGradient | RadialGradient | ConicGradient
 
-/** 落ち影などの効果。color は #rrggbb、濃さは opacity（0〜1）で持つ。種類を足すとき（内側の影など）は type を増やす */
+/**
+ * 影の効果。color は #rrggbb、濃さは opacity（0〜1）で持つ。
+ * drop-shadow は図形の外に落ちる影（CSS の box-shadow）、inner-shadow は図形の内側の縁に付く影（box-shadow の inset）。
+ * 内側の影は塗りの上・線の下に描き、図形の外へははみ出さない。テキストと画像は効果を持たない。
+ * visible は効果ごとの表示（塗りの visible と同じ）。種類を足すときは type を増やす
+ */
 export type Effect = {
-  type: 'drop-shadow'
+  type: 'drop-shadow' | 'inner-shadow'
   x: number
   y: number
   blur: number
   color: string
   opacity: number
+  visible: boolean
 }
 
 /**
@@ -94,6 +111,11 @@ export type Style = {
   fills: Paint[]
   strokes: Paint[]
   strokeWidth: number
+  /**
+   * 線の破線の並び（px。線を引く長さ・空ける長さを交互に。CSS・SVG の stroke-dasharray と同じで、数が奇数なら 2 回繰り返した並びになる）。
+   * 空なら実線。線がなければ意味はない
+   */
+  strokeDashes: number[]
   effects: Effect[]
 }
 
@@ -144,7 +166,17 @@ export type PathNode = BaseNode &
     endCap: Cap
     /** 端の印（矢印・丸・ひし形）の大きさ（px、矢印なら長さ）。0 なら線の太さから決める（太さの 4 倍、最小 10） */
     capSize: number
+    /**
+     * 2 つ目以降の輪郭（穴や、離れた形）。頂点は points と同じく枠に対する割合で、枠はすべての輪郭を囲む。
+     * 端の形（startCap / endCap）は最初の輪郭（points）にだけ付く。空なら輪郭は points の 1 つだけ
+     */
+    contours: PathContour[]
+    /** 塗る範囲の決め方（SVG・Canvas の fill-rule と同じ）。輪郭が重なった所や自分と交わる所を、evenodd は偶奇で、nonzero は巻き数で決める */
+    fillRule: 'nonzero' | 'evenodd'
   }
+
+/** パスの 2 つ目以降の輪郭 */
+export type PathContour = { points: PathPoint[]; closed: boolean }
 
 export type TextNode = BaseNode & {
   type: 'text'
@@ -175,6 +207,11 @@ export type ImageNode = BaseNode & {
    */
   positionX: number
   positionY: number
+  /**
+   * 切り抜きの拡大（1 以上。既存のデザインツールの crop の大きさ）。fit で決まる画像の大きさをこの倍率で大きくし、
+   * positionX / positionY の割合で寄せて、枠からはみ出した分を切り落とす。1 は拡大しない
+   */
+  scale: number
 }
 
 /**
@@ -246,8 +283,16 @@ export type ComponentProperty = {
    * instance: 結んだ入れ子のインスタンスの元（上書きの componentId）。種類の合わないノードは無視する
    */
   type: 'text' | 'boolean' | 'instance'
-  /** 結んだノード。main の中のノード（上書きのキーと同じ、main の側の id）。main の外や、ないノードは無視する */
+  /**
+   * 結んだノード。main の中のノード（上書きのキーと同じ、main の側の id）。main の中に置いた入れ子のインスタンスの中身（写し）も結べる
+   * （文言・表示だけ）。main の外や、ないノードは無視する
+   */
   targets: NodeId[]
+  /**
+   * 差し替え（instance）のプロパティで、インスタンスで選ぶ欄の先頭に出すコンポーネントの id（既存のデザインツールの preferred values）。
+   * ほかのコンポーネントも選べる。instance 以外では意味はない。ないコンポーネントは無視する
+   */
+  preferred: string[]
 }
 
 /**

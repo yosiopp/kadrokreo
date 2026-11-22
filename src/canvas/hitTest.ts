@@ -1,9 +1,10 @@
 import { isInstance } from '../document/component.ts'
-import { type Point, getAbsoluteBounds, toNodeSpace } from '../document/geometry.ts'
-import { flattenPath, pathOutline } from '../document/path.ts'
+import { type Point, rotateVector, toNodeSpace } from '../document/geometry.ts'
+import { flattenPath, pathOutlines } from '../document/path.ts'
 import type { NodeId, Scene } from '../document/types.ts'
+import { frameLabelPose } from './labels.ts'
 import { FRAME_LABEL_HEIGHT } from './render.ts'
-import { type Viewport, worldToScreen } from './viewport.ts'
+import type { Viewport } from './viewport.ts'
 
 // ポインタの下にあるノードを探す。editor の選択と、viewer の選択の両方が使う。
 
@@ -55,13 +56,18 @@ function hitSiblings(
       if (dx * dx + dy * dy <= 1) return node.id
     } else if (node.type === 'path') {
       // 曲線は細かい折れ線に直して調べる
-      const points = flattenPath(pathOutline(node), node.closed)
-      // 塗ってある閉じた形は内側でも当たる。それ以外（直線を含む）は線の近くだけ。細い線でもつかめるよう、最低限の当たり幅を持たせる
-      if (node.closed && node.fills.length > 0 && insidePolygon(local, points)) return node.id
+      const contours = pathOutlines(node).map((contour) => ({ points: flattenPath(contour.vertices, contour.closed), closed: contour.closed }))
+      // 塗ってある閉じた形は内側でも当たる（輪郭が複数なら、穴は塗る範囲の決め方 fillRule で決まる）。
+      // それ以外（直線を含む）は線の近くだけ。細い線でもつかめるよう、最低限の当たり幅を持たせる
+      if (node.closed && node.fills.length > 0 && insideContours(local, contours.map((contour) => contour.points), node.fillRule)) {
+        return node.id
+      }
       const reach = Math.max(node.strokeWidth / 2, tolerance)
-      const last = node.closed ? points.length : points.length - 1
-      for (let j = 0; j < last; j++) {
-        if (distanceToSegment(local, points[j], points[(j + 1) % points.length]) <= reach) return node.id
+      for (const { points, closed } of contours) {
+        const last = closed ? points.length : points.length - 1
+        for (let j = 0; j < last; j++) {
+          if (distanceToSegment(local, points[j], points[(j + 1) % points.length]) <= reach) return node.id
+        }
       }
     } else if (inside) {
       return node.id
@@ -70,17 +76,24 @@ function hitSiblings(
   return null
 }
 
-/** 点から右へ伸ばした半直線が辺を横切る回数が奇数なら内側 */
-function insidePolygon(p: Point, points: readonly Point[]): boolean {
-  let inside = false
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    const a = points[i]
-    const b = points[j]
-    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
-      inside = !inside
+/**
+ * 点がいくつもの多角形（輪郭）で塗られる範囲の内側か。点から右へ伸ばした半直線が辺を横切る回数を数え、
+ * evenodd なら奇数、nonzero なら向きを足した巻き数が 0 でなければ内側
+ */
+function insideContours(p: Point, contours: readonly (readonly Point[])[], rule: 'nonzero' | 'evenodd'): boolean {
+  let crossings = 0
+  let winding = 0
+  for (const points of contours) {
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const a = points[j]
+      const b = points[i]
+      if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+        crossings++
+        winding += b.y > a.y ? 1 : -1
+      }
     }
   }
-  return inside
+  return rule === 'evenodd' ? crossings % 2 === 1 : winding !== 0
 }
 
 function distanceToSegment(p: Point, a: Point, b: Point): number {
@@ -105,14 +118,10 @@ export function hitTestFrameLabel(
   for (let i = scene.rootIds.length - 1; i >= 0; i--) {
     const node = scene.nodes[scene.rootIds[i]]
     if (node.type !== 'frame' || !node.visible || (node.locked && !options.locked)) continue
-    // ラベルは、フレームを囲む矩形の左上に出している
-    const origin = worldToScreen(viewport, getAbsoluteBounds(scene, node.id))
-    if (
-      screen.y >= origin.y - FRAME_LABEL_HEIGHT &&
-      screen.y <= origin.y &&
-      screen.x >= origin.x &&
-      screen.x <= origin.x + measureLabel(node.name)
-    ) {
+    // ラベルはフレームの上の辺に沿わせて出している。押した点をラベルの向きの座標に直して比べる
+    const { origin, angle } = frameLabelPose(node, viewport)
+    const p = rotateVector({ x: screen.x - origin.x, y: screen.y - origin.y }, -angle)
+    if (p.y >= -FRAME_LABEL_HEIGHT && p.y <= 0 && p.x >= 0 && p.x <= measureLabel(node.name)) {
       return node.id
     }
   }

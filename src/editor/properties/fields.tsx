@@ -41,11 +41,18 @@ export function Section({ title, overridden, action, children }: SectionProps) {
   )
 }
 
-export function ExportSection({ label, onExport }: { label: string; onExport: (scale: number) => void }) {
+type ExportSectionProps = {
+  label: string
+  onExport: (scale: number) => void
+  onExportSvg: () => void
+  onCopySvg: () => Promise<boolean>
+}
+
+export function ExportSection({ label, onExport, onExportSvg, onCopySvg }: ExportSectionProps) {
   const [scale, setScale] = useState(1)
   return (
     <Section title="書き出し">
-      <ExportControls scale={scale} onScaleChange={setScale} onExport={() => onExport(scale)}>
+      <ExportControls scale={scale} onScaleChange={setScale} onExport={() => onExport(scale)} onExportSvg={onExportSvg} onCopySvg={onCopySvg}>
         {label}
       </ExportControls>
     </Section>

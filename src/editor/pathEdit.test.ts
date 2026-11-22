@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pathFromPoints, pathSegments, segmentAt } from '../document/path.ts'
+import { pathFromContours, pathFromPoints, pathSegments, segmentAt } from '../document/path.ts'
 import { createFrame, createPath } from './nodes.ts'
 import { createPage } from './operations/document.ts'
 import { insertNode } from './operations/tree.ts'
@@ -20,6 +20,16 @@ import {
   parentVertices,
   reshapePath,
   toggleSmooth,
+  contourSegment,
+  deleteContourVertices,
+  editByContour,
+  flatVertices,
+  locateVertex,
+  nearestOnContours,
+  neighborVertex,
+  parentContours,
+  reshapeContours,
+  withFlatVertices,
 } from './pathEdit.ts'
 
 const zigzag = [
@@ -181,5 +191,106 @@ describe('頂点の複数選択・種類・角の丸め・辺から開く', () =
       expect(vertex.x).toBeCloseTo(before[i].x)
       expect(vertex.y).toBeCloseTo(before[i].y)
     })
+  })
+})
+
+describe('2 つ目以降の輪郭の編集（通し番号）', () => {
+  // 外側の正方形（0〜3）と、内側の穴の正方形（4〜7）
+  const outer = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 100, y: 100 },
+    { x: 0, y: 100 },
+  ]
+  const hole = [
+    { x: 30, y: 30 },
+    { x: 70, y: 30 },
+    { x: 70, y: 70 },
+    { x: 30, y: 70 },
+  ]
+  const contours = [
+    { vertices: outer, closed: true },
+    { vertices: hole, closed: true },
+  ]
+  const ring = () => {
+    const path = { ...createPath(pathFromContours(contours), true), ...pathFromContours(contours) }
+    return { path, page: insertNode(createPage(), path) }
+  }
+
+  it('locateVertex と flatVertices は通し番号を輪郭と輪郭の中の番号に分ける', () => {
+    expect(flatVertices(contours)).toHaveLength(8)
+    expect(locateVertex(contours, 0)).toEqual({ contour: 0, local: 0 })
+    expect(locateVertex(contours, 5)).toEqual({ contour: 1, local: 1 })
+    expect(locateVertex(contours, 8)).toBeNull()
+    expect(withFlatVertices(contours, flatVertices(contours))).toEqual(contours)
+  })
+
+  it('reshapeContours で穴の頂点を動かせる。枠は全部の輪郭に合わせ直し、最初の輪郭はそのまま', () => {
+    const { path, page } = ring()
+    const result = reshapeContours(page, path.id, (all) => withFlatVertices(all, moveVertices(flatVertices(all), [5, 6], 10, 0)))
+    const after = parentContours(result, path.id)
+    expect(after[0].vertices).toEqual(outer)
+    expect(after[1].vertices[1]).toEqual({ x: 80, y: 30 })
+    expect(after[1].vertices[2]).toEqual({ x: 80, y: 70 })
+    // 穴を外へ出すと枠が広がる
+    const out = reshapeContours(page, path.id, (all) => withFlatVertices(all, moveVertex(flatVertices(all), 5, { x: 150, y: 30 })))
+    expect(out.nodes[path.id]).toMatchObject({ x: 0, width: 150 })
+    expect(parentContours(out, path.id)[1].vertices[1]).toEqual({ x: 150, y: 30 })
+  })
+
+  it('nearestOnContours は穴の辺も通し番号で返し、editByContour で穴の辺に頂点を足せる', () => {
+    const nearest = nearestOnContours(contours, { x: 50, y: 32 })
+    expect(nearest).toMatchObject({ segment: 4 })
+    expect(nearest!.t).toBeCloseTo(0.5)
+    expect(contourSegment(contours, 4)).toMatchObject({ from: { x: 30, y: 30 }, to: { x: 70, y: 30 } })
+    // 閉じた輪郭の最後の頂点から始まる辺は、同じ輪郭の最初の頂点へ戻る
+    expect(contourSegment(contours, 7)).toMatchObject({ from: { x: 30, y: 70 }, to: { x: 30, y: 30 } })
+    const added = editByContour(contours, [nearest!.segment], (vertices, closed, [segment]) =>
+      insertVertex(vertices, closed, segment, nearest!.t),
+    )!
+    expect(added[0]).toBe(contours[0])
+    expect(added[1].vertices).toHaveLength(5)
+    // 足した頂点の通し番号は segment + 1
+    expect(flatVertices(added)[5]).toEqual({ x: 50, y: 30 })
+  })
+
+  it('editByContour は輪郭ごとに閉じているかを渡し、穴の辺で開ける', () => {
+    const opened = editByContour(contours, [7], (vertices, closed, [local]) => openAtSegment(vertices, closed, local))!
+    expect(opened[0].closed).toBe(true)
+    expect(opened[1]).toEqual({ vertices: hole, closed: false })
+    // 頂点の種類は、その輪郭の隣を見て決める
+    const smooth = editByContour(contours, [4], (vertices, closed, local) => setVertexKind(vertices, local, closed, 'smooth'))!
+    expect(smooth[1].vertices[0].in).toBeDefined()
+    expect(smooth[1].vertices[0].in!.y).toBeGreaterThan(30)
+    expect(neighborVertex(contours, 4)).toEqual(hole[1])
+    expect(neighborVertex(contours, 6)).toEqual(hole[1])
+  })
+
+  it('deleteContourVertices は穴の頂点を消す。輪郭の頂点を全部選ぶと輪郭ごと消す', () => {
+    const fewer = deleteContourVertices([...contours, { vertices: [...hole, { x: 50, y: 80 }], closed: true }], [12])!
+    expect(fewer[2].vertices).toHaveLength(4)
+    // 閉じた輪郭を 3 つより減らす削除は、何も消さない
+    expect(deleteContourVertices(contours, [4, 5])).toBeNull()
+    // 穴を丸ごと消す
+    expect(deleteContourVertices(contours, [4, 5, 6, 7])).toEqual([contours[0]])
+    // 穴を丸ごと消しつつ、後ろの輪郭の頂点も消す（番号は消す前の並びで数える）
+    const three = [...contours, { vertices: [...hole, { x: 50, y: 80 }], closed: true }]
+    const both = deleteContourVertices(three, [4, 5, 6, 7, 12])!
+    expect(both).toHaveLength(2)
+    expect(both[1].vertices).toHaveLength(4)
+    // 全部の輪郭を丸ごと選んでも、パスは消さない
+    expect(deleteContourVertices(contours, [0, 1, 2, 3, 4, 5, 6, 7])).toBeNull()
+    // reshapeContours で輪郭を消すと、kdr の contours も減る
+    const { path, page } = ring()
+    const result = reshapeContours(page, path.id, (all) => deleteContourVertices(all, [4, 5, 6, 7]))
+    expect(result.nodes[path.id]).toMatchObject({ contours: [] })
+  })
+
+  it('reshapePath は最初の輪郭だけを書き換え、穴は保つ', () => {
+    const { path, page } = ring()
+    const result = reshapePath(page, path.id, (vertices) => moveVertices(vertices, [0], -10, 0))
+    const after = parentContours(result, path.id)
+    expect(after[0].vertices[0]).toEqual({ x: -10, y: 0 })
+    expect(after[1].vertices).toEqual(hole)
   })
 })

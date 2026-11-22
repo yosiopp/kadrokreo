@@ -4,6 +4,7 @@ import { isComponentPart } from '../document/variants.ts'
 import { isOpen, layerRows, toggleFolding } from '../document/layers.ts'
 import type { NodeId, Scene, SceneNode } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'
+import { useVirtualRows } from '../ui/virtualRows.ts'
 import { RenameInput } from './RenameInput.tsx'
 import { withoutCopies } from './components.ts'
 import { EyeIcon, LockIcon } from './icons.tsx'
@@ -52,6 +53,9 @@ export function LayersPanel({ store, state }: Props) {
   // 写し（インスタンスの中身）は、表示の切り替えのほかは、一覧からは触れない
   const rows = layerRows(page, folding)
   const selected = new Set(selection)
+  // 行は見えている分だけ作る（数千行あっても、開いたときに全部を作らない）
+  const listRef = useRef<HTMLUListElement>(null)
+  const visible = useVirtualRows(listRef, rows.length)
 
   // Shift で範囲を選ぶときの起点。最後に Shift なしで押した行と、押した直後の選択。
   // 選択がほか（キャンバスなど）で変わったら、起点は選択の最後のものにする
@@ -146,8 +150,13 @@ export function LayersPanel({ store, state }: Props) {
     <section className="layers" aria-label="レイヤー">
       <h2 className="panel-title">レイヤー</h2>
       {rows.length === 0 && <p className="panel-hint">ツールを選んでキャンバスに図形を描くと、ここに並びます。</p>}
-      <ul className="layer-list" onDragLeave={actions.clearDrop}>
-        {rows.map(({ node, depth, copy }) => (
+      <ul
+        ref={listRef}
+        className="layer-list"
+        style={{ paddingTop: visible.before, paddingBottom: `calc(12px + ${visible.after}px)` }}
+        onDragLeave={actions.clearDrop}
+      >
+        {rows.slice(visible.start, visible.end).map(({ node, depth, copy }) => (
           <LayerItem
             key={node.id}
             node={node}
