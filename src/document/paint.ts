@@ -1,5 +1,6 @@
-import { type Bounds, type Point, type Size, normalizeAngle } from './geometry.ts'
-import type { CornerRadius, Effect, ImageNode, LinearGradient, Paint, Style } from './types.ts'
+import { type Bounds, type Matrix, type Point, type Size, getAbsoluteBounds, getWorldMatrix, normalizeAngle, transformRect, unionBounds } from './geometry.ts'
+import { capReach, flattenPath, pathOutlines } from './path.ts'
+import type { Blur, CornerRadius, Effect, ImageNode, LinearGradient, NodeId, Paint, PathNode, RadialGradient, Scene, Shadow, Style, TextNode } from './types.ts'
 
 // 塗り（Paint）の配列を読む関数。配列は先頭が一番下なので、いちばん上に見えるのは最後の要素
 
@@ -26,7 +27,7 @@ export function paintColor(paint: Paint): string {
 
 /** 単色 1 つだけの塗り。色が null なら塗りなし */
 export function solid(color: string | null): Paint[] {
-  return color === null ? [] : [{ type: 'solid', color, opacity: 1, visible: true }]
+  return color === null ? [] : [{ type: 'solid', color, opacity: 1, visible: true, blendMode: 'normal' }]
 }
 
 /** 線を引くか（表示している線の塗りがあり、太さが 0 でない） */
@@ -55,12 +56,43 @@ export function withoutHidden<T extends object>(node: T): T {
   return out as T
 }
 
-/** 落ち影と内側の影に分ける */
-export function splitEffects(effects: readonly Effect[]): { drop: Effect[]; inner: Effect[] } {
+/** 影の効果か（ぼかしでない） */
+export function isShadow(effect: Effect): effect is Shadow {
+  return effect.type === 'drop-shadow' || effect.type === 'inner-shadow'
+}
+
+/** 落ち影と内側の影に分ける（ぼかしは入らない） */
+export function splitEffects(effects: readonly Effect[]): { drop: Shadow[]; inner: Shadow[] } {
   return {
-    drop: effects.filter((effect) => effect.type === 'drop-shadow'),
-    inner: effects.filter((effect) => effect.type === 'inner-shadow'),
+    drop: effects.filter((effect): effect is Shadow => effect.type === 'drop-shadow'),
+    inner: effects.filter((effect): effect is Shadow => effect.type === 'inner-shadow'),
   }
+}
+
+/**
+ * ぼかしの効果（type の種類）をまとめた 1 つのぼかしの半径。なければ 0。
+ * ガウスぼかしを重ねると標準偏差は 2 乗の和の平方根になるので、同じ種類が 2 つ以上あればそうまとめる
+ */
+export function blurRadius(effects: readonly Effect[], type: Blur['type']): number {
+  let sum = 0
+  for (const effect of effects) if (effect.type === type) sum += effect.blur * effect.blur
+  return Math.sqrt(sum)
+}
+
+/**
+ * 円形のグラデーションの、半径 1 の円を楕円に写す変換（ノードの座標系へ）。横・縦の半径に伸ばしてから angle だけ回し、中心へ動かす。
+ * 描画（canvas）と SVG の gradientTransform で同じ楕円にする
+ */
+export function radialTransform(paint: Pick<RadialGradient, 'cx' | 'cy' | 'rx' | 'ry' | 'angle'>, size: Size): Matrix {
+  const rx = paint.rx * size.width
+  const ry = paint.ry * size.height
+  // 極端に大きい角度でラジアンが Infinity にならないよう、先に 1 周に収める
+  const radians = ((paint.angle % 360) * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  // 0 のとき -0 や 1e-17 が混ざらないよう、回さない向きはそのまま
+  if (paint.angle % 360 === 0) return [rx, 0, 0, ry, paint.cx * size.width, paint.cy * size.height]
+  return [rx * cos, rx * sin, -ry * sin, ry * cos, paint.cx * size.width, paint.cy * size.height]
 }
 
 /** 直線状のグラデーションの始点と終点（ノードの座標系）。描画（canvas）と SVG の出力で同じ線にする */
@@ -148,4 +180,126 @@ export function compactRadius(radii: readonly [number, number, number, number]):
 /** 角丸があるか（どれかの隅が 0 より大きい） */
 export function isRounded(radius: CornerRadius): boolean {
   return cornerRadii(radius).some((r) => r > 0)
+}
+
+/**
+ * 書き出す範囲（PNG・SVG）。ノードの枠を囲む矩形に、線の太さ（枠の外へ出る半分。パスの端の形も）と、
+ * 落ち影とレイヤーのぼかしのはみ出しを足す（既存のデザインツールの書き出しと同じく影まで含める）。線は枠の内側で太らせてから回す。
+ * 影のずれは回転に従わないので、ページの向きで足す。ぼかしは半径の 1.5 倍（標準偏差の 3 倍）まで見る。
+ * 中身を切り取らないフレームは、はみ出した子（とその影）も含める。隠したノード・効果は数えない。
+ * 線の角のとがり（miter）と、テキストの枠からはみ出す行は含めない（書体の幅を測れないため）
+ */
+export function getPaintedBounds(scene: Scene, ids: readonly NodeId[], textLines?: TextLinesOf): Bounds | null {
+  return unionBounds(ids.flatMap((id) => paintedBoundsOf(scene, id, textLines) ?? []))
+}
+
+/** テキストを描く行（canvas/text.ts の layoutText と同じ結果）。width は行の幅（px。分からなければ省く） */
+export type TextLinesOf = (node: TextNode) => readonly { text: string; width?: number }[]
+
+/**
+ * テキストの行が実際に描かれる範囲（ノードの座標系）。描画（canvas/render.ts）と同じく、行は枠の上から行の高さずつ並び、
+ * 横は行揃えに従って置く。枠の下や横へはみ出す行も含める。行の幅が分からなければ横は枠の幅とみなす
+ */
+export function textInkBox(node: TextNode, lines: readonly { text: string; width?: number }[]): Bounds {
+  const height = lines.length * node.fontSize * node.lineHeight
+  if (lines.some((line) => line.width === undefined)) return { x: 0, y: 0, width: node.width, height }
+  const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
+  let left = 0
+  let right = node.width
+  for (const line of lines) {
+    const x = (node.width - line.width!) * align
+    left = Math.min(left, x)
+    right = Math.max(right, x + line.width!)
+  }
+  return { x: left, y: 0, width: right - left, height }
+}
+
+/** 線が枠の外へ出る長さ（線は輪郭の真ん中に引くので太さの半分。パスは端の形の張り出しも） */
+function strokeOutset(node: Scene['nodes'][string]): number {
+  if (node.type === 'text' || node.type === 'image' || !hasStroke(node)) return 0
+  // 閉じたパスは端がないので capReach は 0 になる。線の太さの半分は必ず外へ出る
+  return node.type === 'path' ? Math.max(capReach(node), node.strokeWidth / 2) : node.strokeWidth / 2
+}
+
+/** マイターのつなぎ目の長さの上限（線の太さに対する倍率。Canvas の miterLimit の既定。超えればベベルになる） */
+const MITER_LIMIT = 10
+
+/**
+ * パスの線の角のとがり（マイター）の先の点のうち、太さの半分より遠くへ出るもの（ノードの座標系）。
+ * 描画と同じく、つなぎ目の長さが太さの 10 倍を超える角はベベルになるので数えない。曲線は細かい折れ線に直して見る
+ */
+export function miterTips(node: PathNode): Point[] {
+  const half = node.strokeWidth / 2
+  const tips: Point[] = []
+  for (const contour of pathOutlines(node)) {
+    const points = flattenPath(contour.vertices, contour.closed)
+    const n = points.length
+    for (let i = 0; i < n; i++) {
+      if (!contour.closed && (i === 0 || i === n - 1)) continue
+      const p = points[i]
+      const a = points[(i - 1 + n) % n]
+      const b = points[(i + 1) % n]
+      const ua = unit(a.x - p.x, a.y - p.y)
+      const ub = unit(b.x - p.x, b.y - p.y)
+      if (!ua || !ub) continue
+      // 2 辺のなす角 θ に対して、つなぎ目の長さは太さ / sin(θ / 2)。先は角の外側（2 辺の向きの和の逆）
+      const cos = Math.max(-1, Math.min(1, ua.x * ub.x + ua.y * ub.y))
+      const sinHalf = Math.sqrt((1 - cos) / 2)
+      if (sinHalf === 0 || 1 / sinHalf > MITER_LIMIT) continue
+      const reach = half / sinHalf
+      const out = unit(-(ua.x + ub.x), -(ua.y + ub.y))
+      if (!out) continue
+      tips.push({ x: p.x + out.x * reach, y: p.y + out.y * reach })
+    }
+  }
+  return tips
+}
+
+function unit(x: number, y: number): Point | null {
+  const length = Math.hypot(x, y)
+  return length < 1e-9 ? null : { x: x / length, y: y / length }
+}
+
+function paintedBoundsOf(scene: Scene, id: NodeId, textLines?: TextLinesOf): Bounds | null {
+  const node = scene.nodes[id]
+  let box = getAbsoluteBounds(scene, id)
+  let content = box
+  if (node.type === 'frame' && !node.clipContent) {
+    content =
+      unionBounds([box, ...node.children.flatMap((child) => (scene.nodes[child].visible ? (paintedBoundsOf(scene, child, textLines) ?? []) : []))]) ?? box
+  } else if (node.type === 'text' && textLines) {
+    // テキストは枠からはみ出す行も描くので、描かれる範囲を足す（影もそこから落ちる）
+    box = content = unionBounds([box, transformRect(getWorldMatrix(scene, id), textInkBox(node, textLines(node)))]) ?? box
+  }
+  const effects = 'effects' in node ? node.effects.filter((effect) => effect.visible) : []
+  const parts = [content]
+  const stroke = strokeOutset(node)
+  if (stroke > 0) {
+    const local = { x: -stroke, y: -stroke, width: node.width + stroke * 2, height: node.height + stroke * 2 }
+    parts.push(transformRect(getWorldMatrix(scene, id), local))
+    // パスの鋭い角は、線のつなぎ目（マイター）が太さの半分より遠くへとがる
+    if (node.type === 'path') {
+      const tips = miterTips(node)
+      if (tips.length > 0) {
+        const world = getWorldMatrix(scene, id)
+        parts.push(unionBounds(tips.map((tip) => transformRect(world, { ...tip, width: 0, height: 0 })))!)
+      }
+    }
+  }
+  for (const effect of effects) {
+    if (effect.type === 'drop-shadow') {
+      const reach = effect.blur * 1.5 + effect.spread
+      if (reach < 0 && effect.x === 0 && effect.y === 0) continue
+      parts.push({
+        x: box.x + effect.x - reach,
+        y: box.y + effect.y - reach,
+        width: Math.max(0, box.width + reach * 2),
+        height: Math.max(0, box.height + reach * 2),
+      })
+    }
+  }
+  let bounds = unionBounds(parts)!
+  const blur = Math.max(0, ...effects.map((effect) => (effect.type === 'layer-blur' ? effect.blur * 1.5 : 0)))
+  if (blur > 0) bounds = { x: bounds.x - blur, y: bounds.y - blur, width: bounds.width + blur * 2, height: bounds.height + blur * 2 }
+  return bounds
 }

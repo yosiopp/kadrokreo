@@ -10,6 +10,7 @@ import { ComponentSections, InstanceContentSection } from './properties/Componen
 import type { PanelContext } from './properties/context.ts'
 import { ExportSection } from './properties/fields.tsx'
 import { FrameSections } from './properties/FrameSections.tsx'
+import { BooleanSection, MaskSection } from './properties/MaskSection.tsx'
 import { TextSection } from './properties/TextSection.tsx'
 import type { EditorState, EditorStore } from './store.ts'
 
@@ -85,6 +86,8 @@ export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopy
       </h2>
       {ctx.inner ? <InstanceContentSection ctx={ctx} /> : <ArrangeSections ctx={ctx} />}
       <ComponentSections ctx={ctx} />
+      <MaskSection ctx={ctx} />
+      <BooleanSection ctx={ctx} />
       <AppearanceSections ctx={ctx} onReplaceImage={onReplaceImage} />
       <FrameSections ctx={ctx} />
       <TextSection ctx={ctx} />

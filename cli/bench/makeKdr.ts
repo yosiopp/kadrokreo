@@ -54,8 +54,8 @@ const PALETTE = [
 ]
 const FONT_SIZES = [12, 14, 16, 20, 24]
 const SHADOWS: Effect[] = [
-  { type: 'drop-shadow', x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.2, visible: true },
-  { type: 'drop-shadow', x: 0, y: 8, blur: 16, color: '#0f172a', opacity: 0.15, visible: true },
+  { type: 'drop-shadow', x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.2, visible: true, spread: 0, blendMode: 'normal' },
+  { type: 'drop-shadow', x: 0, y: 8, blur: 16, color: '#0f172a', opacity: 0.15, visible: true, spread: 0, blendMode: 'normal' },
 ]
 
 const LEAF = { width: 40, height: 24 }

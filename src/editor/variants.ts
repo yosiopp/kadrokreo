@@ -10,6 +10,7 @@ import {
   variantSetOf,
   variantsIn,
 } from '../document/variants.ts'
+import { inheritComponentProperties } from './componentProperties.ts'
 import { swapComponent } from './components.ts'
 import { wrapInAutoLayout } from './layout.ts'
 import { createId } from './nodes.ts'
@@ -75,6 +76,8 @@ export function addVariant(
       name: formatVariantName(nextVariantProps(scene, setId, props)),
       component: { id: createId(), role: 'main', description: '', properties: [] },
     })
+    // プロパティはまとまりで揃えるので、複製したバリアントも同じプロパティを持ち、同じたどり方のノードに結ぶ
+    scene = inheritComponentProperties(scene, mainId, copyId, doc)
     const set = scene.nodes[setId]
     if (set.type === 'frame') scene = moveNode(scene, copyId, setId, set.children.indexOf(mainId) + 1)
     id = copyId

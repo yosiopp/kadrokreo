@@ -44,11 +44,11 @@ export function estimateTextWidth(text: string, fontSize: number, fontWeight: nu
 }
 
 /** canvas/text.ts の layoutText と同じ決まりで、見積もった幅を使って行に分ける（SVG の書き出しのテキスト） */
-export function estimateTextLines(style: Style): { text: string }[] {
+export function estimateTextLines(style: Style): { text: string; width: number }[] {
   const measure = (text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily)
   const paragraphs = style.text.split('\n')
   const wrapAt = wrapWidth(style)
-  return (wrapAt === null ? paragraphs : paragraphs.flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure))).map((text) => ({ text }))
+  return (wrapAt === null ? paragraphs : paragraphs.flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure))).map((text) => ({ text, width: measure(text.trimEnd()) }))
 }
 
 /** canvas/text.ts の measureText と同じ決まりで、見積もった幅を使って大きさを出す */

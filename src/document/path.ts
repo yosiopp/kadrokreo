@@ -1,10 +1,11 @@
 import { type Bounds, type Point, tidy } from './geometry.ts'
 import type { Cap, PathNode, PathPoint, SceneNode } from './types.ts'
 
-/** 画面で呼び分けるノードの種類。直線はパスの 1 つだが、名前やアイコンは分ける */
-export type NodeKind = SceneNode['type'] | 'line'
+/** 画面で呼び分けるノードの種類。直線はパスの 1 つ、ブーリアン演算はフレームの 1 つだが、名前やアイコンは分ける */
+export type NodeKind = SceneNode['type'] | 'line' | 'boolean'
 
 export function nodeKind(node: SceneNode): NodeKind {
+  if (node.type === 'frame' && node.booleanOperation !== null) return 'boolean'
   return isLine(node) ? 'line' : node.type
 }
 

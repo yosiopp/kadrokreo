@@ -63,7 +63,7 @@ describe('hitTest', () => {
   it('塗った多角形は内側で当たり、へこんだ部分では当たらない', () => {
     // 左上・右上・右下・左下を結ぶ四角形から、上辺の中央を下へ凹ませた形
     const points = [{ x: 0, y: 0 }, { x: 50, y: 60 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]
-    const shape = path({ ...pathFromPoints(points, true), closed: true, fills: [{ type: 'solid', color: '#d9d9d9', opacity: 1, visible: true }] })
+    const shape = path({ ...pathFromPoints(points, true), closed: true, fills: [{ type: 'solid', color: '#d9d9d9', opacity: 1, visible: true, blendMode: 'normal' as const }] })
     const scene = sceneOf(shape)
     expect(hitTest(scene, { x: 50, y: 80 })).toBe('path')
     expect(hitTest(scene, { x: 10, y: 50 })).toBe('path')
@@ -92,7 +92,7 @@ describe('hitTest', () => {
     expect(hitTest(scene, { x: 50, y: 26 }, { tolerance: 3 })).toBe('path')
     expect(hitTest(scene, { x: 50, y: 98 }, { tolerance: 3 })).toBeNull()
     // 閉じて塗れば、曲線の内側で当たる
-    const filled = sceneOf({ ...arch, closed: true, fills: [{ type: 'solid', color: '#d9d9d9', opacity: 1, visible: true }] })
+    const filled = sceneOf({ ...arch, closed: true, fills: [{ type: 'solid', color: '#d9d9d9', opacity: 1, visible: true, blendMode: 'normal' as const }] })
     expect(hitTest(filled, { x: 50, y: 60 }, { tolerance: 3 })).toBe('path')
     expect(hitTest(filled, { x: 5, y: 30 }, { tolerance: 3 })).toBeNull()
   })
@@ -149,5 +149,31 @@ describe('hitTestFrameLabel', () => {
     expect(hitTestFrameLabel(rotated, viewport, { x: 220.5, y: 66.4 }, measure)).toBe('frame')
     // 囲む矩形の左上（前の置き場所）には当たらない
     expect(hitTestFrameLabel(rotated, viewport, { x: 70, y: 50 }, measure)).toBeNull()
+  })
+})
+
+describe('マスク', () => {
+  // 円のマスク（0〜100）の手前に矩形（0〜200）。マスクの外の矩形は描かれないので当たらない
+  function masked(visible = true) {
+    return sceneOf(
+      rect({ id: 'below', x: 0, y: 0, width: 300, height: 300 }),
+      ellipse({ id: 'mask', x: 0, y: 0, width: 100, height: 100, isMask: true, visible, fills: [] }),
+      rect({ id: 'content', x: 0, y: 0, width: 200, height: 200 }),
+    )
+  }
+
+  it('マスクの手前のものは、マスクの形の内側だけで当たる。マスクより奥のものはかからない', () => {
+    const scene = masked()
+    expect(hitTest(scene, { x: 50, y: 50 })).toBe('content')
+    // 円の外（四隅）と、円の外の矩形の部分は、奥の矩形に当たる
+    expect(hitTest(scene, { x: 5, y: 5 })).toBe('below')
+    expect(hitTest(scene, { x: 150, y: 150 })).toBe('below')
+  })
+
+  it('マスク自身は塗りによらず形の内側で当たる。隠したマスクは何も切り取らない', () => {
+    const scene = masked()
+    const withoutContent = { ...scene, rootIds: ['below', 'mask'] }
+    expect(hitTest(withoutContent, { x: 50, y: 50 })).toBe('mask')
+    expect(hitTest(masked(false), { x: 150, y: 150 })).toBe('content')
   })
 })

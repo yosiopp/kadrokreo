@@ -147,6 +147,11 @@ function tailwindClass([property, value]: Declaration): string[] {
       return value === '50%' ? ['rounded-full'] : sized('rounded')
     case 'box-shadow':
       return sized('shadow')
+    case 'mix-blend-mode':
+      return [`mix-blend-${value}`]
+    case 'background-blend-mode':
+      if (!value.includes(',')) return [`bg-blend-${value}`]
+      break
     case 'overflow':
       if (value === 'hidden' || value === 'visible') return [`overflow-${value}`]
       break

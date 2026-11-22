@@ -4,7 +4,7 @@ const path = require('path')
 
 // 性能の改善の残り: レイヤーの一覧は見えている行だけを作る（仮想スクロール）。
 // 行の多い kdr（計測用の makeKdr で作る）を editor と viewer で開き、作る行が一部だけなこと、
-// スクロールすると下の行が出てきて選べること、パンしても描き直した絵が全部を描いたときと同じことを確かめる。
+// スクロールすると下の行が出てきて選べること、パン・ドラッグ・ズームで使い回して描いた絵が全部を描いたときと同じことを確かめる。
 // 画像は入れない（縮めて描いた画像の縁のにじみは、範囲を切って描くと Chrome の描き方が変わり、角の 1〜2 画素が薄く変わるため。pitfalls.md）
 const OUT = path.join(__dirname, 'out')
 require('fs').mkdirSync(OUT, { recursive: true })
@@ -103,6 +103,44 @@ function compare(a, b, tolerance) {
   // 端を描くときの座標は、全部を描いたときと浮動小数点の誤差の分だけずれるので、縁のにじみが 1〜2 階調変わることはある
   const diff = compare(before, after, 2)
   check('editor: パンで端だけを描いても、全部を描いた絵と同じになる', diff.count === 0, `違う画素 ${diff.count}、最大 ${diff.max} 階調`)
+
+  // 図形を動かすと、変わったノードの範囲だけを描き直す。動かしてから取り消して元に戻ったら、最初の絵と同じになる
+  await lastRow.click()
+  await page.keyboard.press('Shift+Digit2')
+  const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  await page.mouse.move(middle.x, middle.y)
+  // 画面いっぱいだと描き直す範囲が広すぎて全部を描くので、ポインタの位置を中心に縮めて小さく映す
+  await page.keyboard.down('Control')
+  for (let i = 0; i < 4; i++) await page.mouse.wheel(0, 50)
+  await page.keyboard.up('Control')
+  await page.waitForTimeout(300)
+  const beforeDrag = await canvasPixels(page)
+  await page.mouse.down()
+  for (let i = 1; i <= 6; i++) {
+    await page.mouse.move(middle.x + i * 7, middle.y + i * 3)
+    await canvasPixels(page)
+  }
+  await page.keyboard.press('Escape')
+  await page.mouse.up()
+  await page.mouse.move(middle.x, middle.y)
+  const afterDrag = await canvasPixels(page)
+  const dragDiff = compare(beforeDrag, afterDrag, 0)
+  check('editor: ドラッグで範囲だけを描き直しても、取り消すと元の絵と同じになる', dragDiff.count === 0, `違う画素 ${dragDiff.count}、最大 ${dragDiff.max} 階調`)
+
+  // ホイールでズームしている途中は前の絵を拡大・縮小して見せ、止まったら全部を描き直す
+  await page.keyboard.press('Escape')
+  await page.keyboard.down('Control')
+  for (let i = 0; i < 3; i++) await page.mouse.wheel(0, 30)
+  await page.keyboard.up('Control')
+  const zooming = await canvasPixels(page)
+  await page.waitForTimeout(400)
+  const settled = await canvasPixels(page)
+  // 書体の読み込みが済んだときと同じく、取っておいた絵を捨てて全部を描かせる
+  await page.evaluate(() => document.fonts.dispatchEvent(new Event('loadingdone')))
+  const redrawn = await canvasPixels(page)
+  check('editor: ズームの途中は前の絵を拡大・縮小して見せる', compare(zooming, redrawn, 2).count > 0)
+  const zoomDiff = compare(settled, redrawn, 0)
+  check('editor: ズームが止まったら、全部を描いた絵と同じになる', zoomDiff.count === 0, `違う画素 ${zoomDiff.count}、最大 ${zoomDiff.max} 階調`)
 
   // viewer
   const viewer = await context.newPage()

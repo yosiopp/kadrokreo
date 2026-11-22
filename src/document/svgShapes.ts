@@ -1,5 +1,5 @@
 import { type Point, tidy } from './geometry.ts'
-import { gradientLine, paintColor } from './paint.ts'
+import { gradientLine, paintColor, radialTransform } from './paint.ts'
 import { type Vertex, cappedStroke, contoursData, isLine, pathOutlines } from './path.ts'
 import type { Asset, ColorStop, ConicGradient, Paint, PathNode } from './types.ts'
 
@@ -36,8 +36,8 @@ export function gradientDef(
     .join('')
   if (paint.type === 'conic') return conicPatternDef(paint, size, id, options)
   if (paint.type === 'radial') {
-    // 半径 1 の円を、変換で枠に対する割合の楕円にする（描画と同じ）
-    const matrix = [paint.rx * size.width, 0, 0, paint.ry * size.height, paint.cx * size.width, paint.cy * size.height]
+    // 半径 1 の円を、変換で枠に対する割合の（回した）楕円にする（描画と同じ）
+    const matrix = radialTransform(paint, size)
     return `<radialGradient id="${escapeXml(id)}" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(${matrix.map(tidy).join(' ')})">${stops}</radialGradient>`
   }
   const [from, to] = gradientLine(paint, size)
@@ -50,7 +50,8 @@ export const CONIC_WEDGES = 120
 /**
  * 角度のグラデーションを、扇形を並べた pattern で近似する（SVG に conic のグラデーションはない）。
  * 扇形は 1 つずつ真ん中の角度の色で塗るので、色は 3° ずつの段になる。継ぎ目が見えないよう扇形を少し重ね、
- * 塗りの不透明度は重なりで濃くならないよう g にかける。線のはみ出しも覆えるよう、pattern は枠より外まで広げる
+ * 塗りの不透明度は重なりで濃くならないよう g にかける。線のはみ出しも覆えるよう、pattern は枠より外まで広げる。
+ * 元の値は data-kdr-conic（中心 x y・向き・不透明度）と data-kdr-stops（位置 色,…）に残し、取り込み（editor/svg/convert.ts）で戻す
  */
 function conicPatternDef(paint: ConicGradient, size: { width: number; height: number }, id: string, options: SvgPaintOptions): string {
   const { width, height } = size
@@ -75,8 +76,12 @@ function conicPatternDef(paint: ConicGradient, size: { width: number; height: nu
     return `<path d="M${tidy(cx)} ${tidy(cy)} L${point(a0)} L${point(a1)} Z" fill="${color(stopColorAt(paint.stops, (i + 0.5) / CONIC_WEDGES))}"/>`
   }).join('')
   const group = paint.opacity < 1 ? `<g opacity="${tidy(paint.opacity)}">${wedges}</g>` : wedges
+  // 取り込み直したときに角度のグラデーションへ戻せるよう、元の値を data 属性に残す（中心はこの座標系のピクセル、色は #rrggbb）
+  const source =
+    ` data-kdr-conic="${[cx, cy, paint.angle, paint.opacity].map(tidy).join(' ')}"` +
+    ` data-kdr-stops="${escapeXml(paint.stops.map((stop) => `${tidy(stop.offset)} ${stop.color}`).join(','))}"`
   return (
-    `<pattern id="${escapeXml(id)}" patternUnits="userSpaceOnUse" ` +
+    `<pattern id="${escapeXml(id)}"${source} patternUnits="userSpaceOnUse" ` +
     `x="${tidy(box.x)}" y="${tidy(box.y)}" width="${tidy(box.width)}" height="${tidy(box.height)}">${group}</pattern>`
   )
 }

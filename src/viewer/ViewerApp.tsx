@@ -10,6 +10,7 @@ import { decodeKdr } from '../document/kdr.ts'
 import type { DesignDocument, NodeId, PageId } from '../document/types.ts'
 import { findMain, instanceOf } from '../document/component.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
+import { getExportOptions } from '../ui/exportOptions.ts'
 import { Logo } from '../ui/Logo.tsx'
 import { Message } from '../ui/Message.tsx'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
@@ -147,7 +148,7 @@ export default function ViewerApp() {
     const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
     const name = pngBaseName(doc, page, targets, !nodeIds)
     try {
-      const png = await renderPng(page, doc.assets, targets, scale)
+      const png = await renderPng(page, doc.assets, targets, scale, getExportOptions().background)
       downloadBlob(png, pngFileName(safeFileName(name), scale))
       setMessage(null)
     } catch (error) {
@@ -161,7 +162,7 @@ export default function ViewerApp() {
     const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
     const name = pngBaseName(doc, page, targets, !nodeIds)
     try {
-      downloadBlob(renderSvg(page, doc.assets, targets), svgFileName(safeFileName(name)))
+      downloadBlob(renderSvg(page, doc.assets, targets, getExportOptions()), svgFileName(safeFileName(name)))
       setMessage(null)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'SVG の書き出しに失敗しました')
@@ -173,7 +174,7 @@ export default function ViewerApp() {
     if (!doc || !page) return false
     const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
     try {
-      const copied = await copyText(svgMarkup(page, doc.assets, targets))
+      const copied = await copyText(svgMarkup(page, doc.assets, targets, getExportOptions()))
       setMessage(copied ? null : 'クリップボードへコピーできませんでした')
       return copied
     } catch (error) {

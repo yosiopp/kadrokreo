@@ -67,17 +67,20 @@ function followParent<T extends Scene>(
   frame: FrameNode,
   resized: NodeId[],
 ): T {
+  // ブーリアン演算のノードの子は、追従のしかたによらず一緒に拡大・縮小する（結果の形がノードの大きさに合うように。既存のデザインツールと同じ）
+  const boolean = frame.booleanOperation !== null
   const targets = frame.children.filter((childId) => {
     const child = after.nodes[childId]
     return (
       previous.children.includes(childId) &&
       before.nodes[childId] === child &&
       followsConstraints(frame, child) &&
-      (child.constraints.horizontal !== 'start' || child.constraints.vertical !== 'start')
+      (boolean || child.constraints.horizontal !== 'start' || child.constraints.vertical !== 'start')
     )
   })
   if (targets.length === 0) return current
-  return patchNodes(current, targets, (child) => {
+  return patchNodes(current, targets, (original) => {
+    const child: SceneNode = boolean ? { ...original, constraints: { horizontal: 'scale', vertical: 'scale' } } : original
     if (child.rotation !== 0) return followRotated(child, previous, frame, resized)
     const horizontal = constrain(child.constraints.horizontal, child.x, child.width, previous.width, frame.width)
     const vertical = constrain(child.constraints.vertical, child.y, child.height, previous.height, frame.height)

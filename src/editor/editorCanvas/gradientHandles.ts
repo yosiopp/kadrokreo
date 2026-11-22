@@ -1,11 +1,11 @@
 import { type Point, type Size, applyMatrix, getWorldMatrix, invert, normalizeAngle } from '../../document/geometry.ts'
-import { gradientLine } from '../../document/paint.ts'
-import type { Gradient, NodeId, Paint, Scene } from '../../document/types.ts'
+import { gradientLine, radialTransform } from '../../document/paint.ts'
+import type { Gradient, NodeId, Paint, Scene, SceneNode } from '../../document/types.ts'
 import { type PaintKey, withStopOffset } from '../operations/paints.ts'
 
 // キャンバスでグラデーションを動かすハンドルの位置と、つかんで動かしたときのグラデーション。
 // 直線は始点・終点をつかんで、それぞれ自由に置く（Shift で、もう一方の端を中心に向きを 15° 刻みにする）。
-// 円形は中心と、横・縦の半径の先をつかむ。角度は中心と、最初の色の向きを示す先（end）をつかむ。
+// 円形は中心と、横・縦の半径の先をつかむ（半径の先を回すと楕円も回る）。角度は中心と、最初の色の向きを示す先（end）をつかむ。
 // 色の位置（停止点）は、直線は始点から終点、円形は中心から横の半径の先、角度は中心から向きの先の線の上を動く（既存のデザインツールと同じ）
 
 /** キャンバスで動かしているグラデーション。stop は選んでいる色の番号（なければ null） */
@@ -48,9 +48,10 @@ export function gradientHandles(gradient: Gradient, size: Size): GradientHandles
     const radians = (gradient.angle * Math.PI) / 180
     axis = [center, { x: center.x + Math.cos(radians) * length, y: center.y + Math.sin(radians) * length }]
   } else {
-    const center = { x: gradient.cx * size.width, y: gradient.cy * size.height }
-    axis = [center, { x: center.x + gradient.rx * size.width, y: center.y }]
-    radiusY = { x: center.x, y: center.y + gradient.ry * size.height }
+    // 半径の先は、回す角度（angle）だけ回した楕円の軸の上
+    const [a, b, c, d, cx, cy] = radialTransform(gradient, size)
+    axis = [{ x: cx, y: cy }, { x: cx + a, y: cy + b }]
+    radiusY = { x: cx + c, y: cy + d }
   }
   const [from, to] = axis
   const stops = gradient.stops.map((stop) => ({
@@ -192,14 +193,20 @@ export function dragGradient(
       return { gradient: { ...base, cx: round(point.x / size.width, 4), cy: round(point.y / size.height, 4) }, stop: null }
     case 'radiusX':
     case 'radiusY': {
-      const center = { x: base.cx * size.width, y: base.cy * size.height }
-      // 半径の先は軸の上に留める（回した楕円は持たない）。つかんだ向きの距離だけを見る
-      const px = part.kind === 'radiusX' ? Math.abs(point.x - center.x) : Math.abs(point.y - center.y)
+      // 半径の先は、中心からの距離が半径、向きが楕円の回す角度になる（縦の半径の先は、回す角度より 90° 先）。
+      // Shift なら縦横の半径を揃え（円にする）、向きを 15° 刻みにする
+      const dx = point.x - base.cx * size.width
+      const dy = point.y - base.cy * size.height
+      const px = Math.hypot(dx, dy)
+      if (px === 0) return { gradient: base, stop: null }
+      const degrees = (Math.atan2(dy, dx) * 180) / Math.PI - (part.kind === 'radiusY' ? 90 : 0)
+      const angle = normalizeAngle(constrain ? Math.round(degrees / 15) * 15 : round(degrees, 1))
       if (constrain) {
-        return { gradient: { ...base, rx: round(px / size.width, 4), ry: round(px / size.height, 4) }, stop: null }
+        return { gradient: { ...base, angle, rx: round(px / size.width, 4), ry: round(px / size.height, 4) }, stop: null }
       }
       return {
-        gradient: part.kind === 'radiusX' ? { ...base, rx: round(px / size.width, 4) } : { ...base, ry: round(px / size.height, 4) },
+        gradient:
+          part.kind === 'radiusX' ? { ...base, angle, rx: round(px / size.width, 4) } : { ...base, angle, ry: round(px / size.height, 4) },
         stop: null,
       }
     }
@@ -211,4 +218,20 @@ export function dragGradient(
 /** ページ座標の点を、ノードの座標系に直す */
 export function toNodeSpace(scene: Scene, id: NodeId, world: Point): Point {
   return applyMatrix(invert(getWorldMatrix(scene, id)), world)
+}
+
+/**
+ * ダブルクリックでキャンバスのグラデーションの操作に入るときの、動かす塗り。
+ * 見えている塗りの中で手前（後ろの番号）のグラデーションを選び、塗りになければ線から探す（既存のデザインツールと同じく、ダブルクリックで操作に入る道）
+ */
+export function gradientToEdit(node: SceneNode): GradientEdit | null {
+  for (const key of ['fills', 'strokes'] as const) {
+    if (!(key in node)) continue
+    const paints = (node as unknown as Record<PaintKey, Paint[]>)[key]
+    for (let index = paints.length - 1; index >= 0; index--) {
+      const paint = paints[index]
+      if (paint.visible && paint.type !== 'solid') return { id: node.id, key, index, stop: null }
+    }
+  }
+  return null
 }

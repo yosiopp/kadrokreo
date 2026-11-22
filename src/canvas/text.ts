@@ -36,16 +36,29 @@ export function applyFont(ctx: CanvasRenderingContext2D, style: FontStyle): void
 
 // ノードは不変なので、同じオブジェクトなら行分けの結果も同じ
 const layoutCache = new WeakMap<TextStyle, TextLine[]>()
+// 行分けは文字と書体と折り返す幅だけで決まるので、それをキーにしても覚える。インスタンスの写しのテキストは
+// 別のノードでも中身が同じなので、1 回ずつ測らずに済む（large で開くときの行分けが約 19ms → 数 ms）
+const contentCache = new Map<string, TextLine[]>()
+/** 中身で覚える数の上限。超えたら全部捨てて覚え直す */
+const CONTENT_CACHE_LIMIT = 20_000
+// 書体の読み込みが済むと測った幅が変わるので、中身で覚えたものは捨てる（ノードで覚えたものは、ノードの大きさと揃えるため残す）
+if (typeof document !== 'undefined') document.fonts?.addEventListener('loadingdone', () => contentCache.clear())
 
 /** 描画する行に分ける。折り返す幅（wrapWidth）がなければ改行だけ、あればその幅に収まるよう折り返す */
 export function layoutText(ctx: CanvasRenderingContext2D, style: TextStyle): TextLine[] {
   const cached = layoutCache.get(style)
   if (cached) return cached
+  const wrapAt = wrapWidth(style)
+  const key = `${style.fontWeight}\u0000${style.fontSize}\u0000${style.fontFamily}\u0000${wrapAt}\u0000${style.text}`
+  const shared = contentCache.get(key)
+  if (shared) {
+    layoutCache.set(style, shared)
+    return shared
+  }
 
   applyFont(ctx, style)
   const measure = (text: string) => ctx.measureText(text).width
   const paragraphs = style.text.split('\n')
-  const wrapAt = wrapWidth(style)
   const lines = wrapAt === null
     ? paragraphs.map((text) => ({ text, width: measure(text) }))
     : paragraphs
@@ -53,6 +66,8 @@ export function layoutText(ctx: CanvasRenderingContext2D, style: TextStyle): Tex
         .flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure, style.fontSize))
         .map((text) => ({ text, width: measure(text.trimEnd()) }))
   layoutCache.set(style, lines)
+  if (contentCache.size >= CONTENT_CACHE_LIMIT) contentCache.clear()
+  contentCache.set(key, lines)
   return lines
 }
 

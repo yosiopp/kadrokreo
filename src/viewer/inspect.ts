@@ -1,24 +1,18 @@
-import {
-  type InstanceNode,
-  OVERRIDE_KEYS,
-  type PropertyValue,
-  canBindProperty,
-  derivedId,
-  instanceProperties,
-  findMain,
-  instanceOf,
-  isMain,
-} from '../document/component.ts'
-import { type Point, type Size, getCorners, getNodesBounds, tidy } from '../document/geometry.ts'
+import { type InstanceNode, OVERRIDE_KEYS, derivedId, findMain, instanceOf, isMain } from '../document/component.ts'
+import { type PropertyValue, canBindProperty, instanceProperties } from '../document/componentProperties.ts'
+import { type Point, type Size, getCorners, getNodesBounds, invert, nodeMatrix, tidy } from '../document/geometry.ts'
+import { BOOLEAN_OPERATION_LABELS, drawnNode, isBooleanNode } from '../document/booleanNode.ts'
+import { type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
+import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
 import { followsConstraints, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
-import { isVariantSet, parseVariantName, variantProperties, variantSetOf } from '../document/variants.ts'
-import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Effect, Gradient, ImageNode, NodeId, Override, Paint, Scene, SceneNode } from '../document/types.ts'
-import { angleLine, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
-import { capMarkerSize, isLine, isMarkerCap } from '../document/path.ts'
-import { ALIGN_CONTENT_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
+import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
+import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
+import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
+import { capMarkerSize, contoursData, isLine, isMarkerCap } from '../document/path.ts'
+import { ALIGN_CONTENT_LABELS, BLEND_MODE_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, MASK_TYPE_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
 
@@ -53,8 +47,9 @@ export function inspectNode(
   id: NodeId,
   format: ColorFormat = 'hex',
 ): InspectSection[] {
-  // 隠した塗り・線・効果は出さない
-  const node = withoutHidden(scene.nodes[id])
+  // 隠した塗り・線・効果は出さない。ブーリアン演算のノードは結果の形のパスとして見せる（演算は別の見出しに出す）
+  const original = scene.nodes[id]
+  const node = withoutHidden(drawnNode(scene, original))
   const hex = (color: string) => formatColor(color, format, { upper: true })
   const sections: InspectSection[] = []
   const add = (title: string, rows: (InspectRow | false | null)[]) => {
@@ -76,6 +71,10 @@ export function inspectNode(
     node.rotation !== 0 && { label: '回転', value: `${num(node.rotation)}°` },
     'cornerRadius' in node && isRounded(node.cornerRadius) && { label: '角丸', value: radiusText(node.cornerRadius, num) },
     node.opacity < 1 && { label: '不透明度', value: percent(node.opacity) },
+    node.blendMode !== 'normal' && { label: '描画モード', value: BLEND_MODE_LABELS[node.blendMode] },
+    node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && { label: '描画モード', value: '通過' },
+    node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && node.opacity < 1 &&
+      { label: 'CSS', value: 'opacity は中身をまとめてから混ぜるので、通過（子が後ろと直接混ざる）は表せない' },
   ])
 
   if (node.type === 'frame' && node.layout) {
@@ -117,6 +116,7 @@ export function inspectNode(
     paints.toReversed().flatMap((paint): InspectRow[] => [
       ...paintRowsOf(paint),
       ...(paint.opacity < 1 ? [{ label: '不透明度', value: percent(paint.opacity) }] : []),
+      ...(paint.blendMode !== 'normal' ? [{ label: '描画モード', value: BLEND_MODE_LABELS[paint.blendMode] }] : []),
     ])
   const paintRowsOf = (paint: Paint): InspectRow[] =>
       paint.type === 'solid'
@@ -133,10 +133,34 @@ export function inspectNode(
                 ? { label: '角度のグラデーション', value: `中心 ${percent(paint.cx)} ${percent(paint.cy)}・${num(paint.angle)}°から` }
                 : {
                     label: '円形のグラデーション',
-                    value: `中心 ${percent(paint.cx)} ${percent(paint.cy)}・半径 ${percent(paint.rx)} ${percent(paint.ry)}`,
+                    value:
+                      `中心 ${percent(paint.cx)} ${percent(paint.cy)}・半径 ${percent(paint.rx)} ${percent(paint.ry)}` +
+                      (paint.angle !== 0 ? `・${num(paint.angle)}° 回す` : ''),
                   },
+            paint.type === 'radial' && !radialCssExact(paint) && { label: 'CSS', value: '回した楕円は表せないので、回さない楕円で書いている' },
             ...paint.stops.map((stop) => ({ label: percent(stop.offset), value: hex(stop.color), color: stop.color })),
-          ]
+          ].filter((row) => row !== false)
+  // マスク（自分は描かず、手前の兄弟を形で切り取る）と、かかっているマスク
+  const maskId = maskOf(scene, node.id)
+  const appliedMask = maskId === null ? null : (scene.nodes[maskId] as MaskNode)
+  add('マスク', [
+    isMaskNode(node) && { label: '使い方', value: node.visible ? 'マスクとして使う（描かない）' : 'マスク（隠しているのでかけない）' },
+    isMaskNode(node) && node.maskType !== 'vector' && { label: '種類', value: MASK_TYPE_LABELS[node.maskType] },
+    appliedMask !== null && { label: 'かかるマスク', value: appliedMask.name },
+    appliedMask !== null && appliedMask.maskType !== 'vector' && {
+      label: 'CSS',
+      value: `${MASK_TYPE_LABELS[appliedMask.maskType]}のマスクは、マスクの絵を SVG にした mask-image で書いている`,
+    },
+  ])
+
+  if (isBooleanNode(original)) {
+    const parts = original.children.filter((child) => scene.nodes[child]?.visible && scene.nodes[child].type !== 'text')
+    add('ブーリアン演算', [
+      { label: '演算', value: BOOLEAN_OPERATION_LABELS[original.booleanOperation] },
+      { label: '元の図形', value: `${parts.length} 個` },
+    ])
+  }
+
   if ('fills' in node) add('塗り', paintRows(node.fills))
 
   if ('strokes' in node && hasStroke(node)) {
@@ -154,15 +178,28 @@ export function inspectNode(
   }
 
   if ('effects' in node) {
+    // パスの影は CSS の filter の drop-shadow、テキストの影は text-shadow で書く。どちらも内側の影と広がりは表せない
+    const filterShadow = node.type === 'path' || node.type === 'text'
     add(
-      '影',
+      '効果',
       node.effects.flatMap((shadow) => [
         { label: '種類', value: EFFECT_TYPE_LABELS[shadow.type] },
-        // パスの影は CSS の filter の drop-shadow で書くが、内側の影はそれで表せない
-        shadow.type === 'inner-shadow' && node.type === 'path' && { label: 'CSS', value: 'filter で表せないので、コードに含めていない' },
+        ...(!isShadow(shadow)
+          ? [
+              { label: 'ぼかし', value: num(shadow.blur) },
+              shadow.type === 'background-blur' &&
+                node.type === 'text' && { label: 'CSS', value: 'backdrop-filter は枠の内側全体をぼかす（キャンバスでは文字の形の内側だけ）' },
+            ]
+          : [
+        shadow.type === 'inner-shadow' && filterShadow && { label: 'CSS', value: `${node.type === 'text' ? 'text-shadow' : 'filter'} で表せないので、コードに含めていない` },
         { label: '横', value: num(shadow.x) },
         { label: '縦', value: num(shadow.y) },
         { label: 'ぼかし', value: num(shadow.blur) },
+        shadow.spread !== 0 && { label: '広がり', value: num(shadow.spread) },
+        shadow.spread !== 0 && shadow.type === 'drop-shadow' && filterShadow && {
+          label: 'CSS',
+          value: `${node.type === 'text' ? 'text-shadow' : 'filter の drop-shadow'} は広がりを表せないので、広がりなしで書いている`,
+        },
         {
           label: '色',
           // HEX のときは、色と濃さを分けて出す（濃さは別の値として持っている）
@@ -172,6 +209,9 @@ export function inspectNode(
               : formatColor(shadow.color, format, { alpha: shadow.opacity }),
           color: shadow.color,
         },
+        shadow.blendMode !== 'normal' && { label: '描画モード', value: BLEND_MODE_LABELS[shadow.blendMode] },
+        shadow.blendMode !== 'normal' && { label: 'CSS', value: '影ごとの描画モードは CSS で表せないので、ふつうに重ねて書いている' },
+            ]),
       ]),
     )
   }
@@ -194,13 +234,14 @@ export function inspectNode(
     add('コンポーネント', [
       { label: '種類', value: set ? 'バリアント' : '元' },
       set !== null && { label: 'まとまり', value: set.name },
+      set !== null && set.setDescription !== '' && { label: 'まとまりの説明', value: set.setDescription },
       ...variantRows(node.name),
       node.component.description !== '' && { label: '説明', value: node.component.description },
     ])
     add(
       'プロパティ',
       node.component.properties.map((property) => {
-        const targets = property.targets.filter((target) => canBindProperty(scene, node.id, property.type, target))
+        const targets = property.targets.filter((target) => canBindProperty(scene, node.id, property.type, target, doc))
         // 差し替えの候補（preferred values）があれば、名前を書き添える
         const preferred =
           property.type === 'instance'
@@ -218,7 +259,9 @@ export function inspectNode(
     add('コンポーネント', [
       { label: '種類', value: 'バリアントのまとまり' },
       ...variantProperties(scene, node.id).map(({ name, values }) => ({ label: name, value: values.join(' / ') })),
+      node.type === 'frame' && node.setDescription !== '' && { label: '説明', value: node.setDescription },
     ])
+    add('プロパティ', sharedPropertyRows(scene, node.id))
   }
   const instance = instanceOf(scene, id)
   if (instance) {
@@ -273,6 +316,26 @@ function overridesOn(scene: Scene, instance: InstanceNode, mainId: NodeId | unde
 }
 
 /** プロパティの値の表し方。真偽値は表示・非表示、差し替えはコンポーネントの名前 */
+/**
+ * まとまりのバリアントが共有するプロパティ（プロパティはバリアントごとに持つが、editor が名前で揃えている）。
+ * 名前ごとに、種類と、持っているバリアントの数（全部でなければ）を出す
+ */
+function sharedPropertyRows(scene: Scene, setId: NodeId): InspectRow[] {
+  const variants = variantsIn(scene, setId)
+  const found = new Map<string, { type: ComponentProperty['type']; count: number }>()
+  for (const variant of variants) {
+    for (const property of variant.component.properties) {
+      const entry = found.get(property.name)
+      if (entry) entry.count++
+      else found.set(property.name, { type: property.type, count: 1 })
+    }
+  }
+  return [...found].map(([name, { type, count }]) => ({
+    label: name,
+    value: `${PROPERTY_TYPE_LABELS[type]}${count < variants.length ? `（${variants.length} 個のうち ${count} 個のバリアント）` : ''}`,
+  }))
+}
+
 function propertyText(doc: DesignDocument, type: ComponentProperty['type'], value: PropertyValue): string {
   if (type === 'boolean') return value ? '表示' : '非表示'
   if (type === 'text') return String(value)
@@ -302,8 +365,8 @@ function overrideRow(label: string, override: Override | undefined): InspectRow 
  */
 export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = {}): string {
   const style = { ...DEFAULT_CODE_STYLE, ...options }
-  // 隠した塗り・線・効果は書かない
-  const node = withoutHidden(scene.nodes[id])
+  // 隠した塗り・線・効果は書かない。ブーリアン演算のノードは結果の形のパス（SVG）として書く
+  const node = withoutHidden(drawnNode(scene, scene.nodes[id]))
   const parent = node.parentId === null ? null : scene.nodes[node.parentId]
   const lines: string[] = []
   const add = (property: string, value: string) => lines.push(`${property}: ${value};`)
@@ -416,6 +479,14 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   }
   if (node.rotation !== 0) add('transform', `rotate(${num(node.rotation)}deg)`)
   if (node.opacity < 1) add('opacity', num(node.opacity))
+  // 塗りが 1 つだけなら、塗りの描画モードは要素ごと後ろに混ぜるのと同じ（ノードの描画モードが normal のとき）
+  const fills = 'fills' in node ? node.fills : []
+  const blend = node.blendMode !== 'normal' ? node.blendMode : fills.length === 1 && node.type !== 'path' ? fills[0].blendMode : 'normal'
+  if (blend !== 'normal') add('mix-blend-mode', blend)
+  // 塗りが 2 つ以上なら、上の塗りは background-blend-mode で下の塗りに混ぜる（一番下の塗りを後ろに混ぜることは CSS では表せない）
+  if (fills.length > 1 && node.type !== 'path' && node.type !== 'text' && fills.some((fill) => fill.blendMode !== 'normal')) {
+    add('background-blend-mode', fills.toReversed().map((fill) => fill.blendMode).join(', '))
+  }
 
   if (node.type === 'text') {
     const top = node.fills.at(-1)
@@ -469,13 +540,43 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   else if ('cornerRadius' in node && isRounded(node.cornerRadius)) add('border-radius', radiusText(node.cornerRadius, px))
   if ('effects' in node && node.effects.length > 0) {
     // CSS は先に書いた影が手前。効果は先頭が奥なので、逆に並べる。内側の影は inset（box-shadow ではどの落ち影よりも手前に描かれる）
+    const filters: string[] = []
+    // レイヤーのぼかしは影も含めてぼかす（描画と同じ）。CSS の blur() の値は半径の半分（標準偏差）
+    const layerBlur = blurRadius(node.effects, 'layer-blur')
     if (node.type === 'path') {
-      // パスの影は、枠ではなく形に沿って落ちる。filter の drop-shadow には内側の影がないので、落ち影だけ
+      // パスの影は、枠ではなく形に沿って落ちる。filter の drop-shadow には内側の影と広がりがないので、落ち影だけを広がりなしで
       const drops = splitEffects(node.effects).drop.toReversed()
-      if (drops.length > 0) add('filter', drops.map((shadow) => `drop-shadow(${shadowCss(shadow, style)})`).join(' '))
-    } else add('box-shadow', node.effects.toReversed().map((shadow) => shadowCss(shadow, style)).join(', '))
+      filters.push(...drops.map((shadow) => `drop-shadow(${shadowCss({ ...shadow, spread: 0 }, style)})`))
+    } else if (node.type === 'text') {
+      // 文字の影は text-shadow。内側の影と広がりは表せない
+      const drops = splitEffects(node.effects).drop.toReversed()
+      if (drops.length > 0) add('text-shadow', drops.map((shadow) => shadowCss({ ...shadow, spread: 0 }, style)).join(', '))
+    } else {
+      const shadows = node.effects.filter(isShadow).toReversed()
+      if (shadows.length > 0) add('box-shadow', shadows.map((shadow) => shadowCss(shadow, style)).join(', '))
+    }
+    if (layerBlur > 0) filters.push(`blur(${length(tidy(layerBlur / 2), style)})`)
+    if (filters.length > 0) add('filter', filters.join(' '))
+    const backgroundBlur = blurRadius(node.effects, 'background-blur')
+    if (backgroundBlur > 0) add('backdrop-filter', `blur(${length(tidy(backgroundBlur / 2), style)})`)
   }
   if (node.type === 'frame' && node.clipContent && node.children.length > 0) add('overflow', 'hidden')
+  // かかっているマスクは、マスクの形を自分の枠の座標に直した clip-path にする
+  const maskId = maskOf(scene, node.id)
+  if (maskId !== null) {
+    const mask = scene.nodes[maskId] as MaskNode
+    const m = invert(nodeMatrix(node))
+    if (mask.maskType === 'vector') {
+      const d = contoursData(maskContours(mask, m))
+      add('clip-path', `path(${maskFillRule(mask) === 'evenodd' ? 'evenodd, ' : ''}'${d}')`)
+    } else {
+      // 不透明度・明るさのマスクは、マスクの絵を自分の枠に合わせた SVG にして mask-image に書く（枠の外は透けない）
+      add('mask-image', `url("${svgDataUrl(maskImageSvg(mask, m, node))}")`)
+      add('mask-mode', mask.maskType === 'alpha' ? 'alpha' : 'luminance')
+      add('mask-size', '100% 100%')
+      add('mask-repeat', 'no-repeat')
+    }
+  }
 
   return lines.join('\n')
 }
@@ -495,8 +596,12 @@ function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
     return `conic-gradient(from ${num((((gradient.angle + 90) % 360) + 360) % 360)}deg at ${percent(gradient.cx)} ${percent(gradient.cy)}, ${stops.join(', ')})`
   }
   if (gradient.type === 'radial') {
-    // 楕円の大きさの % は、CSS も枠の幅・高さに対する割合
-    const { cx, cy, rx, ry } = gradient
+    // 楕円の大きさの % は、CSS も枠の幅・高さに対する割合。CSS は楕円を回せないので、横・縦が入れ替わる向き（90°・270°）だけ写し、
+    // ほかの角度は回さない楕円で代える（パネルに知らせる）
+    const { cx, cy } = gradient
+    const swap = Math.abs(((gradient.angle % 180) + 180) % 180 - 90) < 1e-9
+    const rx = swap ? (gradient.ry * size.height) / (size.width || 1) : gradient.rx
+    const ry = swap ? (gradient.rx * size.width) / (size.height || 1) : gradient.ry
     return `radial-gradient(${percent(rx)} ${percent(ry)} at ${percent(cx)} ${percent(cy)}, ${stops.join(', ')})`
   }
   const angle = linearAngle(gradient, size)
@@ -613,11 +718,18 @@ function paddingCss(layout: AutoLayout, px: (value: number) => string): string |
   return values.every((value) => value === 0) ? null : values.map(px).join(' ')
 }
 
-/** CSS の box-shadow の値。内側の影は inset を付ける */
-export function shadowCss(shadow: Effect, style: CodeStyle = DEFAULT_CODE_STYLE): string {
+/** CSS の box-shadow の値。内側の影は inset を付け、広がりは 0 でなければ書く */
+export function shadowCss(shadow: Shadow, style: CodeStyle = DEFAULT_CODE_STYLE): string {
   const color = formatColor(shadow.color, style.color, { alpha: shadow.opacity })
   const inset = shadow.type === 'inner-shadow' ? 'inset ' : ''
-  return `${inset}${length(shadow.x, style)} ${length(shadow.y, style)} ${length(shadow.blur, style)} ${color}`
+  const spread = shadow.spread !== 0 ? ` ${length(shadow.spread, style)}` : ''
+  return `${inset}${length(shadow.x, style)} ${length(shadow.y, style)} ${length(shadow.blur, style)}${spread} ${color}`
+}
+
+/** 円形のグラデーションを CSS で同じ形に書けるか（回さないか、横・縦が入れ替わるだけの向き） */
+function radialCssExact(paint: RadialGradient): boolean {
+  const turn = ((paint.angle % 90) + 90) % 90
+  return turn < 1e-9 || 90 - turn < 1e-9
 }
 
 /** rem は、基準が 16px なら 1px = 0.0625rem なので、小数 4 桁まで出す */
@@ -668,4 +780,9 @@ export function inspectSelection(scene: Scene, ids: readonly NodeId[]): InspectS
     })
   }
   return sections
+}
+
+/** SVG を CSS の url() に入れる data URL にする。読めるように、URL で意味を持つ文字だけを % にし、二重引用符は一重に替える */
+export function svgDataUrl(svg: string): string {
+  return `data:image/svg+xml,${svg.replace(/"/g, "'").replace(/[%#<>{}\n\r"]/g, (c) => encodeURIComponent(c))}`
 }

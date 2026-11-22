@@ -269,7 +269,8 @@ const DEFAULT_LAYOUT: AutoLayout = {
  */
 export function enableAutoLayout<T extends Scene>(scene: T, id: NodeId): T {
   const frame = scene.nodes[id]
-  if (frame?.type !== 'frame' || frame.layout) return scene
+  // ブーリアン演算のノードは並べない（子は形の材料で、並べるものではない）
+  if (frame?.type !== 'frame' || frame.layout || frame.booleanOperation !== null) return scene
 
   const items = visibleItems(scene, frame)
   // 大きさは中身に合わせる。親いっぱいに伸ばしている向きはそのまま

@@ -15,6 +15,8 @@ export type ComponentEntry = {
   node: MainNode
   /** 行に出す名前。まとまりならまとまりの名前 */
   name: string
+  /** 名前にポインタを重ねたときに出す説明文。まとまりならまとまりの説明文（フレームの setDescription） */
+  description: string
   /** 「元を表示」で選ぶノード。まとまりならまとまり */
   shownId: NodeId
   /** まとまりなら、その中のバリアントの行（まとまりの中の順）。まとまりでなければ空 */
@@ -32,7 +34,7 @@ export function componentEntries(doc: DesignDocument, query: string, sort: Compo
   const seen = new Set<string>()
   const entries = listComponents(doc).flatMap(({ page, node }): ComponentEntry[] => {
     const set = variantSetOf(page, node.id)
-    if (!set) return matches(node.name) ? [{ page, node, name: node.name, shownId: node.id, variants: [] }] : []
+    if (!set) return matches(node.name) ? [{ page, node, name: node.name, description: node.component.description, shownId: node.id, variants: [] }] : []
     const key = `${page.id}:${set.id}`
     if (seen.has(key)) return []
     seen.add(key)
@@ -44,8 +46,16 @@ export function componentEntries(doc: DesignDocument, query: string, sort: Compo
         page,
         node: variants[0],
         name: set.name,
+        description: set.setDescription,
         shownId: set.id,
-        variants: variants.map((variant) => ({ page, node: variant, name: variant.name, shownId: variant.id, variants: [] })),
+        variants: variants.map((variant) => ({
+          page,
+          node: variant,
+          name: variant.name,
+          description: variant.component.description,
+          shownId: variant.id,
+          variants: [],
+        })),
       },
     ]
   })

@@ -24,8 +24,8 @@ export function findFrameAt(
     for (let i = ids.length - 1; i >= 0; i--) {
       const node = scene.nodes[ids[i]]
       if (node.type !== 'frame' || !node.visible || node.locked || exclude.has(node.id)) continue
-      // インスタンスの中へは入れられない
-      if (isInstance(node)) continue
+      // インスタンスの中へは入れられない。ブーリアン演算のノードにも、ドラッグでは入れない（元の図形が変わってしまう）
+      if (isInstance(node) || node.booleanOperation !== null) continue
       const local = toNodeSpace(node, p)
       const inside =
         local.x >= 0 && local.x <= node.width && local.y >= 0 && local.y <= node.height
@@ -54,10 +54,11 @@ export function nodesInMarquee(scene: Scene, marquee: Bounds): NodeId[] {
       if (!node.visible || node.locked) continue
       const bounds = getAbsoluteBounds(scene, id)
       if (!intersects(bounds, marquee)) {
-        if (node.type === 'frame' && !isInstance(node) && !node.clipContent) visit(node.children)
+        if (node.type === 'frame' && !isInstance(node) && !node.clipContent && node.booleanOperation === null) visit(node.children)
         continue
       }
-      if (node.type === 'frame' && !isInstance(node) && !contains(marquee, bounds)) visit(node.children)
+      // ブーリアン演算のノードは、インスタンスと同じく全体でひとつとして選ぶ
+      if (node.type === 'frame' && !isInstance(node) && node.booleanOperation === null && !contains(marquee, bounds)) visit(node.children)
       else result.push(id)
     }
   }

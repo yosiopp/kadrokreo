@@ -8,8 +8,8 @@ import { setRotation, setSize } from '../operations/transform.ts'
 import { patchNodes } from '../operations/tree.ts'
 import { type PanelContext, textsIn, common, mapValue } from './context.ts'
 import { CheckField, NumberField, Section, SelectField } from './fields.tsx'
-import { CONSTRAINT_LABELS, optionsOf } from '../../ui/labels.ts'
-import type { Constraint } from '../../document/types.ts'
+import { BLEND_MODE_LABELS, CONSTRAINT_LABELS, optionsOf } from '../../ui/labels.ts'
+import type { BlendMode, Constraint, SceneNode } from '../../document/types.ts'
 
 const ALIGNMENTS: { alignment: Alignment; label: string }[] = [
   { alignment: 'left', label: '左揃え' },
@@ -28,7 +28,7 @@ const LIMIT_FIELDS = [
   ['maxHeight', '最大 H', 'height'],
 ] as const
 
-/** 整列・位置とサイズ・並び・親いっぱいに伸ばす・大きさの下限と上限・不透明度。インスタンスの中身では出さない */
+/** 整列・位置とサイズ・並び・親いっぱいに伸ばす・大きさの下限と上限・不透明度と描画モード。インスタンスの中身では出さない */
 export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
   const { store, page, selection, nodes, apply, hasInstance } = ctx
   // 大きさを数値で決める。テキストは折り返しに、自動で並べるフレームはその向きが固定になる
@@ -56,6 +56,11 @@ export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
   const minSize = nodes.some(isLine) ? 0 : 1
   // 1 つだけのときは親フレームに揃えるので、ページ直下では揃える先がない
   const canAlign = nodes.length > 1 || nodes[0].parentId !== null
+
+  // フレームだけを選んでいれば、描画モードに「通過」（子を後ろと直接混ぜる）を出す
+  const blendOptions: [BlendMode | 'pass-through', string][] = nodes.every((node) => node.type === 'frame')
+    ? [['pass-through', '通過'], ...optionsOf(BLEND_MODE_LABELS)]
+    : optionsOf(BLEND_MODE_LABELS)
 
   return (
     <>
@@ -203,7 +208,26 @@ export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
           max={100}
           onCommit={(percent) => apply({ opacity: percent / 100 })}
         />
+        <SelectField
+          label="描画モード"
+          value={common(nodes.map(blendModeOf))}
+          options={blendOptions}
+          onChange={(mode) =>
+            store.apply((base) =>
+              patchNodes(base, selection, (node) => {
+                // 通過はフレームだけ。ほかのモードを選んだら通過をやめる
+                if (mode === 'pass-through') return node.type === 'frame' ? { blendMode: 'normal', passThrough: true } : null
+                return node.type === 'frame' ? { blendMode: mode, passThrough: false } : { blendMode: mode }
+              }),
+            )
+          }
+        />
       </Section>
     </>
   )
+}
+
+/** 描画モードの欄に出す値。通過のフレームは 'pass-through' */
+function blendModeOf(node: SceneNode): BlendMode | 'pass-through' {
+  return node.type === 'frame' && node.passThrough && node.blendMode === 'normal' ? 'pass-through' : node.blendMode
 }

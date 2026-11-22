@@ -3,7 +3,7 @@ import type { Asset } from '../document/types.ts'
 // アセットは不変なので、オブジェクトをキーにデコード結果を持つ。使われなくなれば一緒に解放される
 type Entry = { bitmap: ImageBitmap | null; ready: Promise<void> }
 const cache = new WeakMap<Asset, Entry>()
-const listeners = new Set<() => void>()
+const listeners = new Set<(asset: Asset) => void>()
 
 function entryOf(asset: Asset): Entry {
   let entry = cache.get(asset)
@@ -12,7 +12,7 @@ function entryOf(asset: Asset): Entry {
     loading.ready = decode(asset).then(
       (bitmap) => {
         loading.bitmap = bitmap
-        for (const listener of listeners) listener()
+        for (const listener of listeners) listener(asset)
       },
       // 壊れた画像は読み込み中と同じ見た目のままにする
       () => {},
@@ -40,7 +40,8 @@ export function primeImage(asset: Asset, bitmap: ImageBitmap): void {
   cache.set(asset, { bitmap, ready: Promise.resolve() })
 }
 
-export function onImageLoad(listener: () => void): () => void {
+/** デコードが済んだら、その画像を渡して知らせる */
+export function onImageLoad(listener: (asset: Asset) => void): () => void {
   listeners.add(listener)
   return () => {
     listeners.delete(listener)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { derivedId, isInstance } from '../document/component.ts'
+import { derivedId, isInstance, isMain, mainsOf } from '../document/component.ts'
 import { solid } from '../document/paint.ts'
 import type { DesignDocument, FrameNode, NodeId, Page } from '../document/types.ts'
 import { type FitText, captureOverrides, createInstance, makeComponent, syncComponents } from './components.ts'
@@ -167,6 +167,14 @@ describe('同期を速くしても結果は変わらない', () => {
       const captured = deepFreeze(captureOverrides(doc, raw))
       const synced = syncComponents(captured, fitText)
       expect(synced, `${step} 回目（種類 ${kind}）`).toEqual(fresh(captured))
+      // 同期が引き継いだ元の集まり（inheritMains）が、ページを見直して集めたものと同じ
+      for (const page of synced.pages) {
+        const found = new Map<string, NodeId>()
+        for (const node of Object.values(page.nodes)) if (isMain(node) && !found.has(node.component.id)) found.set(node.component.id, node.id)
+        const inherited = new Map([...mainsOf(page)].map(([id, main]) => [id, main.id]))
+        expect(inherited, `${step} 回目の元の集まり`).toEqual(found)
+        for (const main of mainsOf(page).values()) expect(page.nodes[main.id]).toBe(main)
+      }
       doc = synced
     }
     // 途中でインスタンスがなくなっていない（確かめた中身があった）

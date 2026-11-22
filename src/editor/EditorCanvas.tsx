@@ -3,6 +3,7 @@ import { type CanvasPointer, CanvasView } from '../canvas/CanvasView.tsx'
 import type { Camera } from '../canvas/camera.ts'
 import { hitTest } from '../canvas/hitTest.ts'
 import { HIT_TOLERANCE, pickNode } from '../canvas/pick.ts'
+import { isBooleanNode } from '../document/booleanNode.ts'
 import { type Viewport, worldToScreen } from '../canvas/viewport.ts'
 import { isInstance, owningInstance } from '../document/component.ts'
 import { type Point, applyMatrix, getNodesBounds, invert, toLocal } from '../document/geometry.ts'
@@ -33,11 +34,15 @@ import {
   type GradientHandles,
   editedGradient,
   gradientPartAt,
+  gradientToEdit,
   offsetOnAxis,
   stopMarkers,
   worldGradientHandles,
 } from './editorCanvas/gradientHandles.ts'
 import { patchGradientAt, withStopAt, withStopRemoved } from './operations/paints.ts'
+import { canCreateBooleanNode, canFlattenBoolean } from './operations/booleanNodes.ts'
+import { canOutlineStroke } from './operations/outline.ts'
+import { BOOLEAN_LABELS, addContour, canBooleanPaths, canJoinPaths, canSplitPaths, maskAction } from './operations/paths.ts'
 import { useShortcuts } from './editorCanvas/useShortcuts.ts'
 import { useTextEditing } from './editorCanvas/useTextEditing.ts'
 import { findFrameAt } from './hitTest.ts'
@@ -65,6 +70,13 @@ const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator
 const MOD = MAC ? '⌘' : 'Ctrl+'
 const SHIFT = MAC ? '⇧' : 'Shift+'
 const ALT = MAC ? '⌥' : 'Alt+'
+/** 右クリックメニューのブーリアン演算（キーは Alt + Shift と組み合わせる） */
+const BOOLEAN_MENU = [
+  { op: 'union', key: 'U' },
+  { op: 'subtract', key: 'S' },
+  { op: 'intersect', key: 'I' },
+  { op: 'exclude', key: 'X' },
+] as const
 
 // 選択枠・ハンドルの計算、ドラッグ中のプレビュー、重ねて描く印、キーボード、テキストの編集は editorCanvas/ にある。
 // ここはポインタの押す・離すから、どのジェスチャーを始めるかを決める
@@ -78,13 +90,15 @@ type Props = {
   /** クリップボードから画像が貼り付けられた */
   onPasteImages: (files: File[]) => void
   onPasteSvg: (text: string) => void
+  /** 操作ができなかった理由などを知らせる */
+  onMessage: (message: string) => void
   /** 選択中のものを SVG の文字にしてクリップボードへ入れる（右クリックメニューの「SVG としてコピー」） */
   onCopySvg: () => void
   /** コンポーネントの一覧からドラッグしているインスタンスが入るフレーム（ページ直下なら null） */
   dropTarget?: NodeId | null
 }
 
-export function EditorCanvas({ store, camera, state, tool, onToolChange, onPasteImages, onPasteSvg, onCopySvg, dropTarget = null }: Props) {
+export function EditorCanvas({ store, camera, state, tool, onToolChange, onPasteImages, onPasteSvg, onCopySvg, onMessage, dropTarget = null }: Props) {
   const gestureRef = useRef<Gesture | null>(null)
   // ペンツールで描いている途中の頂点（ページ座標、制御点を含む）。cursor はポインタの位置
   const penRef = useRef<{ points: Vertex[]; cursor: Point | null } | null>(null)
@@ -101,10 +115,20 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     onToolChange,
   )
 
+  // 頂点の編集中にペンツールへ切り替えたときの、そのパス。ペンで描いた形を新しいパスにせず、このパスの輪郭として足す
+  const contourTargetRef = useRef<NodeId | null>(null)
+
   // ツールを切り替えたら、描きかけのパスや頂点の編集は終える（別のものを選んだときは、ストアが頂点の編集を終える）
   useEffect(() => {
-    if (tool !== 'pen') penRef.current = null
-    if (tool !== 'select' && store.getState().vertexEdit) store.editVertices(null)
+    if (tool !== 'pen') {
+      penRef.current = null
+      contourTargetRef.current = null
+    }
+    const { vertexEdit, page, selection } = store.getState()
+    if (tool === 'pen' && vertexEdit && selection.length === 1 && selection[0] === vertexEdit.id && page.nodes[vertexEdit.id]?.type === 'path') {
+      contourTargetRef.current = vertexEdit.id
+    }
+    if (tool !== 'select' && vertexEdit) store.editVertices(null)
     if (tool !== 'select' && store.getState().gradientEdit) store.editGradient(null)
   }, [tool, store])
 
@@ -211,6 +235,18 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     if (!draft || draft.points.length < 2) return
 
     const page = store.getState().page
+    // 頂点の編集から来たなら、そのパスの輪郭として足し、頂点の編集に戻る
+    const target = contourTargetRef.current
+    contourTargetRef.current = null
+    const targetNode = target === null ? null : page.nodes[target]
+    if (targetNode?.type === 'path' && !targetNode.locked) {
+      const vertices = mapVertices(draft.points, (point) => toLocal(page, targetNode.parentId, point))
+      store.apply((base) => addContour(base, targetNode.id, { vertices, closed }))
+      store.select([targetNode.id])
+      store.editVertices({ id: targetNode.id, vertices: [], segment: null })
+      onToolChange('select')
+      return
+    }
     const parentId = findFrameAt(page, draft.points[0])
     const shape = pathFromPoints(
       mapVertices(draft.points, (point) => toLocal(page, parentId, point)),
@@ -537,9 +573,11 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     const tolerance = HIT_TOLERANCE / camera.getViewport().zoom
     const top = hitTest(page, pointer.world, { tolerance })
     if (!top) return
-    // インスタンスは、ダブルクリックで中身を選べる（文言や色を、そのインスタンスだけ変えられる）
-    const inner = isInstance(page.nodes[top])
-    const hit = inner ? (hitTest(page, pointer.world, { tolerance, deep: true }) ?? top) : top
+    // インスタンスは、ダブルクリックで中身を選べる（文言や色を、そのインスタンスだけ変えられる）。
+    // ブーリアン演算のノードも、ダブルクリックで元の図形を選べる
+    const boolean = isBooleanNode(page.nodes[top])
+    const inner = isInstance(page.nodes[top]) || boolean
+    const hit = inner ? (hitTest(page, pointer.world, { tolerance, deep: !boolean, booleanChildren: boolean }) ?? top) : top
     if (page.nodes[hit].type === 'text') {
       store.select([hit])
       editText(hit)
@@ -549,6 +587,13 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       // パスは頂点の編集に入る。別のものを選ぶか Esc で抜ける
       store.select([hit])
       store.editVertices({ id: hit, vertices: [], segment: null })
+    } else {
+      // グラデーションの塗りか線を持つ図形は、キャンバスでグラデーションを動かす操作に入る（塗りの行のボタンと同じ）
+      const edit = gradientToEdit(page.nodes[hit])
+      if (edit) {
+        store.select([hit])
+        store.editGradient(edit)
+      }
     }
   }
 
@@ -670,6 +715,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     editText,
     onPasteImages,
     onPasteSvg,
+    onMessage,
   })
 
   /** 右クリック。押した所のものを選んで（選択枠の内側なら選択はそのまま）、メニューを出す */
@@ -716,6 +762,33 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       { label: '上下に反転', shortcut: `${SHIFT}V`, disabled: movableIds().length === 0, onSelect: () => commands.flip('vertical') },
       'separator',
       { label: 'フレームにまとめる（自動で並べる）', shortcut: `${SHIFT}A`, disabled: movableIds().length === 0, onSelect: commands.wrap },
+      {
+        label: maskAction(page, movableIds()) === 'clear' ? 'マスクをやめる' : 'マスクとして使う',
+        shortcut: `${ALT}${MOD}M`,
+        disabled: maskAction(page, movableIds()) === null,
+        onSelect: commands.mask,
+      },
+      { label: 'パスを結合', shortcut: `${MOD}E`, disabled: !canJoinPaths(page, movableIds()), onSelect: commands.join },
+      { label: 'パスを分割', shortcut: `${SHIFT}${MOD}E`, disabled: !canSplitPaths(page, movableIds()), onSelect: commands.split },
+      {
+        label: 'ブーリアン演算（パスに焼き込む）',
+        disabled: !canBooleanPaths(page, movableIds()),
+        submenu: BOOLEAN_MENU.map(({ op, key }) => ({ label: BOOLEAN_LABELS[op], shortcut: `${ALT}${SHIFT}${key}`, onSelect: () => commands.booleanOp(op) })),
+      },
+      {
+        label: 'ブーリアン演算（元を残す）',
+        disabled: !canCreateBooleanNode(page, movableIds()) && !canFlattenBoolean(page, movableIds()),
+        submenu: [
+          ...BOOLEAN_MENU.map(({ op }) => ({
+            label: BOOLEAN_LABELS[op],
+            disabled: !canCreateBooleanNode(page, movableIds()),
+            onSelect: () => commands.booleanNode(op),
+          })),
+          'separator' as const,
+          { label: '平らにする', disabled: !canFlattenBoolean(page, movableIds()), onSelect: commands.flattenBoolean },
+        ],
+      },
+      { label: '線の輪郭化', shortcut: `${ALT}${MOD}O`, disabled: !canOutlineStroke(page, movableIds()), onSelect: commands.outlineStroke },
       {
         label: 'コンポーネントにする',
         shortcut: `${ALT}${MOD}K`,

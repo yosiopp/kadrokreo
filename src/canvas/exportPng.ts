@@ -1,15 +1,23 @@
-import { type Bounds, getNodesBounds, getWorldMatrix } from '../document/geometry.ts'
+import { type Bounds, getWorldMatrix } from '../document/geometry.ts'
+import { type TextLinesOf, getPaintedBounds } from '../document/paint.ts'
 import type { Asset, AssetId, DesignDocument, NodeId, Page, Scene } from '../document/types.ts'
 import { loadImage } from './images.ts'
 import { renderScene } from './render.ts'
+import { layoutText } from './text.ts'
 
 /** ブラウザが扱えるキャンバスの大きさには上限がある。一辺と総画素数の両方で抑える */
 const MAX_SIDE = 16_384
 const MAX_PIXELS = 64_000_000
 
-/** 書き出す範囲（targets を囲む矩形）と、倍率をかけた画素の大きさ。大きすぎればエラー */
-export function pngArea(scene: Scene, targets: readonly NodeId[], scale: number): { bounds: Bounds; width: number; height: number } {
-  const bounds = getNodesBounds(scene, targets)
+/** 書き出す範囲（targets を囲む矩形に影・ぼかし・線の太さ・枠からはみ出すテキストの行を足したもの）と、倍率をかけた画素の大きさ。大きすぎればエラー */
+export function pngArea(
+  scene: Scene,
+  targets: readonly NodeId[],
+  scale: number,
+  textLines?: TextLinesOf,
+): { bounds: Bounds; width: number; height: number } {
+  // 影・ぼかし・枠からはみ出すテキストの行まで含める（getPaintedBounds）
+  const bounds = getPaintedBounds(scene, targets, textLines)
   if (!bounds) throw new Error('書き出すものがありません')
   const width = Math.max(1, Math.ceil(bounds.width * scale))
   const height = Math.max(1, Math.ceil(bounds.height * scale))
@@ -33,6 +41,7 @@ export function drawPng(
   targets: readonly NodeId[],
   area: { bounds: Bounds; width: number; height: number },
   scale: number,
+  background: string | null = null,
 ): void {
   renderScene(
     ctx,
@@ -48,26 +57,37 @@ export function drawPng(
       roots: targets.map((id) => ({ id, parent: getWorldMatrix(scene, scene.nodes[id].parentId) })),
     },
   )
+  // 背景は描いた絵の後ろに敷く（範囲全体。SVG の書き出しの背景と同じ）
+  if (background !== null) {
+    ctx.save()
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.globalCompositeOperation = 'destination-over'
+    ctx.fillStyle = background
+    ctx.fillRect(0, 0, area.width, area.height)
+    ctx.restore()
+  }
 }
 
 /**
- * targets のノードを、背景が透明な PNG にする。targets は重なり順（背面が先）に並べ、
- * 親子を一緒に含めないこと。
- * 範囲は、それらを囲む矩形。影など、枠の外にはみ出す部分は含めない。
+ * targets のノードを PNG にする。targets は重なり順（背面が先）に並べ、親子を一緒に含めないこと。
+ * 範囲は pngArea（影・ぼかし・線の太さのはみ出しを含む）。background（#rrggbb）を渡せば範囲全体に敷き、null なら透明
  */
 export async function renderPng(
   scene: Scene,
   assets: Record<AssetId, Asset>,
   targets: readonly NodeId[],
   scale: number,
+  background: string | null = null,
 ): Promise<Blob> {
-  const area = pngArea(scene, targets, scale)
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')!
+  // テキストの行分けは描画と同じく Canvas で測る（枠からはみ出す行を範囲に含めるため）
+  const area = pngArea(scene, targets, scale, (node) => layoutText(ctx, node))
   await loadSceneImages(scene, assets)
 
-  const canvas = document.createElement('canvas')
   canvas.width = area.width
   canvas.height = area.height
-  drawPng(canvas.getContext('2d')!, scene, assets, targets, area, scale)
+  drawPng(ctx, scene, assets, targets, area, scale, background)
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(

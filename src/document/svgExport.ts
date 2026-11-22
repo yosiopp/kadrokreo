@@ -1,18 +1,20 @@
-import { type Matrix, getNodesBounds, getWorldMatrix, multiply, nodeMatrix, rotateVector, tidy } from './geometry.ts'
+import { IDENTITY, type Matrix, getWorldMatrix, multiply, nodeMatrix, rotateVector, tidy, transformRect } from './geometry.ts'
+import { drawnNode } from './booleanNode.ts'
 import { readImageInfo } from './imageInfo.ts'
-import { cornerRadii, hasStroke, imageRect, isRounded, splitEffects, withoutHidden } from './paint.ts'
-import { isLine } from './path.ts'
+import { type TextLinesOf, blurRadius, cornerRadii, getPaintedBounds, hasStroke, imageRect, isRounded, isShadow, splitEffects, withoutHidden } from './paint.ts'
+import { type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from './mask.ts'
+import { contoursData, isLine } from './path.ts'
 import { dataUri, escapeXml, gradientDef, pathSvg } from './svgShapes.ts'
 import type {
   Asset,
   AssetId,
   CornerRadius,
-  Effect,
   ImageNode,
   NodeId,
   Paint,
   Scene,
   SceneNode,
+  Shadow,
   Style,
   TextNode,
 } from './types.ts'
@@ -25,16 +27,23 @@ import type {
 // - 塗りは単色・linearGradient・radialGradient（userSpaceOnUse でノードの座標系に書く）。塗りがいくつもあれば、描画と同じく
 //   要素を下から順に重ねる。塗りごとの不透明度は fill-opacity / stroke-opacity（グラデーションは stop-opacity）。
 // - 影は filter。落ち影は一番下の塗りに付け（塗りがなければ線に）、内側の影は一番上の塗りに付ける。ずれは回転に従わない（ノードの向きに直して書く）。
+// - 影の広がりは feMorphology（四角く太らせる・細らせるので、角は描画より角張る）。
+// - 描画モードは style の mix-blend-mode（ノードは要素か g に、塗りは塗りの要素に）。
+// - レイヤーのぼかしは feGaussianBlur の filter を g に付ける。背景のぼかしは SVG で表せないので書かない（コメントを残す）。
+// - テキストの影は text に filter で付ける（落ち影は一番下の塗り、内側の影は一番上の塗り）。画像の影は、枠の形の黒い要素に影だけを出す filter を付けて、画像の下（内側の影は上）に置く。
 // - 角度のグラデーションは SVG にないので、扇形を並べた pattern で近似する（svgShapes.ts の gradientDef）。
 // - 隠した塗り・線・効果（visible が false）は書かない。
 // - テキストは text と、行ごとの tspan。行の区切り（折り返し）は呼び出し側が渡す（ブラウザは Canvas で、CLI は見積もりで測る）。
 //   フォントは埋め込まず、名前だけを書く（理由は decisions.md「SVG の書き出し」）。1 行目の基線は、呼び出し側がフォントの実際の高さ（textMetrics）を
 //   渡せば描画と同じ位置に、渡さなければ SVG の取り込みと同じ見積もり（文字の上 0.9・下 0.22）で置く。
 // - 画像は data URI の image。fit と切り抜きは imageRect で置き、枠の外は clipPath で切る。
+// - マスク（isMask）は書かず、そこから次のマスクまでの兄弟を、マスクの形の path の clipPath をかけた g にまとめる。
+//   不透明度・明るさのマスク（maskType）は、マスクの図形を塗りだけで描いた mask にする。
+// - ブーリアン演算のノードは、結果の形の path（evenodd）として書く（子は書かない）。
 // 取り込み（editor/svg/）で読み戻すと同じ形になることを svgExport.test.ts で確かめている。
 
-/** テキストを描く行に分ける（canvas/text.ts の layoutText と同じ結果を返すもの） */
-export type SvgTextLines = (node: TextNode) => readonly { text: string }[]
+/** テキストを描く行に分ける（canvas/text.ts の layoutText と同じ結果を返すもの）。行の幅を返せば、範囲に横へはみ出す行も含める */
+export type SvgTextLines = TextLinesOf
 
 /** フォントの上下の高さ（px）。Canvas の measureText の fontBoundingBoxAscent / fontBoundingBoxDescent に当たる */
 export type SvgTextMetrics = (node: TextNode) => { ascent: number; descent: number }
@@ -66,16 +75,20 @@ export function textBaseline(node: Pick<TextNode, 'fontSize' | 'lineHeight'>, me
 
 /**
  * targets のノードを 1 つの SVG ファイルの文字列にする。targets は重なり順（背面が先）に並べ、親子を一緒に含めないこと。
- * 範囲は PNG の書き出しと同じく、それらを囲む矩形（影など枠の外にはみ出す分は含めない）
+ * 範囲は PNG の書き出しと同じく、それらを囲む矩形に影・ぼかし・線の太さ・枠からはみ出すテキストの行（textLines を渡したとき）を足したもの
  */
 export function exportSvg(scene: Scene, targets: readonly NodeId[], options: SvgExportOptions): string {
-  const bounds = getNodesBounds(scene, targets)
+  // 影・ぼかし・枠からはみ出すテキストの行まで含める（getPaintedBounds）
+  const bounds = getPaintedBounds(scene, targets, options.textLines)
   if (!bounds) throw new Error('書き出すものがありません')
   const writer = new SvgWriter(scene, options)
   const body = targets
     .map((id) => {
       const parent = getWorldMatrix(scene, scene.nodes[id].parentId)
-      return writer.node(id, multiply(parent, nodeMatrix(scene.nodes[id])), parent)
+      const element = writer.node(id, multiply(parent, nodeMatrix(scene.nodes[id])), parent)
+      // かかっているマスクは、選んでいなくてもかける（描画と同じ）
+      const mask = maskOf(scene, id)
+      return mask === null || element === '' ? element : writer.masked(scene.nodes[mask] as MaskNode, parent, element)
     })
     .join('')
   const width = tidy(Math.max(bounds.width, 0))
@@ -90,6 +103,20 @@ export function exportSvg(scene: Scene, targets: readonly NodeId[], options: Svg
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" ` +
     `viewBox="${tidy(bounds.x)} ${tidy(bounds.y)} ${width} ${height}">\n${defs}${background}${body}\n</svg>\n`
   )
+}
+
+/**
+ * 不透明度・明るさのマスクの絵を、かかるノードの枠（size）に合わせた SVG の文字列にする（Dev モードの CSS の mask-image に使う）。
+ * m はマスクの親の座標系から、かかるノードの座標系への変換。マスクは線と効果を見ず、塗りだけで描く（描画と同じ）
+ */
+export function maskImageSvg(mask: MaskNode, m: Matrix, size: { width: number; height: number }): string {
+  const scene: Scene = { nodes: { [mask.id]: mask }, rootIds: [mask.id] }
+  const writer = new SvgWriter(scene, { assets: {}, ids: false })
+  const body = writer.maskShape(mask, multiply(m, nodeMatrix(mask)))
+  const defs = writer.defs.length > 0 ? `<defs>${writer.defs.join('')}</defs>` : ''
+  const width = tidy(Math.max(size.width, 0))
+  const height = tidy(Math.max(size.height, 0))
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${defs}${body}</svg>`
 }
 
 /** SVG ファイルの名前。PNG と同じ名前の付け方（pngBaseName）に拡張子を付ける */
@@ -131,18 +158,104 @@ class SvgWriter {
    * 1 つのノード。m はノードの座標系から、書き込む先（親の要素）の座標系への変換。
    * world は親の座標系からページへの変換（影のずれを回転に従わせないために、向きを知る）
    */
-  node(id: NodeId, m: Matrix, parentWorld: Matrix): string {
-    // 隠した塗り・線・効果は書かない
-    const node = withoutHidden(this.scene.nodes[id])
+  node(id: NodeId, m: Matrix, parentWorld: Matrix, source: SceneNode = this.scene.nodes[id]): string {
+    // 隠した塗り・線・効果は書かない。ブーリアン演算のノードは、結果の形のパスとして書く
+    const node = withoutHidden(drawnNode(this.scene, source))
     if (!node.visible || node.opacity === 0) return ''
+    // マスクは描かない（兄弟を切り取る clipPath / mask になる。children）
+    if (isMaskNode(node)) return ''
     const world = multiply(parentWorld, nodeMatrix(node))
     const parts = this.content(node, world)
     if (parts.length === 0) return ''
+    const effects = 'effects' in node ? node.effects : []
+    const blur = blurRadius(effects, 'layer-blur')
+    const extra =
+      (node.blendMode !== 'normal' ? ` style="mix-blend-mode:${node.blendMode}"` : '') +
+      (blur > 0 ? this.blurFilter(node, blur) : '')
     const idAttr = this.options.ids === false ? '' : ` id="${escapeXml(this.nameId(node.name))}"`
-    const attrs = `${idAttr}${transformAttr(m)}${node.opacity < 1 ? ` opacity="${tidy(node.opacity)}"` : ''}`
-    // 要素が 1 つなら、その要素に付ける（取り込むとフレームにならず、同じ種類のノードに戻る）
-    if (node.type !== 'frame' && parts.length === 1 && !parts[0].startsWith('<g')) return parts[0].replace(/^<(\w+)/, `<$1${attrs}`)
-    return `<g${attrs}>${parts.join('')}</g>`
+    const attrs = `${idAttr}${transformAttr(m)}${node.opacity < 1 ? ` opacity="${tidy(node.opacity)}"` : ''}${extra}`
+    // 背景のぼかしは SVG にないので、書かなかったことをコメントで残す
+    const note =
+      (blurRadius(effects, 'background-blur') > 0 ? `<!-- ${escapeXml(node.name)}: 背景のぼかしは SVG で表せないので書いていない -->` : '') +
+      // 通過は SVG で表せない（g の opacity は中身をまとめてから混ぜる）
+      (node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && node.opacity < 1
+        ? `<!-- ${escapeXml(node.name)}: 通過は SVG で表せないので、中身をまとめてから半透明にしている -->`
+        : '')
+    // 要素が 1 つなら、その要素に付ける（取り込むとフレームにならず、同じ種類のノードに戻る）。同じ属性を持っていれば g にする
+    const clash = extra !== '' && / (style|filter)="/.test(parts[0].slice(0, parts[0].indexOf('>')))
+    if (node.type !== 'frame' && parts.length === 1 && !parts[0].startsWith('<g') && !clash) return note + parts[0].replace(/^<(\w+)/, `<$1${attrs}`)
+    return `${note}<g${attrs}>${parts.join('')}</g>`
+  }
+
+  /** レイヤーのぼかしの filter を定義して、付ける属性を返す。範囲は枠と、影・ぼかしのはみ出し */
+  private blurFilter(node: SceneNode, blur: number): string {
+    const effects = 'effects' in node ? node.effects : []
+    const pad =
+      blur * 1.5 +
+      Math.max(0, ...splitEffects(effects).drop.map((e) => e.blur * 2 + Math.max(0, e.spread) + Math.abs(e.x) + Math.abs(e.y))) +
+      ('strokeWidth' in node ? node.strokeWidth : 0)
+    const id = this.defId('blur')
+    this.defs.push(
+      `<filter id="${id}" filterUnits="userSpaceOnUse" x="${tidy(-pad)}" y="${tidy(-pad)}" ` +
+        `width="${tidy(node.width + pad * 2)}" height="${tidy(node.height + pad * 2)}" color-interpolation-filters="sRGB">` +
+        `<feGaussianBlur stdDeviation="${tidy(blur / 2)}"/></filter>`,
+    )
+    return ` filter="url(#${id})"`
+  }
+
+  /**
+   * 兄弟の並び（親の座標系に書く）。マスクから次のマスクまでの兄弟は、マスクの形の clipPath をかけた g にまとめる。
+   * parentWorld は親の座標系からページへの変換
+   */
+  private children(ids: readonly NodeId[], parentWorld: Matrix): string {
+    const masks = masksOf(this.scene, ids)
+    const runs: { mask: NodeId | null; parts: string[] }[] = []
+    ids.forEach((id, i) => {
+      const element = this.node(id, nodeMatrix(this.scene.nodes[id]), parentWorld)
+      const last = runs[runs.length - 1]
+      if (last && last.mask === masks[i]) last.parts.push(element)
+      else runs.push({ mask: masks[i], parts: [element] })
+    })
+    return runs
+      .map(({ mask, parts }) => {
+        const content = parts.join('')
+        return mask === null || content === '' ? content : this.masked(this.scene.nodes[mask] as MaskNode, IDENTITY, content)
+      })
+      .join('')
+  }
+
+  /**
+   * content をマスクの形で切り取る g。m はマスクの親の座標系から、書き込む先の座標系への変換。
+   * clipPath の id はマスクのレイヤー名から作る（取り込むとマスクの名前に戻る）
+   */
+  masked(mask: MaskNode, m: Matrix, content: string): string {
+    if (mask.maskType !== 'vector') return this.paintedMask(mask, m, content)
+    const id = this.nameId(mask.name)
+    const rule = maskFillRule(mask) === 'evenodd' ? ' clip-rule="evenodd"' : ''
+    this.defs.push(`<clipPath id="${escapeXml(id)}"><path d="${contoursData(maskContours(mask, m))}"${rule}/></clipPath>`)
+    return `<g clip-path="url(#${escapeXml(id)})">${content}</g>`
+  }
+
+  /**
+   * 不透明度・明るさのマスク（maskType が alpha / luminance）。マスクの図形を塗りだけで描いた mask をかけた g。
+   * SVG の mask は明るさで透かすのが既定なので、不透明度なら style の mask-type:alpha を付ける。範囲はマスクの枠（外は透けない）
+   */
+  private paintedMask(mask: MaskNode, m: Matrix, content: string): string {
+    const id = this.nameId(mask.name)
+    const local = multiply(m, nodeMatrix(mask))
+    const box = transformRect(local, { x: 0, y: 0, width: mask.width, height: mask.height })
+    const body = this.maskShape(mask, local)
+    const type = mask.maskType === 'alpha' ? ' style="mask-type:alpha"' : ''
+    this.defs.push(
+      `<mask id="${escapeXml(id)}" maskUnits="userSpaceOnUse" x="${tidy(box.x)}" y="${tidy(box.y)}" width="${tidy(box.width)}" height="${tidy(box.height)}"${type}>${body}</mask>`,
+    )
+    return `<g mask="url(#${escapeXml(id)})">${content}</g>`
+  }
+
+  /** マスクの図形を、線と効果を見ずに塗りだけで書く（マスクの印を外して、ふつうの図形として）。local はマスクの枠から書き込む先への変換 */
+  maskShape(mask: MaskNode, local: Matrix): string {
+    const shape = { ...mask, isMask: false, strokes: [], effects: [], blendMode: 'normal' as const }
+    return this.node(mask.id, local, IDENTITY, shape).replace(/^<(\w+) id="[^"]*"/, '<$1')
   }
 
   /** ノードの中身の要素（ノードの座標系） */
@@ -158,13 +271,13 @@ class SvgWriter {
       case 'path':
         return this.path(node, world)
       case 'text':
-        return this.text(node)
+        return this.text(node, world)
       case 'image':
-        return this.image(node)
+        return this.image(node, world)
       case 'frame': {
         const shape = (decls: string) => boxShape(node, node.cornerRadius, decls)
         const background = this.styled({ ...node, strokes: [] }, world, shape)
-        let children = node.children.map((child) => this.node(child, nodeMatrix(this.scene.nodes[child]), world)).join('')
+        let children = this.children(node.children, world)
         if (children !== '' && node.clipContent) {
           const clip = this.defId('clip')
           this.defs.push(`<clipPath id="${clip}">${boxShape(node, node.cornerRadius, '')}</clipPath>`)
@@ -179,12 +292,13 @@ class SvgWriter {
 
   /** 塗りの属性。グラデーションなら定義を足して url で指す */
   private paintAttr(paint: Paint, role: 'fill' | 'stroke', size: { width: number; height: number }): string {
+    const blend = paint.blendMode !== 'normal' ? ` style="mix-blend-mode:${paint.blendMode}"` : ''
     if (paint.type === 'solid') {
-      return ` ${role}="${escapeXml(paint.color)}"${paint.opacity < 1 ? ` ${role}-opacity="${tidy(paint.opacity)}"` : ''}`
+      return ` ${role}="${escapeXml(paint.color)}"${paint.opacity < 1 ? ` ${role}-opacity="${tidy(paint.opacity)}"` : ''}${blend}`
     }
     const id = this.defId('paint')
     this.defs.push(gradientDef(paint, size, id, { color: (hex) => hex }))
-    return ` ${role}="url(#${id})"`
+    return ` ${role}="url(#${id})"${blend}`
   }
 
   /** 線の太さと破線の属性 */
@@ -202,7 +316,8 @@ class SvgWriter {
     const strokes = stroked ? node.strokes : []
     const { drop, inner } = splitEffects(node.effects)
     if (node.fills.length === 0 && strokes.length === 0 && inner.length === 0) return []
-    if (node.fills.length <= 1 && strokes.length <= 1 && drop.length === 0 && inner.length === 0) {
+    const blended = [...node.fills, ...strokes].filter((paint) => paint.blendMode !== 'normal').length
+    if (node.fills.length <= 1 && strokes.length <= 1 && drop.length === 0 && inner.length === 0 && blended === 0) {
       const fill = node.fills.length > 0 ? this.paintAttr(node.fills[0], 'fill', node) : ' fill="none"'
       const stroke = strokes.length > 0 ? this.paintAttr(strokes[0], 'stroke', node) + this.strokeShape(node) : ''
       return [shape(fill + stroke)]
@@ -238,7 +353,7 @@ class SvgWriter {
 
   private path(node: Extract<SceneNode, { type: 'path' }>, world: Matrix): string[] {
     const strokes = hasStroke(node) ? node.strokes : []
-    const effects = node.effects.length > 0
+    const effects = node.effects.some(isShadow)
     const call = (fill: Paint | null, stroke: Paint | null, extra: string): string[] => {
       const { defs, elements } = pathSvg(node, { id: this.defId('paint'), color: (hex) => hex, fill, stroke, standalone: true })
       this.defs.push(...defs)
@@ -249,14 +364,16 @@ class SvgWriter {
     // 直線には面がないので塗らない（内側の影もない）
     const fills = isLine(node) ? [] : node.fills
     const shown = isLine(node) ? { ...node, effects: splitEffects(node.effects).drop } : node
-    if (fills.length <= 1 && strokes.length <= 1 && !effects) {
+    const blend = (paint: Paint) => (paint.blendMode !== 'normal' ? ` style="mix-blend-mode:${paint.blendMode}"` : '')
+    const blended = [...fills, ...strokes].some((paint) => paint.blendMode !== 'normal')
+    if (fills.length <= 1 && strokes.length <= 1 && !effects && !blended) {
       if (fills.length === 0 && strokes.length === 0) return []
       return call(fills[0] ?? null, strokes[0] ?? null, '')
     }
     const filters = this.fillFilters(shown, world, fills.length)
-    const parts = fills.flatMap((fill, i) => call(fill, null, filters.fill(i)))
-    if (filters.carrier !== '') parts.push(...call({ type: 'solid', color: '#000000', opacity: 1, visible: true }, null, filters.carrier))
-    for (const stroke of strokes) parts.push(...call(null, stroke, filters.stroke))
+    const parts = fills.flatMap((fill, i) => call(fill, null, filters.fill(i) + blend(fill)))
+    if (filters.carrier !== '') parts.push(...call({ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' }, null, filters.carrier))
+    for (const stroke of strokes) parts.push(...call(null, stroke, filters.stroke + blend(stroke)))
     return parts
   }
 
@@ -267,22 +384,29 @@ class SvgWriter {
   private shadow(
     node: SceneNode & Pick<Style, 'effects'>,
     world: Matrix,
-    drop: readonly Effect[],
-    inner: readonly Effect[],
+    drop: readonly Shadow[],
+    inner: readonly Shadow[],
     source: boolean,
   ): string {
     const effects = [...drop, ...inner]
     if (effects.length === 0) return ''
     // 影のずれはページの向きで決まる（回転に従わない）ので、ノードの向きに直す
     const angle = (Math.atan2(world[1], world[0]) * 180) / Math.PI
-    const local = (effect: Effect) => rotateVector({ x: effect.x, y: effect.y }, -angle)
-    const spread = Math.max(...effects.map((e) => e.blur * 2 + Math.abs(e.x) + Math.abs(e.y))) + ('strokeWidth' in node ? node.strokeWidth : 0)
+    const local = (effect: Shadow) => rotateVector({ x: effect.x, y: effect.y }, -angle)
+    const spread =
+      Math.max(...effects.map((e) => e.blur * 2 + Math.abs(e.spread) + Math.abs(e.x) + Math.abs(e.y))) + ('strokeWidth' in node ? node.strokeWidth : 0)
+    // 広がりは形（の外側）を四角く太らせる・細らせる
+    const morph = (input: string, amount: number, result: string) =>
+      amount === 0
+        ? ''
+        : `<feMorphology in="${input}" operator="${amount > 0 ? 'dilate' : 'erode'}" radius="${tidy(Math.abs(amount))}" result="${result}"/>`
     const id = this.defId('shadow')
     // Canvas の shadowBlur は、ガウスぼかしの標準偏差の 2 倍
     const drops = drop.map((effect, i) => {
       const offset = local(effect)
       return (
-        `<feGaussianBlur in="SourceAlpha" stdDeviation="${tidy(effect.blur / 2)}"/>` +
+        morph('SourceAlpha', effect.spread, `m${i}`) +
+        `<feGaussianBlur in="${effect.spread === 0 ? 'SourceAlpha' : `m${i}`}" stdDeviation="${tidy(effect.blur / 2)}"/>` +
         `<feOffset dx="${tidy(offset.x)}" dy="${tidy(offset.y)}" result="o${i}"/>` +
         `<feFlood flood-color="${escapeXml(effect.color)}" flood-opacity="${tidy(effect.opacity)}"/>` +
         `<feComposite in2="o${i}" operator="in" result="s${i}"/>`
@@ -294,7 +418,8 @@ class SvgWriter {
       return (
         `<feFlood flood-color="${escapeXml(effect.color)}" flood-opacity="${tidy(effect.opacity)}" result="f${i}"/>` +
         `<feComposite in="f${i}" in2="SourceAlpha" operator="out" result="v${i}"/>` +
-        `<feGaussianBlur in="v${i}" stdDeviation="${tidy(effect.blur / 2)}"/>` +
+        morph(`v${i}`, effect.spread, `w${i}`) +
+        `<feGaussianBlur in="${effect.spread === 0 ? `v${i}` : `w${i}`}" stdDeviation="${tidy(effect.blur / 2)}"/>` +
         `<feOffset dx="${tidy(offset.x)}" dy="${tidy(offset.y)}" result="u${i}"/>` +
         `<feComposite in="u${i}" in2="SourceAlpha" operator="in" result="n${i}"/>`
       )
@@ -311,7 +436,7 @@ class SvgWriter {
     return ` filter="url(#${id})"`
   }
 
-  private text(node: TextNode): string[] {
+  private text(node: TextNode, world: Matrix): string[] {
     if (node.fills.length === 0) return []
     const lines = this.options.textLines?.(node) ?? node.text.split('\n').map((text) => ({ text }))
     const lineHeight = node.fontSize * node.lineHeight
@@ -325,12 +450,29 @@ class SvgWriter {
     const font =
       ` font-family="${escapeXml(node.fontFamily)}" font-size="${tidy(node.fontSize)}"` +
       `${node.fontWeight === 400 ? '' : ` font-weight="${node.fontWeight}"`}${anchor}`
+    // 文字の落ち影は一番下の塗りに、内側の影は一番上の塗りに付ける（塗りが 1 つなら両方を 1 つの filter に）
+    const { drop, inner } = splitEffects(node.effects)
+    const last = node.fills.length - 1
+    const filterOf = (i: number) => {
+      const drops = i === 0 ? drop : []
+      const inners = i === last ? inner : []
+      return drops.length + inners.length > 0 ? this.shadow(node, world, drops, inners, true) : ''
+    }
     return node.fills.map(
-      (fill) => `<text x="${x}" y="${tidy(baseline)}"${font}${this.paintAttr(fill, 'fill', node)} xml:space="preserve">${spans}</text>`,
+      (fill, i) =>
+        `<text x="${x}" y="${tidy(baseline)}"${font}${this.paintAttr(fill, 'fill', node)}${filterOf(i)} xml:space="preserve">${spans}</text>`,
     )
   }
 
-  private image(node: ImageNode): string[] {
+  private image(node: ImageNode, world: Matrix): string[] {
+    // 影は枠の形に付ける（描画と同じ）。枠の形の黒い要素に、影だけを出す filter を付ける
+    const { drop, inner } = splitEffects(node.effects)
+    const below = drop.length > 0 ? [boxShape(node, node.cornerRadius, ` fill="#000000"${this.shadow(node, world, drop, [], false)}`)] : []
+    const above = inner.length > 0 ? [boxShape(node, node.cornerRadius, ` fill="#000000"${this.shadow(node, world, [], inner, false)}`)] : []
+    return [...below, ...this.imageContent(node), ...above]
+  }
+
+  private imageContent(node: ImageNode): string[] {
     const asset = Object.hasOwn(this.options.assets, node.assetId) ? this.options.assets[node.assetId] : undefined
     const info = asset ? readImageInfo(asset.bytes) : null
     // 画像がなければ、描画のデコード待ちと同じ灰色の矩形

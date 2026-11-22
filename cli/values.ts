@@ -1,5 +1,5 @@
-import { solid } from '../src/document/paint.ts'
-import type { Effect, PathPoint, SceneNode } from '../src/document/types.ts'
+import { isShadow, solid } from '../src/document/paint.ts'
+import type { Effect, PathPoint, SceneNode, Shadow } from '../src/document/types.ts'
 import { parseDashes } from '../src/editor/dashes.ts'
 import type { NodePatch } from '../src/editor/operations/tree.ts'
 import { UsageError } from './args.ts'
@@ -9,10 +9,11 @@ import { UsageError } from './args.ts'
 // 入れ子の項目は . でつなぐ（layout.gap=8、sizing.width=fill）。配列の要素は番号でつなぐ（effects.0.blur=4）。
 // よく使うものには略記がある: fill=色 / stroke=色（単色 1 つの塗り・線にする。null で外す）、
 // shadow.blur=4 など（最初の影。なければ既定の影を付けてから変える）、shadow=null（影を外す）、
+// blur=8 / backgroundBlur=8（レイヤーのぼかし・背景のぼかし。最初のその効果を変えるか足す。null か 0 で外す）、
 // cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、dash=4,2（破線。null で実線）、radius=8（パスの頂点の角の丸め。頂点ごとならカンマで並べる）。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
 
-const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: true }
+const DEFAULT_SHADOW: Shadow = { type: 'drop-shadow', x: 0, y: 4, blur: 8, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.25, visible: true }
 
 /** 略記を、本来の項目の「名前=値」に直す。直せないもの（そのノードにない項目）はそのまま返す */
 function expandShorthand(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): [string, unknown] | null {
@@ -53,14 +54,28 @@ function expandShorthand(node: SceneNode, path: string, raw: string, draft: Reco
       }),
     ]
   }
-  if (head === 'shadow' && Object.hasOwn(node, 'effects')) {
+  const currentEffects = () => (Object.hasOwn(draft, 'effects') ? draft.effects : node.effects) as Effect[]
+  if (head === 'shadow') {
+    // 影の略記は、ぼかしを除いた最初の影に当てる
+    const current = currentEffects()
+    const at = current.findIndex(isShadow)
     if (rest.length === 0) {
       if (raw !== 'null') throw new UsageError(`${path}: shadow は null（外す）か shadow.blur=4 のように指定してください`)
-      return ['effects', []]
+      return ['effects', current.filter((effect) => !isShadow(effect))]
     }
-    const current = (Object.hasOwn(draft, 'effects') ? draft.effects : (node as { effects: Effect[] }).effects) as Effect[]
-    const first = structuredClone(current[0] ?? DEFAULT_SHADOW) as unknown as Record<string, unknown>
-    return ['effects', [setIn(first, rest, raw, path), ...current.slice(1)]]
+    const first = structuredClone(at === -1 ? DEFAULT_SHADOW : current[at]) as unknown as Record<string, unknown>
+    const next = setIn(first, rest, raw, path) as unknown as Effect
+    return ['effects', at === -1 ? [next, ...current] : current.with(at, next)]
+  }
+  if ((head === 'blur' || head === 'backgroundBlur') && rest.length === 0) {
+    const type = head === 'blur' ? 'layer-blur' : 'background-blur'
+    const current = currentEffects()
+    const at = current.findIndex((effect) => effect.type === type)
+    const value = raw === 'null' ? 0 : parseValue(raw, 0, path)
+    if (typeof value !== 'number' || !(value >= 0)) throw new UsageError(`${path}: 0 以上の数を指定してください（null で外す）`)
+    if (value === 0) return ['effects', current.filter((effect) => effect.type !== type)]
+    const effect: Effect = { type, blur: value, visible: true }
+    return ['effects', at === -1 ? [...current, effect] : current.with(at, effect)]
   }
   return null
 }

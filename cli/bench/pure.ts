@@ -2,7 +2,7 @@
 // ブラウザを使わずに、純粋な関数だけの時間を測る（npm run bench が使う）。
 //   node cli/bench/pure.ts --nodes 2000 --depth 4 --instances 170 --images 10
 // 結果は JSON で標準出力に出す。画面の描き直しを含む時間は bench/run.mjs が Chrome で測る。
-import { decodeKdr } from '../../src/document/kdr.ts'
+import { decodeKdr, parseKdr, readKdrArchive } from '../../src/document/kdr.ts'
 import { layerRows } from '../../src/document/layers.ts'
 import type { DesignDocument, Page } from '../../src/document/types.ts'
 import { syncComponents } from '../../src/editor/components.ts'
@@ -44,12 +44,17 @@ export async function runPureBench(document: DesignDocument, meta: ReturnType<ty
     return onPage((scene) => setFill(scene, [meta.mainRectId], flip ? '#fde68a' : '#f8fafc'))(document)
   }
   const bytes = new Uint8Array(await (await encodeKdr(document)).arrayBuffer())
+  const archive = await readKdrArchive(new Blob([bytes]))
   const store = createEditorStore(document, fitTextEstimated)
+  const recolorStore = createEditorStore(document, fitTextEstimated)
   let x = 0
+  let recolor = false
 
   return {
     // kdr のバイト列からメモリ上の形まで（展開・JSON の解析・検証）
     decodeKdr: await time(() => decodeKdr(new Blob([bytes])), 10, 2),
+    // そのうち、展開して JSON にしたものの検証と組み直し
+    parseKdr: await time(() => parseKdr(archive.document, archive.assets)),
     // 合っているドキュメントの同期（同じ参照なので、覚え書きで飛ばす）
     syncComponentsNoop: await time(() => syncComponents(document, fitTextEstimated)),
     // 元に関係ない変更（長方形を 1 つ動かした）のあとの同期。長方形を動かす時間を含む
@@ -66,6 +71,11 @@ export async function runPureBench(document: DesignDocument, meta: ReturnType<ty
       x++
       store.preview((base) => translateNodes(base, [dragTargetId], x, 0))
     }),
+    // 元の色を変える 1 回（上書きを覚える・並べ直し・同期をまとめた settle を含む）
+    storeApplyMainChanged: await time(() => {
+      recolor = !recolor
+      recolorStore.apply(() => setFill(recolorStore.getState().page, [meta.mainRectId], recolor ? '#fde68a' : '#f8fafc'))
+    }, 10, 2),
     // レイヤー一覧の行（フレームは開き、インスタンスは閉じた状態）
     layerRows: await time(() => layerRows(page, { toggled: new Set(), held: new Set() })),
     // viewer の一覧（色・文字・影）の集計と、パネルに出す形にするまで

@@ -1,9 +1,10 @@
 import { normalizeAngle } from '../../document/geometry.ts'
-import { linearAngle } from '../../document/paint.ts'
-import type { Effect, Gradient, NodeId, Paint, SceneNode } from '../../document/types.ts'
-import { EFFECT_TYPE_LABELS, PAINT_TYPE_LABELS, optionsOf } from '../../ui/labels.ts'
+import { isShadow, linearAngle } from '../../document/paint.ts'
+import type { Blur, Effect, Gradient, NodeId, Paint, SceneNode, Shadow } from '../../document/types.ts'
+import { BLEND_MODE_LABELS, EFFECT_TYPE_LABELS, PAINT_TYPE_LABELS, optionsOf } from '../../ui/labels.ts'
 import { EyeIcon } from '../icons.tsx'
 import {
+  DEFAULT_SHADOW,
   MAX_PAINTS,
   MAX_STOPS,
   type PaintKey,
@@ -25,11 +26,10 @@ import type { GradientEdit } from '../editorCanvas/gradientHandles.ts'
 import { type Mixed, MIXED, common, mapValue } from './context.ts'
 import { CheckField, ColorField, NumberField, Section, SelectField } from './fields.tsx'
 
-// 塗り・線・影（落ち影・内側の影）を複数重ねる欄。行ごとに目のボタンで表示を切り替えられる。選んでいるノードで数と種類が揃っていれば、番目ごとに並べて、
+// 塗り・線・効果（落ち影・内側の影・レイヤーのぼかし・背景のぼかし）を複数重ねる欄。行ごとに目のボタンで表示を切り替えられる。選んでいるノードで数と種類が揃っていれば、番目ごとに並べて、
 // 番目ごとの値は揃っていなければ「混在」で出す（色を選ぶと、全部のその番目に当たる）。
 // 数や種類が揃っていなければ、まとめて置き換えるボタンだけを出す
 
-const DEFAULT_SHADOW: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true }
 
 /** 割合（0〜1）を % の欄の値に */
 const toPercent = (value: number | Mixed) => mapValue(value, (v) => Math.round(v * 1000) / 10)
@@ -73,7 +73,7 @@ export function PaintListSection({
     count !== MIXED && Array.from({ length: count }, (_, i) => common(lists.map((list) => list[i].type))).every((t) => t !== MIXED)
   const update = (change: (paints: readonly Paint[]) => Paint[] | null) =>
     store.apply((base) => updatePaints(base, selection, paintKey, change))
-  const solidPaint: Paint = { type: 'solid', color: fallback, opacity: 1, visible: true }
+  const solidPaint: Paint = { type: 'solid', color: fallback, opacity: 1, visible: true, blendMode: 'normal' }
   const canAdd = lists.every((list) => list.length < MAX_PAINTS)
 
   const addButton = (
@@ -102,7 +102,7 @@ export function PaintListSection({
           fallback={fallback}
           onPreview={() => {}}
           onCommit={() => {}}
-          onSet={(color) => color !== null && update(() => [{ type: 'solid', color, opacity: 1, visible: true }])}
+          onSet={(color) => color !== null && update(() => [{ type: 'solid', color, opacity: 1, visible: true, blendMode: 'normal' }])}
         />
       ) : (
         Array.from({ length: count }, (_, k) => count - 1 - k).map((index) => (
@@ -215,9 +215,9 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
           value={common(paints.map((paint) => (paint.type === 'solid' ? paint.color : '')))}
           nullable={false}
           fallback="#000000"
-          onPreview={(color) => preview((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible }))}
+          onPreview={(color) => preview((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible, blendMode: paint.blendMode }))}
           onCommit={store.commitPreview}
-          onSet={(color) => color !== null && patch((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible }))}
+          onSet={(color) => color !== null && patch((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible, blendMode: paint.blendMode }))}
         />
       )}
 
@@ -229,12 +229,19 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
         onCommit={(percent) => patch((paint) => ({ ...paint, opacity: percent / 100 }))}
       />
 
+      <SelectField
+        label={`${label}の描画モード`}
+        value={common(paints.map((paint) => paint.blendMode))}
+        options={optionsOf(BLEND_MODE_LABELS)}
+        onChange={(blendMode) => patch((paint) => ({ ...paint, blendMode }))}
+      />
+
       {type !== 'solid' && selection.length === 1 && (
         <div className="variant-actions">
           <button
             type="button"
             aria-pressed={gradientEdit !== null}
-            title="キャンバスで始点・終点（円形は中心と半径、角度は中心と向き）と色の位置をつかんで動かす。線の上のダブルクリックで色を足し、Delete で選んだ色を消す"
+            title="キャンバスで始点・終点（円形は中心と半径。半径の先を回すと楕円も回る。角度は中心と向き）と色の位置をつかんで動かす。線の上のダブルクリックで色を足し、Delete で選んだ色を消す"
             onClick={() =>
               store.editGradient(gradientEdit ? null : { id: selection[0], key: paintKey, index, stop: null })
             }
@@ -312,6 +319,11 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
               onCommit={(percent) => patchGradient((g) => (g.type === 'radial' ? { ...g, [key]: percent / 100 } : g))}
             />
           ))}
+          <NumberField
+            label="回す角度"
+            value={common(gradients.map((gradient) => (gradient.type === 'radial' ? gradient.angle : 0)))}
+            onCommit={(angle) => patchGradient((g) => (g.type === 'radial' ? { ...g, angle: normalizeAngle(angle) } : g))}
+          />
         </div>
       )}
 
@@ -372,9 +384,10 @@ type EffectListProps = {
   nodes: (SceneNode & { effects: Effect[] })[]
 }
 
-/** 影を重ねる節。先頭の影から並べる */
+/** 影とぼかしを重ねる節。先頭の効果から並べる */
 export function EffectListSection({ store, selection, nodes }: EffectListProps) {
   const lists = nodes.map((node) => node.effects)
+  const typeOptions = optionsOf(EFFECT_TYPE_LABELS)
   const count = common(lists.map((list) => list.length))
   const enabled = common(lists.map((list) => list.length > 0))
   const update = (change: (effects: readonly Effect[]) => Effect[] | null) =>
@@ -394,15 +407,17 @@ export function EffectListSection({ store, selection, nodes }: EffectListProps) 
         Array.from({ length: count }, (_, index) => {
           const shadows = lists.map((list) => list[index])
           const label = index === 0 ? '影' : `影 ${index + 1}`
-          const patch = (values: Partial<Effect>) => store.apply((base) => patchEffectAt(base, selection, index, values))
+          const patch = (values: Partial<Shadow> | Partial<Blur>) => store.apply((base) => patchEffectAt(base, selection, index, values))
           const kind = common(shadows.map((shadow) => shadow.type))
+          // 影の欄は、選んだものの番目がどれも影のときだけ出す（ぼかしはぼかしの長さだけ）
+          const shadowRows = shadows.every(isShadow) ? shadows : null
           return (
             <div key={index} className="paint-row">
               <div className="paint-row-head">
                 <SelectField
                   label={`${label}の種類`}
                   value={kind}
-                  options={optionsOf(EFFECT_TYPE_LABELS)}
+                  options={typeOptions}
                   onChange={(type) => patch({ type })}
                 />
                 <VisibilityButton
@@ -422,32 +437,54 @@ export function EffectListSection({ store, selection, nodes }: EffectListProps) 
                   </button>
                 )}
               </div>
-              <div className="field-grid">
-                <NumberField label="横" value={common(shadows.map((shadow) => shadow.x))} onCommit={(x) => patch({ x })} />
-                <NumberField label="縦" value={common(shadows.map((shadow) => shadow.y))} onCommit={(y) => patch({ y })} />
+              {shadowRows ? (
+                <>
+                  <div className="field-grid">
+                    <NumberField label="横" value={common(shadowRows.map((shadow) => shadow.x))} onCommit={(x) => patch({ x })} />
+                    <NumberField label="縦" value={common(shadowRows.map((shadow) => shadow.y))} onCommit={(y) => patch({ y })} />
+                    <NumberField
+                      label="ぼかし"
+                      value={common(shadowRows.map((shadow) => shadow.blur))}
+                      min={0}
+                      onCommit={(blur) => patch({ blur })}
+                    />
+                    <NumberField
+                      label="広がり"
+                      value={common(shadowRows.map((shadow) => shadow.spread))}
+                      onCommit={(spread) => patch({ spread })}
+                    />
+                    <NumberField
+                      label="濃さ"
+                      value={mapValue(common(shadowRows.map((shadow) => shadow.opacity)), (opacity) => Math.round(opacity * 100))}
+                      min={0}
+                      max={100}
+                      onCommit={(percent) => patch({ opacity: percent / 100 })}
+                    />
+                  </div>
+                  <SelectField
+                    label={`${label}の描画モード`}
+                    value={common(shadowRows.map((shadow) => shadow.blendMode))}
+                    options={optionsOf(BLEND_MODE_LABELS)}
+                    onChange={(blendMode) => patch({ blendMode })}
+                  />
+                  <ColorField
+                    label={label}
+                    value={common(shadowRows.map((shadow) => shadow.color))}
+                    nullable={false}
+                    fallback={DEFAULT_SHADOW.color}
+                    onPreview={(color) => store.preview((base) => patchEffectAt(base, selection, index, { color }))}
+                    onCommit={store.commitPreview}
+                    onSet={(color) => color !== null && patch({ color })}
+                  />
+                </>
+              ) : (
                 <NumberField
                   label="ぼかし"
-                  value={common(shadows.map((shadow) => shadow.blur))}
+                  value={common(shadows.map((effect) => effect.blur))}
                   min={0}
                   onCommit={(blur) => patch({ blur })}
                 />
-                <NumberField
-                  label="濃さ"
-                  value={mapValue(common(shadows.map((shadow) => shadow.opacity)), (opacity) => Math.round(opacity * 100))}
-                  min={0}
-                  max={100}
-                  onCommit={(percent) => patch({ opacity: percent / 100 })}
-                />
-              </div>
-              <ColorField
-                label={label}
-                value={common(shadows.map((shadow) => shadow.color))}
-                nullable={false}
-                fallback={DEFAULT_SHADOW.color}
-                onPreview={(color) => store.preview((base) => patchEffectAt(base, selection, index, { color }))}
-                onCommit={store.commitPreview}
-                onSet={(color) => color !== null && patch({ color })}
-              />
+              )}
             </div>
           )
         })}

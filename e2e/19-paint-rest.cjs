@@ -108,9 +108,14 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await drag([150, 180], [150, 200])
   rect = await byName('Rectangle 1')
   check('縦の半径を変えられる', rect.fills[0].ry === 0.7 && rect.fills[0].rx === 0.5, JSON.stringify(rect.fills[0]))
-  await drag([250, 130], [190, 170], { shift: true })
+  await drag([250, 130], [190, 130], { shift: true })
   rect = await byName('Rectangle 1')
-  check('Shift で縦横の半径を揃えて円にできる', rect.fills[0].rx === 0.2 && rect.fills[0].ry === 0.4, JSON.stringify(rect.fills[0]))
+  check('Shift で縦横の半径を揃えて円にできる', rect.fills[0].rx === 0.2 && rect.fills[0].ry === 0.4 && rect.fills[0].angle === 0, JSON.stringify(rect.fills[0]))
+  // 半径の先を中心の真下へ回すと、楕円が 90° 回る
+  await drag([190, 130], [150, 170])
+  rect = await byName('Rectangle 1')
+  check('半径の先を回すと楕円が回る', rect.fills[0].angle === 90 && rect.fills[0].rx === 0.2, JSON.stringify(rect.fills[0]))
+  await drag([150, 170], [190, 130])
   // 別の図形を選ぶと抜ける
   await deselect()
   await page.mouse.click(...at(200, 150))

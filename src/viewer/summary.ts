@@ -1,5 +1,6 @@
-import type { Effect, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
-import { hasStroke, shownPaints } from '../document/paint.ts'
+import { isMaskNode } from '../document/mask.ts'
+import type { Shadow, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
+import { hasStroke, isShadow, shownPaints } from '../document/paint.ts'
 import { colorAlpha, formatColor } from './colors.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, type InspectSection, shadowCss } from './inspect.ts'
 
@@ -11,7 +12,7 @@ export type TextStyleUse = Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeigh
   count: number
   nodes: NodeId[]
 }
-export type ShadowUse = { shadow: Effect; count: number; nodes: NodeId[] }
+export type ShadowUse = { shadow: Shadow; count: number; nodes: NodeId[] }
 
 /** 下の塗りを隠すか。グラデーションも枠全体を覆う（端の色が外まで続く）ので、どの色も不透明なら隠す */
 function isOpaque(paint: Paint): boolean {
@@ -58,7 +59,8 @@ export function summarizePage(scene: Scene): {
 
   function visit(node: SceneNode) {
     // 非表示や不透明度 0 のものは、その中身も画面に出ない（描画も省く）
-    if (!node.visible || node.opacity === 0) return
+    // マスクも描かないので、その色は数えない
+    if (!node.visible || node.opacity === 0 || isMaskNode(node)) return
     const countColor = (value: string) => {
       const color = value.toLowerCase()
       const use = colors.get(color) ?? { color, count: 0, nodes: [] }
@@ -85,15 +87,16 @@ export function summarizePage(scene: Scene): {
       countPaints(node.fills)
       if (hasStroke(node)) countPaints(node.strokes)
     }
-    for (const shadow of 'effects' in node ? shownPaints(node.effects) : []) {
-      const { type, x, y, blur, color, opacity } = shadow
-      const key = [type, x, y, blur, color.toLowerCase(), opacity].join('\n')
+    for (const shadow of 'effects' in node ? shownPaints(node.effects).filter(isShadow) : []) {
+      const { type, x, y, blur, spread, color, opacity } = shadow
+      const key = [type, x, y, blur, spread, color.toLowerCase(), opacity].join('\n')
       const use = shadows.get(key) ?? { shadow, count: 0, nodes: [] }
       use.count++
       if (use.nodes.at(-1) !== node.id) use.nodes.push(node.id)
       shadows.set(key, use)
     }
-    if (node.type === 'frame') for (const id of node.children) visit(scene.nodes[id])
+    // ブーリアン演算のノードの子は描かない（形の材料だけ）ので、その色は数えない
+    if (node.type === 'frame' && node.booleanOperation === null) for (const id of node.children) visit(scene.nodes[id])
   }
   for (const id of scene.rootIds) visit(scene.nodes[id])
 

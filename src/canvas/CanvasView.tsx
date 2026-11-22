@@ -52,6 +52,10 @@ type Props = {
 
 /** これより動かさずに離したら、ドラッグではなくクリックとみなす（画面ピクセル） */
 const CLICK_TRAVEL = 4
+/** ホイールのズームがこれだけ途切れたら止まったとみなし、拡大・縮小して見せていた絵を描き直す（ms） */
+const ZOOM_SETTLE = 120
+/** ズームし続けていても、これだけ経ったら一度描き直す（ぼやけたままにしない。ms） */
+const ZOOM_SHARPEN = 300
 
 export function CanvasView(props: Props) {
   const { camera } = props
@@ -79,6 +83,9 @@ export function CanvasView(props: Props) {
     // ページの絵は取っておき、選択枠だけが変わったときやパンでは使い回す（sceneCache.ts）
     const cache = new SceneCache()
     let frame = 0
+    // ホイールでズームしている途中か。lastWheel は最後にズームしたとき、sharpAt は最後に全部を描いたとき（performance.now）
+    let zoomGesture: { lastWheel: number; sharpAt: number } | null = null
+    let settleTimer = 0
 
     function draw() {
       frame = 0
@@ -96,7 +103,17 @@ export function CanvasView(props: Props) {
       if (width === 0 || height === 0) return
       const viewport = camera.getViewport()
       const labelColor = getComputedStyle(container).getPropertyValue('--canvas-label')
-      cache.render(ctx, { scene, assets, viewport, size, pixelRatio, labelColor, hiddenId })
+      const now = performance.now()
+      const zooming = zoomGesture !== null && now - zoomGesture.lastWheel < ZOOM_SETTLE && now - zoomGesture.sharpAt < ZOOM_SHARPEN
+      const kind = cache.render(ctx, { scene, assets, viewport, size, pixelRatio, labelColor, hiddenId }, zooming)
+      if (zoomGesture) {
+        if (kind === 'preview') {
+          // 止まったら描き直す
+          clearTimeout(settleTimer)
+          settleTimer = window.setTimeout(requestDraw, Math.max(0, zoomGesture.lastWheel + ZOOM_SETTLE - now) + 1)
+        } else if (now - zoomGesture.lastWheel >= ZOOM_SETTLE) zoomGesture = null
+        else zoomGesture.sharpAt = now
+      }
       ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
       if (drawOverlay) {
         ctx.save()
@@ -116,12 +133,15 @@ export function CanvasView(props: Props) {
     })
     observer.observe(container)
     const unsubscribe = camera.subscribe(requestDraw)
-    // 画像のデコードや書体の読み込みが済んだら、取っておいた絵は古い
+    // 書体の読み込みが済んだら、取っておいた絵は古い。画像のデコードが済んだら、その画像を使うノードだけを描き直す
     const redrawAll = () => {
       cache.invalidate()
       requestDraw()
     }
-    const unsubscribeImages = onImageLoad(redrawAll)
+    const unsubscribeImages = onImageLoad((asset) => {
+      cache.invalidateAsset(asset)
+      requestDraw()
+    })
     document.fonts?.addEventListener('loadingdone', redrawAll)
 
     function onWheel(event: WheelEvent) {
@@ -132,6 +152,9 @@ export function CanvasView(props: Props) {
         const delta = Math.max(-50, Math.min(50, event.deltaY * unit))
         const rect = container.getBoundingClientRect()
         const anchor = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+        const now = performance.now()
+        if (zoomGesture) zoomGesture.lastWheel = now
+        else zoomGesture = { lastWheel: now, sharpAt: now }
         camera.zoomAt(anchor, camera.getViewport().zoom * Math.exp(-delta * 0.01))
       } else if (event.shiftKey && event.deltaX === 0) {
         camera.panBy(-event.deltaY * unit, 0)
@@ -155,6 +178,7 @@ export function CanvasView(props: Props) {
 
     return () => {
       cancelAnimationFrame(frame)
+      clearTimeout(settleTimer)
       requestDrawRef.current = () => {}
       observer.disconnect()
       unsubscribe()

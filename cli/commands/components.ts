@@ -1,4 +1,5 @@
-import { canBindProperty, findMain, isInstance, isMain } from '../../src/document/component.ts'
+import { findMain, isInstance, isMain } from '../../src/document/component.ts'
+import { canBindProperty } from '../../src/document/componentProperties.ts'
 import { getWorldCenter } from '../../src/document/geometry.ts'
 import type { ComponentProperty, DesignDocument, NodeId, Scene } from '../../src/document/types.ts'
 import { isVariantSet, parseVariantName, propValue, variantProperties, variantSetOf } from '../../src/document/variants.ts'
@@ -17,7 +18,13 @@ import {
 import {
   addComponentProperty,
   bindComponentProperty,
+  moveComponentProperty,
+  removeComponentProperty,
+  alignVariantProperties,
+  setVariantSetDescription,
+  renameComponentProperty,
   setComponentDescription,
+  setPreferredComponents,
   setInstanceProperty,
 } from '../../src/editor/componentProperties.ts'
 import { updatePage } from '../../src/editor/operations/document.ts'
@@ -254,14 +261,33 @@ function requireOverrides(doc: DesignDocument, scene: Scene, ids: readonly NodeI
 export const describe_: Command = {
   name: 'describe',
   kind: 'edit',
-  usage: 'describe 元 説明文',
-  summary: 'コンポーネントの元に説明文を付ける（空文字 "" で外す）',
+  usage: 'describe 元|まとまり 説明文',
+  summary: 'コンポーネントの元、またはバリアントのまとまりに説明文を付ける（空文字 "" で外す）',
   run({ session }, step) {
     checkStep(step, { positionals: 2 })
-    const mainId = session.resolveOne(positional(step, 0, '元'))
-    if (!isMain(session.page.nodes[mainId])) throw new UsageError(`describe: ${step.positionals[0]} はコンポーネントの元ではありません`)
+    const id = session.resolveOne(positional(step, 0, '元'))
     const text = step.positionals[1]
-    session.apply((page) => setComponentDescription(page, mainId, text))
+    if (isVariantSet(session.page, id)) {
+      session.apply((page) => setVariantSetDescription(page, id, text))
+      return
+    }
+    if (!isMain(session.page.nodes[id])) {
+      throw new UsageError(`describe: ${step.positionals[0]} はコンポーネントの元でもバリアントのまとまりでもありません`)
+    }
+    session.apply((page) => setComponentDescription(page, id, text))
+  },
+}
+
+export const propAlign: Command = {
+  name: 'prop-align',
+  kind: 'edit',
+  usage: 'prop-align まとまり',
+  summary:
+    'バリアントのまとまりで、どれかのバリアントにだけあるコンポーネントのプロパティをすべてのバリアントに足し、結ぶノード（同じ名前のレイヤー）と並びを揃える。まとまりの代わりに中のバリアントを指してもよい',
+  run({ session }, step) {
+    checkStep(step, { positionals: 1 })
+    const setId = resolveVariantSet(session, positional(step, 0, 'まとまり'), step.name)
+    session.apply((page) => alignVariantProperties(page, setId, session.document))
   },
 }
 
@@ -289,16 +315,16 @@ export const propAdd: Command = {
       let next = page
       let key = name
       for (const target of targets) {
-        if (!canBindProperty(next, mainId, type as ComponentProperty['type'], target)) {
+        if (!canBindProperty(next, mainId, type as ComponentProperty['type'], target, session.document)) {
           throw new UsageError(`prop-add: ${target} は ${type} のプロパティに結べません（元の中の、種類の合うノードを指定してください）`)
         }
         const current = next.nodes[mainId]
         const existing = key !== undefined && isMain(current) && current.component.properties.find((property) => property.name === key)
         if (existing) {
           if (existing.type !== type) throw new UsageError(`prop-add: プロパティ ${key} は ${existing.type} です`)
-          next = bindComponentProperty(next, mainId, existing.name, target)
+          next = bindComponentProperty(next, mainId, existing.name, target, session.document)
         } else {
-          const added = addComponentProperty(next, mainId, type as ComponentProperty['type'], target, key)
+          const added = addComponentProperty(next, mainId, type as ComponentProperty['type'], target, key, session.document)
           if (added.name === null) throw new UsageError(`prop-add: プロパティの名前が空です`)
           next = added.scene
           key = added.name
@@ -306,6 +332,86 @@ export const propAdd: Command = {
       }
       return next
     })
+  },
+}
+
+/** 元を指すセレクタを元の id にし、プロパティ key があることを確かめる */
+function resolvePropertyMain(
+  session: Parameters<Command['run']>[0]['session'],
+  step: Parameters<Command['run']>[1],
+  key: string,
+): { mainId: NodeId; property: ComponentProperty } {
+  const mainId = session.resolveOne(positional(step, 0, '元'))
+  const main = session.page.nodes[mainId]
+  if (!isMain(main)) throw new UsageError(`${step.name}: ${step.positionals[0]} はコンポーネントの元ではありません`)
+  const property = main.component.properties.find((candidate) => candidate.name === key)
+  if (!property) {
+    const names = main.component.properties.map((candidate) => candidate.name)
+    throw new UsageError(`${step.name}: プロパティ ${key} がありません（あるもの: ${names.join(', ')}）`)
+  }
+  return { mainId, property }
+}
+
+/** バリアントなら、まとまりのすべてのバリアントにかかることを書き添える */
+const SHARED_NOTE = '元がバリアントなら、まとまりのすべてのバリアントで揃える'
+
+export const propRename: Command = {
+  name: 'prop-rename',
+  kind: 'edit',
+  usage: 'prop-rename 元 名前 新しい名前',
+  summary: `元のプロパティの名前を変える。${SHARED_NOTE}`,
+  run({ session }, step) {
+    checkStep(step, { positionals: 3 })
+    const { mainId } = resolvePropertyMain(session, step, positional(step, 1, '名前'))
+    const from = step.positionals[1]
+    const to = positional(step, 2, '新しい名前')
+    if (from === to.trim()) return
+    session.apply((page) => {
+      const next = renameComponentProperty(page, mainId, from, to)
+      if (next === page) throw new UsageError(`${step.name}: 名前が空か、プロパティ ${to} はもうあります`)
+      return next
+    })
+  },
+}
+
+export const propRm: Command = {
+  name: 'prop-rm',
+  kind: 'edit',
+  usage: 'prop-rm 元 名前',
+  summary: `元のプロパティを消す（インスタンスの値は、ふつうの上書きとして残る）。${SHARED_NOTE}`,
+  run({ session }, step) {
+    checkStep(step, { positionals: 2 })
+    const { mainId } = resolvePropertyMain(session, step, positional(step, 1, '名前'))
+    session.apply((page) => removeComponentProperty(page, mainId, step.positionals[1]))
+  },
+}
+
+export const propOrder: Command = {
+  name: 'prop-order',
+  kind: 'edit',
+  usage: 'prop-order 元 名前 位置',
+  summary: `元のプロパティを並びの「位置」番目（0 が先頭）へ移す。インスタンスの欄もこの順になる。${SHARED_NOTE}`,
+  run({ session }, step) {
+    checkStep(step, { positionals: 3 })
+    const { mainId } = resolvePropertyMain(session, step, positional(step, 1, '名前'))
+    const raw = positional(step, 2, '位置')
+    const index = Number(raw)
+    if (!Number.isInteger(index) || index < 0) throw new UsageError(`${step.name}: 位置は 0 以上の整数です: ${raw}`)
+    session.apply((page) => moveComponentProperty(page, mainId, step.positionals[1], index))
+  },
+}
+
+export const propPrefer: Command = {
+  name: 'prop-prefer',
+  kind: 'edit',
+  usage: 'prop-prefer 元 名前 [候補の元…]',
+  summary: `差し替えのプロパティの候補（インスタンスで選ぶ欄の先頭に出す元）を、この順に決める。候補を省くと外す。${SHARED_NOTE}`,
+  run({ session }, step) {
+    checkStep(step, {})
+    const { mainId, property } = resolvePropertyMain(session, step, positional(step, 1, '名前'))
+    if (property.type !== 'instance') throw new UsageError(`${step.name}: プロパティ ${property.name} は差し替え（instance）ではありません`)
+    const ids = step.positionals.slice(2).map((selector) => findComponent(session.document, selector))
+    session.apply((page) => setPreferredComponents(page, mainId, property.name, ids))
   },
 }
 

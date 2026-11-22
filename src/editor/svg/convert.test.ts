@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { kdrFile, parseKdr } from '../../document/kdr.ts'
 import { pathPoints } from '../../document/path.ts'
-import type { FrameNode, ImageNode, PathNode, SceneNode, TextNode } from '../../document/types.ts'
+import type { FrameNode, ImageNode, PathNode, RectNode, SceneNode, TextNode } from '../../document/types.ts'
 import { createDocument, pasteIntoPage } from '../operations/document.ts'
 import { type SvgImport, convertSvg } from './convert.ts'
 import { parseTransform } from './values.ts'
@@ -68,7 +68,7 @@ describe('path の d', () => {
   it('曲線のコマンドを、制御点つきの頂点にする', () => {
     const result = convert('<svg><path id="wave" d="M0 0 C10 -10 20 -10 30 0 S50 10 60 0" fill="none" stroke="#ff0000"/></svg>')
     const path = children(result)[0] as PathNode
-    expect(path).toMatchObject({ type: 'path', name: 'wave', closed: false, fills: [], strokes: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }] })
+    expect(path).toMatchObject({ type: 'path', name: 'wave', closed: false, fills: [], strokes: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }] })
     const points = pathPoints(path).map((p) => ({ ...p, x: p.x + path.x, y: p.y + path.y }))
     expect(points).toHaveLength(3)
     // S の 1 つ目の制御点は、前の曲線の 2 つ目の制御点を折り返したもの
@@ -177,17 +177,27 @@ describe('塗りと線', () => {
       '<svg><g fill="red"><rect width="10" height="10" style="fill: #00f; stroke: rgb(0, 128, 0); stroke-width: 3" opacity="0.5"/><circle r="5" cx="5" cy="5"/></g></svg>',
     )
     const [rect, circle] = children(result, children(result)[0] as FrameNode)
-    expect(rect).toMatchObject({ fills: [{ type: 'solid', color: '#0000ff' }], strokes: [{ type: 'solid', color: '#008000' }], strokeWidth: 3, opacity: 0.5, visible: true })
+    expect(rect).toMatchObject({ fills: [{ type: 'solid', color: '#0000ff' }], strokes: [{ type: 'solid', color: '#008000' }], strokeWidth: 3, opacity: 0.5, visible: true, blendMode: 'normal' as const })
     // 塗りは親から受け継ぐ。何も指定しなければ黒
-    expect(circle).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }], strokes: [] })
-    expect(children(convert('<svg><rect width="1" height="1"/></svg>'))[0]).toMatchObject({ fills: [{ type: 'solid', color: '#000000', opacity: 1, visible: true }] })
+    expect(circle).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }], strokes: [] })
+    expect(children(convert('<svg><rect width="1" height="1"/></svg>'))[0]).toMatchObject({ fills: [{ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }] })
   })
 
-  it('fill-opacity と半透明の色はノードの opacity に寄せる', () => {
-    const result = convert('<svg><rect width="10" height="10" fill="#ff000080"/><rect width="10" height="10" fill="blue" fill-opacity="0.25"/></svg>')
-    const [a, b] = children(result)
-    expect(a.opacity).toBeCloseTo(128 / 255)
-    expect(b.opacity).toBeCloseTo(0.25)
+  it('fill-opacity・stroke-opacity・半透明の色・揃った stop-opacity は塗りごとの不透明度に写す（ノードの opacity は 1 のまま）', () => {
+    const result = convert(`<svg>
+      <defs><linearGradient id="g"><stop offset="0" stop-color="#ff0000" stop-opacity="0.5"/><stop offset="1" stop-color="#0000ff" stop-opacity="0.5"/></linearGradient></defs>
+      <rect width="10" height="10" fill="#ff000080"/>
+      <rect width="10" height="10" fill="blue" fill-opacity="0.25" stroke="red" stroke-opacity="0.5"/>
+      <rect width="10" height="10" fill="url(#g)"/>
+    </svg>`)
+    const [a, b, c] = children(result) as RectNode[]
+    expect(a.opacity).toBe(1)
+    expect(a.fills[0].opacity).toBeCloseTo(128 / 255, 3)
+    expect(b.opacity).toBe(1)
+    expect(b.fills[0].opacity).toBe(0.25)
+    expect(b.strokes[0].opacity).toBe(0.5)
+    expect(c.fills[0]).toMatchObject({ type: 'linear', opacity: 0.5 })
+    expect(result.warnings).toEqual([])
   })
 
   it('linearGradient を直線状のグラデーションにし、始点と終点を枠に対する割合にする', () => {
@@ -203,9 +213,9 @@ describe('塗りと線', () => {
     </svg>`)
     const [a, b, c] = children(result) as Extract<SceneNode, { fills: unknown }>[]
     const stops = [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }]
-    expect(a.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 1, y2: 0, stops, opacity: 1, visible: true }])
-    expect(b.fills).toEqual([{ type: 'linear', x1: 0.25, y1: 0, x2: 0.75, y2: 0, stops, opacity: 1, visible: true }])
-    expect(c.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 0, y2: 1, stops, opacity: 1, visible: true }])
+    expect(a.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 1, y2: 0, stops, opacity: 1, visible: true, blendMode: 'normal' as const }])
+    expect(b.fills).toEqual([{ type: 'linear', x1: 0.25, y1: 0, x2: 0.75, y2: 0, stops, opacity: 1, visible: true, blendMode: 'normal' as const }])
+    expect(c.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 0, y2: 1, stops, opacity: 1, visible: true, blendMode: 'normal' as const }])
   })
 
   it('円形のグラデーションは、中心と半径を枠に対する割合にする', () => {
@@ -219,9 +229,9 @@ describe('塗りと線', () => {
     </svg>`)
     const [circle, rect, focal] = children(result) as Extract<SceneNode, { fills: unknown }>[]
     const stops = [{ offset: 0, color: '#ffd700' }, { offset: 1, color: '#000000' }]
-    expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true }])
-    expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops, opacity: 1, visible: true }])
-    expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true }])
+    expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
+    expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
+    expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
     expect(labels(result)).toContain('円形のグラデーションの焦点（中心に寄せた）')
   })
 })
@@ -241,7 +251,7 @@ describe('危険なもの・表せないもの', () => {
     // 根のフレームと、外部の塗りの代わりの色を付けた矩形と、塗りのない矩形だけ
     expect(nodes.map((node) => node.type).sort()).toEqual(['frame', 'rect', 'rect'])
     const [fallback, empty] = children(result)
-    expect(fallback).toMatchObject({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }] })
+    expect(fallback).toMatchObject({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true, blendMode: 'normal' as const }] })
     expect(empty).toMatchObject({ fills: [] })
     expect(labels(result)).toEqual(
       expect.arrayContaining(['スクリプト（<script>）', '埋め込み HTML（<foreignObject>）', '外部の画像（<image>。読まなかった）', '外部への参照（読まなかった）']),
@@ -265,12 +275,12 @@ describe('危険なもの・表せないもの', () => {
       <textPath/>
     </svg>`)
     expect(children(result).map((node) => node.type)).toEqual(['rect', 'rect', 'ellipse'])
-    expect(children(result)[1]).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }] })
+    expect(children(result)[1]).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }] })
     expect(children(result)[2]).toMatchObject({ fills: [] })
     expect(labels(result)).toEqual([
       'フィルタ',
-      'クリップパス（矩形・円でないもの。かけなかった）',
-      'マスク（矩形・円でないもの。かけなかった）',
+      'クリップパス（読めない中身。かけなかった）',
+      'マスク（読めない中身。かけなかった）',
       'パターンの塗り',
       'たどれない塗りの参照',
       '線に沿った文字（<textPath>）',
@@ -322,15 +332,15 @@ describe('CSS（<style>）', () => {
     </svg>`)
     const [st0, attribute, special, big, styled, strong] = children(result) as PathNode[]
     // クラスは要素名より強い
-    expect(st0).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }], strokes: [{ type: 'solid', color: '#000000', opacity: 1, visible: true }], strokeWidth: 2 })
+    expect(st0).toMatchObject({ fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }], strokes: [{ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }], strokeWidth: 2 })
     // CSS は属性より強い
-    expect(attribute.fills).toEqual([{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }])
+    expect(attribute.fills).toEqual([{ type: 'solid', color: '#00ff00', opacity: 1, visible: true, blendMode: 'normal' as const }])
     // #id はクラスより強い
-    expect(special.fills).toEqual([{ type: 'solid', color: '#0000ff', opacity: 1, visible: true }])
+    expect(special.fills).toEqual([{ type: 'solid', color: '#0000ff', opacity: 1, visible: true, blendMode: 'normal' as const }])
     expect(big.strokeWidth).toBe(4)
     // style 属性は CSS より強く、!important は style 属性より強い
-    expect(styled.fills).toEqual([{ type: 'solid', color: '#fedcba', opacity: 1, visible: true }])
-    expect(strong.fills).toEqual([{ type: 'solid', color: '#123456', opacity: 1, visible: true }])
+    expect(styled.fills).toEqual([{ type: 'solid', color: '#fedcba', opacity: 1, visible: true, blendMode: 'normal' as const }])
+    expect(strong.fills).toEqual([{ type: 'solid', color: '#123456', opacity: 1, visible: true, blendMode: 'normal' as const }])
     expect(labels(result)).toEqual(['CSS の複雑なセレクタ（読み飛ばした）', 'CSS の @ で始まる規則（読み飛ばした）'])
   })
 
@@ -343,7 +353,7 @@ describe('CSS（<style>）', () => {
       <rect width="10" height="10" class="gone"/>
     </svg>`)
     const [group, gradient] = children(result)
-    expect(children(result, group as FrameNode)[0]).toMatchObject({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }] })
+    expect(children(result, group as FrameNode)[0]).toMatchObject({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true, blendMode: 'normal' as const }] })
     expect(gradient).toMatchObject({ opacity: 0.5 })
     expect((gradient as PathNode).fills[0]).toMatchObject({ type: 'linear', stops: [{ color: '#ff0000' }, { color: '#0000ff' }] })
     expect(children(result)).toHaveLength(2)
@@ -397,28 +407,74 @@ describe('クリップとマスク', () => {
     expect(children(result)[0]).toMatchObject({ type: 'frame', x: 30, y: 20, width: 20, height: 20 })
   })
 
-  it('白い矩形のマスクは切り取り、灰色なら明るさを不透明度にする。表せないものはかけずに知らせる', () => {
+  it('白い矩形のマスクは切り取り、灰色なら明るさを不透明度にする。たどれないものはかけずに知らせる', () => {
     const result = convert(`<svg>
       <mask id="white"><rect width="50" height="50" fill="#fff"/></mask>
       <mask id="gray"><rect width="50" height="50" fill="#808080"/></mask>
-      <mask id="tilted"><rect width="50" height="50" fill="#fff" transform="rotate(30)"/></mask>
-      <clipPath id="oval"><ellipse rx="20" ry="10"/></clipPath>
       <rect width="100" height="100" mask="url(#white)"/>
       <rect width="100" height="100" mask="url(#gray)"/>
-      <rect width="100" height="100" mask="url(#tilted)"/>
-      <rect width="100" height="100" clip-path="url(#oval)"/>
       <rect width="100" height="100" clip-path="url(#nothing)"/>
     </svg>`)
-    const [white, gray, tilted, oval, nothing] = children(result)
+    const [white, gray, nothing] = children(result)
     expect(white).toMatchObject({ type: 'frame', name: 'white', width: 50, height: 50, opacity: 1 })
     expect(gray.type).toBe('frame')
     expect(gray.opacity).toBeCloseTo(0.502, 2)
-    expect([tilted.type, oval.type, nothing.type]).toEqual(['rect', 'rect', 'rect'])
-    expect(labels(result)).toEqual([
-      'マスク（矩形・円でないもの。かけなかった）',
-      'クリップパス（矩形・円でないもの。かけなかった）',
-      'たどれないクリップパスの参照',
-    ])
+    expect(nothing.type).toBe('rect')
+    expect(labels(result)).toEqual(['たどれないクリップパスの参照'])
+  })
+
+  it('矩形・円で表せない形は、マスク（isMask）のパスにして中身と一緒にフレームにまとめる', () => {
+    const result = convert(`<svg>
+      <mask id="tilted"><rect width="50" height="50" fill="#fff" transform="rotate(30)"/></mask>
+      <clipPath id="oval"><ellipse rx="20" ry="10"/></clipPath>
+      <clipPath id="tri"><path d="M0 0 L100 0 L50 80 Z"/></clipPath>
+      <rect width="100" height="100" mask="url(#tilted)"/>
+      <rect width="100" height="100" clip-path="url(#oval)"/>
+      <rect id="r" width="100" height="100" clip-path="url(#tri)"/>
+    </svg>`)
+    const [tilted, oval, tri] = children(result) as FrameNode[]
+    for (const frame of [tilted, oval, tri]) {
+      expect(frame).toMatchObject({ type: 'frame', clipContent: false, fills: [] })
+      const [mask, content] = children(result, frame)
+      expect(mask).toMatchObject({ type: 'path', isMask: true, strokes: [] })
+      expect(content.type).toBe('rect')
+    }
+    expect(tilted.name).toBe('tilted')
+    // 楕円は中心 (0, 0) の半径 20 × 10。フレームは中身（0〜100）を囲み、マスクはその外にはみ出してよい
+    const ovalMask = children(result, oval)[0] as PathNode
+    expect(oval).toMatchObject({ x: 0, y: 0, width: 100, height: 100 })
+    expect(ovalMask).toMatchObject({ x: -20, y: -10, width: 40, height: 20 })
+    const triMask = children(result, tri)[0] as PathNode
+    expect(triMask).toMatchObject({ name: 'tri', x: 0, y: 0, width: 100, height: 80, closed: true })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('g の clip-path はグループのフレームの最背面にマスクを入れる。objectBoundingBox は中身の枠の割合', () => {
+    const result = convert(`<svg>
+      <clipPath id="half" clipPathUnits="objectBoundingBox"><polygon points="0,0 1,0 0,1"/></clipPath>
+      <g id="layer" clip-path="url(#half)"><rect x="10" y="10" width="40" height="20"/><rect x="10" y="30" width="40" height="20"/></g>
+    </svg>`)
+    const [layer] = children(result) as FrameNode[]
+    expect(layer).toMatchObject({ type: 'frame', name: 'layer', x: 10, y: 10, width: 40, height: 40 })
+    const [mask, a, b] = children(result, layer)
+    expect(mask).toMatchObject({ type: 'path', isMask: true, x: 0, y: 0, width: 40, height: 40 })
+    expect([a.type, b.type]).toEqual(['rect', 'rect'])
+  })
+
+  it('白い形のあとの黒い形はマスクの穴（evenodd）にし、半端な明るさは形だけかけて知らせる', () => {
+    const result = convert(`<svg>
+      <mask id="ring"><circle cx="50" cy="50" r="40" fill="white"/><circle cx="50" cy="50" r="20" fill="black"/></mask>
+      <mask id="mixed"><circle cx="50" cy="50" r="40" fill="white"/><circle cx="20" cy="20" r="10" fill="#808080"/></mask>
+      <rect width="100" height="100" mask="url(#ring)"/>
+      <rect width="100" height="100" mask="url(#mixed)"/>
+    </svg>`)
+    const [ring, mixed] = children(result) as FrameNode[]
+    const ringMask = children(result, ring)[0] as PathNode
+    expect(ringMask).toMatchObject({ isMask: true, fillRule: 'evenodd' })
+    expect(ringMask.contours).toHaveLength(1)
+    expect(ring.opacity).toBe(1)
+    expect(children(result, mixed)[0]).toMatchObject({ isMask: true, fillRule: 'nonzero' })
+    expect(labels(result)).toEqual(['明るさが半端なマスク（形だけかけた）'])
   })
 })
 
@@ -471,7 +527,7 @@ describe('テキスト', () => {
     )
     const text = children(result)[0] as TextNode
     expect(text).toMatchObject({ type: 'text', text: 'Hello\nWorld', fontSize: 20, fontFamily: 'Inter', fontWeight: 700, textAlign: 'center', name: 'Hello' })
-    expect(text.fills).toEqual([{ type: 'solid', color: '#333333', opacity: 1, visible: true }])
+    expect(text.fills).toEqual([{ type: 'solid', color: '#333333', opacity: 1, visible: true, blendMode: 'normal' as const }])
     // 幅 50（5 文字 × 20 × 0.5）の中央が x = 100
     close(text.x + text.width / 2, 100)
     expect(text.y).toBeLessThan(50 - 20 * 0.8)
@@ -516,5 +572,43 @@ describe('parseSvgXml', () => {
     expect(() => parseSvgXml('<svg><g></svg>')).toThrow(SvgParseError)
     expect(() => parseSvgXml('<svg><g>')).toThrow(SvgParseError)
     expect(() => parseSvgXml('<html/>')).toThrow(SvgParseError)
+  })
+})
+
+describe('既存のデザインツールの書き出しの影', () => {
+  it('落ち影・内側の影（広がり・描画モード付き）とレイヤーのぼかしを読む', () => {
+    const result = convert(
+      '<svg width="200" height="200"><g filter="url(#f)"><rect x="20" y="20" width="100" height="60" fill="#ffffff"/></g><defs>' +
+        '<filter id="f" x="0" y="0" width="200" height="200" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">' +
+        '<feFlood flood-opacity="0" result="BackgroundImageFix"/>' +
+        '<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>' +
+        '<feMorphology radius="2" operator="dilate" in="SourceAlpha" result="effect1_dropShadow"/>' +
+        '<feOffset dy="4"/><feGaussianBlur stdDeviation="3"/><feComposite in2="hardAlpha" operator="out"/>' +
+        '<feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0"/>' +
+        '<feBlend mode="multiply" in2="BackgroundImageFix" result="effect1_dropShadow_1_2"/>' +
+        '<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_2" result="shape"/>' +
+        '<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>' +
+        '<feMorphology radius="1" operator="erode" in="SourceAlpha" result="effect2_innerShadow"/>' +
+        '<feOffset dx="2" dy="2"/><feGaussianBlur stdDeviation="1"/><feComposite in2="hardAlpha" operator="arithmetic" k2="-1" k3="1"/>' +
+        '<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0.5 0"/>' +
+        '<feBlend mode="normal" in2="shape" result="effect2_innerShadow_1_2"/>' +
+        '<feGaussianBlur stdDeviation="2" result="effect3_foregroundBlur_1_2"/>' +
+        '</filter></defs></svg>',
+    )
+    expect(labels(result)).toEqual([])
+    const all = Object.values(result.fragment.nodes).flatMap((node) => ('effects' in node ? node.effects : []))
+    expect(all).toEqual([
+      { type: 'drop-shadow', x: 0, y: 4, blur: 6, spread: 2, blendMode: 'multiply', color: '#ff0000', opacity: 0.25, visible: true },
+      { type: 'inner-shadow', x: 2, y: 2, blur: 2, spread: 1, blendMode: 'normal', color: '#0000ff', opacity: 0.5, visible: true },
+      { type: 'layer-blur', blur: 4, visible: true },
+    ])
+  })
+
+  it('知らない部品があれば読まずに知らせる', () => {
+    const result = convert(
+      '<svg width="100" height="100"><rect width="10" height="10" filter="url(#f)"/><defs><filter id="f">' +
+        '<feFlood flood-opacity="0" result="BackgroundImageFix"/><feTurbulence/></filter></defs></svg>',
+    )
+    expect(labels(result).length).toBeGreaterThan(0)
   })
 })

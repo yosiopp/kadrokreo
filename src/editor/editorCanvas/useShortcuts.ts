@@ -9,7 +9,11 @@ import { type ReorderDirection, reorderNodes } from '../operations/arrange.ts'
 import { type Fragment, copyFragment, duplicateNodes } from '../operations/clipboard.ts'
 import { moveNodesToPage, pasteIntoPage } from '../operations/document.ts'
 import { type FlipDirection, flipNodes, translateNodes } from '../operations/transform.ts'
+import type { BooleanOp } from '../../document/pathBoolean.ts'
+import { BOOLEAN_LABELS, MAX_PATH_POINTS, applyMask, booleanPaths, joinPaths, splitPaths } from '../operations/paths.ts'
 import { removeNodes } from '../operations/tree.ts'
+import { createBooleanNode, flattenBooleanNodes } from '../operations/booleanNodes.ts'
+import { outlineStrokes } from '../operations/outline.ts'
 import type { EditorStore } from '../store.ts'
 import { isSvgFile, looksLikeSvg } from '../importSvg.ts'
 import type { Tool } from '../tools.ts'
@@ -37,7 +41,12 @@ type Options = {
   onPasteImages: (files: File[]) => void
   /** クリップボードの文字が SVG の文書のとき */
   onPasteSvg: (text: string) => void
+  /** 操作ができなかった理由などを知らせる */
+  onMessage: (message: string) => void
 }
+
+/** ブーリアン演算のキー（Alt + Shift と組み合わせる。既存のデザインツールと同じ） */
+const BOOLEAN_KEYS: Record<string, BooleanOp> = { KeyU: 'union', KeyS: 'subtract', KeyI: 'intersect', KeyX: 'exclude' }
 
 const TOOL_KEYS: Record<string, Tool> = {
   v: 'select',
@@ -100,6 +109,94 @@ export function useShortcuts(options: Options) {
   /** 選んでいるフレームをコンポーネントにする */
   const componentize = () => store.apply((base) => ownIds().reduce((next, id) => makeComponent(next, id), base))
 
+  /** マスクとして使う（選んだものがどれもマスクなら、やめる）。まとめたフレームかマスクにしたものを選ぶ */
+  function mask() {
+    let selected: NodeId | null = null
+    store.apply((base) => {
+      const result = applyMask(base, movableIds(), 'Mask group')
+      selected = result.id
+      return result.scene
+    })
+    if (selected) store.select([selected])
+  }
+
+  /** 選んだ矩形・楕円・パスを 1 つのパスにまとめる */
+  function join() {
+    let joined: NodeId | null = null
+    store.apply((base) => {
+      const result = joinPaths(base, movableIds())
+      joined = result.id
+      return result.scene
+    })
+    if (joined) store.select([joined])
+  }
+
+  /** 選んだ矩形・楕円・パスにブーリアン演算をかけて 1 つのパスにする。結果が空・頂点が多すぎるときは何も変えずに知らせる */
+  function booleanOp(op: BooleanOp) {
+    let result: NodeId | null = null
+    let error: 'empty' | 'too-many' | undefined
+    store.apply((base) => {
+      const next = booleanPaths(base, movableIds(), op)
+      result = next.id
+      error = next.error
+      return next.scene
+    })
+    if (result) store.select([result])
+    else if (error === 'empty') options.onMessage(`${BOOLEAN_LABELS[op]}の結果が空になるので、何も変えませんでした。`)
+    else if (error === 'too-many') options.onMessage(`${BOOLEAN_LABELS[op]}の結果の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超えるので、何も変えませんでした。`)
+  }
+
+  /** 選んだもの（テキスト以外）を、元の図形を子に残すブーリアン演算のノードにまとめ、それを選ぶ */
+  function booleanNode(op: BooleanOp) {
+    let created: NodeId | null = null
+    store.apply((base) => {
+      const result = createBooleanNode(base, movableIds(), op)
+      created = result.id
+      return result.scene
+    })
+    if (created) store.select([created])
+  }
+
+  /** 選んだブーリアン演算のノードを、結果の形のパスに焼き込む */
+  function flattenBoolean() {
+    let flat: NodeId[] = []
+    let error: 'empty' | 'too-many' | undefined
+    store.apply((base) => {
+      const result = flattenBooleanNodes(base, movableIds())
+      flat = result.ids
+      error = result.error
+      return result.scene
+    })
+    if (flat.length > 0) store.select(flat)
+    if (error === 'empty') options.onMessage('結果が空のブーリアン演算は、平らにしませんでした。')
+    else if (error === 'too-many') options.onMessage(`結果の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超えるブーリアン演算は、平らにしませんでした。`)
+  }
+
+  /** 選んだ図形の線を、線の形のパスにする（塗りのある図形は残して、手前に置く） */
+  function outlineStroke() {
+    let outlines: NodeId[] = []
+    let error: 'too-many' | undefined
+    store.apply((base) => {
+      const result = outlineStrokes(base, movableIds())
+      outlines = result.ids
+      error = result.error
+      return result.scene
+    })
+    if (outlines.length > 0) store.select(outlines)
+    if (error === 'too-many') options.onMessage(`線の形の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超える図形は、輪郭にしませんでした。`)
+  }
+
+  /** 選んだパスを輪郭ごとのパスに分ける */
+  function split() {
+    let parts: NodeId[] = []
+    store.apply((base) => {
+      const result = splitPaths(base, movableIds())
+      parts = result.ids
+      return result.scene
+    })
+    if (parts.length > 0) store.select(parts)
+  }
+
   /** 選んだものを、自動で並べるフレームにまとめる */
   function wrap() {
     let frameId: NodeId | null = null
@@ -159,8 +256,33 @@ export function useShortcuts(options: Options) {
       event.preventDefault()
       return
     }
+    if ((event.metaKey || event.ctrlKey) && event.altKey && event.code === 'KeyO') {
+      // 線の輪郭化（既存のデザインツールと同じキー）
+      outlineStroke()
+      event.preventDefault()
+      return
+    }
+    if ((event.metaKey || event.ctrlKey) && event.altKey && event.code === 'KeyM') {
+      mask()
+      event.preventDefault()
+      return
+    }
+    if (event.altKey && event.shiftKey && !event.metaKey && !event.ctrlKey && Object.hasOwn(BOOLEAN_KEYS, event.code)) {
+      // Alt を押すと key が記号になるので code で見る
+      booleanOp(BOOLEAN_KEYS[event.code])
+      event.preventDefault()
+      return
+    }
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && key === 'e') {
+      split()
+      event.preventDefault()
+      return
+    }
     if (event.metaKey || event.ctrlKey) {
       switch (key) {
+        case 'e':
+          join()
+          break
         case 'z':
           if (event.shiftKey) store.redo()
           else store.undo()
@@ -290,6 +412,13 @@ export function useShortcuts(options: Options) {
     reorder,
     flip,
     wrap,
+    mask,
+    join,
+    split,
+    booleanOp,
+    booleanNode,
+    flattenBoolean,
+    outlineStroke,
     componentize,
     zoomToSelection,
     zoomToFit: () => camera.fit(getContentBounds(store.getState().page)),

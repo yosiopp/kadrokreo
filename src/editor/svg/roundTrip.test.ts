@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { getAbsoluteBounds, getNodesBounds } from '../../document/geometry.ts'
+import { getAbsoluteBounds } from '../../document/geometry.ts'
 import { pathFromContours, pathOutlines, pathPoints } from '../../document/path.ts'
 import { sha256Hex } from '../../document/sha256.ts'
 import { estimateTextMetrics, exportSvg, textBaseline } from '../../document/svgExport.ts'
 import { CONIC_WEDGES } from '../../document/svgShapes.ts'
-import type { Asset, Effect, ImageNode, PathNode, RectNode, Scene, SceneNode, TextNode } from '../../document/types.ts'
+import { getPaintedBounds } from '../../document/paint.ts'
+import type { Asset, Effect, EllipseNode, ImageNode, PathNode, RectNode, Scene, SceneNode, Shadow, TextNode } from '../../document/types.ts'
 import { createEllipse, createFrame, createImage, createLine, createPath, createRect, createText } from '../nodes.ts'
 import { convertSvg } from './convert.ts'
 import { parseSvgXml } from './xml.ts'
@@ -43,7 +44,8 @@ function roundTrip(scene: Scene, assets: Record<string, Asset> = {}, targets = s
     if (!found) throw new Error(`${name} が読み戻せません:\n${svg}`)
     return found
   }
-  const origin = getNodesBounds(scene, targets)!
+  // 書き出しの範囲は影のはみ出しまで含む
+  const origin = getPaintedBounds(scene, targets)!
   return { svg, imported, byName, origin, warnings: result.warnings.map((warning) => warning.label), assets: result.fragment.assets }
 }
 
@@ -64,8 +66,8 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     const rect = named(createRect({ x: 10, y: 20, width: 120, height: 60 }), 'Card', {
       rotation: 30,
       cornerRadius: 8,
-      fills: [{ type: 'solid', color: '#3366ff', opacity: 1, visible: true }],
-      strokes: [{ type: 'solid', color: '#112233', opacity: 1, visible: true }],
+      fills: [{ type: 'solid', color: '#3366ff', opacity: 1, visible: true, blendMode: 'normal' as const }],
+      strokes: [{ type: 'solid', color: '#112233', opacity: 1, visible: true, blendMode: 'normal' as const }],
       strokeWidth: 3,
       strokeDashes: [6, 2],
       opacity: 0.5,
@@ -90,10 +92,10 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
 
   it('楕円の直線状のグラデーション・矩形の円形のグラデーションは向きと色が揃う', () => {
     const ellipse = named(createEllipse({ x: 0, y: 0, width: 100, height: 50 }), 'Dot', {
-      fills: [{ type: 'linear', x1: 0.1, y1: 0.2, x2: 0.8, y2: 1.1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true }],
+      fills: [{ type: 'linear', x1: 0.1, y1: 0.2, x2: 0.8, y2: 1.1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const rect = named(createRect({ x: 120, y: 0, width: 80, height: 40 }), 'Glow', {
-      fills: [{ type: 'radial', cx: 0.3, cy: 0.4, rx: 0.5, ry: 0.25, stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }], opacity: 1, visible: true }],
+      fills: [{ type: 'radial', cx: 0.3, cy: 0.4, rx: 0.5, ry: 0.25, stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }],
     })
     const scene = sceneOf(ellipse, rect)
     const { byName, imported, origin } = roundTrip(scene)
@@ -122,12 +124,24 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expectSameBounds(scene, 'Glow', imported, glow.id, origin)
   })
 
-  it('塗りの不透明度は読み戻すとノードの不透明度に寄る', () => {
+  it('塗りごとの不透明度は、塗りと線で違っても読み戻すと同じになる（グラデーションも）', () => {
+    const gradient = {
+      type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, opacity: 0.6, visible: true, blendMode: 'normal' as const,
+      stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }],
+    }
     const rect = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Half', {
-      fills: [{ type: 'solid', color: '#ff0000', opacity: 0.4, visible: true }],
+      fills: [{ type: 'solid', color: '#ff0000', opacity: 0.4, visible: true, blendMode: 'normal' as const }],
+      strokes: [{ type: 'solid', color: '#000000', opacity: 0.8, visible: true, blendMode: 'normal' as const }],
+      strokeWidth: 2,
     })
-    const back = roundTrip(sceneOf(rect)).byName('Half')
-    close(back.opacity, 0.4)
+    const fade = named(createRect({ x: 20, y: 0, width: 10, height: 10 }), 'Fade', { fills: [gradient] })
+    const { byName, warnings } = roundTrip(sceneOf(rect, fade))
+    const back = byName('Half') as RectNode
+    expect(back.opacity).toBe(1)
+    close(back.fills[0].opacity, 0.4)
+    close(back.strokes[0].opacity, 0.8)
+    close((byName('Fade') as RectNode).fills[0].opacity, 0.6)
+    expect(warnings).toEqual([])
   })
 
   it('4 隅の角丸が違う矩形は、同じ大きさのパスになる', () => {
@@ -146,7 +160,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     ])
     const path = named({ ...createPath({ ...shape, x: shape.x + 40, y: shape.y + 10 }, true), contours: shape.contours }, 'Ring', {
       fillRule: 'evenodd',
-      fills: [{ type: 'solid', color: '#00aa00', opacity: 1, visible: true }],
+      fills: [{ type: 'solid', color: '#00aa00', opacity: 1, visible: true, blendMode: 'normal' as const }],
       strokes: [],
     })
     const scene = sceneOf(path)
@@ -173,7 +187,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
       endCap: 'round',
       strokeWidth: 4,
       strokeDashes: [8, 4],
-      strokes: [{ type: 'solid', color: '#222222', opacity: 1, visible: true }],
+      strokes: [{ type: 'solid', color: '#222222', opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const scene = sceneOf(line)
     const { byName, imported, origin } = roundTrip(scene)
@@ -225,7 +239,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
       fontSize: 20,
       fontWeight: 700,
       fontFamily: 'Inter, sans-serif',
-      fills: [{ type: 'solid', color: '#333333', opacity: 1, visible: true }],
+      fills: [{ type: 'solid', color: '#333333', opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const centered = named(createText({ x: 30, y: 120, width: 0, height: 0 }, 'Centered'), 'Sub', { textAlign: 'center' })
     const scene = sceneOf(text, centered)
@@ -240,6 +254,15 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     const sub = byName('Sub') as TextNode
     expect(sub.textAlign).toBe('center')
     expectSameBounds(scene, 'Sub', imported, sub.id, origin)
+  })
+
+  it('枠からはみ出すテキストの行も範囲（viewBox）に含める。行の分け方を渡さなければ枠だけ', () => {
+    // 枠は 100 × 30（1 行分）なのに 3 行描く。2 行目は 160px で、左揃えなので右へ 60 はみ出す
+    const node = named(createText({ x: 0, y: 0, width: 100, height: 30 }, 'a\nb\nc'), 'Over', { fontSize: 20, lineHeight: 1.5 })
+    const scene: Scene = { nodes: { Over: node }, rootIds: ['Over'] }
+    const textLines = () => [{ text: 'a', width: 10 }, { text: 'b', width: 160 }, { text: 'c', width: 10 }]
+    expect(exportSvg(scene, ['Over'], { assets: {}, textLines })).toContain('viewBox="0 0 160 90"')
+    expect(exportSvg(scene, ['Over'], { assets: {} })).toContain('viewBox="0 0 100 30"')
   })
 
   it('画像は同じ画像（data URI）と枠で戻る', () => {
@@ -263,7 +286,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     const hidden = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Hidden', { visible: false })
     const shadowed = named(createRect({ x: 20, y: 0, width: 10, height: 10 }), 'Shadow', {
       rotation: 90,
-      effects: [{ type: 'drop-shadow', x: 4, y: 0, blur: 6, color: '#000000', opacity: 0.25, visible: true }],
+      effects: [{ type: 'drop-shadow', x: 4, y: 0, blur: 6, color: '#000000', opacity: 0.25, visible: true, spread: 0, blendMode: 'normal' }],
     })
     const { svg } = roundTrip(sceneOf(hidden, shadowed))
     expect(svg).not.toContain('Hidden')
@@ -275,8 +298,8 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
 
   it('落ち影と内側の影は filter に書き、読み戻すと同じ効果になる（回した図形でもずれはページの向き）', () => {
     const effects: Effect[] = [
-      { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: true },
-      { type: 'inner-shadow', x: 3, y: -2, blur: 6, color: '#ff0000', opacity: 0.5, visible: true },
+      { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: true, spread: 0, blendMode: 'normal' },
+      { type: 'inner-shadow', x: 3, y: -2, blur: 6, color: '#ff0000', opacity: 0.5, visible: true, spread: 0, blendMode: 'normal' },
     ]
     const rect = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Box', { rotation: 30, effects })
     const result = roundTrip(sceneOf(rect))
@@ -288,19 +311,115 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect(back.type).toBe('rect')
     expect(back.effects).toHaveLength(2)
     back.effects.forEach((effect, i) => {
-      expect(effect).toMatchObject({ type: effects[i].type, color: effects[i].color, opacity: effects[i].opacity })
-      close(effect.x, effects[i].x)
-      close(effect.y, effects[i].y)
+      const want = effects[i] as Shadow
+      expect(effect).toMatchObject({ type: want.type, color: want.color, opacity: want.opacity })
+      close((effect as Shadow).x, want.x)
+      close((effect as Shadow).y, want.y)
       close(effect.blur, effects[i].blur)
     })
+  })
+
+  it('影の広がりは feMorphology で書き、読み戻すと同じ広がりになる', () => {
+    const effects: Effect[] = [
+      { type: 'drop-shadow', x: 0, y: 4, blur: 8, spread: 3, blendMode: 'normal', color: '#000000', opacity: 0.25, visible: true },
+      { type: 'inner-shadow', x: 0, y: 2, blur: 4, spread: -2, blendMode: 'normal', color: '#ff0000', opacity: 0.5, visible: true },
+    ]
+    const rect = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Box', { effects })
+    const result = roundTrip(sceneOf(rect))
+    expect(result.svg).toContain('<feMorphology in="SourceAlpha" operator="dilate" radius="3" result="m0"/>')
+    expect(result.svg).toContain('operator="erode" radius="2"')
+    expect(result.warnings).not.toContain('フィルタ')
+    const back = (result.byName('Box') as RectNode).effects as Shadow[]
+    expect(back.map((effect) => [effect.type, effect.spread])).toEqual([['drop-shadow', 3], ['inner-shadow', -2]])
+  })
+
+  it('半透明の通過のフレームは、まとめて半透明にしてコメントを残す', () => {
+    const group = named(createFrame({ x: 0, y: 0, width: 40, height: 20 }), 'Group', { passThrough: true, opacity: 0.5 })
+    const child = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Child', { parentId: 'Group' })
+    const result = roundTrip(sceneOf(group, child))
+    expect(result.svg).toContain('<!-- Group: 通過は SVG で表せないので、中身をまとめてから半透明にしている -->')
+    expect(result.svg).toContain('opacity="0.5"')
+    expect(roundTrip(sceneOf({ ...group, opacity: 1 }, child)).svg).not.toContain('通過')
+  })
+
+  it('レイヤーのぼかしは feGaussianBlur の filter。背景のぼかしは書かずにコメントを残す', () => {
+    const blurred = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Soft', { effects: [{ type: 'layer-blur', blur: 6, visible: true }] })
+    const glass = named(createRect({ x: 50, y: 0, width: 40, height: 20 }), 'Glass', { effects: [{ type: 'background-blur', blur: 6, visible: true }] })
+    const result = roundTrip(sceneOf(blurred, glass))
+    expect(result.svg).toContain('<feGaussianBlur stdDeviation="3"/>')
+    expect(result.svg).toContain('<!-- Glass: 背景のぼかしは SVG で表せないので書いていない -->')
+    expect(result.warnings).not.toContain('フィルタ')
+    expect((result.byName('Soft') as RectNode).effects).toEqual([{ type: 'layer-blur', blur: 6, visible: true }])
+    expect((result.byName('Glass') as RectNode).effects).toEqual([])
+    // 影とぼかしを両方持てば、ぼかしは g に付ける（読み戻すとフレームのぼかしになる）
+    const both = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Both', {
+      effects: [{ type: 'drop-shadow', x: 0, y: 2, blur: 4, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.5, visible: true }, { type: 'layer-blur', blur: 4, visible: true }],
+    })
+    const again = roundTrip(sceneOf(both))
+    expect(again.svg).toMatch(/<g id="Both" filter="url\(#kdr-blur-?\d*\)"><rect/)
+    expect(again.warnings).not.toContain('フィルタ')
+    expect(again.byName('Both').effects).toEqual([{ type: 'layer-blur', blur: 4, visible: true }])
+  })
+
+  it('描画モードは style の mix-blend-mode で書き、読み戻すとノードの描画モードになる', () => {
+    const red = { type: 'solid' as const, color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }
+    const node = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Mul', { blendMode: 'multiply' })
+    const fill = named(createEllipse({ x: 50, y: 0, width: 40, height: 20 }), 'Scr', { fills: [{ ...red, blendMode: 'screen' }] })
+    const result = roundTrip(sceneOf(node, fill))
+    expect(result.svg).toContain('style="mix-blend-mode:multiply"')
+    expect(result.svg).toContain('style="mix-blend-mode:screen"')
+    expect(result.byName('Mul').blendMode).toBe('multiply')
+    expect(result.byName('Scr').blendMode).toBe('screen')
+    // 読めない描画モードは知らせる
+    const odd = convertSvg(parseSvgXml('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" style="mix-blend-mode:plus-lighter"/></svg>'), { name: 'x', measureText })
+    expect(odd.warnings.map((warning) => warning.label)).toContain('描画モード（plus-lighter）')
+  })
+
+  it('回した円形のグラデーションは gradientTransform で書き、読み戻すと同じ角度になる', () => {
+    const stops = [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }]
+    const rect = named(createRect({ x: 0, y: 0, width: 80, height: 40 }), 'Tilt', {
+      fills: [{ type: 'radial', cx: 0.4, cy: 0.5, rx: 0.5, ry: 0.25, angle: 30, stops, opacity: 1, visible: true, blendMode: 'normal' }],
+    })
+    const result = roundTrip(sceneOf(rect))
+    expect(result.warnings).toEqual([])
+    const fill = (result.byName('Tilt') as RectNode).fills[0]
+    expect(fill.type).toBe('radial')
+    if (fill.type !== 'radial') return
+    close(fill.angle, 30)
+    close(fill.rx, 0.5, 3)
+    close(fill.ry, 0.25, 3)
+    close(fill.cx, 0.4, 3)
+  })
+
+  it('テキストの落ち影と画像の影を書き、読み戻すと効果になる', () => {
+    const shadow: Effect = { type: 'drop-shadow', x: 0, y: 2, blur: 4, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.5, visible: true }
+    const label = named(createText({ x: 0, y: 0, width: 10, height: 10 }, 'Hi'), 'Label', { effects: [shadow] })
+    const result = roundTrip(sceneOf(label))
+    expect(result.warnings).not.toContain('フィルタ')
+    expect((result.byName('Label') as TextNode).effects).toMatchObject([{ type: 'drop-shadow', y: 2, blur: 4 }])
+  })
+
+  it('範囲（viewBox）は落ち影のはみ出しまで含む', () => {
+    const shadow: Effect = { type: 'drop-shadow', x: 0, y: 4, blur: 4, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.5, visible: true }
+    const card = named(createRect({ x: 10, y: 10, width: 40, height: 20 }), 'Card', { effects: [shadow] })
+    const { svg } = roundTrip(sceneOf(card))
+    expect(svg).toContain('viewBox="4 8 52 32"')
+  })
+
+  it('テキストの内側の影は一番上の塗りに書き、読み戻すと効果になる', () => {
+    const inner: Effect = { type: 'inner-shadow', x: 1, y: 2, blur: 4, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.5, visible: true }
+    const label = named(createText({ x: 0, y: 0, width: 10, height: 10 }, 'Hi'), 'Label', { effects: [inner] })
+    const result = roundTrip(sceneOf(label))
+    expect(result.warnings).not.toContain('フィルタ')
+    expect((result.byName('Label') as TextNode).effects).toMatchObject([{ type: 'inner-shadow', x: 1, y: 2, blur: 4 }])
   })
 
   it('塗りがなくても内側の影は書く。線はそのまま', () => {
     const rect = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Ring', {
       fills: [],
-      strokes: [{ type: 'solid', color: '#0000ff', opacity: 1, visible: true }],
+      strokes: [{ type: 'solid', color: '#0000ff', opacity: 1, visible: true, blendMode: 'normal' as const }],
       strokeWidth: 2,
-      effects: [{ type: 'inner-shadow', x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.5, visible: true }],
+      effects: [{ type: 'inner-shadow', x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.5, visible: true, spread: 0, blendMode: 'normal' }],
     })
     const { svg } = roundTrip(sceneOf(rect))
     // 図形の形だけを持つ要素（影だけを出す filter で、元の黒は出さない）と、線
@@ -312,21 +431,21 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
   it('隠した塗り・線・効果は書かない', () => {
     const rect = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Partly', {
       fills: [
-        { type: 'solid', color: '#ff0000', opacity: 1, visible: true },
-        { type: 'solid', color: '#00ff00', opacity: 1, visible: false },
+        { type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const },
+        { type: 'solid', color: '#00ff00', opacity: 1, visible: false, blendMode: 'normal' as const },
       ],
-      strokes: [{ type: 'solid', color: '#0000ff', opacity: 1, visible: false }],
+      strokes: [{ type: 'solid', color: '#0000ff', opacity: 1, visible: false, blendMode: 'normal' as const }],
       strokeWidth: 2,
-      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: false }],
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: false, spread: 0, blendMode: 'normal' }],
     })
     const { svg, byName } = roundTrip(sceneOf(rect))
     expect(svg).not.toContain('#00ff00')
     expect(svg).not.toContain('#0000ff')
     expect(svg).not.toContain('filter')
-    expect((byName('Partly') as RectNode).fills).toEqual([{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }])
+    expect((byName('Partly') as RectNode).fills).toEqual([{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }])
   })
 
-  it('角度のグラデーションは扇形を並べた pattern で近似する（読み戻すとパターンの塗りとして知らせる）', () => {
+  it('角度のグラデーションは扇形を並べた pattern で近似し、元の値を data 属性に残して読み戻せる', () => {
     const rect = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Wheel', {
       fills: [
         {
@@ -337,16 +456,46 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
           stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }],
           opacity: 0.5,
           visible: true,
+          blendMode: 'normal',
         },
       ],
     })
-    const { svg, warnings } = roundTrip(sceneOf(rect))
-    expect(svg).toMatch(/<pattern id="kdr-paint-\d+" patternUnits="userSpaceOnUse" x="-40" y="-40" width="120" height="100"><g opacity="0.5">/)
+    const { svg, warnings, byName } = roundTrip(sceneOf(rect))
+    expect(svg).toMatch(
+      /<pattern id="kdr-paint-\d+" data-kdr-conic="20 10 0 0.5" data-kdr-stops="0 #ff0000,1 #0000ff" patternUnits="userSpaceOnUse" x="-40" y="-40" width="120" height="100"><g opacity="0.5">/,
+    )
     expect(svg.match(/<path d="M20 10 /g)).toHaveLength(CONIC_WEDGES)
     // 最初の扇形は右（0°）から始まり、始まりの色に近い。最後は終わりの色に近い
     expect(svg).toContain('fill="#fc0003"')
     expect(svg).toContain('fill="#0300fc"')
-    expect(warnings).toContain('パターンの塗り')
+    expect(warnings).not.toContain('パターンの塗り')
+    expect((byName('Wheel') as RectNode).fills).toEqual(rect.fills)
+  })
+
+  it('角度のグラデーションは回した図形・中心のずれ・向きも往復する。data 属性のない pattern は知らせて読まない', () => {
+    const fills = [
+      {
+        type: 'conic' as const,
+        cx: 0.25,
+        cy: 0.75,
+        angle: 45,
+        stops: [{ offset: 0, color: '#ff0000' }, { offset: 0.4, color: '#00ff00' }, { offset: 1, color: '#0000ff' }],
+        opacity: 1,
+        visible: true,
+        blendMode: 'normal' as const,
+      },
+    ]
+    const turned = named(createEllipse({ x: 10, y: 20, width: 60, height: 40 }), 'Turned', { rotation: 30, fills })
+    const back = (roundTrip(sceneOf(turned)).byName('Turned') as EllipseNode).fills[0]
+    expect(back).toMatchObject({ type: 'conic', angle: 45, stops: fills[0].stops })
+    if (back.type !== 'conic') throw new Error('conic ではない')
+    close(back.cx, 0.25, 3)
+    close(back.cy, 0.75, 3)
+    const plain = convertSvg(
+      parseSvgXml('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><defs><pattern id="p" width="4" height="4"/></defs><rect width="10" height="10" fill="url(#p)"/></svg>'),
+      { name: 'plain', measureText },
+    )
+    expect(plain.warnings.map((warning) => warning.label)).toContain('パターンの塗り')
   })
 
   it('レイヤー名は要素の id になり、重なれば番号を付け、記号は _ にする', () => {
@@ -362,12 +511,12 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
   it('塗りがいくつもあれば、描画と同じく下から順に要素を重ねる。フレームの枠線は子より手前', () => {
     const rect = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Layers', {
       fills: [
-        { type: 'solid', color: '#ff0000', opacity: 1, visible: true },
-        { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.5, visible: true },
+        { type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const },
+        { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.5, visible: true, blendMode: 'normal' as const },
       ],
     })
     const frame = named(createFrame({ x: 20, y: 0, width: 50, height: 50 }), 'Box', {
-      strokes: [{ type: 'solid', color: '#0000ff', opacity: 1, visible: true }],
+      strokes: [{ type: 'solid', color: '#0000ff', opacity: 1, visible: true, blendMode: 'normal' as const }],
       strokeWidth: 2,
     })
     const child = named(createRect({ x: 5, y: 5, width: 10, height: 10 }), 'Child', { parentId: 'Box' })
@@ -380,7 +529,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
   it('グラデーションの線の矢印は、端の図形も同じグラデーションで塗る', () => {
     const line = named(createLine({ x: 0, y: 0, width: 100, height: 20 }), 'Grad', {
       endCap: 'arrow',
-      strokes: [{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true }],
+      strokes: [{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const { svg } = roundTrip(sceneOf(line))
     const id = /<linearGradient id="([^"]+)"/.exec(svg)![1]
@@ -412,5 +561,78 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
 
   it('何もなければエラー', () => {
     expect(() => exportSvg({ nodes: {}, rootIds: [] }, [], { assets: {} })).toThrow('書き出すものがありません')
+  })
+})
+
+describe('マスク', () => {
+  it('マスクは書かず、手前の兄弟をマスクの形の clipPath で切り取る。読み戻すとマスクのパスに戻る', () => {
+    const outer = named(createFrame({ x: 0, y: 0, width: 200, height: 200 }), 'Card', { fills: [] })
+    const mask = named(createEllipse({ x: 20, y: 20, width: 100, height: 60 }), 'Oval', { parentId: 'Card', isMask: true })
+    const photo = named(createRect({ x: 0, y: 0, width: 150, height: 150 }), 'Photo', { parentId: 'Card' })
+    const after = named(createRect({ x: 160, y: 0, width: 20, height: 20 }), 'Plain', { parentId: 'Card' })
+    const scene = sceneOf(outer, mask, photo, after)
+    const { svg, byName, imported, warnings } = roundTrip(scene)
+    expect(svg).toContain('<clipPath id="Oval"><path d="M120 50')
+    expect(svg).toMatch(/<g clip-path="url\(#Oval\)"><rect id="Photo"[^>]*\/><rect id="Plain"/)
+    expect(warnings).toEqual([])
+    const oval = byName('Oval') as PathNode
+    expect(oval).toMatchObject({ type: 'path', isMask: true })
+    const group = imported.nodes[oval.parentId!]
+    expect(group.type === 'frame' && group.children.map((id) => imported.nodes[id].name)).toEqual(['Oval', 'Photo', 'Plain'])
+    const box = getAbsoluteBounds(imported, oval.id)
+    close(box.x, 20)
+    close(box.width, 100)
+  })
+
+  it('書き出すノードだけを選んでも、かかっているマスクはかける。隠したマスクは何もかけない', () => {
+    const mask = named(createRect({ x: 0, y: 0, width: 50, height: 50 }), 'M', { isMask: true, rotation: 45 })
+    const photo = named(createRect({ x: 0, y: 0, width: 100, height: 100 }), 'P')
+    const scene = sceneOf(mask, photo)
+    expect(exportSvg(scene, ['P'], { assets: {} })).toContain('clip-path="url(#M)"')
+    const hidden = { ...scene, nodes: { ...scene.nodes, M: { ...mask, visible: false } } }
+    expect(exportSvg(hidden, ['M', 'P'], { assets: {} })).not.toContain('clip-path')
+  })
+
+  it('明るさのマスクは、塗りで透かす mask に書き、読み戻すと明るさのマスクに戻る', () => {
+    const outer = named(createFrame({ x: 0, y: 0, width: 200, height: 200 }), 'Card', { fills: [] })
+    const fade = {
+      type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, opacity: 1, visible: true, blendMode: 'normal' as const,
+      stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }],
+    }
+    const mask = named(createRect({ x: 10, y: 10, width: 100, height: 80 }), 'Fade', { parentId: 'Card', isMask: true, maskType: 'luminance', fills: [fade] })
+    const photo = named(createRect({ x: 0, y: 0, width: 150, height: 150 }), 'Photo', { parentId: 'Card' })
+    const scene = sceneOf(outer, mask, photo)
+    const { svg, byName, imported, warnings } = roundTrip(scene)
+    expect(svg).toMatch(/<mask id="Fade" maskUnits="userSpaceOnUse" x="10" y="10" width="100" height="80"><rect /)
+    expect(svg).toContain('<g mask="url(#Fade)"><rect id="Photo"')
+    expect(warnings).toEqual([])
+    const back = byName('Fade') as RectNode
+    expect(back).toMatchObject({ type: 'rect', isMask: true, maskType: 'luminance' })
+    expect(back.fills[0]).toMatchObject({ type: 'linear' })
+    const group = imported.nodes[back.parentId!]
+    expect(group.type === 'frame' && group.children.map((id) => imported.nodes[id].name)).toEqual(['Fade', 'Photo'])
+    close(getAbsoluteBounds(imported, back.id).x, 10)
+  })
+
+  it('不透明度のマスクは mask-type:alpha を付け、読み戻すと不透明度のマスクに戻る', () => {
+    const mask = named(createEllipse({ x: 0, y: 0, width: 50, height: 50 }), 'A', { isMask: true, maskType: 'alpha' })
+    const photo = named(createRect({ x: 0, y: 0, width: 100, height: 100 }), 'P')
+    const { svg, byName } = roundTrip(sceneOf(mask, photo))
+    expect(svg).toContain('style="mask-type:alpha"')
+    expect(byName('A')).toMatchObject({ isMask: true, maskType: 'alpha' })
+  })
+})
+
+describe('ブーリアン演算のノード', () => {
+  it('結果の形の path（evenodd）として書き、子は書かない', () => {
+    const node = named(createFrame({ x: 0, y: 0, width: 150, height: 100 }), 'Union', { booleanOperation: 'union', clipContent: false })
+    const a = named(createRect({ x: 0, y: 0, width: 100, height: 100 }), 'A', { parentId: 'Union' })
+    const b = named(createEllipse({ x: 50, y: 0, width: 100, height: 100 }), 'B', { parentId: 'Union' })
+    const { svg, byName, imported } = roundTrip(sceneOf(node, a, b))
+    expect(svg).toMatch(/<path id="Union" d="M/)
+    expect(svg).not.toContain('id="A"')
+    const back = byName('Union') as PathNode
+    expect(back).toMatchObject({ type: 'path', fillRule: 'evenodd' })
+    expectSameBounds(sceneOf(node, a, b), 'Union', imported, back.id, { x: 0, y: 0 })
   })
 })

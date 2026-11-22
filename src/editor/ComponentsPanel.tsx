@@ -45,7 +45,7 @@ export function ComponentsPanel({ store, state, camera }: Props) {
 
   /** インスタンスを置ける行（まとまりの行も、バリアントの行も） */
   function row(entry: ComponentEntry, depth: number, extra?: ReactNode) {
-    const { page, node, name, shownId } = entry
+    const { page, node, name, shownId, description } = entry
     return (
       <li
         key={`${depth}:${node.component.id}`}
@@ -64,7 +64,7 @@ export function ComponentsPanel({ store, state, camera }: Props) {
         {extra}
         {/* まとまりの行は、まとまり全体を見せる */}
         <NodeThumbnail scene={page} assets={state.document.assets} nodeId={shownId} width={32} height={24} />
-        <span className="component-name" title={node.component.description || undefined}>
+        <span className="component-name" title={description || undefined}>
           {name}
         </span>
         {depth === 0 && entry.variants.length > 0 && (

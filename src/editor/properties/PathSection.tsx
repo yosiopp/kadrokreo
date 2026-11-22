@@ -110,6 +110,7 @@ export function PathSection({ ctx }: { ctx: PanelContext }) {
         <p className="panel-hint">
           頂点をドラッグで囲むか Shift + クリックで複数選べます。辺を押すと辺を選べます。
           {contours.length > 1 && ` 穴などの輪郭（${contours.length - 1} つ）の頂点も同じように編集できます。`}
+          {' ペン（P）に持ち替えて描くと、このパスに輪郭を描き足せます。'}
         </p>
       )}
     </Section>

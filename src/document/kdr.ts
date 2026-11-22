@@ -2,6 +2,7 @@ import type {
   Asset,
   AssetId,
   AutoLayout,
+  BlendMode,
   ColorStop,
   ComponentLink,
   ComponentProperty,
@@ -169,34 +170,25 @@ export function parseKdr(value: unknown, files: Record<AssetId, unknown> = {}): 
     assets[nodeId(id, `assets.${id}`)] = parseAsset(raw, `assets.${id}`)
   }
 
-  const pages = array(doc.pages, 'document.pages').map((raw, i) => parsePage(raw, `pages[${i}]`, assets))
+  const context: AssetContext = { assets, used: new Set() }
+  const pages = array(doc.pages, 'document.pages').map((raw, i) => parsePage(raw, `pages[${i}]`, context))
   if (pages.length === 0) throw new KdrError('document.pages: ページがありません')
   if (new Set(pages.map((page) => page.id)).size !== pages.length) {
     throw new KdrError('document.pages: ページの id が重複しています')
   }
 
   const used: Record<AssetId, Asset> = {}
-  for (const id of usedAssetIds(pages)) used[id] = assets[id]
+  for (const id of context.used) used[id] = assets[id]
   return { name: string(doc.name, 'document.name'), pages, assets: used }
 }
 
-/** ノード（画像）と、インスタンスの上書き（画像の差し替え）から使われている画像の id */
-export function usedAssetIds(pages: readonly Scene[]): Set<AssetId> {
-  const used = new Set<AssetId>()
-  for (const page of pages) {
-    for (const node of Object.values(page.nodes)) {
-      if (node.type === 'image') used.add(node.assetId)
-      if (node.type === 'frame' && node.component?.role === 'instance') {
-        for (const override of Object.values(node.component.overrides)) {
-          if (override.assetId !== undefined) used.add(override.assetId)
-        }
-      }
-    }
-  }
-  return used
-}
+/**
+ * 読んでいる途中の画像。used には、ノード（画像）とインスタンスの上書き（画像の差し替え）から使われた id を読みながら入れる
+ * （読み終えてからページの全部のノードを辿り直すと、large で約 2ms かかった）
+ */
+type AssetContext = { assets: Record<AssetId, Asset>; used: Set<AssetId> }
 
-function parsePage(value: unknown, path: string, assets: Record<AssetId, Asset>): Page {
+function parsePage(value: unknown, path: string, assets: AssetContext): Page {
   const raw = record(value, path)
   const scene: Scene = { nodes: {}, rootIds: [] }
   scene.rootIds = parseChildren(raw.children, `${path}.children`, null, 1, scene, assets)
@@ -210,7 +202,7 @@ function parseChildren(
   parentId: NodeId | null,
   depth: number,
   scene: Scene,
-  assets: Record<AssetId, Asset>,
+  assets: AssetContext,
 ): NodeId[] {
   if (value === undefined) return []
   const list = array(value, path)
@@ -221,10 +213,8 @@ function parseChildren(
     const node = parseNode(rawNode, at, parentId, assets)
     if (Object.hasOwn(scene.nodes, node.id)) throw new KdrError(`${at}.id: id が重複しています: ${node.id}`)
     scene.nodes[node.id] = node
-    if (node.type === 'frame') {
-      const children = parseChildren(record(rawNode, at).children, `${at}.children`, node.id, depth + 1, scene, assets)
-      scene.nodes[node.id] = { ...node, children }
-    }
+    // 作ったばかりで、まだどこからも参照されていないので、写さずに子を入れる
+    if (node.type === 'frame') node.children = parseChildren(record(rawNode, at).children, `${at}.children`, node.id, depth + 1, scene, assets)
     return node.id
   })
 }
@@ -260,6 +250,7 @@ const DEFAULTS = {
   visible: true,
   locked: false,
   opacity: 1,
+  blendMode: 'normal',
   layoutPositioning: 'auto',
   minWidth: null,
   maxWidth: null,
@@ -277,6 +268,8 @@ const DEFAULTS = {
   capSize: 0,
   contours: [],
   fillRule: 'nonzero',
+  isMask: false,
+  maskType: 'vector',
   fontWeight: 400,
   textAlign: 'left',
   lineHeight: 1.2,
@@ -285,8 +278,11 @@ const DEFAULTS = {
   positionY: 0.5,
   scale: 1,
   clipContent: true,
+  passThrough: false,
   layout: null,
   component: null,
+  setDescription: '',
+  booleanOperation: null,
 } as const
 
 /** オートレイアウトの省略できる項目 */
@@ -304,6 +300,9 @@ const LAYOUT_DEFAULTS = {
   alignContent: 'auto',
 } as const
 
+/** ブーリアン演算の種類 */
+const BOOLEAN_OPERATIONS = ['union', 'subtract', 'intersect', 'exclude'] as const
+
 /** 書き出しで、ノードのうち書かない項目（入れ子や他の項目から決まるもの） */
 const DERIVED_KEYS = new Set(['parentId', 'children', 'sizing', 'constraints'])
 
@@ -311,7 +310,7 @@ function parseNode(
   value: unknown,
   path: string,
   parentId: NodeId | null,
-  assets: Record<AssetId, Asset>,
+  assets: AssetContext,
 ): SceneNode {
   const raw = record(value, path)
   const at = (key: string) => `${path}.${key}`
@@ -338,6 +337,7 @@ function parseNode(
     visible: optional('visible', boolean),
     locked: optional('locked', boolean),
     opacity: optional('opacity', ratio),
+    blendMode: optional('blendMode', blendMode),
     sizing: parseSizing(raw.sizing, at('sizing'), type, layout !== null),
     layoutPositioning: optional('layoutPositioning', (v, p) => oneOf(v, ['auto', 'absolute'] as const, p)),
     constraints: parseConstraints(raw.constraints, at('constraints')),
@@ -354,12 +354,19 @@ function parseNode(
     effects: optional('effects', effects),
   })
   const cornerRadius = () => optional('cornerRadius', parseCornerRadius)
+  const isMask = () => optional('isMask', boolean)
+  const booleanOperation = () => {
+    const op = optional('booleanOperation', (v, p) => (v === null ? null : oneOf(v, BOOLEAN_OPERATIONS, p)))
+    if (op !== null && layout !== null) throw new KdrError(`${at('booleanOperation')}: 自動で並べるフレームは演算のノードにできません`)
+    return op
+  }
+  const maskType = () => optional('maskType', (v, p) => oneOf(v, ['vector', 'alpha', 'luminance'] as const, p))
 
   switch (type) {
     case 'rect':
-      return { ...base, ...style(), type, cornerRadius: cornerRadius() }
+      return { ...base, ...style(), type, cornerRadius: cornerRadius(), isMask: isMask(), maskType: maskType() }
     case 'ellipse':
-      return { ...base, ...style(), type }
+      return { ...base, ...style(), type, isMask: isMask(), maskType: maskType() }
     case 'path': {
       const points = array(raw.points, at('points')).map((point, i) => parsePoint(point, at(`points[${i}]`)))
       if (points.length < 2 || points.length > MAX_PATH_POINTS) {
@@ -376,6 +383,8 @@ function parseNode(
         capSize: optional('capSize', size),
         contours: optional('contours', contours),
         fillRule: optional('fillRule', (v, p) => oneOf(v, ['nonzero', 'evenodd'] as const, p)),
+        isMask: isMask(),
+        maskType: maskType(),
       }
     }
     case 'text':
@@ -386,17 +395,20 @@ function parseNode(
         fontSize: size(raw.fontSize, at('fontSize')),
         fontFamily: string(raw.fontFamily, at('fontFamily')),
         fills: optional('fills', paints),
+        effects: optional('effects', effects),
         fontWeight: optional('fontWeight', fontWeight),
         textAlign: optional('textAlign', (v, p) => oneOf(v, ['left', 'center', 'right'] as const, p)),
         lineHeight: optional('lineHeight', size),
       }
     case 'image': {
       const assetId = nodeId(raw.assetId, at('assetId'))
-      if (!Object.hasOwn(assets, assetId)) throw new KdrError(`${at('assetId')}: 画像データがありません`)
+      if (!Object.hasOwn(assets.assets, assetId)) throw new KdrError(`${at('assetId')}: 画像データがありません`)
+      assets.used.add(assetId)
       return {
         ...base,
         type,
         assetId,
+        effects: optional('effects', effects),
         cornerRadius: cornerRadius(),
         fit: optional('fit', (v, p) => oneOf(v, ['stretch', 'cover', 'contain'] as const, p)),
         positionX: optional('positionX', ratio),
@@ -412,9 +424,12 @@ function parseNode(
         // 子は parseChildren が入れる
         children: [],
         clipContent: optional('clipContent', boolean),
+        passThrough: optional('passThrough', boolean),
         cornerRadius: cornerRadius(),
         layout,
         component: optional('component', (v, p) => (v === null ? null : parseComponent(v, p, assets))),
+        setDescription: optional('setDescription', string),
+        booleanOperation: booleanOperation(),
       }
   }
 }
@@ -488,7 +503,7 @@ function parsePoint(value: unknown, path: string): PathPoint {
   return point
 }
 
-function parseComponent(value: unknown, path: string, assets: Record<AssetId, Asset>): ComponentLink {
+function parseComponent(value: unknown, path: string, assets: AssetContext): ComponentLink {
   const link = record(value, path)
   const id = nodeId(link.id, `${path}.id`)
   const role = oneOf(link.role, ['main', 'instance'] as const, `${path}.role`)
@@ -523,7 +538,7 @@ function parseProperty(value: unknown, path: string): ComponentProperty {
 }
 
 /** インスタンスごとの上書き。どのノードに当たるかはここでは分からないので、値の形だけを確かめる */
-function parseOverrides(value: unknown, path: string, assets: Record<AssetId, Asset>): Record<NodeId, Override> {
+function parseOverrides(value: unknown, path: string, assets: AssetContext): Record<NodeId, Override> {
   const overrides: Record<NodeId, Override> = {}
   for (const [id, rawOverride] of Object.entries(record(value, path))) {
     const at = (key: string) => `${path}.${id}.${key}`
@@ -539,7 +554,8 @@ function parseOverrides(value: unknown, path: string, assets: Record<AssetId, As
     if (Object.hasOwn(raw, 'assetId')) {
       override.assetId = nodeId(raw.assetId, at('assetId'))
       // 画像を差し替える上書きも、ファイルの中の画像を指していなければならない
-      if (!Object.hasOwn(assets, override.assetId)) throw new KdrError(`${at('assetId')}: 上書きの画像データがありません`)
+      if (!Object.hasOwn(assets.assets, override.assetId)) throw new KdrError(`${at('assetId')}: 上書きの画像データがありません`)
+      assets.used.add(override.assetId)
     }
     // 差し替え先のコンポーネントは、なくても読める（インスタンスの元がないときと同じく、同期で無視される）
     if (Object.hasOwn(raw, 'componentId')) override.componentId = nodeId(raw.componentId, at('componentId'))
@@ -596,7 +612,10 @@ function parsePaint(value: unknown, path: string): Paint {
   // 塗りの不透明度は 1 なら、表示は true なら省く（paintFile）
   const opacity = raw.opacity === undefined ? 1 : ratio(raw.opacity, `${path}.opacity`)
   const visible = raw.visible === undefined ? true : boolean(raw.visible, `${path}.visible`)
-  if (type === 'solid') return { type, color: color(raw.color, `${path}.color`), opacity, visible }
+  // 描画モードは normal なら省く
+  const mode = raw.blendMode === undefined ? 'normal' : blendMode(raw.blendMode, `${path}.blendMode`)
+  const common = { opacity, visible, blendMode: mode }
+  if (type === 'solid') return { type, color: color(raw.color, `${path}.color`), ...common }
   const stops = array(raw.stops, `${path}.stops`).map((stop, i): ColorStop => {
     const rawStop = record(stop, `${path}.stops[${i}]`)
     return {
@@ -615,9 +634,10 @@ function parsePaint(value: unknown, path: string): Paint {
       cy: number(raw.cy, `${path}.cy`),
       rx: size(raw.rx, `${path}.rx`),
       ry: size(raw.ry, `${path}.ry`),
+      // 回す角度は 0 なら省く（paintFile）
+      angle: raw.angle === undefined ? 0 : number(raw.angle, `${path}.angle`),
       stops,
-      opacity,
-      visible,
+      ...common,
     }
   }
   if (type === 'conic') {
@@ -627,8 +647,7 @@ function parsePaint(value: unknown, path: string): Paint {
       cy: number(raw.cy, `${path}.cy`),
       angle: number(raw.angle, `${path}.angle`),
       stops,
-      opacity,
-      visible,
+      ...common,
     }
   }
   return {
@@ -638,8 +657,7 @@ function parsePaint(value: unknown, path: string): Paint {
     x2: number(raw.x2, `${path}.x2`),
     y2: number(raw.y2, `${path}.y2`),
     stops,
-    opacity,
-    visible,
+    ...common,
   }
 }
 
@@ -649,17 +667,51 @@ function effects(value: unknown, path: string): Effect[] {
   return list.map((item, i) => {
     const at = `${path}[${i}]`
     const raw = record(item, at)
+    const type = oneOf(raw.type, EFFECT_TYPES, `${at}.type`)
+    // 表示は true なら省く（effectFile）
+    const visible = raw.visible === undefined ? true : boolean(raw.visible, `${at}.visible`)
+    const blur = size(raw.blur, `${at}.blur`)
+    if (type === 'layer-blur' || type === 'background-blur') return { type, blur, visible }
     return {
-      type: oneOf(raw.type, ['drop-shadow', 'inner-shadow'] as const, `${at}.type`),
+      type,
       x: number(raw.x, `${at}.x`),
       y: number(raw.y, `${at}.y`),
-      blur: size(raw.blur, `${at}.blur`),
+      blur,
+      // 広がりは 0 なら省く（effectFile）
+      spread: raw.spread === undefined ? 0 : number(raw.spread, `${at}.spread`),
       color: color(raw.color, `${at}.color`),
       opacity: ratio(raw.opacity, `${at}.opacity`),
-      // 表示は true なら省く（nodeFile）
-      visible: raw.visible === undefined ? true : boolean(raw.visible, `${at}.visible`),
+      visible,
+      // 描画モードは normal なら省く（effectFile）
+      blendMode: raw.blendMode === undefined ? 'normal' : blendMode(raw.blendMode, `${at}.blendMode`),
     }
   })
+}
+
+const EFFECT_TYPES = ['drop-shadow', 'inner-shadow', 'layer-blur', 'background-blur'] as const
+
+/** 描画モードの名前（types.ts の BlendMode と同じ並び） */
+export const BLEND_MODES = [
+  'normal',
+  'multiply',
+  'screen',
+  'overlay',
+  'darken',
+  'lighten',
+  'color-dodge',
+  'color-burn',
+  'hard-light',
+  'soft-light',
+  'difference',
+  'exclusion',
+  'hue',
+  'saturation',
+  'color',
+  'luminosity',
+] as const satisfies readonly BlendMode[]
+
+function blendMode(value: unknown, path: string): BlendMode {
+  return oneOf(value, BLEND_MODES, path)
 }
 
 function fontWeight(value: unknown, path: string): number {
@@ -744,14 +796,25 @@ const PAINT_KEYS = new Set(['fills', 'strokes'])
 
 /** ファイルに書く塗り。不透明度は 1 なら、表示は true なら省く */
 function paintFile(paint: Paint): Partial<Paint> {
-  const { opacity, visible, ...rest } = paint
-  return { ...rest, ...(opacity === 1 ? {} : { opacity }), ...(visible ? {} : { visible }) }
+  const { opacity, visible, blendMode, ...rest } = paint
+  const out: Record<string, unknown> = { ...rest }
+  // 円形のグラデーションの回す角度は 0 なら省く
+  if (out.type === 'radial' && out.angle === 0) delete out.angle
+  return {
+    ...out,
+    ...(opacity === 1 ? {} : { opacity }),
+    ...(visible ? {} : { visible }),
+    ...(blendMode === 'normal' ? {} : { blendMode }),
+  } as Partial<Paint>
 }
 
 /** ファイルに書く効果。表示は true なら省く */
 function effectFile(effect: Effect): Partial<Effect> {
-  const { visible, ...rest } = effect
-  return visible ? rest : effect
+  const out: Record<string, unknown> = { ...effect }
+  if (effect.visible) delete out.visible
+  if ('spread' in effect && effect.spread === 0) delete out.spread
+  if ('blendMode' in effect && effect.blendMode === 'normal') delete out.blendMode
+  return out as Partial<Effect>
 }
 
 function omitDefaults<T extends object>(value: T, defaults: Partial<Record<keyof T, unknown>>): Partial<T> {
@@ -803,9 +866,8 @@ function ratio(value: unknown, path: string): number {
 }
 
 function oneOf<const T>(value: unknown, choices: readonly T[], path: string): T {
-  const found = choices.find((choice) => choice === value)
-  if (found === undefined) throw new KdrError(`${path}: 不正な値です`)
-  return found
+  if (!choices.includes(value as T)) throw new KdrError(`${path}: 不正な値です`)
+  return value as T
 }
 
 function size(value: unknown, path: string): number {

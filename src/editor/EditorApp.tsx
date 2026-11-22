@@ -3,6 +3,7 @@ import { createCamera } from '../canvas/camera.ts'
 import { pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
 import { copyText } from '../ui/clipboard.ts'
+import { getExportOptions } from '../ui/exportOptions.ts'
 import { svgFileName } from '../document/svgExport.ts'
 import type { Viewport } from '../canvas/viewport.ts'
 import { getContentBounds } from '../document/geometry.ts'
@@ -238,7 +239,7 @@ function Editor({ store }: { store: EditorStore }) {
   async function exportPng(scale: number) {
     const { document, page, targets, name } = exportTargets()
     try {
-      const png = await renderPng(page, document.assets, targets, scale)
+      const png = await renderPng(page, document.assets, targets, scale, getExportOptions().background)
       downloadBlob(png, pngFileName(name, scale))
     } catch (error) {
       showError(error, 'PNG の書き出しに失敗しました')
@@ -249,7 +250,7 @@ function Editor({ store }: { store: EditorStore }) {
   function exportSvg() {
     const { document, page, targets, name } = exportTargets()
     try {
-      downloadBlob(renderSvg(page, document.assets, targets), svgFileName(name))
+      downloadBlob(renderSvg(page, document.assets, targets, getExportOptions()), svgFileName(name))
     } catch (error) {
       showError(error, 'SVG の書き出しに失敗しました')
     }
@@ -259,7 +260,7 @@ function Editor({ store }: { store: EditorStore }) {
   async function copySvg(): Promise<boolean> {
     const { document, page, targets } = exportTargets()
     try {
-      const copied = await copyText(svgMarkup(page, document.assets, targets))
+      const copied = await copyText(svgMarkup(page, document.assets, targets, getExportOptions()))
       if (!copied) setMessage('クリップボードへコピーできませんでした')
       return copied
     } catch (error) {
@@ -366,6 +367,7 @@ function Editor({ store }: { store: EditorStore }) {
             onPasteImages={importImages}
             onPasteSvg={importSvgText}
             onCopySvg={copySvg}
+            onMessage={setMessage}
             dropTarget={dropTarget}
           />
           {dragging && <div className="drop-overlay">画像・SVG または kdr ファイルをドロップ</div>}

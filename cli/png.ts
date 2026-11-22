@@ -1,5 +1,6 @@
 import { type Asset, type AssetId, type NodeId, type Scene } from '../src/document/types.ts'
 import { drawPng, loadSceneImages, pngArea } from '../src/canvas/exportPng.ts'
+import { layoutText } from '../src/canvas/text.ts'
 
 // PNG の書き出し。描画は本体の canvas/render.ts をそのまま使い、ブラウザの代わりに @napi-rs/canvas（Skia）の Canvas に描く。
 // @napi-rs/canvas は optionalDependencies なので、入っていない環境（ネイティブのバイナリがない、--omit=optional）では png だけが使えない。
@@ -71,11 +72,14 @@ export async function encodePng(
   assets: Record<AssetId, Asset>,
   targets: readonly NodeId[],
   scale: number,
+  background: string | null = null,
 ): Promise<Uint8Array> {
-  const area = pngArea(scene, targets, scale)
   const napi = await canvasModule()
+  // テキストの行分けは描画と同じ Canvas で測る（枠からはみ出す行を範囲に含めるため）
+  const measure = napi.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+  const area = pngArea(scene, targets, scale, (node) => layoutText(measure, node))
   await loadSceneImages(scene, assets)
   const canvas = napi.createCanvas(area.width, area.height)
-  drawPng(canvas.getContext('2d') as unknown as CanvasRenderingContext2D, scene, assets, targets, area, scale)
+  drawPng(canvas.getContext('2d') as unknown as CanvasRenderingContext2D, scene, assets, targets, area, scale, background)
   return new Uint8Array(await canvas.encode('png'))
 }

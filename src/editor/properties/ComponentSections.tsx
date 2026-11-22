@@ -1,15 +1,6 @@
 import { useState } from 'react'
-import {
-  type InstanceNode,
-  type MainNode,
-  canBindProperty,
-  derivedId,
-  enclosingMainNode,
-  findMain,
-  instanceProperties,
-  isInstance,
-  isMain,
-} from '../../document/component.ts'
+import { type InstanceNode, type MainNode, derivedId, findMain, isInstance, isMain } from '../../document/component.ts'
+import { canBindProperty, enclosingMainNode, instanceProperties } from '../../document/componentProperties.ts'
 import type { ComponentProperty, Page } from '../../document/types.ts'
 import {
   type VariantProperty,
@@ -24,6 +15,8 @@ import {
 import { OVERRIDE_LABELS, PROPERTY_TYPE_LABELS } from '../../ui/labels.ts'
 import {
   addComponentProperty,
+  alignVariantProperties,
+  setVariantSetDescription,
   bindComponentProperty,
   moveComponentProperty,
   removeComponentProperty,
@@ -246,7 +239,23 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
             <button type="button" onClick={() => addVariantOf(variantsIn(page, variantSet.id).at(-1)!.id)}>
               バリアントを追加
             </button>
+            {alignVariantProperties(page, variantSet.id, state.document) !== page && (
+              <button
+                type="button"
+                title="どれかのバリアントにだけあるコンポーネントのプロパティを、すべてのバリアントに足して並びを揃える"
+                onClick={() => store.apply((base) => alignVariantProperties(base, variantSet.id, state.document))}
+              >
+                プロパティを揃える
+              </button>
+            )}
           </div>
+          {variantSet.type === 'frame' && (
+            <DescriptionField
+              ariaLabel="まとまりの説明"
+              value={variantSet.setDescription}
+              onCommit={(next) => store.apply((base) => setVariantSetDescription(base, variantSet.id, next))}
+            />
+          )}
         </Section>
       )}
 
@@ -312,6 +321,11 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
               {instanceMain && instanceMain.node.component.description !== '' && (
                 <p className="section-note component-description" aria-label="コンポーネントの説明">
                   {instanceMain.node.component.description}
+                </p>
+              )}
+              {instanceSet && instanceSet.setDescription !== '' && (
+                <p className="section-note component-description" aria-label="まとまりの説明">
+                  {instanceSet.setDescription}
                 </p>
               )}
               <InstancePropertyFields ctx={ctx} instance={single as InstanceNode} />
@@ -383,13 +397,21 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
 }
 
 /** 元の説明文の欄。複数行で、フォーカスが外れたときに確定する */
-function DescriptionField({ value, onCommit }: { value: string; onCommit: (value: string) => void }) {
+function DescriptionField({
+  value,
+  onCommit,
+  ariaLabel = 'コンポーネントの説明',
+}: {
+  value: string
+  onCommit: (value: string) => void
+  ariaLabel?: string
+}) {
   const [draft, setDraft] = useState<string | null>(null)
   return (
     <label className="field field-stacked">
       <span className="field-label">説明</span>
       <textarea
-        aria-label="コンポーネントの説明"
+        aria-label={ariaLabel}
         rows={2}
         placeholder="使い方など"
         value={draft ?? value}
@@ -412,16 +434,22 @@ function DescriptionField({ value, onCommit }: { value: string; onCommit: (value
 
 /** 元のプロパティの一覧（名前を変える・並べ替える・消す、差し替えの候補を選ぶ）。結ぶのは、元の中のノードを選んだときの節で */
 function MainPropertiesList({ ctx, main }: { ctx: PanelContext; main: MainNode }) {
-  const { store, page } = ctx
+  const { store, state, page } = ctx
   const { properties } = main.component
+  const set = variantSetOf(page, main.id)
   return (
     <div className="component-properties" aria-label="コンポーネントのプロパティ">
       <span className="field-label">プロパティ</span>
       {properties.length === 0 && (
         <p className="section-note">元の中のノードを選ぶと、文言・表示・入れ子のインスタンスの元をプロパティにできます。</p>
       )}
+      {set && (
+        <p className="section-note shared-properties-note">
+          「{set.name}」のすべてのバリアントで共有します（名前で揃え、結ぶノードはレイヤー名が同じものを対応させます）。
+        </p>
+      )}
       {properties.map((property, index) => {
-        const targets = property.targets.filter((id) => canBindProperty(page, main.id, property.type, id))
+        const targets = property.targets.filter((id) => canBindProperty(page, main.id, property.type, id, state.document))
         return (
           <div key={property.name} className="component-property-block">
             <div className="variant-property">
@@ -557,7 +585,7 @@ function InstancePropertyFields({ ctx, instance }: { ctx: PanelContext; instance
           )
         }
         const main = findMain(state.document, instance.component.id)
-        const target = main ? property.targets.find((id) => canBindProperty(main.page, main.node.id, 'instance', id)) : undefined
+        const target = main ? property.targets.find((id) => canBindProperty(main.page, main.node.id, 'instance', id, state.document)) : undefined
         const nested = target === undefined ? null : nestedInstanceOf(state.document, page, derivedId(instance.id, target))
         return (
           <ComponentSelect
@@ -582,18 +610,18 @@ function InstancePropertyFields({ ctx, instance }: { ctx: PanelContext; instance
  * そのノードを、元のプロパティに結ぶ（新しく作るか、種類の合う既存のものに）・外す
  */
 function PropertyBindingSection({ ctx }: { ctx: PanelContext }) {
-  const { store, page, nodes } = ctx
+  const { store, state, page, nodes } = ctx
   const node = nodes[0]
   const main = node.parentId === null ? null : enclosingMainNode(page, node.parentId)
   if (!main) return null
-  const types = (['text', 'boolean', 'instance'] as const).filter((type) => canBindProperty(page, main.id, type, node.id))
+  const types = (['text', 'boolean', 'instance'] as const).filter((type) => canBindProperty(page, main.id, type, node.id, state.document))
   if (types.length === 0) return null
   const { properties } = main.component
   const bound = properties.filter((property) => property.targets.includes(node.id))
   const bindable = properties.filter(
     (property) => !property.targets.includes(node.id) && types.includes(property.type),
   )
-  const create = (type: ComponentProperty['type']) => store.apply((base) => addComponentProperty(base, main.id, type, node.id).scene)
+  const create = (type: ComponentProperty['type']) => store.apply((base) => addComponentProperty(base, main.id, type, node.id, undefined, state.document).scene)
   return (
     <Section title="コンポーネントのプロパティ">
       <p className="section-note">「{main.name}」のプロパティに結ぶと、インスタンスごとに値を選べます。</p>
@@ -627,7 +655,7 @@ function PropertyBindingSection({ ctx }: { ctx: PanelContext }) {
           value=""
           options={[['', '選ぶ…'], ...bindable.map((property) => [property.name, property.name] as const)]}
           onChange={(name) => {
-            if (name !== '') store.apply((base) => bindComponentProperty(base, main.id, name, node.id))
+            if (name !== '') store.apply((base) => bindComponentProperty(base, main.id, name, node.id, state.document))
           }}
         />
       )}

@@ -1,6 +1,7 @@
 import { type Size, normalizeAngle } from '../../src/document/geometry.ts'
 import { linearFromAngle } from '../../src/document/paint.ts'
-import type { ColorStop, Paint } from '../../src/document/types.ts'
+import { BLEND_MODES } from '../../src/document/kdr.ts'
+import type { BlendMode, ColorStop, Paint } from '../../src/document/types.ts'
 import { MAX_PAINTS, MAX_STOPS, type PaintKey, convertPaint } from '../../src/editor/operations/paints.ts'
 import { patchNodes } from '../../src/editor/operations/tree.ts'
 import { UsageError } from '../args.ts'
@@ -17,15 +18,15 @@ export const gradient: Command = {
   kind: 'edit',
   flags: ['stroke', 'add', 'hidden'],
   usage:
-    'gradient linear|radial|conic ノード… [--colors 色,色@50%,色…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r|rx,ry] [--opacity 0〜1] [--hidden] [--stroke] [--index N | --add]',
+    'gradient linear|radial|conic ノード… [--colors 色,色@50%,色…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r|rx,ry] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N | --add]',
   summary:
     'グラデーションの塗りにする。ふつうはいちばん上の塗り（なければ足す）を置き換え、--index N は N 番目（0 が一番下、-1 がいちばん上）、--add は上に重ねる。' +
     '--stroke なら線。--colors は 2〜16 色で、@ の後に位置（0〜1 か %）。位置を省いた色は前後の間に等しく並べる。' +
     '--colors を省くと、いまの塗りの色を受け継ぐ。直線は --angle（0 が左から右、90 が上から下。枠の中心を通り、枠の角が両端の色になる線）か、' +
-    '--from と --to（始点・終点。枠に対する割合か %）、円形は --center と --radius（枠に対する割合か %）、' +
-    '角度（conic）は --center と --angle（最初の色の向き。0 が右で時計回り）。--opacity は塗りごとの不透明度、--hidden はその塗りを隠す（消さずに残す）',
+    '--from と --to（始点・終点。枠に対する割合か %）、円形は --center と --radius（枠に対する割合か %）と --angle（楕円を回す角度。時計回り）、' +
+    '角度（conic）は --center と --angle（最初の色の向き。0 が右で時計回り）。--opacity は塗りごとの不透明度、--blend は塗りの描画モード（multiply など）、--hidden はその塗りを隠す（消さずに残す）',
   run({ session }, step) {
-    checkStep(step, { options: ['colors', 'angle', 'from', 'to', 'center', 'radius', 'opacity', 'hidden', 'stroke', 'index', 'add'] })
+    checkStep(step, { options: ['colors', 'angle', 'from', 'to', 'center', 'radius', 'opacity', 'blend', 'hidden', 'stroke', 'index', 'add'] })
     const type = positional(step, 0, '種類（linear / radial / conic）') as GradientType
     if (!GRADIENT_TYPES.includes(type)) throw new UsageError(`gradient: 種類は ${GRADIENT_TYPES.join(' / ')} です: ${type}`)
     const ids = session.resolveAll(step.positionals.slice(1))
@@ -49,16 +50,20 @@ export const gradient: Command = {
     const hidden = flag(step, 'hidden')
     if (type === 'linear' && center) throw new UsageError('gradient: --center は radial と conic のときだけです')
     if (type !== 'radial' && radius) throw new UsageError('gradient: --radius は radial のときだけです')
-    if (type === 'radial' && angle !== undefined) throw new UsageError('gradient: --angle は linear と conic のときだけです')
+    const blend = option(step, 'blend')
+    if (blend !== undefined && !(BLEND_MODES as readonly string[]).includes(blend)) {
+      throw new UsageError(`gradient: --blend は ${BLEND_MODES.join(' / ')} のどれかです: ${blend}`)
+    }
 
     /** 元の塗り（なければ null）から、作るグラデーション */
     const build = (base: Paint | null, size: Size): Paint => {
       if (base === null && stops === undefined) throw new UsageError('gradient: 塗りがないノードには --colors を指定してください')
-      let paint = convertPaint(base ?? { type: 'solid', color: '#000000', opacity: 1, visible: true }, type)
+      let paint = convertPaint(base ?? { type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' }, type)
       if (paint.type === 'solid') throw new Error('unreachable')
       if (stops) paint = { ...paint, stops }
       if (opacity !== undefined) paint = { ...paint, opacity }
       if (hidden) paint = { ...paint, visible: false }
+      if (blend !== undefined) paint = { ...paint, blendMode: blend as BlendMode }
       if (paint.type === 'linear' && angle !== undefined) paint = { ...paint, ...linearFromAngle(normalizeAngle(angle), size) }
       if (paint.type === 'linear' && from) paint = { ...paint, x1: from[0], y1: from[1] }
       if (paint.type === 'linear' && to) paint = { ...paint, x2: to[0], y2: to[1] }
@@ -67,6 +72,7 @@ export const gradient: Command = {
       if (paint.type === 'radial') {
         if (center) paint = { ...paint, cx: center[0], cy: center[1] }
         if (radius) paint = { ...paint, rx: radius[0], ry: radius[1] }
+        if (angle !== undefined) paint = { ...paint, angle: normalizeAngle(angle) }
       }
       return paint
     }

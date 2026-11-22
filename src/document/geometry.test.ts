@@ -30,6 +30,7 @@ function box(id: string, parentId: string | null, x: number, y: number, rotation
     visible: true,
     locked: false,
     opacity: 1,
+    blendMode: 'normal',
     type: 'frame',
     sizing: { width: 'fixed', height: 'fixed' },
     layoutPositioning: 'auto',
@@ -45,9 +46,12 @@ function box(id: string, parentId: string | null, x: number, y: number, rotation
     effects: [],
     children,
     clipContent: false,
+    passThrough: false,
     cornerRadius: 0,
     layout: null,
     component: null,
+    setDescription: '',
+    booleanOperation: null,
   } as SceneNode
 }
 

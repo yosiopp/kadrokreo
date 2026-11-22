@@ -1,5 +1,5 @@
 import { isInstance } from '../../document/component.ts'
-import type { AutoLayout, Sizing } from '../../document/types.ts'
+import type { AutoLayout, FrameNode, Sizing } from '../../document/types.ts'
 import { ALIGN_CONTENT_LABELS, SIZING_LABELS, alignLabels, optionsOf } from '../../ui/labels.ts'
 import { patchLayouts, setAutoLayoutEnabled, setFrameSizing, setLayoutWrap } from '../layout.ts'
 import { type PanelContext, common } from './context.ts'
@@ -16,7 +16,8 @@ const PADDING_FIELDS = [
 /** フレームとオートレイアウト。フレームだけを選んでいるときに出す */
 export function FrameSections({ ctx }: { ctx: PanelContext }) {
   const { store, selection, nodes, apply, inner } = ctx
-  const frames = (inner ? [] : nodes).filter((node) => !isInstance(node)).filter((node) => node.type === 'frame')
+  // ブーリアン演算のノードは、はみ出し・自動で並べる・角丸に意味がないので、フレームの欄を出さない
+  const frames = (inner ? [] : nodes).filter((node) => !isInstance(node)).filter((node): node is FrameNode => node.type === 'frame' && node.booleanOperation === null)
   const allFrames = frames.length === nodes.length
   if (!allFrames) return null
 

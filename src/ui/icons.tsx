@@ -27,6 +27,8 @@ const TYPE_SHAPES: Record<NodeKind, ReactNode> = {
   ellipse: <circle cx="8" cy="8" r="5.5" />,
   line: <path d="M3 13L13 3" />,
   path: <path d="M2.5 12.5L6 4l4.5 6 3-5.5" />,
+  // ブーリアン演算: 重なった 2 つの正方形
+  boolean: <path d="M2.5 2.5h7v7h-7zM6.5 6.5h7v7h-7z" />,
   text: <path d="M3.5 4.5v-2h9v2M8 2.5v11M6 13.5h4" />,
   image: (
     <>
@@ -38,7 +40,15 @@ const TYPE_SHAPES: Record<NodeKind, ReactNode> = {
 }
 
 /** role を渡すと、コンポーネントの元（ひし形 4 つ）かインスタンス（ひし形 1 つ）の印にする */
-export function TypeIcon({ type, role }: { type: NodeKind; role?: 'main' | 'instance' }) {
+export function TypeIcon({ type, role, mask = false }: { type: NodeKind; role?: 'main' | 'instance'; mask?: boolean }) {
+  if (mask) {
+    // マスク: 塗った正方形を円でくり抜いた形
+    return (
+      <Icon>
+        <path d="M2.5 2.5h11v11h-11zM8 4.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7z" fill="currentColor" stroke="none" fillRule="evenodd" />
+      </Icon>
+    )
+  }
   if (role === 'main') {
     return (
       <Icon>

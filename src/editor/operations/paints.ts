@@ -1,7 +1,7 @@
 import { isLine } from '../../document/path.ts'
 import { normalizeAngle } from '../../document/geometry.ts'
 import { compactRadius, cornerRadii, linearAngle, linearFromAngle } from '../../document/paint.ts'
-import type { ColorStop, Effect, Gradient, NodeId, Paint, Scene, SceneNode } from '../../document/types.ts'
+import type { Blur, ColorStop, Effect, Gradient, NodeId, Paint, Scene, SceneNode, Shadow } from '../../document/types.ts'
 import { patchNodes } from './tree.ts'
 
 // 塗り・線・影の変更。塗りの配列は先頭が一番下（いちばん上に見えるのは最後の要素）
@@ -85,8 +85,9 @@ function mixColor(a: string, b: string, t = 0.5): string {
  */
 export function convertPaint(paint: Paint, type: PaintType): Paint {
   if (paint.type === type) return paint
-  const { opacity, visible } = paint
-  if (type === 'solid') return { type, color: paint.type === 'solid' ? paint.color : paint.stops[0].color, opacity, visible }
+  const { opacity, visible, blendMode } = paint
+  const common = { opacity, visible, blendMode }
+  if (type === 'solid') return { type, color: paint.type === 'solid' ? paint.color : paint.stops[0].color, ...common }
   const stops =
     paint.type === 'solid'
       ? [
@@ -99,11 +100,11 @@ export function convertPaint(paint: Paint, type: PaintType): Paint {
   switch (type) {
     case 'linear':
       // 角度からは、その向きの線（正方形の枠として）。ほかは上から下
-      return { type, ...linearFromAngle(paint.type === 'conic' ? paint.angle : 90, { width: 1, height: 1 }), stops, opacity, visible }
+      return { type, ...linearFromAngle(paint.type === 'conic' ? paint.angle : 90, { width: 1, height: 1 }), stops, ...common }
     case 'radial':
-      return { type, ...center, rx: 0.5, ry: 0.5, stops, opacity, visible }
+      return { type, ...center, rx: 0.5, ry: 0.5, angle: 0, stops, ...common }
     case 'conic':
-      return { type, ...center, angle: paint.type === 'linear' ? linearAngle(paint, { width: 1, height: 1 }) : 0, stops, opacity, visible }
+      return { type, ...center, angle: paint.type === 'linear' ? linearAngle(paint, { width: 1, height: 1 }) : 0, stops, ...common }
   }
 }
 
@@ -187,7 +188,7 @@ export function setFill<T extends Scene>(scene: T, ids: readonly NodeId[], fill:
   return updatePaints(scene, ids, 'fills', (fills) => {
     if (fill === null) return withTopPaint(fills, null)
     const top = fills.at(-1)
-    return withTopPaint(fills, top && top.type !== 'solid' ? withStopColor(top, 0, fill) : { type: 'solid', color: fill, opacity: top?.opacity ?? 1, visible: true })
+    return withTopPaint(fills, top && top.type !== 'solid' ? withStopColor(top, 0, fill) : { type: 'solid', color: fill, opacity: top?.opacity ?? 1, visible: true, blendMode: 'normal' })
   })
 }
 
@@ -199,7 +200,7 @@ export function setStroke<T extends Scene>(scene: T, ids: readonly NodeId[], str
   return patchNodes(scene, ids, (node) => {
     if (!('strokes' in node)) return null
     if (stroke === null) return node.strokes.length === 0 ? null : { strokes: withTopPaint(node.strokes, null) }
-    return { strokes: withTopPaint(node.strokes, { type: 'solid', color: stroke, opacity: node.strokes.at(-1)?.opacity ?? 1, visible: node.strokes.at(-1)?.visible ?? true }) }
+    return { strokes: withTopPaint(node.strokes, { type: 'solid', color: stroke, opacity: node.strokes.at(-1)?.opacity ?? 1, visible: node.strokes.at(-1)?.visible ?? true, blendMode: node.strokes.at(-1)?.blendMode ?? 'normal' }) }
   })
 }
 
@@ -224,16 +225,35 @@ export function setShadow<T extends Scene>(scene: T, ids: readonly NodeId[], sha
   })
 }
 
-/** index 番目の影があるノードだけ、その影の一部（種類・表示も）を書き換える */
+/** 新しく足す影の既定（パネルの「影を付ける」と同じ） */
+export const DEFAULT_SHADOW: Shadow = { type: 'drop-shadow', x: 0, y: 4, blur: 12, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.25, visible: true }
+
+/** 効果の種類を変える。影どうし・ぼかしどうしは値をそのまま、影とぼかしの間ではぼかしの長さだけを受け継ぐ */
+export function convertEffect(effect: Effect, type: Effect['type']): Effect {
+  if (effect.type === type) return effect
+  const isBlur = (t: Effect['type']) => t === 'layer-blur' || t === 'background-blur'
+  if (isBlur(type)) return { type: type as Blur['type'], blur: effect.blur, visible: effect.visible }
+  if (effect.type === 'drop-shadow' || effect.type === 'inner-shadow') return { ...effect, type: type as Shadow['type'] }
+  return { ...DEFAULT_SHADOW, type: type as Shadow['type'], blur: effect.blur, visible: effect.visible }
+}
+
+/**
+ * index 番目の効果があるノードだけ、その効果の一部（種類・表示も）を書き換える。
+ * 種類を変えるときは convertEffect で形を揃える（影にない項目は影のときだけ当てる）
+ */
 export function patchEffectAt<T extends Scene>(
   scene: T,
   ids: readonly NodeId[],
   index: number,
-  patch: Partial<Effect>,
+  patch: Partial<Shadow> | Partial<Blur>,
 ): T {
-  return updateEffects(scene, ids, (effects) =>
-    index < effects.length ? effects.with(index, { ...effects[index], ...patch }) : null,
-  )
+  return updateEffects(scene, ids, (effects) => {
+    if (index >= effects.length) return null
+    const current = patch.type === undefined ? effects[index] : convertEffect(effects[index], patch.type)
+    const next: Record<string, unknown> = { ...current }
+    for (const [key, value] of Object.entries(patch)) if (key in current) next[key] = value
+    return effects.with(index, next as Effect)
+  })
 }
 
 /**

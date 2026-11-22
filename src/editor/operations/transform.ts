@@ -220,7 +220,7 @@ function mirrorContent(scene: Scene, node: SceneNode, axis: Axis, add: (id: Node
   const patch: Record<string, unknown> = {
     fills: node.fills.map((paint) => mirrorPaint(paint, axis)),
     strokes: node.strokes.map((paint) => mirrorPaint(paint, axis)),
-    effects: node.effects.map((effect) => ({ ...effect, [axis]: -effect[axis] || 0 })),
+    effects: node.effects.map((effect) => ('x' in effect ? { ...effect, [axis]: -effect[axis] || 0 } : effect)),
   }
   if (node.type === 'rect' || node.type === 'frame') patch.cornerRadius = mirrorRadius(node.cornerRadius, axis)
   if (node.type === 'path') {
@@ -259,7 +259,11 @@ function mirrorPaint(paint: Paint, axis: Axis): Paint {
   if (paint.type === 'linear') {
     return axis === 'x' ? { ...paint, x1: tidy(1 - paint.x1), x2: tidy(1 - paint.x2) } : { ...paint, y1: tidy(1 - paint.y1), y2: tidy(1 - paint.y2) }
   }
-  if (paint.type === 'radial') return axis === 'x' ? { ...paint, cx: tidy(1 - paint.cx) } : { ...paint, cy: tidy(1 - paint.cy) }
+  if (paint.type === 'radial') {
+    // 楕円の軸の向きは、どちらの向きに映しても符号が変わる
+    const angle = paint.angle === 0 ? 0 : tidy(normalizeAngle(-paint.angle))
+    return axis === 'x' ? { ...paint, cx: tidy(1 - paint.cx), angle } : { ...paint, cy: tidy(1 - paint.cy), angle }
+  }
   if (paint.type === 'conic') {
     // 鏡に映すと回る向きが逆になるので、始まりの向きを映し、色の並びを逆にする（位置 t の色は 1 - t へ）
     const angle = axis === 'x' ? 180 - paint.angle : -paint.angle

@@ -30,6 +30,7 @@ function base(name: string, bounds: Bounds) {
     visible: true,
     locked: false,
     opacity: 1,
+    blendMode: 'normal' as const,
     sizing: { width: 'fixed', height: 'fixed' } as RectNode['sizing'],
     layoutPositioning: 'auto' as const,
     constraints: { horizontal: 'start', vertical: 'start' } as RectNode['constraints'],
@@ -50,6 +51,8 @@ export function createRect(bounds: Bounds): RectNode {
     strokeDashes: [],
     effects: [],
     cornerRadius: 0,
+    isMask: false,
+    maskType: 'vector',
   }
 }
 
@@ -62,6 +65,8 @@ export function createEllipse(bounds: Bounds): EllipseNode {
     strokeWidth: 1,
     strokeDashes: [],
     effects: [],
+    isMask: false,
+    maskType: 'vector',
   }
 }
 
@@ -91,6 +96,8 @@ export function createPath(shape: Bounds & Pick<PathNode, 'points'>, closed: boo
     capSize: 0,
     contours: [],
     fillRule: 'nonzero',
+    isMask: false,
+    maskType: 'vector',
   }
 }
 
@@ -102,6 +109,7 @@ export function createText(bounds: Bounds, text = ''): TextNode {
     fontSize: 16,
     fontFamily: 'sans-serif',
     fills: solid('#000000'),
+    effects: [],
     sizing: { width: 'hug', height: 'hug' },
     fontWeight: 400,
     textAlign: 'left',
@@ -110,7 +118,7 @@ export function createText(bounds: Bounds, text = ''): TextNode {
 }
 
 export function createImage(bounds: Bounds, assetId: AssetId): ImageNode {
-  return { ...base('Image', bounds), type: 'image', assetId, cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
+  return { ...base('Image', bounds), type: 'image', assetId, effects: [], cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
 }
 
 export function createFrame(bounds: Bounds): FrameNode {
@@ -124,8 +132,11 @@ export function createFrame(bounds: Bounds): FrameNode {
     effects: [],
     children: [],
     clipContent: true,
+    passThrough: false,
     cornerRadius: 0,
     layout: null,
     component: null,
+    setDescription: '',
+    booleanOperation: null,
   }
 }

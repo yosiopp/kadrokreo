@@ -1,5 +1,5 @@
 import type { NodeKind } from '../document/path.ts'
-import type { AutoLayout, Cap, ComponentProperty, Constraint, Effect, ImageNode, Override, Paint, Sizing } from '../document/types.ts'
+import type { AutoLayout, BlendMode, Cap, ComponentProperty, Constraint, Effect, ImageNode, MaskType, Override, Paint, Sizing } from '../document/types.ts'
 
 // 設定の値の、画面での呼び名。editor のプロパティパネルと、viewer のインスペクトが同じ言葉で出す
 
@@ -11,7 +11,11 @@ export const TYPE_LABELS: Record<NodeKind, string> = {
   path: 'パス',
   text: 'テキスト',
   image: '画像',
+  boolean: 'ブーリアン演算',
 }
+
+/** マスクの種類の呼び名 */
+export const MASK_TYPE_LABELS: Record<MaskType, string> = { vector: '形', alpha: '不透明度', luminance: '明るさ' }
 
 export const FIT_LABELS: Record<ImageNode['fit'], string> = {
   cover: '枠を埋めて切り抜く',
@@ -29,6 +33,28 @@ export const PAINT_TYPE_LABELS: Record<Paint['type'], string> = {
 export const EFFECT_TYPE_LABELS: Record<Effect['type'], string> = {
   'drop-shadow': '落ち影',
   'inner-shadow': '内側の影',
+  'layer-blur': 'レイヤーのぼかし',
+  'background-blur': '背景のぼかし',
+}
+
+/** 描画モードの呼び名（既存のデザインツールの日本語版に近い名前） */
+export const BLEND_MODE_LABELS: Record<BlendMode, string> = {
+  normal: '通常',
+  multiply: '乗算',
+  screen: 'スクリーン',
+  overlay: 'オーバーレイ',
+  darken: '比較（暗）',
+  lighten: '比較（明）',
+  'color-dodge': '覆い焼きカラー',
+  'color-burn': '焼き込みカラー',
+  'hard-light': 'ハードライト',
+  'soft-light': 'ソフトライト',
+  difference: '差の絶対値',
+  exclusion: '除外',
+  hue: '色相',
+  saturation: '彩度',
+  color: 'カラー',
+  luminosity: '輝度',
 }
 
 /** 文字の太さ（100〜900）の呼び名。CSS や書体の一般的な名前 */

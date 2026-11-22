@@ -67,6 +67,8 @@ describe('nodeMarkup', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
     const path: PathNode = {
       ...base,
@@ -86,6 +88,8 @@ describe('nodeMarkup', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
     const image: ImageNode = {
       ...base,
@@ -93,6 +97,7 @@ describe('nodeMarkup', () => {
       name: 'Photo',
       parentId: 'frame',
       type: 'image',
+      effects: [],
       assetId: 'a1',
       cornerRadius: 0,
       fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1,
@@ -131,6 +136,8 @@ describe('nodeMarkup', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
     const html = nodeMarkup(sceneOf(path), 'path').html
     expect(html).toMatch(/<path d="M17\.07 17\.07 C[^"]* 24\.14 0 L100 0 L100 100 Z"\/>/)
@@ -159,6 +166,8 @@ describe('nodeMarkup', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
     // 矢印の長さは max(2 × 4, 10) = 10。線は 10 × 0.8 = 8 手前で止める
     expect(nodeMarkup(sceneOf(line), 'line').html).toBe(
@@ -191,6 +200,8 @@ describe('nodeMarkup', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
     const html = nodeMarkup(sceneOf(path), 'path', { style: { color: 'rgb' } }).html
     // 塗りは元の形のまま、線は始点側を短くする
@@ -221,6 +232,8 @@ describe('nodeMarkup', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
     expect(nodeMarkup(sceneOf(path), 'path').html).toBe(
       '<svg class="curve" viewBox="0 0 100 100"><path d="M0 0 C100 0 100 0 100 100"/></svg>',
@@ -245,6 +258,7 @@ describe('nodeMarkup', () => {
       ],
       opacity: 1,
       visible: true,
+      blendMode: 'normal' as const,
     }
     const path: PathNode = {
       ...base,
@@ -267,6 +281,8 @@ describe('nodeMarkup', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
     const html = nodeMarkup(sceneOf(path), 'path').html
     expect(html).toContain(
@@ -280,7 +296,7 @@ describe('nodeMarkup', () => {
       '<stop offset="0" stop-color="#ff0000" stop-opacity="0.5"/><stop offset="1" stop-color="#0000ff" stop-opacity="0.5"/>',
     )
     // 円形のグラデーションは、半径 1 の円を変換で枠に合わせた楕円にする
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: gradient.stops, opacity: 1, visible: true }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: gradient.stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
     expect(nodeMarkup(sceneOf({ ...path, fills: [radial] }), 'path').html).toContain(
       '<radialGradient id="blob-fill" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(50 0 0 25 50 25)">',
     )
@@ -334,6 +350,8 @@ describe('nodeMarkup の出力形式', () => {
         capSize: 0,
         contours: [],
         fillRule: 'nonzero',
+        isMask: false,
+        maskType: 'vector',
       } satisfies PathNode,
     )
 
@@ -403,7 +421,8 @@ describe('nodeMarkup の出力形式', () => {
   })
 
   it('画像は JSX では閉じた img にする', () => {
-    const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
+    const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image',
+      effects: [], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
     const { html } = nodeMarkup(sceneOf(image), 'image', { style: { format: 'react' } })
     expect(html).toContain(`<img style={{ width: 100, height: 50, objectFit: 'cover' }} src="photo.png" alt="Photo" />`)
   })
@@ -425,5 +444,19 @@ describe('nodeCode', () => {
     expect(nodeCode(scene(), 'rect', { format: 'tailwind', unit: 'rem' }).code).toBe(
       'absolute left-[0.625rem] top-[0] w-[6.25rem] h-[3.125rem] bg-[#ff0000] rounded-[0.25rem]',
     )
+  })
+})
+
+describe('マスク', () => {
+  it('マスクは要素にせず、かかっている子に clip-path を付ける', () => {
+    const scene = sceneOf(
+      frame({ name: 'Card', children: ['mask', 'photo'] }),
+      rect({ id: 'mask', name: 'Window', parentId: 'frame', isMask: true }),
+      rect({ id: 'photo', name: 'Photo', parentId: 'frame' }),
+    )
+    const { html, css } = nodeMarkup(scene, 'frame')
+    expect(html).not.toContain('window')
+    expect(html).toContain('class="photo"')
+    expect(css).toContain("clip-path: path('M0 0 L100 0 L100 50 L0 50 Z');")
   })
 })

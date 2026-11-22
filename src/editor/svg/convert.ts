@@ -12,7 +12,7 @@ import {
   unionBounds,
 } from '../../document/geometry.ts'
 import { readImageInfo } from '../../document/imageInfo.ts'
-import { IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../../document/kdr.ts'
+import { BLEND_MODES, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../../document/kdr.ts'
 import { angleLine, linearFromAngle } from '../../document/paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
@@ -20,6 +20,7 @@ import { sha256Hex } from '../../document/sha256.ts'
 import type {
   Asset,
   AssetId,
+  BlendMode,
   Cap,
   ColorStop,
   Effect,
@@ -57,9 +58,10 @@ import {
 // - rect / circle / ellipse は、かかっている変換が「回転と縦横の拡大」で表せれば矩形・楕円のノード（回転つき）に、
 //   歪めたり裏返したりしていればパスにする。line / polyline / polygon / path はパス。path の輪郭が複数あれば、
 //   1 つのパスの輪郭（contours）にし、fill-rule を写す（穴が開く）。stroke-dasharray は線の破線にする。
-// - 塗りは単色と linearGradient・radialGradient。kadrokreo の塗りは不透明度を持たないので、fill-opacity などはノードの opacity に寄せる。
+// - 塗りは単色と linearGradient・radialGradient。fill-opacity・stroke-opacity・色の alpha・揃った stop-opacity は塗りの不透明度（Paint.opacity）に写す。
 // - <style> の CSS は単純なセレクタ（要素名・#id・.class）だけ読み、属性 < CSS < style 属性 < CSS の !important の順に重ねる。
-// - clip-path / mask は、中身が矩形・円 1 つで、軸に沿って置かれているときだけ、切り取るフレーム（角丸）にする。
+// - clip-path / mask は、中身が矩形・円 1 つで、軸に沿って置かれているときは、切り取るフレーム（角丸）にする。
+//   ほかの形（パス・多角形・回った矩形・いくつもの形・objectBoundingBox）は、形をマスク（isMask）のパスにして中身と一緒にフレームにまとめる（maskShape）。
 // - <image> は data URI の PNG / JPEG / WebP / GIF だけを画像のノードにする（外部の URL は読まない）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
 // - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターン・textPath など）は
@@ -98,6 +100,8 @@ const MAX_STOPS = 16
 const MAX_EFFECTS = 16
 /** 塗りと線を持つ図形の要素（影の filter を効果として読む） */
 const SHAPE_ELEMENTS = new Set(['rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path'])
+/** 影とぼかしの filter を効果として読む要素（グループはフレームになるので効果を持てる） */
+const EFFECT_ELEMENTS = new Set([...SHAPE_ELEMENTS, 'g', 'text', 'image'])
 /** kdr の破線の数の上限 */
 const MAX_DASHES = 16
 
@@ -105,6 +109,9 @@ const MAX_DASHES = 16
 const KAPPA = 0.5522847498
 
 /** 親から受け継ぐ値（presentation attribute と style 属性） */
+/** 塗りで透かすマスク（paintedMask）の中身にできる図形 */
+const PAINTED_MASK_SHAPES = new Set(['rect', 'circle', 'ellipse', 'path', 'polygon'])
+
 type Inherited = {
   fill: string
   stroke: string
@@ -377,13 +384,26 @@ class Converter {
     const matrix = transform ? multiply(parentMatrix, transform) : parentMatrix
     if (!transform) this.warn('読めない transform（無視した）')
     const inherited = this.inherit(element, parentInherited)
+    // 図形・グループ・テキスト・画像に付いた影とぼかしの filter は効果として読む（図形は shape で、ほかはここで）
+    const effects = EFFECT_ELEMENTS.has(name) ? this.filterEffects(element, matrix) : null
     for (const [attribute, label] of SKIPPED_REFERENCES) {
       const value = declared[attribute]
-      // 図形に付いた影の filter は効果として読む（shape）
-      if (attribute === 'filter' && SHAPE_ELEMENTS.has(name) && this.filterEffects(element, matrix) !== null) continue
+      if (attribute === 'filter' && effects !== null) continue
       if (value !== undefined && value.trim() !== 'none') this.warn(label)
     }
     const ids = this.convertShape(element, matrix, inherited, depth, uses)
+    if (effects !== null && !SHAPE_ELEMENTS.has(name)) {
+      const node = ids.length === 1 ? this.nodes[ids[0]] : undefined
+      if (node && 'effects' in node && node.effects.length === 0) this.nodes[ids[0]] = { ...node, effects }
+      else if (ids.length > 0) this.warn('フィルタ')
+    }
+    // 描画モード（CSS の mix-blend-mode）はできたノードに付ける
+    const blend = declared['mix-blend-mode']?.trim()
+    if (blend !== undefined && blend !== 'normal' && blend !== '') {
+      if ((BLEND_MODES as readonly string[]).includes(blend)) {
+        for (const id of ids) if (this.nodes[id].blendMode === 'normal') this.nodes[id] = { ...this.nodes[id], blendMode: blend as BlendMode }
+      } else this.warn(`描画モード（${blend}）`)
+    }
     return this.clipped(element, ids, matrix, depth)
   }
 
@@ -492,13 +512,22 @@ class Converter {
         this.warn(`たどれない${label}の参照`)
         continue
       }
-      const region = this.clipRegion(target, kind, matrix)
-      if (!region) {
-        this.warn(`${label}（矩形・円でないもの。かけなかった）`)
-        continue
-      }
       if (depth > MAX_FRAME_DEPTH) {
         this.warn('深すぎるグループの入れ子（フレームにせずにまとめた）')
+        continue
+      }
+      if (kind === 'mask') {
+        const painted = this.paintedMask(element, target, matrix, result, depth)
+        if (painted !== null) {
+          result = [painted]
+          continue
+        }
+      }
+      const region = this.clipRegion(target, kind, matrix)
+      if (!region) {
+        // 矩形・円 1 つで表せなければ、形をマスク（isMask）のパスにして、中身と一緒にフレームにまとめる
+        const masked = this.maskShape(target, kind, matrix, result, label)
+        if (masked) result = [this.masked(element, result, masked, target.attributes.id ?? (kind === 'clipPath' ? 'Clip' : 'Mask'))]
         continue
       }
       result = [
@@ -511,6 +540,40 @@ class Converter {
       ]
     }
     return result
+  }
+
+  /**
+   * 塗りで透かす mask（中身が図形 1 つで、塗りがグラデーションか、mask-type: alpha のもの）は、その図形を塗りごとノードにして
+   * 不透明度・明るさのマスク（maskType）にする。それ以外（単色・いくつもの形）は、形のマスクやフレームの不透明度で表す（clipRegion / maskShape）。
+   * 当てはまらなければ null
+   */
+  private paintedMask(element: SvgElement, target: SvgElement, matrix: Matrix, ids: NodeId[], depth: number): NodeId | null {
+    if (target.attributes.maskContentUnits?.trim() === 'objectBoundingBox') return null
+    const shapes = target.children.filter(
+      (child): child is SvgElement => typeof child !== 'string' && child.name !== 'title' && child.name !== 'desc',
+    )
+    if (shapes.length !== 1 || !PAINTED_MASK_SHAPES.has(shapes[0].name)) return null
+    const [shape] = shapes
+    const type = this.declared(target)['mask-type']?.trim() === 'alpha' ? 'alpha' : 'luminance'
+    const fill = this.declared(shape).fill?.trim() ?? ''
+    if (type === 'luminance' && !fill.startsWith('url(')) return null
+    const converted = this.convertElement(shape, matrix, this.inherit(target, ROOT_INHERITED), depth, 0)
+    const node = converted.length === 1 ? this.nodes[converted[0]] : undefined
+    if (!node || (node.type !== 'rect' && node.type !== 'ellipse' && node.type !== 'path')) {
+      for (const id of converted) delete this.nodes[id]
+      return null
+    }
+    const name = target.attributes.id ?? 'Mask'
+    const mask = { ...node, name, isMask: true, maskType: type, strokes: [], effects: [] } satisfies SceneNode
+    const only = ids.length === 1 ? this.nodes[ids[0]] : null
+    if (only?.type === 'frame' && (element.name === 'g' || element.name === 'a' || element.name === 'switch' || element.name === 'svg') && !only.clipContent) {
+      this.nodes[mask.id] = { ...mask, x: mask.x - only.x, y: mask.y - only.y, parentId: only.id }
+      this.nodes[only.id] = { ...only, children: [mask.id, ...only.children] }
+      return only.id
+    }
+    this.nodes[mask.id] = mask
+    const box = unionBounds(ids.map((id) => outerBounds(this.nodes[id])))!
+    return this.wrap([mask.id, ...ids], box, { name, clipContent: false })
   }
 
   /** clipPath / mask の中身が、軸に沿った矩形・円 1 つなら、その枠（外側のフレームの座標）と角の丸め */
@@ -574,6 +637,173 @@ class Converter {
       if (alpha < 1e-3) return null
     }
     return { box, radius: Math.min(pageRx, box.width / 2, box.height / 2), alpha: round4(alpha) }
+  }
+
+  /**
+   * clipPath / mask の中身の図形（rect・circle・ellipse・polygon・polyline・path と、それを指す use）を、マスクの輪郭（外側のフレームの座標）にする。
+   * clipPath は全部の形を足した範囲（nonzero。形が 1 つならその clip-rule）。mask は塗りの明るさで分け、明るい形（見せる）のあとに暗い形（隠す）が
+   * 続けば、偶奇（evenodd）で暗い形を穴にする（暗い形が明るい形の内側にあるときに正しい）。明るさが半端なら形だけかけて知らせる。
+   * 明るい形の明るさが揃っていれば、それをフレームの不透明度にする。読めない中身なら知らせて null
+   */
+  private maskShape(
+    target: SvgElement,
+    kind: 'clipPath' | 'mask',
+    matrix: Matrix,
+    ids: NodeId[],
+    label: string,
+  ): { contours: Contour[]; rule: 'nonzero' | 'evenodd'; alpha: number } | null {
+    const units = kind === 'clipPath' ? target.attributes.clipPathUnits : target.attributes.maskContentUnits
+    let base = matrix
+    if (units?.trim() === 'objectBoundingBox') {
+      // 中身を囲む枠の割合。枠は外側のフレームの座標で取るので、中身が回っていたり歪んでいたりすると近似になる
+      const box = unionBounds(ids.map((id) => outerBounds(this.nodes[id])))
+      if (!box) return null
+      base = [box.width, 0, 0, box.height, box.x, box.y]
+    }
+    const own = kind === 'clipPath' ? parseTransform(target.attributes.transform) : IDENTITY
+    if (!own) return null
+    const shapes = target.children.filter(
+      (child): child is SvgElement => typeof child !== 'string' && child.name !== 'title' && child.name !== 'desc',
+    )
+    const parts: { contours: Contour[]; alpha: number; rule: string }[] = []
+    for (const child of shapes) {
+      let shape = child
+      let m = multiply(base, own)
+      // use は 1 段だけたどる（clipPath の中で use は図形を指すことしかできない）
+      if (shape.name === 'use') {
+        const href = (shape.attributes.href ?? shape.attributes['xlink:href'])?.trim()
+        const referenced = href?.startsWith('#') ? this.definitions.get(href.slice(1)) : undefined
+        const useTransform = parseTransform(shape.attributes.transform)
+        if (!referenced || !useTransform) return this.unreadableMask(label)
+        m = multiply(multiply(m, useTransform), [1, 0, 0, 1, this.length(shape.attributes.x, 'width') ?? 0, this.length(shape.attributes.y, 'height') ?? 0])
+        shape = referenced
+      }
+      const inner = parseTransform(shape.attributes.transform)
+      const userContours = this.shapeOutline(shape)
+      if (!inner || userContours === null) return this.unreadableMask(label)
+      const style = this.declared(shape)
+      if (style.display?.trim() === 'none') continue
+      m = multiply(m, inner)
+      const contours = userContours.map((contour) => ({
+        vertices: mapVertices(contour.vertices, (point) => applyMatrix(m, point)),
+        closed: true,
+      }))
+      let alpha = 1
+      if (kind === 'mask') {
+        const fill = (style.fill ?? 'black').trim()
+        const color = fill === 'none' ? null : parseColor(fill === 'currentColor' ? (style.color ?? 'black') : fill)
+        if (fill === 'none') continue
+        if (!color) {
+          this.warn('グラデーションなどで塗ったマスク（形だけかけた）')
+        } else {
+          const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.color.slice(i, i + 2), 16) / 255)
+          alpha = clamp01((0.2125 * r + 0.7154 * g + 0.0721 * b) * color.alpha * (parseFraction(style['fill-opacity']) ?? 1) * this.opacityOf(shape))
+        }
+      }
+      parts.push({ contours, alpha, rule: (style['clip-rule'] ?? style['fill-rule'] ?? 'nonzero').trim() })
+    }
+    const shown = parts.filter((part) => part.alpha >= 0.5)
+    const hidden = parts.filter((part) => part.alpha < 0.5)
+    if (shown.length === 0) return this.unreadableMask(label)
+    // 暗い形は明るい形のあとだけ（先に描いた暗い形は、あとの明るい形に塗りつぶされる）
+    const firstHidden = parts.findIndex((part) => part.alpha < 0.5)
+    const lastShown = parts.findLastIndex((part) => part.alpha >= 0.5)
+    const holes = firstHidden !== -1 && firstHidden < lastShown ? [] : hidden
+    if (parts.some((part) => part.alpha > 1e-3 && part.alpha < 0.999)) {
+      if (new Set(shown.map((part) => round4(part.alpha))).size > 1 || holes.some((part) => part.alpha > 1e-3)) {
+        this.warn('明るさが半端なマスク（形だけかけた）')
+      }
+    }
+    const alphas = new Set(shown.map((part) => round4(part.alpha)))
+    const alpha = alphas.size === 1 ? [...alphas][0] : 1
+    const contours = [...shown, ...holes].flatMap((part) => part.contours)
+    const total = contours.reduce((sum, contour) => sum + contour.vertices.length, 0)
+    if (contours.length === 0 || total > MAX_PATH_POINTS) return this.unreadableMask(label)
+    const rule = holes.length > 0 ? 'evenodd' : parts.length === 1 && parts[0].rule === 'evenodd' ? 'evenodd' : 'nonzero'
+    return { contours, rule, alpha }
+  }
+
+  private unreadableMask(label: string): null {
+    this.warn(`${label}（読めない中身。かけなかった）`)
+    return null
+  }
+
+  /** 図形の要素の輪郭（その要素の座標。transform はかけない）。図形でなければ null */
+  private shapeOutline(shape: SvgElement): Contour[] | null {
+    const a = shape.attributes
+    switch (shape.name) {
+      case 'rect': {
+        const box = {
+          x: this.length(a.x, 'width') ?? 0,
+          y: this.length(a.y, 'height') ?? 0,
+          width: this.length(a.width, 'width') ?? 0,
+          height: this.length(a.height, 'height') ?? 0,
+        }
+        if (!(box.width > 0 && box.height > 0)) return []
+        const rxRaw = this.length(a.rx, 'width')
+        const ryRaw = this.length(a.ry, 'height')
+        const rx = Math.min(Math.max(0, rxRaw ?? ryRaw ?? 0), box.width / 2)
+        const ry = Math.min(Math.max(0, ryRaw ?? rxRaw ?? 0), box.height / 2)
+        return [{ vertices: roundedRect(box, rx, ry), closed: true }]
+      }
+      case 'circle':
+      case 'ellipse': {
+        const cx = this.length(a.cx, 'width') ?? 0
+        const cy = this.length(a.cy, 'height') ?? 0
+        const rx = shape.name === 'circle' ? (this.length(a.r, 'diagonal') ?? 0) : (this.length(a.rx, 'width') ?? this.length(a.ry, 'height') ?? 0)
+        const ry = shape.name === 'circle' ? rx : (this.length(a.ry, 'height') ?? rx)
+        return rx > 0 && ry > 0 ? [{ vertices: ellipseVertices(cx, cy, rx, ry), closed: true }] : []
+      }
+      case 'polygon':
+      case 'polyline': {
+        const numbers = parseNumbers(a.points) ?? []
+        const points: Point[] = []
+        for (let i = 0; i + 1 < numbers.length; i += 2) points.push({ x: numbers[i], y: numbers[i + 1] })
+        return points.length >= 3 ? [{ vertices: points, closed: true }] : []
+      }
+      case 'path': {
+        if (a.d === undefined || a.d.trim() === '') return []
+        try {
+          return parsePathData(a.d).filter((subpath) => subpath.vertices.length >= 2)
+        } catch (error) {
+          if (!(error instanceof PathDataError)) throw error
+          return null
+        }
+      }
+      default:
+        return null
+    }
+  }
+
+  /**
+   * 中身（ids）にマスクのパスをかける。中身がこの要素から作ったグループのフレーム 1 つなら、その最背面にマスクを入れる。
+   * そうでなければ、マスクと中身をフレーム（はみ出しは隠さない）にまとめる。マスクの明るさはフレームの不透明度にする
+   */
+  private masked(
+    element: SvgElement,
+    ids: NodeId[],
+    mask: { contours: Contour[]; rule: 'nonzero' | 'evenodd'; alpha: number },
+    name: string,
+  ): NodeId {
+    const shape = pathFromContours(mask.contours)
+    const node: PathNode = {
+      ...createPath(shape, true),
+      contours: shape.contours,
+      id: this.id(),
+      name,
+      strokes: [],
+      fillRule: mask.rule,
+      isMask: true,
+    }
+    const only = ids.length === 1 ? this.nodes[ids[0]] : null
+    if (only?.type === 'frame' && element.name !== 'use' && (element.name === 'g' || element.name === 'a' || element.name === 'switch' || element.name === 'svg') && !only.clipContent) {
+      this.nodes[node.id] = { ...node, x: node.x - only.x, y: node.y - only.y, parentId: only.id }
+      this.nodes[only.id] = { ...only, children: [node.id, ...only.children], opacity: round4(only.opacity * mask.alpha) }
+      return only.id
+    }
+    this.add(node)
+    const box = unionBounds(ids.map((id) => outerBounds(this.nodes[id])))!
+    return this.wrap([node.id, ...ids], box, { name, clipContent: false, opacity: mask.alpha })
   }
 
   private use(element: SvgElement, matrix: Matrix, inherited: Inherited, depth: number, uses: number): NodeId[] {
@@ -799,8 +1029,7 @@ class Converter {
       opacity: this.opacityOf(element),
     }
     const userBox = { x, y: y - inherited.fontSize, width: size.width / (scale || 1), height: size.height / (scale || 1) }
-    const fill = this.paint(inherited.fill, inherited.fillOpacity, inherited, matrix, userBox, node)
-    node = { ...node, fills: fill.paints, opacity: node.opacity * fill.alpha }
+    node = { ...node, fills: this.paint(inherited.fill, inherited.fillOpacity, inherited, matrix, userBox, node) }
     if (inherited.stroke.trim() !== 'none') this.warn('文字の線（stroke）')
     return [this.add(node)]
   }
@@ -817,35 +1046,26 @@ class Converter {
       lengthScale(matrix)
     // 直線には面がないので塗らない
     const isLine = element.name === 'line'
-    const fill = isLine ? { paints: [], alpha: 1 } : this.paint(inherited.fill, inherited.fillOpacity, inherited, matrix, userBox, node)
-    const stroke = strokeWidth > 0
-      ? this.paint(inherited.stroke, inherited.strokeOpacity, inherited, matrix, userBox, node)
-      : { paints: [], alpha: 1 }
-    // 塗りの不透明度はノードの opacity に寄せる。塗りと線で違えば、見えている方に合わせる
-    let alpha = 1
-    if (fill.paints.length > 0 && stroke.paints.length > 0) {
-      if (Math.abs(fill.alpha - stroke.alpha) > 1e-6) this.warn('塗りと線で違う不透明度（片方に揃えた）')
-      alpha = Math.max(fill.alpha, stroke.alpha)
-    } else if (fill.paints.length > 0) alpha = fill.alpha
-    else if (stroke.paints.length > 0) alpha = stroke.alpha
+    const fill = isLine ? [] : this.paint(inherited.fill, inherited.fillOpacity, inherited, matrix, userBox, node)
+    const stroke = strokeWidth > 0 ? this.paint(inherited.stroke, inherited.strokeOpacity, inherited, matrix, userBox, node) : []
     const id = element.attributes.id
     // 線の端の形（stroke-linecap）は、開いたパスの両端に写す。閉じた形には端がない
     const cap: Cap | null = inherited.lineCap === 'round' || inherited.lineCap === 'square' ? inherited.lineCap : null
-    const caps = node.type === 'path' && !node.closed && cap && stroke.paints.length > 0 ? { startCap: cap, endCap: cap } : {}
+    const caps = node.type === 'path' && !node.closed && cap && stroke.length > 0 ? { startCap: cap, endCap: cap } : {}
     const fillRule = node.type === 'path' && inherited.fillRule === 'evenodd' ? { fillRule: 'evenodd' as const } : {}
-    const strokeDashes = stroke.paints.length > 0 ? this.dashes(inherited, lengthScale(matrix)) : []
+    const strokeDashes = stroke.length > 0 ? this.dashes(inherited, lengthScale(matrix)) : []
     const named = {
       ...node,
       ...caps,
       ...fillRule,
       strokeDashes,
       name: id !== undefined && id !== '' ? id : node.name,
-      fills: fill.paints,
-      strokes: stroke.paints,
+      fills: fill,
+      strokes: stroke,
       effects: this.filterEffects(element, matrix) ?? [],
-      strokeWidth: stroke.paints.length > 0 ? round(strokeWidth) : node.strokeWidth,
+      strokeWidth: stroke.length > 0 ? round(strokeWidth) : node.strokeWidth,
       visible: inherited.visible,
-      opacity: this.opacityOf(element) * alpha,
+      opacity: this.opacityOf(element),
     }
     return [this.add(named)]
   }
@@ -860,18 +1080,24 @@ class Converter {
     const url = /^url\(\s*['"]?#([^'")]*)['"]?\s*\)$/.exec(raw)
     const target = url ? this.definitions.get(url[1].trim()) : undefined
     if (target?.name !== 'filter') return null
-    const shadows = readShadowFilter(target, (part) => this.declared(part))
-    if (!shadows) return null
+    const effects = readShadowFilter(target, (part) => this.declared(part))
+    if (!effects) return null
     const scale = lengthScale(matrix)
-    return shadows.slice(0, MAX_EFFECTS).map((shadow) => ({
-      type: shadow.type,
-      x: round(matrix[0] * shadow.dx + matrix[2] * shadow.dy),
-      y: round(matrix[1] * shadow.dx + matrix[3] * shadow.dy),
-      blur: round(shadow.stdDeviation * 2 * scale),
-      color: shadow.color,
-      opacity: round4(shadow.opacity),
-      visible: true,
-    }))
+    return effects.slice(0, MAX_EFFECTS).map((effect): Effect => {
+      const blur = round(effect.stdDeviation * 2 * scale)
+      if (effect.type === 'layer-blur') return { type: effect.type, blur, visible: true }
+      return {
+        type: effect.type,
+        x: round(matrix[0] * effect.dx + matrix[2] * effect.dy),
+        y: round(matrix[1] * effect.dx + matrix[3] * effect.dy),
+        blur,
+        spread: round(effect.spread * scale),
+        blendMode: effect.blendMode,
+        color: effect.color,
+        opacity: round4(effect.opacity),
+        visible: true,
+      }
+    })
   }
 
   /**
@@ -908,9 +1134,24 @@ class Converter {
   // ── 塗り ──
 
   /**
-   * fill / stroke の値を塗りにする。alpha は塗りの不透明度（色の alpha と fill-opacity の積）で、呼び出し側がノードの opacity に寄せる
+   * fill / stroke の値を塗りにする。色の alpha・fill-opacity（stroke-opacity）・グラデーションの揃った色の透明度は、塗りの不透明度（Paint.opacity）に写す
    */
   private paint(
+    raw: string,
+    opacity: number,
+    inherited: Inherited,
+    matrix: Matrix,
+    userBox: Bounds,
+    node: SceneNode,
+  ): Paint[] {
+    const { paints, alpha } = this.paintOf(raw, opacity, inherited, matrix, userBox, node)
+    return paints.map((paint) => {
+      const value = round4(clamp01(paint.opacity * alpha))
+      return value === paint.opacity ? paint : { ...paint, opacity: value }
+    })
+  }
+
+  private paintOf(
     raw: string,
     opacity: number,
     inherited: Inherited,
@@ -927,20 +1168,25 @@ class Converter {
       const target = url[1].trim()
       if (!target.startsWith('#')) {
         this.warn('外部への参照（読まなかった）')
-        return fallback !== '' ? this.paint(fallback, opacity, inherited, matrix, userBox, node) : none
+        return fallback !== '' ? this.paintOf(fallback, opacity, inherited, matrix, userBox, node) : none
       }
       const element = this.definitions.get(target.slice(1))
       if (element?.name === 'linearGradient') {
         const paint = this.linearGradient(element, inherited, matrix, userBox, node)
-        return paint ? { paints: [paint], alpha: opacity } : none
+        return paint ? { paints: [paint], alpha: opacity * (this.uniformStopOpacity(element, inherited) ?? 1) } : none
       }
       if (element?.name === 'radialGradient') {
         const paint = this.radialGradient(element, inherited, matrix, userBox, node)
-        return paint ? { paints: [paint], alpha: opacity } : none
+        return paint ? { paints: [paint], alpha: opacity * (this.uniformStopOpacity(element, inherited) ?? 1) } : none
       }
-      if (element?.name === 'pattern') this.warn('パターンの塗り')
+      if (element?.name === 'pattern') {
+        // kadrokreo が書き出した角度のグラデーションなら、元の値から戻す
+        const conic = this.conicPattern(element, matrix, node)
+        if (conic) return { paints: [conic], alpha: opacity }
+        this.warn('パターンの塗り')
+      }
       else this.warn('たどれない塗りの参照')
-      return fallback !== '' ? this.paint(fallback, opacity, inherited, matrix, userBox, node) : none
+      return fallback !== '' ? this.paintOf(fallback, opacity, inherited, matrix, userBox, node) : none
     }
     const color = this.color(value, inherited)
     if (!color) {
@@ -948,7 +1194,38 @@ class Converter {
       return none
     }
     if (color.alpha === 0) return none
-    return { paints: [{ type: 'solid', color: color.color, opacity: 1, visible: true }], alpha: color.alpha * opacity }
+    return { paints: [{ type: 'solid', color: color.color, opacity: 1, visible: true, blendMode: 'normal' }], alpha: color.alpha * opacity }
+  }
+
+  /**
+   * kadrokreo の SVG の書き出しが角度のグラデーションを近似した pattern（data-kdr-conic / data-kdr-stops を持つ）を、角度のグラデーションに戻す。
+   * 中心は pattern の座標系（要素の座標系）のピクセルなので、ページを経てノードの枠に対する割合に直す。読めなければ null
+   */
+  private conicPattern(element: SvgElement, matrix: Matrix, node: SceneNode): Paint | null {
+    const source = element.attributes['data-kdr-conic']?.trim().split(/\s+/).map(Number)
+    const rawStops = element.attributes['data-kdr-stops']
+    if (!source || source.length !== 4 || !source.every(Number.isFinite) || rawStops === undefined) return null
+    const [x, y, angle, paintOpacity] = source
+    const stops: ColorStop[] = []
+    for (const item of rawStops.split(',')) {
+      const match = /^\s*([\d.eE+-]+)\s+(#[0-9a-fA-F]{6})\s*$/.exec(item)
+      const offset = match ? Number(match[1]) : NaN
+      if (!match || !(offset >= 0 && offset <= 1) || (stops.length > 0 && offset < stops[stops.length - 1].offset)) return null
+      stops.push({ offset, color: match[2].toLowerCase() })
+    }
+    if (stops.length < 2 || stops.length > 16 || !(paintOpacity >= 0 && paintOpacity <= 1)) return null
+    if (node.width === 0 || node.height === 0) return { type: 'solid', color: stops[0].color, opacity: paintOpacity, visible: true, blendMode: 'normal' }
+    const center = toNodeSpace(node, applyMatrix(matrix, { x, y }))
+    return {
+      type: 'conic',
+      cx: center.x / node.width,
+      cy: center.y / node.height,
+      angle,
+      stops,
+      opacity: paintOpacity,
+      visible: true,
+      blendMode: 'normal',
+    }
   }
 
   private color(value: string, inherited: Inherited): Rgba | null {
@@ -975,6 +1252,23 @@ class Converter {
     return chain
   }
 
+  /** グラデーションの色の透明度（stop-color の alpha と stop-opacity の積）がすべて同じなら、その値。違えば null */
+  private uniformStopOpacity(element: SvgElement, inherited: Inherited): number | null {
+    const owner = this.gradientChain(element).find((item) =>
+      item.children.some((child) => typeof child !== 'string' && child.name === 'stop'),
+    )
+    if (!owner) return null
+    const alphas = new Set<number>()
+    for (const child of owner.children) {
+      if (typeof child === 'string' || child.name !== 'stop') continue
+      const style = this.declared(child)
+      const rawColor = (style['stop-color'] ?? 'black').trim()
+      const color = (rawColor === 'currentColor' ? parseColor(inherited.color) : parseColor(rawColor)) ?? { color: '#000000', alpha: 1 }
+      alphas.add(round4(clamp01(color.alpha * (parseFraction(style['stop-opacity']) ?? 1))))
+    }
+    return alphas.size === 1 ? [...alphas][0] : null
+  }
+
   private stops(element: SvgElement, inherited: Inherited): ColorStop[] {
     const owner = this.gradientChain(element).find((item) =>
       item.children.some((child) => typeof child !== 'string' && child.name === 'stop'),
@@ -994,7 +1288,8 @@ class Converter {
       if (color.alpha * opacity < 1) translucent = true
       stops.push({ offset, color: color.color })
     }
-    if (translucent) this.warn('グラデーションの色の透明度')
+    // すべての色が同じ透明度なら、塗りの不透明度に写す（paint）。色ごとに違うときだけ知らせる
+    if (translucent && this.uniformStopOpacity(element, inherited) === null) this.warn('グラデーションの色ごとに違う透明度（不透明にした）')
     if (stops.length > MAX_STOPS) {
       this.warn(`${MAX_STOPS} 色を超えるグラデーション（間引いた）`)
       const picked = Array.from({ length: MAX_STOPS }, (_, i) => stops[Math.round((i * (stops.length - 1)) / (MAX_STOPS - 1))])
@@ -1015,7 +1310,7 @@ class Converter {
   ): Paint | null {
     const stops = this.stops(element, inherited)
     if (stops.length === 0) return null
-    if (stops.length === 1) return { type: 'solid', color: stops[0].color, opacity: 1, visible: true }
+    if (stops.length === 1) return { type: 'solid', color: stops[0].color, opacity: 1, visible: true, blendMode: 'normal' }
     const chain = this.gradientChain(element)
     const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
     const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
@@ -1032,16 +1327,16 @@ class Converter {
     if (userSpace) toPage = multiply(matrix, gradientTransform)
     else {
       // 枠に対する割合の座標。幅や高さが 0 の枠には SVG もグラデーションを描かない
-      if (userBox.width === 0 || userBox.height === 0) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
+      if (userBox.width === 0 || userBox.height === 0) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true, blendMode: 'normal' }
       toPage = multiply(multiply(matrix, [userBox.width, 0, 0, userBox.height, userBox.x, userBox.y]), gradientTransform)
     }
     const start = toNodeSpace(node, applyMatrix(toPage, p1))
     const end = toNodeSpace(node, applyMatrix(toPage, p2))
-    if (Math.hypot(end.x - start.x, end.y - start.y) < 1e-9) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
+    if (Math.hypot(end.x - start.x, end.y - start.y) < 1e-9) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true, blendMode: 'normal' }
     // 始点・終点は枠に対する割合で持つ。幅や高さが 0 の向きは中央に置く
     const ratio = (value: number, length: number) => (length > 0 ? round4(value / length) : 0.5)
     const line = { x1: ratio(start.x, node.width), y1: ratio(start.y, node.height), x2: ratio(end.x, node.width), y2: ratio(end.y, node.height) }
-    if (!Object.values(line).every(Number.isFinite)) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
+    if (!Object.values(line).every(Number.isFinite)) return { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true, blendMode: 'normal' }
     if (node.width === 0 || node.height === 0) {
       // つぶれた枠では、SVG の向きの線を枠の割合で表せないので、向きの線に色の位置を写す
       return this.projectedLinear(start, end, stops, node)
@@ -1054,7 +1349,7 @@ class Converter {
     if (Math.abs(along.x * across.x + along.y * across.y) > 1e-6 * Math.hypot(along.x, along.y) * Math.hypot(across.x, across.y)) {
       this.warn('歪めた直線状のグラデーション（色の線を垂直にした）')
     }
-    return { type: 'linear', ...line, stops, opacity: 1, visible: true }
+    return { type: 'linear', ...line, stops, opacity: 1, visible: true, blendMode: 'normal' }
   }
 
   /** 向き（度）だけの線に、SVG の始点・終点の位置を写した直線状のグラデーション（つぶれた枠のとき） */
@@ -1073,12 +1368,12 @@ class Converter {
       previous = offset
       return { offset, color: stop.color }
     })
-    return { type: 'linear', ...linearFromAngle(angle, node), stops: mapped, opacity: 1, visible: true }
+    return { type: 'linear', ...linearFromAngle(angle, node), stops: mapped, opacity: 1, visible: true, blendMode: 'normal' }
   }
 
   /**
    * radialGradient を kadrokreo の円形のグラデーションにする。中心と横・縦の半径をノードの枠に対する割合に直す。
-   * 焦点（fx / fy）と、回したり傾けたりした楕円の向きは持てないので、中心と半径の長さだけを写す
+   * 回した楕円は angle に写す。焦点（fx / fy）と、傾けた（軸が直交しない）楕円は持てないので、中心と半径の長さだけを写す
    */
   private radialGradient(
     element: SvgElement,
@@ -1089,8 +1384,8 @@ class Converter {
   ): Paint | null {
     const stops = this.stops(element, inherited)
     if (stops.length === 0) return null
-    const last: Paint = { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true }
-    if (stops.length === 1) return { type: 'solid', color: stops[0].color, opacity: 1, visible: true }
+    const last: Paint = { type: 'solid', color: stops[stops.length - 1].color, opacity: 1, visible: true, blendMode: 'normal' }
+    if (stops.length === 1) return { type: 'solid', color: stops[0].color, opacity: 1, visible: true, blendMode: 'normal' }
     const chain = this.gradientChain(element)
     const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
     const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
@@ -1118,14 +1413,22 @@ class Converter {
     const center = toNodeSpace(node, applyMatrix(toPage, c))
     const alongX = toNodeSpace(node, applyMatrix(toPage, { x: c.x + r, y: c.y }))
     const alongY = toNodeSpace(node, applyMatrix(toPage, { x: c.x, y: c.y + r }))
-    const tilt = Math.abs(alongX.y - center.y) + Math.abs(alongY.x - center.x)
-    if (tilt > 1e-6 * (node.width + node.height)) this.warn('回した・傾けた円形のグラデーション（向きをなくした）')
-    const rx = Math.hypot(alongX.x - center.x, alongX.y - center.y)
-    const ry = Math.hypot(alongY.x - center.x, alongY.y - center.y)
+    const ux = { x: alongX.x - center.x, y: alongX.y - center.y }
+    const uy = { x: alongY.x - center.x, y: alongY.y - center.y }
+    const rx = Math.hypot(ux.x, ux.y)
+    const ry = Math.hypot(uy.x, uy.y)
+    // 2 つの軸が直交していなければ（傾けた楕円）、向きは横の軸に合わせ、ゆがみは捨てる
+    if (Math.abs(ux.x * uy.x + ux.y * uy.y) > 1e-6 * rx * ry) this.warn('傾けた円形のグラデーション（回した楕円にした）')
+    // 横の軸の向き（ピクセル）。縦横の入れ替わる向きでも、横の半径は横の軸の長さのまま
+    const angle = Math.abs(ux.y) < 1e-9 * rx ? (ux.x < 0 ? 180 : 0) : (Math.atan2(ux.y, ux.x) * 180) / Math.PI
+    // 楕円は 180° 回すと同じなので、-90° より大きく 90° 以下に揃える
+    let turn = angle
+    while (turn > 90) turn -= 180
+    while (turn <= -90) turn += 180
     const values = [center.x / node.width, center.y / node.height, rx / node.width, ry / node.height].map(round4)
     if (!values.every(Number.isFinite)) return last
     const [cx, cy, rxRatio, ryRatio] = values
-    return { type: 'radial', cx, cy, rx: rxRatio, ry: ryRatio, stops, opacity: 1, visible: true }
+    return { type: 'radial', cx, cy, rx: rxRatio, ry: ryRatio, angle: round4(turn) + 0, stops, opacity: 1, visible: true, blendMode: 'normal' }
   }
 
   // ── 長さ ──

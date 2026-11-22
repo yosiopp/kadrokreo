@@ -32,6 +32,11 @@ type BaseNode = {
   locked: boolean
   opacity: number
   /**
+   * ノードを後ろに見えているものへ重ねるときの描画モード。子を持つフレームは、中身を 1 枚の絵にまとめてから重ねる
+   * （既存のデザインツールのフレームと同じ。子はフレームの中でだけ混ざる）
+   */
+  blendMode: BlendMode
+  /**
    * 向きごとの大きさの決め方。fill は、並べる向きなら余った場所を分け合い、直交する向きなら余白の内側いっぱいになる
    */
   sizing: { width: Sizing; height: Sizing }
@@ -67,19 +72,49 @@ export type ColorStop = { offset: number; color: string }
  * radial は円形（楕円）のグラデーションで、中心 cx / cy は枠の左上からの位置、半径 rx / ry は横・縦の半径で、
  * どれも枠の幅・高さに対する割合（SVG の objectBoundingBox、CSS の radial-gradient の % と同じ）。
  * 中心が最初の色、半径の楕円の上が最後の色で、その外は最後の色のまま。既定（枠に内接する楕円）は 0.5 が 4 つ。
+ * angle は楕円を中心のまわりに回す角度（度、時計回り）。横・縦の半径をピクセル（rx × 幅、ry × 高さ）にしてから回すので、
+ * rx は angle の向き、ry はそれに直交する向きの半径になる。0 なら回さない（軸に沿った楕円）。
  * conic は角度のグラデーション（CSS の conic-gradient）で、中心 cx / cy は radial と同じく枠に対する割合。
  * angle は最初の色を置く向き（度）で、直線の向きと同じく 0 が右、90 が下（時計回り）。CSS の `from` は angle + 90 になる。
  * 色の位置 0〜1 が、その向きから時計回りに 1 周する角度に当たる。
  * 円は枠の大きさによらず正円（ピクセルで角度を測る）。
  * opacity（0〜1）は塗りごとの不透明度で、色（グラデーションならすべての色）にかける。ノードの opacity とは別に重なる。
  * visible は塗りごとの表示（既存のデザインツールの目のアイコン）。false の塗りは描かず、CSS・SVG・色の一覧にも出さないが、消さずに残す。
+ * blendMode は、その塗りを下（同じノードの下の塗りと、ノードの後ろに見えているもの）に重ねるときの描画モード。
  * 種類を足すときは type を増やす
  */
-export type Paint =
-  | { type: 'solid'; color: string; opacity: number; visible: boolean }
-  | { type: 'linear'; x1: number; y1: number; x2: number; y2: number; stops: ColorStop[]; opacity: number; visible: boolean }
-  | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; stops: ColorStop[]; opacity: number; visible: boolean }
-  | { type: 'conic'; cx: number; cy: number; angle: number; stops: ColorStop[]; opacity: number; visible: boolean }
+export type Paint = PaintCommon &
+  (
+    | { type: 'solid'; color: string }
+    | { type: 'linear'; x1: number; y1: number; x2: number; y2: number; stops: ColorStop[] }
+    | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; angle: number; stops: ColorStop[] }
+    | { type: 'conic'; cx: number; cy: number; angle: number; stops: ColorStop[] }
+  )
+
+/** 塗りの種類によらない項目 */
+export type PaintCommon = { opacity: number; visible: boolean; blendMode: BlendMode }
+
+/**
+ * 描画モード（既存のデザインツールの blend mode）。名前は CSS の mix-blend-mode と Canvas の globalCompositeOperation と同じ。
+ * normal はふつうに重ねる
+ */
+export type BlendMode =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'color-burn'
+  | 'hard-light'
+  | 'soft-light'
+  | 'difference'
+  | 'exclusion'
+  | 'hue'
+  | 'saturation'
+  | 'color'
+  | 'luminosity'
 
 export type LinearGradient = Extract<Paint, { type: 'linear' }>
 export type RadialGradient = Extract<Paint, { type: 'radial' }>
@@ -88,18 +123,40 @@ export type ConicGradient = Extract<Paint, { type: 'conic' }>
 export type Gradient = LinearGradient | RadialGradient | ConicGradient
 
 /**
+ * 効果。影（Shadow）とぼかし（Blur）がある。visible は効果ごとの表示（塗りの visible と同じ）。種類を足すときは type を増やす
+ */
+export type Effect = Shadow | Blur
+
+/**
  * 影の効果。color は #rrggbb、濃さは opacity（0〜1）で持つ。
  * drop-shadow は図形の外に落ちる影（CSS の box-shadow）、inner-shadow は図形の内側の縁に付く影（box-shadow の inset）。
- * 内側の影は塗りの上・線の下に描き、図形の外へははみ出さない。テキストと画像は効果を持たない。
- * visible は効果ごとの表示（塗りの visible と同じ）。種類を足すときは type を増やす
+ * 内側の影は塗りの上・線の下に描き、図形の外へははみ出さない。
+ * blur はぼかしの半径（CSS の box-shadow のぼかしと同じ。標準偏差はその半分）。
+ * spread は影の広がり（CSS の box-shadow の spread と同じ）。落ち影は形をこの長さだけ太らせ（負なら細らせ）てから影にし、
+ * 内側の影は縁から内へこの長さだけ影を広げる。
+ * blendMode は、影を後ろ（ノードより先に描いてあるもの。内側の影なら塗り）に重ねるときの描画モード（既存のデザインツールの影の描画モード）。
+ * CSS の box-shadow や SVG の filter には影ごとの描画モードがないので、Dev モードのコードと SVG の書き出しはふつうに重ねる
  */
-export type Effect = {
+export type Shadow = {
   type: 'drop-shadow' | 'inner-shadow'
   x: number
   y: number
   blur: number
+  spread: number
   color: string
   opacity: number
+  visible: boolean
+  blendMode: BlendMode
+}
+
+/**
+ * ぼかしの効果。layer-blur はノードそのもの（子を含む）をぼかし（CSS の filter: blur）、
+ * background-blur はノードの形の内側で、後ろに見えているものをぼかす（CSS の backdrop-filter: blur。塗りが半透明のときに見える）。
+ * blur はぼかしの半径で、影の blur と同じ長さ（CSS の blur() の値はその半分）
+ */
+export type Blur = {
+  type: 'layer-blur' | 'background-blur'
+  blur: number
   visible: boolean
 }
 
@@ -125,9 +182,26 @@ export type Style = {
  */
 export type CornerRadius = number | [number, number, number, number]
 
-export type RectNode = BaseNode & Style & { type: 'rect'; cornerRadius: CornerRadius }
+/**
+ * マスクとして使う図形（既存のデザインツールの「マスクとして使う」）。isMask が true なら、自分は描かず、同じ親の中で自分より手前（children / rootIds で後ろ）にある兄弟を、
+ * 次のマスクが現れるまで自分の形で切り取る。形だけのマスクで、塗りの色・不透明度・線・効果は見ない（パスは開いていても閉じた形として切り取る）。
+ * 隠したマスク（visible が false）は何も切り取らないが、手前のマスクの範囲はそこで終わる。持てるのは矩形・楕円・パスだけ
+ */
+export type Maskable = {
+  isMask: boolean
+  /**
+   * マスクの種類（既存のデザインツールの mask type）。vector は形だけ（塗りを見ない）、alpha は塗りの不透明度（グラデーションの透明さも）で透かし、
+   * luminance は塗りの明るさ（白が見え、黒が消える）に不透明度を掛けたもので透かす。alpha / luminance ではノードの opacity も効き、線と効果は見ない。
+   * isMask が false なら意味はない
+   */
+  maskType: MaskType
+}
 
-export type EllipseNode = BaseNode & Style & { type: 'ellipse' }
+export type MaskType = 'vector' | 'alpha' | 'luminance'
+
+export type RectNode = BaseNode & Style & Maskable & { type: 'rect'; cornerRadius: CornerRadius }
+
+export type EllipseNode = BaseNode & Style & Maskable & { type: 'ellipse' }
 
 /**
  * 線の端の形。round / square は線の太さで決まる端（CSS・SVG の stroke-linecap と同じ形で、線の太さの半分だけ端の外へ出る）。
@@ -157,7 +231,8 @@ export type PathPoint = {
  * 頂点の順に引くので、最初の頂点が始点、最後の頂点が終点。水平・垂直の直線は高さ・幅が 0 になる。
  */
 export type PathNode = BaseNode &
-  Style & {
+  Style &
+  Maskable & {
     type: 'path'
     points: PathPoint[]
     /** 最後の頂点と最初の頂点をつなぐ */
@@ -180,6 +255,8 @@ export type PathContour = { points: PathPoint[]; closed: boolean }
 
 export type TextNode = BaseNode & {
   type: 'text'
+  /** 効果（Style の effects と同じ）。内側の影はテキストには描かない（CSS の text-shadow でも表せない） */
+  effects: Effect[]
   text: string
   fontSize: number
   fontFamily: string
@@ -198,6 +275,8 @@ export type TextNode = BaseNode & {
  */
 export type ImageNode = BaseNode & {
   type: 'image'
+  /** 効果（Style の effects と同じ）。影は枠（角丸を含む）の形に付く */
+  effects: Effect[]
   assetId: AssetId
   cornerRadius: CornerRadius
   fit: 'stretch' | 'cover' | 'contain'
@@ -323,10 +402,32 @@ export type FrameNode = BaseNode &
     /** 先頭が最背面。自動で並べるときは、先頭から順に並ぶ */
     children: NodeId[]
     clipContent: boolean
+    /**
+     * 通過（既存のデザインツールの pass through）。true なら、半透明でも中身をまとめずに、子をそれぞれ後ろと直接混ぜる
+     * （子の描画モードや背景のぼかしがフレームの後ろにも効く）。不透明度は、混ぜた結果と後ろの間で効く。
+     * 描画モード（blendMode）が normal でなければ意味はない（まとめてから混ぜる）。不透明なら false と同じ見た目
+     */
+    passThrough: boolean
     cornerRadius: CornerRadius
     layout: AutoLayout | null
     component: ComponentLink | null
+    /**
+     * バリアントのまとまりの説明文（使い方など）。空ならなし。このフレームがバリアントのまとまり
+     * （document/variants.ts の isVariantSet）でなければ意味はない。バリアントそれぞれの説明は component.description
+     */
+    setDescription: string
+    /**
+     * ブーリアン演算のノード（既存のデザインツールの boolean operation）にするときの演算。null なら普通のフレーム。
+     * 演算のノードは子を描かず、表示している子（矩形・楕円・パス・画像の枠・フレームの枠・入れ子の演算のノード。テキストは入らない）の形に
+     * 演算をかけた結果を、このフレームの塗り・線・効果で描く（document/booleanNode.ts）。子を変えれば結果も変わる。
+     * union は合体、subtract は最背面の子から残りを引く、intersect は交差、exclude は除外。
+     * 演算のノードでは layout は null で、clipContent と cornerRadius は意味はない。枠は editor が結果を囲む矩形に合わせる
+     */
+    booleanOperation: BooleanOperation | null
   }
+
+/** ブーリアン演算の種類（document/pathBoolean.ts の BooleanOp と同じ） */
+export type BooleanOperation = 'union' | 'subtract' | 'intersect' | 'exclude'
 
 export type SceneNode =
   | RectNode

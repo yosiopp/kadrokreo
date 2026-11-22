@@ -20,7 +20,7 @@ describe('summarizePage', () => {
   })
 
   it('グラデーションは各色を数える。太さ 0 の線は数えない', () => {
-    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }], opacity: 1, visible: true }
+    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }], opacity: 1, visible: true, blendMode: 'normal' as const }
     const scene = sceneOf(rect({ fills: [gradient], strokes: solid('#333333'), strokeWidth: 0 }))
     expect(summarizePage(scene).colors.map((use) => use.color)).toEqual(['#111111', '#222222'])
   })
@@ -45,8 +45,10 @@ describe('summarizePage', () => {
       capSize: 0,
       contours: [],
       fillRule: 'nonzero',
+      isMask: false,
+      maskType: 'vector',
     }
-    const image = { ...base, id: 'image', type: 'image', assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 } as const
+    const image = { ...base, id: 'image', type: 'image', effects: [] as never[], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 } as const
     expect(summarizePage(sceneOf(line, image)).colors).toEqual([{ color: '#abcdef', count: 1, nodes: ['line'] }])
   })
 
@@ -65,7 +67,7 @@ describe('summarizePage', () => {
   })
 
   it('不透明な塗りの下に重ねて隠れた色は数えない。線とテキストも同じ', () => {
-    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }], opacity: 1, visible: true }
+    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }], opacity: 1, visible: true, blendMode: 'normal' as const }
     const scene = sceneOf(
       // 塗りは下から順。いちばん上の #ff0000 が全体を覆う
       rect({ id: 'a', fills: [...solid('#00ff00'), gradient, ...solid('#ff0000')], strokes: [...solid('#0000ff'), ...solid('#000000')], strokeWidth: 1 }),
@@ -100,7 +102,7 @@ describe('summarizePage', () => {
   })
 
   it('上の塗りが半透明（#rrggbbaa、グラデーションの止めに半透明）なら、その下も見える', () => {
-    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#00000080' }], opacity: 1, visible: true }
+    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#00000080' }], opacity: 1, visible: true, blendMode: 'normal' as const }
     expect(visiblePaints([...solid('#111111'), ...solid('#222222'), ...solid('#33333380')])).toEqual([...solid('#222222'), ...solid('#33333380')])
     expect(visiblePaints([...solid('#111111'), fade])).toEqual([...solid('#111111'), fade])
     expect(visiblePaints([...solid('#11111180'), ...solid('#22222280')])).toHaveLength(2)
@@ -109,16 +111,16 @@ describe('summarizePage', () => {
   })
 
   it('塗りごとの不透明度が 1 未満の塗りは、下を隠さない', () => {
-    const half = { type: 'solid' as const, color: '#333333', opacity: 0.5, visible: true }
+    const half = { type: 'solid' as const, color: '#333333', opacity: 0.5, visible: true, blendMode: 'normal' as const }
     expect(visiblePaints([...solid('#111111'), ...solid('#222222'), half])).toEqual([...solid('#222222'), half])
-    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.9, visible: true }
+    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.9, visible: true, blendMode: 'normal' as const }
     expect(visiblePaints([...solid('#111111'), fade])).toHaveLength(2)
   })
 
   it('隠した塗りは数えず、下の塗りを隠さない。隠した影も数えない', () => {
-    const hidden = { type: 'solid' as const, color: '#333333', opacity: 1, visible: false }
+    const hidden = { type: 'solid' as const, color: '#333333', opacity: 1, visible: false, blendMode: 'normal' as const }
     expect(visiblePaints([...solid('#111111'), hidden])).toEqual(solid('#111111'))
-    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: false }
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25, visible: false, spread: 0 , blendMode: 'normal' as const}
     const summary = summarizePage(sceneOf(rect({ fills: [...solid('#111111'), hidden], effects: [shadow] })))
     expect(summary.colors.map((use) => use.color)).toEqual(['#111111'])
     expect(summary.shadows).toEqual([])
@@ -155,7 +157,7 @@ describe('inspectPage', () => {
   })
 
   it('影は、同じものをまとめて CSS の値で出す。単位と色の書き方に従う', () => {
-    const shadow = { type: 'drop-shadow' as const, x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25, visible: true }
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25, visible: true, spread: 0 , blendMode: 'normal' as const}
     const scene = sceneOf(
       rect({ id: 'a', fills: [], effects: [shadow] }),
       rect({ id: 'b', fills: [], effects: [{ ...shadow }] }),

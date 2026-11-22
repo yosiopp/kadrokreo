@@ -47,14 +47,14 @@ describe('values', () => {
   it('入れ子の項目と、塗り・線・影の略記', () => {
     const rect = createRect({ x: 0, y: 0, width: 10, height: 10 })
     expect(buildPatch(rect, [['shadow.blur', '4'], ['sizing.width', 'fill']])).toEqual({
-      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25, visible: true }],
+      effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25, visible: true, spread: 0, blendMode: 'normal' }],
       sizing: { width: 'fill', height: 'fixed' },
     })
     expect(buildPatch(rect, [['fill', '#ff0000'], ['stroke', 'null']])).toEqual({
-      fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true }],
+      fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }],
       strokes: [],
     })
-    expect(buildPatch(rect, [['fills.0.color', '#00ff00']])).toEqual({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true }] })
+    expect(buildPatch(rect, [['fills.0.color', '#00ff00']])).toEqual({ fills: [{ type: 'solid', color: '#00ff00', opacity: 1, visible: true, blendMode: 'normal' as const }] })
     expect(() => buildPatch(rect, [['text', 'a']])).toThrow(/rect には text がありません/)
     expect(() => buildPatch(rect, [['id', 'a']])).toThrow(/変えられません/)
     expect(() => buildPatch(rect, [['shadow.nope', '1']])).toThrow(/nope/)

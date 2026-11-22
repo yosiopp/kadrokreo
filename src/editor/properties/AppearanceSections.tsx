@@ -39,7 +39,6 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
   const rounded = plain.filter((node) => node.type === 'rect' || node.type === 'frame' || node.type === 'image')
   const filled = [...shapes, ...texts]
   const stroked = [...shapes, ...lines]
-  const onlyShapes = shapes.length === nodes.length
   const radii = rounded.map((node) => cornerRadii(node.cornerRadius))
   const separate = rounded.some((node) => typeof node.cornerRadius !== 'number')
   const [cornersOpen, setCornersOpen] = useState(false)
@@ -194,7 +193,7 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
         </Section>
       )}
 
-      {onlyShapes && !limited && <EffectListSection store={store} selection={selection} nodes={shapes} />}
+      {!limited && <EffectListSection store={store} selection={selection} nodes={nodes} />}
     </>
   )
 }

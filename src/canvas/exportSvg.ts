@@ -16,13 +16,27 @@ function canvasTextMetrics(ctx: CanvasRenderingContext2D): SvgTextMetrics {
   }
 }
 
+/** 画面の書き出し欄で選べるオプション（ui/exportOptions.ts） */
+export type SvgMarkupOptions = { ids: boolean; background: string | null }
+
 /** targets のノードを SVG の文字列にする（viewer と editor の「SVG に」「SVG をコピー」）。並べ方の決まりは exportSvg と同じ */
-export function svgMarkup(scene: Scene, assets: Record<AssetId, Asset>, targets: readonly NodeId[]): string {
+export function svgMarkup(
+  scene: Scene,
+  assets: Record<AssetId, Asset>,
+  targets: readonly NodeId[],
+  options: SvgMarkupOptions = { ids: true, background: null },
+): string {
   const ctx = document.createElement('canvas').getContext('2d')!
-  return exportSvg(scene, targets, { assets, textLines: canvasTextLines(ctx), textMetrics: canvasTextMetrics(ctx) })
+  return exportSvg(scene, targets, {
+    assets,
+    textLines: canvasTextLines(ctx),
+    textMetrics: canvasTextMetrics(ctx),
+    ids: options.ids,
+    ...(options.background === null ? {} : { background: options.background }),
+  })
 }
 
 /** targets のノードを SVG ファイルにする（viewer と editor の「SVG に」） */
-export function renderSvg(scene: Scene, assets: Record<AssetId, Asset>, targets: readonly NodeId[]): Blob {
-  return new Blob([svgMarkup(scene, assets, targets)], { type: 'image/svg+xml' })
+export function renderSvg(scene: Scene, assets: Record<AssetId, Asset>, targets: readonly NodeId[], options?: SvgMarkupOptions): Blob {
+  return new Blob([svgMarkup(scene, assets, targets, options)], { type: 'image/svg+xml' })
 }

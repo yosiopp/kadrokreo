@@ -1,4 +1,6 @@
 import { tidy } from '../document/geometry.ts'
+import { isMaskNode } from '../document/mask.ts'
+import { drawnNode } from '../document/booleanNode.ts'
 import { withoutHidden } from '../document/paint.ts'
 import { dataUri, escapeXml as escapeHtml, pathSvg } from '../document/svgShapes.ts'
 import type { Asset, AssetId, NodeId, PathNode, Scene, SceneNode } from '../document/types.ts'
@@ -90,7 +92,9 @@ export function nodeMarkup(
     }
   }
 
-  function visit(node: SceneNode, depth: number) {
+  function visit(source: SceneNode, depth: number) {
+    // ブーリアン演算のノードは、結果の形のパス（svg）として書く
+    const node = drawnNode(tree, source)
     const indent = '  '.repeat(depth)
     const name = className(node)
     let css = nodeCss(tree, node.id, style)
@@ -101,7 +105,8 @@ export function nodeMarkup(
     const attr = attribute(name, css)
     switch (node.type) {
       case 'frame': {
-        const children = node.children.map((child) => tree.nodes[child]).filter((child) => child.visible)
+        // マスクは描かない（手前の兄弟の clip-path になる）
+        const children = node.children.map((child) => tree.nodes[child]).filter((child) => child.visible && !isMaskNode(child))
         if (children.length === 0) {
           lines.push(`${indent}<div ${attr}></div>`)
         } else {

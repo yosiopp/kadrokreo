@@ -228,9 +228,15 @@ async function measurePanZoom(session, box) {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   const pan = await measure(args.runs, (i) => page.mouse.wheel(0, i % 2 === 0 ? 40 : -40))
   await page.keyboard.down('Control')
-  const zoom = await measure(args.runs, (i) => page.mouse.wheel(0, i % 2 === 0 ? -20 : 20))
+  // 10 回ずつ同じ向きにズームする（1 回ごとに行き来すると同じ倍率に戻り、取っておいた絵をそのまま使い回せてしまう）。
+  // ズームの途中は前の絵を拡大・縮小して見せるだけなので、止まって描き直すまで（ホイール 1 回のあと 300ms 待つ）も別に測る
+  const zoom = await measure(args.runs, (i) => page.mouse.wheel(0, Math.floor(i / 10) % 2 === 0 ? -20 : 20))
+  const zoomSettle = await measure(10, async (i) => {
+    await page.mouse.wheel(0, i % 2 === 0 ? -20 : 20)
+    await page.waitForTimeout(300)
+  })
   await page.keyboard.up('Control')
-  return { pan, zoom }
+  return { pan, zoom, zoomSettle }
 }
 
 let editorPort = ''
@@ -363,6 +369,7 @@ async function benchViewer(browser, url, kdrPath, meta) {
 
 const LABELS = [
   ['pure', 'decodeKdr', 'kdr を読む（展開・解析・検証）', 'Node'],
+  ['pure', 'parseKdr', 'そのうち検証（parseKdr）', 'Node'],
   ['memory', 'peak', 'kdr を読む途中の最大メモリの増分（RSS、MB）', 'Node'],
   ['memory', 'retained', 'kdr を読んだあとに残るメモリ（ヒープ + 外、MB）', 'Node'],
   ['pure', 'syncComponentsNoop', 'syncComponents（変更なし）', 'Node'],
@@ -370,6 +377,7 @@ const LABELS = [
   ['pure', 'syncComponentsMainChanged', 'syncComponents（元の色を変えた）', 'Node'],
   ['pure', 'storeApplyUnrelated', 'ストアの apply 1 回（settle を含む）', 'Node'],
   ['pure', 'storePreviewMove', 'ストアの preview 1 回（ドラッグ 1 歩）', 'Node'],
+  ['pure', 'storeApplyMainChanged', 'ストアの apply 1 回（元の色を変えた）', 'Node'],
   ['pure', 'layerRows', 'レイヤーの行を並べる', 'Node'],
   ['pure', 'inspectPage', 'viewer の一覧（色・文字・影）を作る', 'Node'],
   ['editor', 'open.main', 'kdr を開く（メインスレッド）', 'editor'],
@@ -382,12 +390,14 @@ const LABELS = [
   ['editor', 'componentSync', '元の色を変える（同期と描き直し）', 'editor'],
   ['editor', 'pan', 'パン 1 回', 'editor'],
   ['editor', 'zoom', 'ズーム 1 回', 'editor'],
+  ['editor', 'zoomSettle', 'ズームして止まり、描き直すまで', 'editor'],
   ['viewer', 'open.main', 'kdr を開く（メインスレッド）', 'viewer'],
   ['viewer', 'open.wall', 'kdr を開く（経過時間）', 'viewer'],
   ['viewer', 'open.heap', 'kdr を開いたあとの JS ヒープの増分（MB）', 'viewer'],
   ['viewer', 'summary', '選択を外して一覧を出す', 'viewer'],
   ['viewer', 'pan', 'パン 1 回', 'viewer'],
   ['viewer', 'zoom', 'ズーム 1 回', 'viewer'],
+  ['viewer', 'zoomSettle', 'ズームして止まり、描き直すまで', 'viewer'],
 ]
 
 function lookup(result, group, key) {

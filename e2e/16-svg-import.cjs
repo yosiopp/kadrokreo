@@ -40,7 +40,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await input.setInputFiles(SAMPLE)
   await page.waitForSelector('.app-message')
   const message = await page.locator('.app-message').textContent()
-  check('落としたものを知らせる', /sample\.svg/.test(message) && /スクリプト/.test(message) && /foreignObject/.test(message) && /フィルタ/.test(message) && /外部の画像/.test(message), message)
+  check('落としたものを知らせる', /sample\.svg/.test(message) && /スクリプト/.test(message) && /foreignObject/.test(message) && !/フィルタ/.test(message) && /外部の画像/.test(message), message)
   await page.waitForTimeout(700)
   let doc = await saved()
   const root = byName(doc, 'sample')[0]
@@ -55,6 +55,8 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('linearGradient は直線状のグラデーションになる', background?.fills[0]?.type === 'linear' && background.fills[0].x1 === background.fills[0].x2 && background.fills[0].y2 > background.fills[0].y1 && background.fills[0].stops[0].color === '#4f8ef7')
   const caption = byName(doc, 'caption')[0]
   check('text はテキストになる（中央揃え・白）', caption?.type === 'text' && caption.text === 'Hello SVG' && caption.textAlign === 'center' && caption.fills[0]?.color === '#ffffff' && caption.fontSize === 12)
+  const blurred = byName(doc, 'window')[0]
+  check('ぼかしだけの filter はレイヤーのぼかしになる（知らせない）', blurred?.effects?.[0]?.type === 'layer-blur' && blurred.effects[0].blur > 0, JSON.stringify(blurred?.effects))
   check('ほかの図形もノードになる', ['roof', 'window', 'sun', 'ground', 'bird'].every((name) => byName(doc, name).length === 1), (await layers()).join(','))
   const ring = byName(doc, 'ring')[0]
   check('輪郭が複数の path は穴のある 1 つのパスになり、CSS の塗りと fill-rule を写す', ring?.type === 'path' && ring.contours.length === 1 && ring.fillRule === 'evenodd' && ring.fills[0]?.color === '#8e4ec6', JSON.stringify(ring && { c: ring.contours.length, r: ring.fillRule }))

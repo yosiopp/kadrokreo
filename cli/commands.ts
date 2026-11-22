@@ -9,6 +9,11 @@ import {
   overrideReset,
   prop,
   propAdd,
+  propAlign,
+  propOrder,
+  propPrefer,
+  propRename,
+  propRm,
   swap,
   variant,
   variantAdd,
@@ -19,6 +24,7 @@ import {
 } from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
+import { boolean, flatten, join, mask, outlineStroke, split } from './commands/paths.ts'
 import { gradient } from './commands/paints.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
 import { css, html, json, png, svgOut } from './commands/output.ts'
@@ -60,6 +66,13 @@ const commands: Command[] = [
   mv,
   order,
   dup,
+  // edit: パスとマスク
+  join,
+  split,
+  boolean,
+  flatten,
+  outlineStroke,
+  mask,
   // edit: 並べる
   align,
   distribute,
@@ -84,6 +97,11 @@ const commands: Command[] = [
   variantValueRename,
   describe_,
   propAdd,
+  propRename,
+  propOrder,
+  propPrefer,
+  propRm,
+  propAlign,
   prop,
 ]
 

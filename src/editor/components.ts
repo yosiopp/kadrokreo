@@ -4,6 +4,7 @@ import {
   OVERRIDE_KEYS,
   derivedId,
   findMain,
+  inheritMains,
   instanceOf,
   isInstance,
   isMain,
@@ -22,6 +23,20 @@ import type {
   SceneNode,
   TextNode,
 } from '../document/types.ts'
+import {
+  type SourceContext as SyncContext,
+  collectMains,
+  componentReach,
+  enclosingMain,
+  isInside,
+  moveOverrides,
+  namePath,
+  pathIndex,
+  representedLink,
+  sourceContext,
+  subtreeIds,
+  swapChain,
+} from '../document/componentSource.ts'
 import { stretchedAxes } from '../document/autoLayout.ts'
 import { variantSetOf } from '../document/variants.ts'
 import { applyConstraints } from './constraints.ts'
@@ -139,36 +154,6 @@ export function swapComponent(doc: DesignDocument, pageId: PageId, instanceId: N
   )
 }
 
-/**
- * 上書きを、元 previous の中から元 next の中へ移す。キーは、レイヤー名のたどり方（親から順の名前）が同じノードに付け替え、
- * 同じたどり方のノードがなければ捨てる（同じたどり方のものが複数あれば、最初に見つけたもの）。元そのものへの上書きは元へ
- */
-function moveOverrides(
-  previous: { page: Scene; node: FrameNode },
-  next: { page: Scene; node: FrameNode },
-  overrides: Record<NodeId, Override>,
-): Record<NodeId, Override> {
-  const byPath = pathIndex(next.page, next.node.id)
-  const moved: Record<NodeId, Override> = {}
-  for (const [sourceId, override] of Object.entries(overrides)) {
-    if (!Object.hasOwn(previous.page.nodes, sourceId)) continue
-    const path = namePath(previous.page, previous.node.id, sourceId)
-    const target = path === null ? undefined : byPath.get(path)
-    if (target !== undefined) moved[target] = override
-  }
-  return moved
-}
-
-/** rootId の中のノードを、rootId からのレイヤー名のたどり方で引けるようにしたもの */
-function pathIndex(scene: Scene, rootId: NodeId): Map<string, NodeId> {
-  const byPath = new Map<string, NodeId>()
-  for (const id of subtreeIds(scene, rootId)) {
-    const path = namePath(scene, rootId, id)
-    if (path !== null && !byPath.has(path)) byPath.set(path, id)
-  }
-  return byPath
-}
-
 /** 入れ子のインスタンスを差し替えたときの名前。元の名前のままだったときだけ、新しい元の名前にする */
 function swappedName(name: string, previous: { page: Page; node: MainNode } | undefined, next: { page: Page; node: MainNode }) {
   return previous && (name === previous.node.name || name === componentName(previous)) ? componentName(next) : name
@@ -179,16 +164,6 @@ function swappedName(name: string, previous: { page: Page; node: MainNode } | un
  */
 export function componentName(main: { page: Page; node: MainNode }): string {
   return variantSetOf(main.page, main.node.id)?.name ?? main.node.name
-}
-
-/** 元（rootId）の中での、id までのレイヤー名のたどり方。元そのものは空文字、元の中になければ null */
-function namePath(scene: Scene, rootId: NodeId, id: NodeId): string | null {
-  const names: string[] = []
-  for (let current: NodeId | null = id; current !== rootId; current = scene.nodes[current].parentId) {
-    if (current === null) return null
-    names.unshift(scene.nodes[current].name)
-  }
-  return names.join('\u0000')
 }
 
 /** ドキュメントにあるコンポーネントの元。ページの順、ページの中では作った順 */
@@ -226,20 +201,6 @@ function sourceOf(doc: DesignDocument, scene: Scene, id: NodeId): Source | null 
 }
 
 /**
- * id のノードが、どのインスタンスを写したものか（そのインスタンスのつながり）。インスタンスそのものならそのつながり、
- * インスタンスの写し（元の中に置いたインスタンスの写しや、そのまた中のインスタンスの写し）なら、写しをたどって見つけたもの。
- * インスタンスに当たらなければ null
- */
-function representedLink(doc: DesignDocument, scene: Scene, id: NodeId, depth = 0): InstanceNode['component'] | null {
-  const node = scene.nodes[id]
-  if (isInstance(node)) return node.component
-  if (node?.type !== 'frame' || depth >= MAX_PASSES) return null
-  const found = sourceOf(doc, scene, id)
-  if (!found || found.instance.id === id) return null
-  return representedLink(doc, found.scene, found.source.id, depth + 1)
-}
-
-/**
  * インスタンスの写しの元になる木。ふつうは元のあるページそのもので、入れ子のインスタンスを差し替えていれば、
  * 差し替えた後の木（swappedSource）。上書きのキーは、この木のノードの id
  */
@@ -254,22 +215,6 @@ function effectiveSource(
   const mains = collectMains(doc)
   const ctx = { doc, mains, reaches: componentReach(doc, mains) }
   return swappedSource(main.page, main.node.id, instance.component.overrides, ctx, swapChain(scene, instance), fitText)
-}
-
-/**
- * インスタンスの中で差し替え先にできないコンポーネントを決める、コンポーネントの id の並び。
- * インスタンス自身の元と、インスタンスを含む元。差し替え先がこのどれかを含むと循環する
- */
-function swapChain(scene: Scene, instance: InstanceNode): string[] {
-  const enclosing = enclosingMain(scene, instance.id)
-  return enclosing === null ? [instance.component.id] : [instance.component.id, enclosing]
-}
-
-/** 同期のあいだ使い回す、元の一覧と「含むか」の答え */
-type SyncContext = {
-  doc: DesignDocument
-  mains: ReadonlyMap<string, { page: Page; node: MainNode }>
-  reaches: (from: string, to: string) => boolean
 }
 
 /**
@@ -301,7 +246,7 @@ function swappedSource(
       const componentId = override.componentId!
       if (!Object.hasOwn(scene.nodes, sourceId) || !isInside(scene, sourceId, mainId)) continue
       const nested = scene.nodes[sourceId]
-      const link = representedLink(ctx.doc, scene, sourceId)
+      const link = representedLink(ctx, scene, sourceId)
       if (nested.type !== 'frame' || !link || link.id === componentId) continue
       const next = ctx.mains.get(componentId)
       if (!next || chain.some((id) => ctx.reaches(componentId, id))) continue
@@ -330,14 +275,6 @@ function swappedSource(
   return scene
 }
 
-/** id が rootId の子孫か */
-function isInside(scene: Scene, id: NodeId, rootId: NodeId): boolean {
-  for (let current = scene.nodes[id]?.parentId ?? null; current !== null; current = scene.nodes[current].parentId) {
-    if (current === rootId) return true
-  }
-  return false
-}
-
 /** 写し copyId が入れ子のインスタンス（入れ子の中の入れ子も）の写しなら、差し替えの情報。そうでなければ null */
 export type NestedInstance = {
   /** 写しを持っているインスタンス */
@@ -361,7 +298,8 @@ export function nestedInstanceOf(doc: DesignDocument, scene: Scene, copyId: Node
   const { instance } = found
   const main = findMain(doc, instance.component.id)
   const sourceId = found.source.id
-  const current = representedLink(doc, found.scene, sourceId)
+  const sources = sourceContext(doc)
+  const current = representedLink(sources, found.scene, sourceId)
   if (!main || !current) return null
   // 元の中で置いたときのコンポーネント: このノードの差し替えだけを外した木で見たもの
   let originalId = current.id
@@ -370,9 +308,9 @@ export function nestedInstanceOf(doc: DesignDocument, scene: Scene, copyId: Node
     const { componentId: _swapped, ...rest } = own
     const overrides = { ...instance.component.overrides, [sourceId]: rest }
     const without = effectiveSource(doc, scene, { ...instance, component: { ...instance.component, overrides } }, main)
-    originalId = representedLink(doc, without, sourceId)?.id ?? current.id
+    originalId = representedLink(sources, without, sourceId)?.id ?? current.id
   }
-  const reaches = componentReach(doc)
+  const reaches = sources.reaches
   const chain = swapChain(scene, instance)
   return {
     instance,
@@ -654,6 +592,8 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
     // インスタンスごとに写すと、インスタンスの数 × ノードの数かかる（元を変えたときに全部のインスタンスが作り直しになる）
     let next: Page = page
     let owned = false
+    // 元のノードを消していなければ、作り直したページの元の集まりは page と同じ（inheritMains）
+    let keepsMains = true
     const own = () => {
       if (owned) return next.nodes
       next = { ...next, nodes: { ...next.nodes } }
@@ -682,78 +622,29 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
         // 写しを外へ出してしまったときだけ。めったにないので、ふつうに消して新しい表を持ち直す
         next = removeNodes(next, plan.strays)
         owned = true
+        keepsMains = false
       }
       const nodes = own()
-      for (const id of plan.currentIds) delete nodes[id]
+      for (const id of plan.currentIds) {
+        if (isMain(nodes[id])) keepsMains = false
+        delete nodes[id]
+      }
       Object.assign(nodes, plan.expected)
+      // 作り直した姿は、いまの元に合っている。覚えておけば、次の回（変化がないことを確かめる回）で比べ直さずに済む。
+      // 同じ回のうちに親や元が変われば、次の回のキーが合わなくなって、今までどおり比べ直す
+      const rebuilt = nodes[instance.id]
+      if (key && isInstance(rebuilt)) {
+        const after = syncKey(next, rebuilt, main.page, main.node, fitText)
+        if (after) syncedInstances.set(rebuilt, after)
+      }
     }
-    if (next !== page) changed = true
+    if (next !== page) {
+      changed = true
+      if (keepsMains) inheritMains(next, page)
+    }
     return next
   })
   return changed ? { ...doc, pages } : doc
-}
-
-/**
- * 「コンポーネント from を置くと、その中に to が入るか」を答える関数。
- * 元 A の中に B のインスタンスがあれば「A は B を使う」として、使う関係をたどる。循環を見つけるのに使う。
- */
-function componentReach(
-  doc: DesignDocument,
-  mains: ReadonlyMap<string, { page: Page; node: MainNode }> = collectMains(doc),
-): (from: string, to: string) => boolean {
-  const uses = new Map<string, Set<string>>()
-  for (const [id, main] of mains) {
-    const used = new Set<string>()
-    for (const nodeId of subtreeIds(main.page, main.node.id)) {
-      const node = main.page.nodes[nodeId]
-      if (nodeId === main.node.id || !isInstance(node)) continue
-      used.add(node.component.id)
-      // 中で入れ子のインスタンスを差し替えていれば、差し替え先も使っている
-      for (const override of Object.values(node.component.overrides)) {
-        if (override.componentId !== undefined) used.add(override.componentId)
-      }
-    }
-    uses.set(id, used)
-  }
-  const reaches = (from: string, to: string, seen = new Set<string>()): boolean => {
-    if (from === to) return true
-    if (seen.has(from)) return false
-    seen.add(from)
-    return [...(uses.get(from) ?? [])].some((next) => reaches(next, to, seen))
-  }
-  return (from, to) => reaches(from, to)
-}
-
-/** コンポーネントの id から、その元（同じ id が複数あれば、先のページにあるもの） */
-function collectMains(doc: DesignDocument): Map<string, { page: Page; node: MainNode }> {
-  const mains = new Map<string, { page: Page; node: MainNode }>()
-  for (const page of doc.pages) {
-    for (const [id, node] of mainsOf(page)) {
-      if (!mains.has(id)) mains.set(id, { page, node })
-    }
-  }
-  return mains
-}
-
-/** id を含む、いちばん近い元のコンポーネントの id。なければ null */
-function enclosingMain(scene: Scene, id: NodeId): string | null {
-  for (let current = scene.nodes[id].parentId; current !== null; current = scene.nodes[current].parentId) {
-    const node = scene.nodes[current]
-    if (isMain(node)) return node.component.id
-  }
-  return null
-}
-
-function subtreeIds(scene: Scene, rootId: NodeId): NodeId[] {
-  const ids: NodeId[] = []
-  const stack = [rootId]
-  while (stack.length > 0) {
-    const id = stack.pop()!
-    ids.push(id)
-    const node = scene.nodes[id]
-    if (node.type === 'frame') for (const child of node.children) stack.push(child)
-  }
-  return ids
 }
 
 /** インスタンスの中身を、元の写しに上書きを当てたものに置き換える。すでに同じなら何もしない */
@@ -847,6 +738,7 @@ function expectedCopies(
     visible: instance.visible,
     locked: instance.locked,
     opacity: instance.opacity,
+    blendMode: instance.blendMode,
     component: { ...instance.component, overrides },
     children: main.children.map(idFor),
   }

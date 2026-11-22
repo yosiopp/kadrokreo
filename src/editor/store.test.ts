@@ -125,7 +125,7 @@ describe('createEditorStore', () => {
 
   it('グラデーションの編集は、そのノードだけを選び、その塗りがグラデーションの間だけ続く', () => {
     const { store, rect } = setup()
-    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 0.5, color: '#888888' }, { offset: 1, color: '#ffffff' }], opacity: 1, visible: true }
+    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 0.5, color: '#888888' }, { offset: 1, color: '#ffffff' }], opacity: 1, visible: true, blendMode: 'normal' as const }
     store.apply((doc) => updateNode(doc, rect.id, { fills: [gradient] }))
     store.select([rect.id])
     store.editGradient({ id: rect.id, key: 'fills', index: 0, stop: 2 })

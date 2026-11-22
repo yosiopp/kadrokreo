@@ -3,6 +3,7 @@ import { solid } from '../../document/paint.ts'
 import { createLine, createRect, createText } from '../nodes.ts'
 import { createPage } from './document.ts'
 import {
+  convertEffect,
   convertPaint,
   movePaint,
   patchEffectAt,
@@ -48,6 +49,7 @@ describe('塗り・グラデーション・影', () => {
       stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }],
       opacity: 1,
       visible: true,
+      blendMode: 'normal' as const,
     }
     expect(withStopColor(gradient, -1, '#ff0000').stops).toEqual([
       { offset: 0, color: '#000000' },
@@ -58,22 +60,22 @@ describe('塗り・グラデーション・影', () => {
   })
 
   it('塗りの種類を変えると、色を受け継ぐ', () => {
-    const red = { type: 'solid' as const, color: '#ff0000', opacity: 1, visible: true }
+    const red = { type: 'solid' as const, color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }
     const linear = convertPaint(red, 'linear')
-    expect(linear).toEqual({ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#ffffff' }], opacity: 1, visible: true })
+    expect(linear).toEqual({ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#ffffff' }], opacity: 1, visible: true, blendMode: 'normal' as const })
     const radial = convertPaint(linear, 'radial')
-    expect(radial).toEqual({ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: linear.type === 'linear' ? linear.stops : [], opacity: 1, visible: true })
+    expect(radial).toEqual({ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: linear.type === 'linear' ? linear.stops : [], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const })
     expect(convertPaint(radial, 'solid')).toEqual(red)
     expect(convertPaint(red, 'solid')).toBe(red)
     // 角度は、円形から中心を、直線から向きを受け継ぐ。隠した塗りは隠したまま
     const moved = { ...radial, cx: 0.2, cy: 0.8 } as typeof radial
     expect(convertPaint(moved, 'conic')).toMatchObject({ type: 'conic', cx: 0.2, cy: 0.8, angle: 0 })
-    expect(convertPaint({ ...linear, x1: 0, y1: 0, x2: 1, y2: 1, visible: false } as typeof linear, 'conic')).toMatchObject({ type: 'conic', cx: 0.5, angle: 45, visible: false })
+    expect(convertPaint({ ...linear, x1: 0, y1: 0, x2: 1, y2: 1, visible: false } as typeof linear, 'conic')).toMatchObject({ type: 'conic', cx: 0.5, angle: 45, visible: false, blendMode: 'normal' as const })
     expect(convertPaint(convertPaint(moved, 'conic'), 'radial')).toMatchObject({ cx: 0.2, cy: 0.8, rx: 0.5 })
   })
 
   it('グラデーションの色を足す・消す・位置を変える', () => {
-    const gradient = convertPaint({ type: 'solid', color: '#000000', opacity: 1, visible: true }, 'linear') as Extract<ReturnType<typeof convertPaint>, { type: 'linear' }>
+    const gradient = convertPaint({ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }, 'linear') as Extract<ReturnType<typeof convertPaint>, { type: 'linear' }>
     const three = withStopAdded(gradient)
     expect(three.stops).toEqual([
       { offset: 0, color: '#000000' },
@@ -91,7 +93,7 @@ describe('塗り・グラデーション・影', () => {
   })
 
   it('withStopAt は位置に、そこでの色を足す', () => {
-    const gradient = convertPaint({ type: 'solid', color: '#000000', opacity: 1, visible: true }, 'linear') as Extract<ReturnType<typeof convertPaint>, { type: 'linear' }>
+    const gradient = convertPaint({ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }, 'linear') as Extract<ReturnType<typeof convertPaint>, { type: 'linear' }>
     const added = withStopAt(gradient, 0.25)
     expect(added.index).toBe(1)
     expect(added.gradient.stops).toEqual([
@@ -107,7 +109,7 @@ describe('塗り・グラデーション・影', () => {
   })
 
   it('塗りの不透明度は、種類や色を変えても保つ', () => {
-    const half = { type: 'solid' as const, color: '#ff0000', opacity: 0.5, visible: true }
+    const half = { type: 'solid' as const, color: '#ff0000', opacity: 0.5, visible: true, blendMode: 'normal' as const }
     expect(convertPaint(half, 'radial').opacity).toBe(0.5)
     expect(convertPaint(convertPaint(half, 'linear'), 'solid')).toEqual(half)
     const { page, rect } = shapes()
@@ -134,7 +136,7 @@ describe('塗り・グラデーション・影', () => {
     const { page, rect } = shapes()
     const layered = updateNode(page, rect.id, { fills: [...solid('#000000'), convertPaint(solid('#ff0000')[0], 'radial')] })
     const moved = patchGradientAt(layered, [rect.id], 'fills', 1, (g) => (g.type === 'radial' ? { ...g, cx: 0.2 } : g))
-    expect(moved.nodes[rect.id]).toMatchObject({ fills: [{ type: 'solid' }, { type: 'radial', cx: 0.2, opacity: 1, visible: true }] })
+    expect(moved.nodes[rect.id]).toMatchObject({ fills: [{ type: 'solid' }, { type: 'radial', cx: 0.2, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }] })
     expect(patchGradientAt(layered, [rect.id], 'fills', 0, (g) => ({ ...g, stops: [] }))).toEqual(layered)
     const recolored = patchPaintAt(layered, [rect.id], 'fills', 0, () => solid('#00ff00')[0])
     expect(recolored.nodes[rect.id]).toMatchObject({ fills: [...solid('#00ff00'), { type: 'radial' }] })
@@ -184,7 +186,7 @@ describe('塗り・グラデーション・影', () => {
 
   it('影を付けると最初の効果を置き換え、null で外す', () => {
     const { page, rect } = shapes()
-    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true }
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true, spread: 0 , blendMode: 'normal' as const}
     const second = { ...shadow, y: 8 }
     const two = updateNode(page, rect.id, { effects: [shadow, second] })
     const replaced = setShadow(two, [rect.id], { ...shadow, blur: 2 })
@@ -198,7 +200,7 @@ describe('塗り・グラデーション・影', () => {
     const { page, rect } = shapes()
     const other = createRect({ x: 50, y: 0, width: 10, height: 10 })
     let next = insertNode(page, other)
-    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true }
+    const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true, spread: 0, blendMode: 'normal' as const }
     next = updateEffects(next, [rect.id], (effects) => [...effects, shadow, { ...shadow, y: 8 }])
     const moved = patchEffectAt(next, [rect.id, other.id], 1, { blur: 20 })
     expect(moved.nodes[rect.id]).toMatchObject({ effects: [shadow, { ...shadow, y: 8, blur: 20 }] })
@@ -219,5 +221,28 @@ describe('角丸', () => {
     for (const corner of [0, 2, 3]) back = setCornerRadius(back, [rect.id], corner, 8)
     expect(back.nodes[rect.id]).toMatchObject({ cornerRadius: 8 })
     expect(setCornerRadius(one, [rect.id], null, 4).nodes[rect.id]).toMatchObject({ cornerRadius: 4 })
+  })
+})
+
+describe('効果の種類の切り替え', () => {
+  const shadow = { type: 'drop-shadow' as const, x: 1, y: 2, blur: 6, spread: 3, blendMode: 'normal' as const, color: '#ff0000', opacity: 0.5, visible: true }
+
+  it('影どうしは値を受け継ぎ、影とぼかしの間ではぼかしの長さだけを受け継ぐ', () => {
+    expect(convertEffect(shadow, 'inner-shadow')).toEqual({ ...shadow, type: 'inner-shadow' })
+    expect(convertEffect(shadow, 'layer-blur')).toEqual({ type: 'layer-blur', blur: 6, visible: true })
+    const back = convertEffect({ type: 'background-blur', blur: 10, visible: false }, 'drop-shadow')
+    expect(back).toMatchObject({ type: 'drop-shadow', blur: 10, visible: false, spread: 0, blendMode: 'normal', color: '#000000' })
+  })
+
+  it('patchEffectAt で種類を変えると形を揃え、その種類にない項目は当てない', () => {
+    let page = createPage()
+    const rect = { ...createRect({ x: 0, y: 0, width: 10, height: 10 }), effects: [shadow] }
+    page = insertNode(page, rect)
+    const blurred = patchEffectAt(page, [rect.id], 0, { type: 'layer-blur' })
+    expect(blurred.nodes[rect.id]).toMatchObject({ effects: [{ type: 'layer-blur', blur: 6, visible: true }] })
+    // ぼかしにずれはないので、x は当てない
+    const ignored = patchEffectAt(blurred, [rect.id], 0, { x: 5, blur: 8 })
+    expect(ignored.nodes[rect.id]).toMatchObject({ effects: [{ type: 'layer-blur', blur: 8, visible: true }] })
+    expect((ignored.nodes[rect.id] as typeof rect).effects[0]).not.toHaveProperty('x')
   })
 })

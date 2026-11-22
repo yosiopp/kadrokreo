@@ -1,3 +1,4 @@
+import { isMaskNode } from '../document/mask.ts'
 import { nodeKind } from '../document/path.ts'
 import type { SceneNode } from '../document/types.ts'
 import { TypeIcon } from './icons.tsx'
@@ -32,8 +33,8 @@ export function LayerCaret({ node, open, onToggle }: CaretProps) {
 /** ノードの種類のアイコン。コンポーネントの元とインスタンスは、その印になる */
 export function LayerIcon({ node }: { node: SceneNode }) {
   return (
-    <span className="layer-icon">
-      <TypeIcon type={nodeKind(node)} role={node.type === 'frame' ? node.component?.role : undefined} />
+    <span className="layer-icon" title={isMaskNode(node) ? 'マスク' : undefined}>
+      <TypeIcon type={nodeKind(node)} role={node.type === 'frame' ? node.component?.role : undefined} mask={isMaskNode(node)} />
     </span>
   )
 }

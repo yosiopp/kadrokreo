@@ -5,6 +5,7 @@ import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
 import { fitMovedVariants } from './variants.ts'
 import { updatePage } from './operations/document.ts'
+import { fitBooleanNodes } from './operations/booleanNodes.ts'
 import { type GradientEdit, editedGradient } from './editorCanvas/gradientHandles.ts'
 import { pathContours } from '../document/path.ts'
 import { contourSegment, flatVertices } from './pathEdit.ts'
@@ -142,7 +143,8 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
       const followed = applyConstraints(from, to, resized)
       return fitText && resized.length > 0 ? fitText(followed, resized) : followed
     }
-    const constrained = prior ? follow(prior, page) : page
+    // ブーリアン演算のノードの枠を結果に合わせる。子をずらして合わせるので、子を辺に追従させる前の比べ元にする
+    const constrained = fitBooleanNodes(prior ? follow(prior, page) : page)
     const arranged = relayout(constrained, fitText)
     const followed = follow(constrained, arranged)
     return followed === arranged ? arranged : relayout(followed, fitText)

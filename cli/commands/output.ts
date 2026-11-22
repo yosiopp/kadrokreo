@@ -70,20 +70,21 @@ export const json: Command = {
 export const png: Command = {
   name: 'png',
   kind: 'export',
-  usage: 'png [ノード…] [--scale 2] [--to ファイル.png | - ] [--each]',
+  usage: 'png [ノード…] [--scale 2] [--to ファイル.png | - ] [--each] [--background #rrggbb]',
   summary:
     'viewer の PNG 書き出しと同じ絵の PNG を書き出す。ノードなしならページ全体、ノード（フレームなど、いくつでも）ならそれらを囲む範囲。' +
     '--scale は倍率（既定 1。viewer は 1 / 2 / 3）。--to を省くと viewer と同じ名前で今のフォルダへ（- は標準出力）。' +
-    '--each はノードごとに別のファイルにする（--to はフォルダ）。@napi-rs/canvas が要る',
+    '--each はノードごとに別のファイルにする（--to はフォルダ）。--background は範囲全体に背景の色を敷く（既定は透明）。@napi-rs/canvas が要る',
   flags: ['each'],
   async run(ctx, step) {
-    checkStep(step, { options: ['scale', 'to', 'each'] })
+    checkStep(step, { options: ['scale', 'to', 'each', 'background'] })
     const { session } = ctx
     const page = session.page
     const scale = numberOption(step, 'scale') ?? 1
     if (!(scale > 0)) throw new UsageError('png: --scale は正の数です')
     const to = option(step, 'to')
     const each = flag(step, 'each')
+    const background = backgroundOption('png', option(step, 'background')) ?? null
     const whole = step.positionals.length === 0
     // viewer と同じく、祖先と一緒に選んだものは除き、描く順（奥から手前）に並べる
     const targets = whole ? page.rootIds : paintOrder(page, session.resolveAll(step.positionals))
@@ -93,7 +94,7 @@ export const png: Command = {
 
     const groups = each ? targets.map((id) => [id]) : [targets]
     for (const group of groups) {
-      const bytes = await encodePng(page, session.document.assets, group, scale)
+      const bytes = await encodePng(page, session.document.assets, group, scale, background)
       const name = pngFileName(safeFileName(pngBaseName(session.document, page, group, whole)), scale)
       if (to === '-') {
         ctx.stdout(bytes)
@@ -122,7 +123,7 @@ export const svgOut: Command = {
     const page = session.page
     const to = option(step, 'to')
     const each = flag(step, 'each')
-    const background = svgBackground(option(step, 'background'))
+    const background = backgroundOption('svg-out', option(step, 'background'))
     const whole = step.positionals.length === 0
     const targets = whole ? page.rootIds : paintOrder(page, session.resolveAll(step.positionals))
     if (targets.length === 0) throw new UsageError('svg-out: 書き出すものがありません（ページが空です）')
@@ -150,13 +151,13 @@ export const svgOut: Command = {
   },
 }
 
-/** svg-out の --background。#rrggbb か #rgb を小文字の #rrggbb にする */
-function svgBackground(raw: string | undefined): string | undefined {
+/** png / svg-out の --background。#rrggbb か #rgb を小文字の #rrggbb にする */
+function backgroundOption(command: string, raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined
   const text = raw.trim().toLowerCase()
   if (/^#[0-9a-f]{6}$/.test(text)) return text
   if (/^#[0-9a-f]{3}$/.test(text)) return `#${[...text.slice(1)].map((c) => c + c).join('')}`
-  throw new UsageError(`svg-out: --background は #rrggbb か #rgb です: ${raw}`)
+  throw new UsageError(`${command}: --background は #rrggbb か #rgb です: ${raw}`)
 }
 
 /** markup.ts が JSX の先頭で import する CSS のファイル名に合わせる */

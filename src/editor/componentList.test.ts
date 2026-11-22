@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { componentEntries, groupByPage } from './componentList.ts'
+import { setComponentDescription, setVariantSetDescription } from './componentProperties.ts'
 import { makeComponent } from './components.ts'
 import { createFrame } from './nodes.ts'
 import { addPage, createDocument, createPage, updatePage } from './operations/document.ts'
@@ -47,6 +48,26 @@ describe('コンポーネントの一覧', () => {
     // まとまりの名前が当てはまれば、すべてのバリアント
     expect(names(componentEntries(doc, 'ボタ', 'document'))).toEqual([['ボタン', ['種類=標準', '種類=2']]])
     expect(componentEntries(doc, 'ない', 'document')).toEqual([])
+  })
+
+  it('説明文は、まとまりの行ならまとまりの説明文、バリアントや単独の元なら元の説明文', () => {
+    let doc = fixture()
+    const pageId = doc.pages[0].id
+    const before = componentEntries(doc, '', 'document')
+    const setId = before[1].shownId
+    const variantId = before[1].variants[0].node.id
+    doc = updatePage(doc, pageId, (page) =>
+      setComponentDescription(
+        setComponentDescription(setVariantSetDescription(page, setId, 'ボタンのまとまり'), variantId, '標準の形'),
+        before[0].node.id,
+        'カード',
+      ),
+    )
+    const entries = componentEntries(doc, '', 'document')
+    expect(entries[0].description).toBe('カード')
+    expect(entries[1].description).toBe('ボタンのまとまり')
+    expect(entries[1].variants.map((variant) => variant.description)).toEqual(['標準の形', ''])
+    expect(entries[2].description).toBe('')
   })
 })
 

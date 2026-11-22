@@ -47,6 +47,7 @@ const NAMES = {
   path: 'Path',
   text: 'Text',
   image: 'Image',
+  boolean: 'Boolean',
 } as const
 
 export function nextName(page: Scene, type: NodeKind): string {

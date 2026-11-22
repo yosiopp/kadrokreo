@@ -210,7 +210,7 @@ function randomNumber(r: Random, min: number, max: number): number {
 }
 
 function randomPaint(r: Random) {
-  if (r.chance(0.6)) return { type: 'solid', color: r.pick(['#ff0000', '#00ff00', '#123456', '#abcdef']), opacity: 1, visible: r.chance(0.8) }
+  if (r.chance(0.6)) return { type: 'solid', color: r.pick(['#ff0000', '#00ff00', '#123456', '#abcdef']), opacity: 1, visible: r.chance(0.8), ...(r.chance(0.2) ? { blendMode: 'overlay' } : {}) }
   const count = r.int(2, 4)
   const stops = Array.from({ length: count }, (_, i) => ({ offset: i / (count - 1), color: r.pick(['#000000', '#ffffff', '#ff8800']) }))
   if (r.chance(0.25)) {
@@ -223,6 +223,8 @@ function randomPaint(r: Random) {
       cy: randomNumber(r, -1, 2),
       rx: randomNumber(r, 0, 2),
       ry: randomNumber(r, 0, 2),
+      ...(r.chance(0.5) ? { angle: randomNumber(r, -720, 720) } : {}),
+      ...(r.chance(0.3) ? { blendMode: r.pick(['multiply', 'screen', 'difference']) } : {}),
       stops,
     }
   }
@@ -230,12 +232,16 @@ function randomPaint(r: Random) {
 }
 
 function randomEffect(r: Random) {
+  if (r.chance(0.25)) {
+    return { type: r.pick(['layer-blur', 'background-blur']), blur: randomNumber(r, 0, 40), ...(r.chance(0.2) ? { visible: false } : {}) }
+  }
   return {
     type: r.pick(['drop-shadow', 'inner-shadow']),
     ...(r.chance(0.2) ? { visible: false } : {}),
     x: randomNumber(r, -20, 20),
     y: randomNumber(r, -20, 20),
     blur: randomNumber(r, 0, 40),
+    ...(r.chance(0.4) ? { spread: randomNumber(r, -20, 20) } : {}),
     color: '#000000',
     opacity: r.next(),
   }
@@ -261,6 +267,7 @@ function randomNode(c: Context, depth: number): Record<string, unknown> {
   }
   if (r.chance(0.3)) node.rotation = randomNumber(r, -720, 720)
   if (r.chance(0.2)) node.opacity = r.pick([0, 0.5, 1, r.next()])
+  if (r.chance(0.1)) node.blendMode = r.pick(['multiply', 'screen', 'color'])
   if (r.chance(0.1)) node.visible = false
   if (r.chance(0.1)) node.locked = true
   if (r.chance(0.2)) node.minWidth = randomNumber(r, 0, 100)
@@ -275,7 +282,7 @@ function randomNode(c: Context, depth: number): Record<string, unknown> {
     node.strokes = Array.from({ length: r.int(0, 2) }, () => randomPaint(r))
     node.strokeWidth = randomNumber(r, 0, 20)
   }
-  if (type !== 'image' && type !== 'text' && r.chance(0.3)) node.effects = Array.from({ length: r.int(0, 3) }, () => randomEffect(r))
+  if (r.chance(0.3)) node.effects = Array.from({ length: r.int(0, 3) }, () => randomEffect(r))
   if (type === 'image' && r.chance(0.3)) {
     node.positionX = r.next()
     node.positionY = r.next()
@@ -640,7 +647,7 @@ describe('kdr の tar のファズテスト', () => {
 
   /** 正しい kdr の tar の最初の見出しを書き換え、チェックサムを合わせ直したもの */
   async function craftedHeader(patch: (header: Uint8Array) => void, fixChecksum = true): Promise<Blob> {
-    const { file } = randomFile(makeRandom(3)) // 画像のないファイルになる種（kdrBlob に画像を渡さないため）
+    const { file } = randomFile(makeRandom(6)) // 画像のないファイルになる種（kdrBlob に画像を渡さないため）
     const tar = new Uint8Array(await new Response((await kdrBlob(file)).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
     const header = tar.subarray(0, 512)
     patch(header)
@@ -752,10 +759,10 @@ describe('kdr の読み込みの極端な入力', () => {
     const big = 1e308
     const gradient = { type: 'linear', x1: 0, y1: 0, x2: 1, y2: 1, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 1 }
     const children = [
-      { type: 'rect', id: 'a', name: 'A', x: -big, y: -big, width: big, height: big, rotation: 1e308, fills: [gradient], strokes: [gradient], strokeWidth: big, cornerRadius: big, effects: [{ type: 'drop-shadow', x: big, y: -big, blur: big, color: '#000000', opacity: 1 }, { type: 'inner-shadow', x: big, y: -big, blur: big, color: '#000000', opacity: 1 }] },
+      { type: 'rect', id: 'a', name: 'A', x: -big, y: -big, width: big, height: big, rotation: 1e308, fills: [gradient], strokes: [gradient], strokeWidth: big, cornerRadius: big, blendMode: 'multiply', effects: [{ type: 'drop-shadow', x: big, y: -big, blur: big, spread: big, color: '#000000', opacity: 1 }, { type: 'inner-shadow', x: big, y: -big, blur: big, spread: -big, color: '#000000', opacity: 1 }, { type: 'layer-blur', blur: big }, { type: 'background-blur', blur: big }] },
       { type: 'ellipse', id: 'b', name: 'B', x: 0, y: 0, width: big, height: 5e-324, rotation: 33.3, fills: [gradient, { type: 'conic', cx: big, cy: -big, angle: big, stops: gradient.stops }] },
       { type: 'path', id: 'c', name: 'C', x: 0, y: 0, width: big, height: big, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], endCap: 'arrow', strokes: [gradient], strokeWidth: big },
-      { type: 'text', id: 'd', name: 'D', x: 0, y: 0, width: big, height: 10, text: 'hello', fontSize: big, lineHeight: big, fontFamily: 'x', fills: [gradient] },
+      { type: 'text', id: 'd', name: 'D', x: 0, y: 0, width: big, height: 10, text: 'hello', fontSize: big, lineHeight: big, fontFamily: 'x', fills: [gradient], effects: [{ type: 'drop-shadow', x: big, y: big, blur: big, spread: big, color: '#000000', opacity: 1 }] },
       { type: 'frame', id: 'e', name: 'E', x: big, y: big, width: big, height: big, opacity: 0.5, rotation: -1e300, fills: [gradient], layout: { gap: big, paddingTop: big }, sizing: { width: 'hug', height: 'hug' }, children: [{ type: 'rect', id: 'f', name: 'F', x: 0, y: 0, width: big, height: big, sizing: { width: 'fill' } }] },
     ]
     expect(parseOrReject({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P', children }] } })).toBe('ok')

@@ -9,7 +9,7 @@ import {
   transformRect,
 } from '../document/geometry.ts'
 import { type Vertex, capMarkerSize, capReach, cappedStroke, pathOutlines, tracePath } from '../document/path.ts'
-import { cornerRadii, gradientLine, hasStroke, imageRect, isRounded, splitEffects, withoutHidden } from '../document/paint.ts'
+import { blurRadius, cornerRadii, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, withoutHidden } from '../document/paint.ts'
 import type {
   Asset,
   AssetId,
@@ -23,9 +23,12 @@ import type {
   RadialGradient,
   Scene,
   SceneNode,
+  Shadow,
   Style,
   TextNode,
 } from '../document/types.ts'
+import { type MaskNode, hasMask, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from '../document/mask.ts'
+import { drawnNode } from '../document/booleanNode.ts'
 import { OVERLAY_COMPONENT } from './overlay.ts'
 import { isVariantSet } from '../document/variants.ts'
 import { getImage } from './images.ts'
@@ -110,12 +113,19 @@ export function renderScene(
   ctx.save()
   ctx.scale(viewport.zoom, viewport.zoom)
   ctx.translate(-viewport.x, -viewport.y)
-  const roots = options.roots ?? scene.rootIds.map((id) => ({ id, parent: IDENTITY }))
-  for (const root of roots) {
-    ctx.save()
-    ctx.transform(...root.parent)
-    drawNode(ctx, pass, root.id, root.parent)
-    ctx.restore()
+  const roots = options.roots ?? []
+  if (options.roots) {
+    // 指定したノードだけを描くときも、かかっているマスクは（選んでいなくても）かける
+    for (const root of roots) {
+      ctx.save()
+      ctx.transform(...root.parent)
+      const mask = maskOf(scene, root.id)
+      if (mask === null) drawNode(ctx, pass, root.id, root.parent)
+      else drawMasked(ctx, pass, scene.nodes[mask] as MaskNode, root.parent, (c) => drawNode(c, pass, root.id, root.parent))
+      ctx.restore()
+    }
+  } else {
+    drawChildren(ctx, pass, scene.rootIds, IDENTITY)
   }
   ctx.restore()
 
@@ -123,10 +133,103 @@ export function renderScene(
   ctx.restore()
 }
 
+/**
+ * 兄弟の並びを背面から描く。マスクは描かず、そこから次のマスクまでの兄弟をその形で切り取る（types.ts の Maskable）。
+ * parent は親の座標系からページ座標系への変換で、ctx はすでに親の座標系になっている
+ */
+function drawChildren(ctx: CanvasRenderingContext2D, pass: Pass, ids: readonly NodeId[], parent: Matrix): void {
+  if (!hasMask(pass.scene, ids)) {
+    for (const id of ids) drawNode(ctx, pass, id, parent)
+    return
+  }
+  // マスクごとに、かかる兄弟の並び（run）にまとめて描く
+  const masks = masksOf(pass.scene, ids)
+  let run: NodeId[] = []
+  let current: NodeId | null = null
+  const flush = () => {
+    if (run.length === 0) return
+    const list = run
+    const draw = (c: CanvasRenderingContext2D) => list.forEach((id) => drawNode(c, pass, id, parent))
+    if (current === null) draw(ctx)
+    else drawMasked(ctx, pass, pass.scene.nodes[current] as MaskNode, parent, draw)
+    run = []
+  }
+  ids.forEach((id, i) => {
+    if (masks[i] !== current) {
+      flush()
+      current = masks[i]
+    }
+    run.push(id)
+  })
+  flush()
+}
+
+/**
+ * draw で描くものを、マスクで切り取って描く（ctx は親の座標系）。形だけのマスクはパスで切り取り、
+ * 不透明度・明るさのマスクは、中身とマスクを別のキャンバスに描いて destination-in で重ねる（明るさは先に不透明度に直す）
+ */
+function drawMasked(ctx: CanvasRenderingContext2D, pass: Pass, mask: MaskNode, parent: Matrix, draw: (c: CanvasRenderingContext2D) => void): void {
+  if (mask.maskType === 'vector') {
+    ctx.save()
+    clipToMask(ctx, mask)
+    draw(ctx)
+    ctx.restore()
+    return
+  }
+  const content = acquireLayer(ctx, pass.layerDepth)
+  pass.layerDepth++
+  draw(content)
+  const alpha = acquireLayer(ctx, pass.layerDepth)
+  pass.layerDepth++
+  // マスクは塗りだけを見る（線と効果は見ない）。ノードの不透明度は効く
+  const shape = { ...mask, isMask: false, strokes: [], effects: [] }
+  const local = nodeMatrix(mask)
+  alpha.save()
+  alpha.globalAlpha = mask.opacity
+  alpha.transform(...local)
+  drawContent(alpha, pass, shape, multiply(parent, local))
+  alpha.restore()
+  if (mask.maskType === 'luminance') luminanceToAlpha(alpha)
+  content.save()
+  content.setTransform(1, 0, 0, 1, 0, 0)
+  content.globalCompositeOperation = 'destination-in'
+  content.drawImage(alpha.canvas, 0, 0)
+  content.restore()
+  pass.layerDepth -= 2
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.drawImage(content.canvas, 0, 0)
+  ctx.restore()
+}
+
+/** キャンバスの絵の明るさ（sRGB の輝度）に不透明度を掛けたものを、不透明度にする（SVG の明るさのマスクと同じ） */
+function luminanceToAlpha(c: CanvasRenderingContext2D): void {
+  const { width, height } = c.canvas
+  if (width === 0 || height === 0) return
+  const image = c.getImageData(0, 0, width, height)
+  const data = image.data
+  for (let i = 0; i < data.length; i += 4) {
+    const luminance = (0.2125 * data[i] + 0.7154 * data[i + 1] + 0.0721 * data[i + 2]) / 255
+    data[i + 3] = Math.round(luminance * data[i + 3])
+    data[i] = data[i + 1] = data[i + 2] = 0
+  }
+  c.putImageData(image, 0, 0)
+}
+
+/** マスクの形で切り取る（ctx は親の座標系）。続けて描くものはその内側だけに描かれる */
+function clipToMask(ctx: CanvasRenderingContext2D, mask: MaskNode): void {
+  ctx.beginPath()
+  for (const contour of maskContours(mask)) tracePath(ctx, contour.vertices, true)
+  ctx.clip(maskFillRule(mask))
+}
+
 /** parent は、親の座標系からページ座標系への変換。ctx はすでに親の座標系になっている */
 function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent: Matrix): void {
-  const node = pass.scene.nodes[id]
+  // ブーリアン演算のノードは、結果の形のパスとして描く
+  const node = drawnNode(pass.scene, pass.scene.nodes[id])
   if (!node.visible || node.opacity === 0) return
+  // マスクは描かない（形で兄弟を切り取るだけ）
+  if (isMaskNode(node)) return
 
   const local = nodeMatrix(node)
   const world = multiply(parent, local)
@@ -134,9 +237,40 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
   const selfContained = node.type !== 'frame' || node.clipContent
   if (selfContained && !intersects(transformRect(world, paintedRect(ctx, node)), pass.visible)) return
 
-  // 半透明のフレームは、中身を別のキャンバスに描いてから 1 枚の絵として重ねる。
+  const effects = 'effects' in node ? shownPaints(node.effects) : []
+  // 背景のぼかしは、ノードより先に描いてあるもの（後ろに見えているもの）をノードの形の内側でぼかす
+  const backgroundBlur = blurRadius(effects, 'background-blur')
+  if (backgroundBlur > 0) blurBackdrop(ctx, pass, node, local, backgroundBlur)
+
+  // 半透明や描画モードを持つフレームと、ぼかすノードは、中身を別のキャンバスに描いてから 1 枚の絵として重ねる。
   // 子を 1 つずつ半透明で描くと、子どうしの重なりが透けてしまう
-  if (node.type === 'frame' && node.opacity < 1 && node.children.length > 0) {
+  const layerBlur = blurRadius(effects, 'layer-blur')
+  // 通過のフレームは、後ろの絵の写しに子を直接混ぜて描き、それを不透明度で後ろと混ぜる（子の描画モードが後ろにも効く）
+  if (isPassThrough(node) && layerBlur === 0) {
+    const layer = acquireLayer(ctx, pass.layerDepth)
+    layer.setTransform(1, 0, 0, 1, 0, 0)
+    layer.drawImage(ctx.canvas, 0, 0)
+    layer.setTransform(ctx.getTransform())
+    pass.layerDepth++
+    layer.transform(...local)
+    drawContent(layer, pass, node, world)
+    pass.layerDepth--
+
+    // 後ろ × (1 - 不透明度) + 混ぜた絵 × 不透明度。写しの外は後ろと同じなので変わらない
+    const alpha = ctx.globalAlpha * node.opacity
+    ctx.save()
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.globalAlpha = alpha
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.drawImage(layer.canvas, 0, 0)
+    ctx.restore()
+    return
+  }
+  const group = node.type === 'frame' && node.children.length > 0 && (node.opacity < 1 || node.blendMode !== 'normal')
+  if (group || layerBlur > 0) {
     const layer = acquireLayer(ctx, pass.layerDepth)
     pass.layerDepth++
     layer.transform(...local)
@@ -145,6 +279,9 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
 
     ctx.save()
     ctx.globalAlpha *= node.opacity
+    if (node.blendMode !== 'normal') ctx.globalCompositeOperation = node.blendMode
+    // ぼかしの半径の半分が標準偏差（CSS の blur() の値）。filter の長さは変換行列に従わないので、拡大率を掛ける
+    if (layerBlur > 0) ctx.filter = `blur(${(layerBlur / 2) * pass.scale}px)`
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.drawImage(layer.canvas, 0, 0)
     ctx.restore()
@@ -153,9 +290,122 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
 
   ctx.save()
   ctx.globalAlpha *= node.opacity
+  if (node.blendMode !== 'normal') ctx.globalCompositeOperation = node.blendMode
   ctx.transform(...local)
   drawContent(ctx, pass, node, world)
   ctx.restore()
+}
+
+/** 通過のフレームとして描くか。不透明なら、まとめずに描くふつうの道と同じ見た目なので、写しを作らない */
+function isPassThrough(node: SceneNode): boolean {
+  return node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && node.opacity < 1 && node.children.length > 0
+}
+
+/**
+ * 背景のぼかし。ノードの形で切り抜き、いま描いてあるキャンバスの絵をぼかして描き直す（ノードの不透明度にはよらない）。
+ * 半透明のフレームの中など、別のキャンバスに描いている途中なら、そのキャンバスの絵（同じフレームの中のもの）だけがぼける
+ */
+function blurBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: SceneNode, local: Matrix, blur: number): void {
+  if (node.type === 'text') {
+    if (node.id !== pass.options.hiddenId) blurTextBackdrop(ctx, pass, node, local, blur)
+    return
+  }
+  // いまの絵を写しておき、形の内側を消してから、写しをぼかして描き戻す（そのまま重ねると、ぼけた絵の下に元の絵が残る）
+  const copy = acquireLayer(ctx, pass.layerDepth)
+  copy.setTransform(1, 0, 0, 1, 0, 0)
+  copy.drawImage(ctx.canvas, 0, 0)
+  ctx.save()
+  ctx.transform(...local)
+  traceShape(ctx, node)
+  ctx.clip(fillRuleOf(node))
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.filter = `blur(${(blur / 2) * pass.scale}px)`
+  ctx.drawImage(copy.canvas, 0, 0)
+  ctx.restore()
+}
+
+/**
+ * 文字の背景のぼかし。文字はパスで切り抜けないので、文字の形を別のキャンバスに描き、その形で今の絵を消してから、
+ * 同じ形で切り抜いたぼかした絵を重ねる
+ */
+function blurTextBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: TextNode, local: Matrix, blur: number): void {
+  const copy = acquireLayer(ctx, pass.layerDepth)
+  copy.setTransform(1, 0, 0, 1, 0, 0)
+  copy.drawImage(ctx.canvas, 0, 0)
+  const shape = acquireLayer(ctx, pass.layerDepth + 1)
+  shape.transform(...local)
+  shape.fillStyle = '#000000'
+  textShape(shape, node).silhouette(shape, 0)
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'destination-out'
+  ctx.drawImage(shape.canvas, 0, 0)
+  shape.save()
+  shape.setTransform(1, 0, 0, 1, 0, 0)
+  shape.globalCompositeOperation = 'source-in'
+  shape.filter = `blur(${(blur / 2) * pass.scale}px)`
+  shape.drawImage(copy.canvas, 0, 0)
+  shape.restore()
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.drawImage(shape.canvas, 0, 0)
+  ctx.restore()
+}
+
+/** 文字の並び。ctx に書体を設定し、行・行揃え・行の高さ・ベースラインと、文字の形を描く関数（影・切り抜き用）を返す */
+function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
+  const { width } = node
+  applyFont(ctx, node)
+  ctx.textBaseline = 'alphabetic'
+  // CSS の行ボックスと同じ位置にベースラインを置き、編集中の入力欄と文字がずれないようにする
+  const metrics = ctx.measureText('')
+  const lineHeight = node.fontSize * node.lineHeight
+  const contentHeight = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent
+  const baseline = (lineHeight - contentHeight) / 2 + metrics.fontBoundingBoxAscent
+  const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
+  const lines = layoutText(ctx, node)
+  // 文字の影は、文字の形を別のキャンバスに描いてから影だけを落とす（行が分かれていても 1 つの形として）
+  const silhouette: Silhouette = (c, spread) => {
+    applyFont(c, node)
+    c.textBaseline = 'alphabetic'
+    c.lineJoin = 'round'
+    lines.forEach((line, i) => {
+      const x = (width - line.width) * align
+      const y = lineHeight * i + baseline
+      if (spread >= 0) c.fillText(line.text, x, y)
+      if (spread > 0) {
+        c.lineWidth = spread * 2
+        c.strokeText(line.text, x, y)
+      }
+    })
+    // 細らせるのは、縁を太い線で消す
+    if (spread < 0) {
+      lines.forEach((line, i) => c.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline))
+      c.globalCompositeOperation = 'destination-out'
+      c.lineWidth = -spread * 2
+      lines.forEach((line, i) => c.strokeText(line.text, (width - line.width) * align, lineHeight * i + baseline))
+      c.globalCompositeOperation = 'source-over'
+    }
+  }
+  return { lines, align, lineHeight, baseline, silhouette }
+}
+
+/** ノードの形のパスを組む（テキスト以外）。描画と同じ形 */
+function traceShape(ctx: CanvasRenderingContext2D, node: Exclude<SceneNode, TextNode>): void {
+  ctx.beginPath()
+  switch (node.type) {
+    case 'ellipse':
+      ctx.ellipse(node.width / 2, node.height / 2, node.width / 2, node.height / 2, 0, 0, Math.PI * 2)
+      break
+    case 'path':
+      for (const contour of pathOutlines(node)) tracePath(ctx, contour.vertices, contour.closed)
+      break
+    default:
+      ctx.roundRect(0, 0, node.width, node.height, clampRadius(node.cornerRadius, node))
+  }
 }
 
 const layers: CanvasRenderingContext2D[] = []
@@ -189,18 +439,18 @@ function drawContent(
   const { width, height } = node
   switch (node.type) {
     case 'rect': {
-      const outline = () => {
-        ctx.beginPath()
-        ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
+      const outline = (c = ctx) => {
+        c.beginPath()
+        c.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
       }
       outline()
       paint(ctx, pass, node, outline)
       break
     }
     case 'ellipse': {
-      const outline = () => {
-        ctx.beginPath()
-        ctx.ellipse(width / 2, height / 2, width / 2, height / 2, 0, 0, Math.PI * 2)
+      const outline = (c = ctx) => {
+        c.beginPath()
+        c.ellipse(width / 2, height / 2, width / 2, height / 2, 0, 0, Math.PI * 2)
       }
       outline()
       paint(ctx, pass, node, outline)
@@ -209,9 +459,9 @@ function drawContent(
     case 'path': {
       const outlines = pathOutlines(node)
       const points = outlines[0].vertices
-      const outline = () => {
-        ctx.beginPath()
-        for (const contour of outlines) tracePath(ctx, contour.vertices, contour.closed)
+      const outline = (c = ctx) => {
+        c.beginPath()
+        for (const contour of outlines) tracePath(c, contour.vertices, contour.closed)
       }
       const capped = !node.closed && (node.startCap !== 'none' || node.endCap !== 'none')
       if (!capped) {
@@ -221,7 +471,7 @@ function drawContent(
       }
       // 端の形を付ける線は、線を矢印の分だけ短くし、端の図形を足すので、塗りと線を別々に描く
       outline()
-      fillAll(ctx, pass, node, node.effects)
+      fillAll(ctx, pass, node, node.effects, filledSilhouette(outline, fillRuleOf(node)))
       drawInnerShadows(ctx, pass, node, node.effects, outline)
       strokeWithCaps(ctx, points, node)
       // 端の形は最初の輪郭にだけ付く。残りの輪郭はそのまま線を引く
@@ -234,30 +484,36 @@ function drawContent(
     }
     case 'text':
       if (node.id !== pass.options.hiddenId) {
-        applyFont(ctx, node)
-        ctx.textBaseline = 'alphabetic'
-        // CSS の行ボックスと同じ位置にベースラインを置き、編集中の入力欄と文字がずれないようにする
-        const metrics = ctx.measureText('')
-        const lineHeight = node.fontSize * node.lineHeight
-        const contentHeight = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent
-        const baseline = (lineHeight - contentHeight) / 2 + metrics.fontBoundingBoxAscent
-        const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
-        const lines = layoutText(ctx, node)
+        const { lines, align, lineHeight, baseline, silhouette } = textShape(ctx, node)
+        const { drop: drops, inner } = splitEffects(node.effects)
+        for (const shadow of drops) drawMaskedShadow(ctx, pass, shadow, silhouette, false)
         for (const fill of node.fills) {
           // 固定の幅からはみ出す行もあるので、文字の大きさの分だけ外まで覆う
           ctx.save()
           ctx.globalAlpha *= fill.opacity
+          if (fill.blendMode !== 'normal') ctx.globalCompositeOperation = fill.blendMode
           ctx.fillStyle = paintStyle(ctx, fill, node, node.fontSize)
           lines.forEach((line, i) => {
             ctx.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline)
           })
           ctx.restore()
         }
+        // 内側の影は、別のキャンバスに影を描いてから文字の形で切り抜いて重ねる（パスで切り抜けないため）
+        for (const shadow of inner) drawTextInnerShadow(ctx, pass, shadow, silhouette)
       }
       break
     case 'image': {
       const asset = pass.assets[node.assetId]
       const bitmap = asset ? getImage(asset) : null
+      const outline = (c = ctx) => {
+        c.beginPath()
+        c.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
+      }
+      // 画像の影は枠（角丸を含む）の形に付ける。画像は角丸で切り抜くので、影は画像に付けず先に描く
+      if (node.effects.some(isShadow)) {
+        outline()
+        drawDropShadows(ctx, pass, node.effects, filledSilhouette(outline, 'nonzero'), false)
+      }
       ctx.save()
       if (isRounded(node.cornerRadius)) {
         ctx.beginPath()
@@ -273,20 +529,24 @@ function drawContent(
         ctx.fillRect(0, 0, width, height)
       }
       ctx.restore()
+      if (splitEffects(node.effects).inner.length > 0) {
+        outline()
+        drawInnerShadows(ctx, pass, node, node.effects, outline)
+      }
       break
     }
     case 'frame': {
-      const outline = () => {
-        ctx.beginPath()
-        ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
+      const outline = (c = ctx) => {
+        c.beginPath()
+        c.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
       }
       outline()
-      fillAll(ctx, pass, node, node.effects)
+      fillAll(ctx, pass, node, node.effects, filledSilhouette(outline, 'nonzero'))
       // 内側の影は背景の上、子の下（CSS の inset の box-shadow と同じ）
       drawInnerShadows(ctx, pass, node, node.effects, outline)
       ctx.save()
       if (node.clipContent) ctx.clip()
-      for (const childId of node.children) drawNode(ctx, pass, childId, world)
+      drawChildren(ctx, pass, node.children, world)
       ctx.restore()
       // 枠線は子より手前に描く
       if (hasStroke(node)) {
@@ -302,23 +562,63 @@ function drawContent(
  * いま組んであるパスを塗りと線で描く。落ち影は塗りに付け、塗りがなければ線に付ける。内側の影は塗りと線の間に描く。
  * outline は同じパスを組み直す関数（内側の影がパスを使うので、線の前に組み直す）
  */
-function paint(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Style, outline: () => void): void {
-  fillAll(ctx, pass, node, node.effects)
+function paint(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Style, outline: Outline): void {
+  fillAll(ctx, pass, node, node.effects, filledSilhouette(outline, fillRuleOf(node)))
   drawInnerShadows(ctx, pass, node, node.effects, outline)
   if (hasStroke(node)) {
     ctx.save()
-    if (node.fills.length === 0) applyEffects(ctx, pass, node.effects)
+    if (node.fills.length === 0) {
+      // 線だけの形は、線の形が影になる。広がりは線の太さに足す
+      const silhouette: Silhouette = (c, spread) => {
+        c.lineWidth = Math.max(0, node.strokeWidth + spread * 2)
+        c.setLineDash(node.strokeDashes)
+        outline(c)
+        c.stroke()
+      }
+      drawDropShadows(ctx, pass, node.effects, silhouette, true)
+    }
     strokeAll(ctx, node)
     ctx.restore()
   }
 }
 
+/** パスを組み直す関数。引数を省くと描いている ctx に組む */
+type Outline = (c?: CanvasRenderingContext2D) => void
+
+/**
+ * 影を落とす形を c に不透明で描く関数。spread だけ太らせる（負なら細らせる）。影の広がりと、文字の影に使う。
+ * c はノードの座標系になっている
+ */
+type Silhouette = (c: CanvasRenderingContext2D, spread: number) => void
+
+/** パスで塗る形の Silhouette。太らせるのは縁に太い線を足し、細らせるのは縁を太い線で消す（角は丸くなる） */
+function filledSilhouette(outline: Outline, rule: CanvasFillRule): Silhouette {
+  return (c, spread) => {
+    outline(c)
+    c.fill(rule)
+    if (spread === 0) return
+    c.save()
+    c.lineJoin = 'round'
+    c.lineWidth = Math.abs(spread) * 2
+    if (spread < 0) c.globalCompositeOperation = 'destination-out'
+    c.stroke()
+    c.restore()
+  }
+}
+
 /** いま組んであるパスを、塗りを下から順に重ねて塗る。落ち影は一番下の塗りに付ける */
-function fillAll(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Pick<Style, 'fills'>, effects: readonly Effect[]): void {
+function fillAll(
+  ctx: CanvasRenderingContext2D,
+  pass: Pass,
+  node: Size & Pick<Style, 'fills'>,
+  effects: readonly Effect[],
+  silhouette: Silhouette,
+): void {
   node.fills.forEach((fill, i) => {
     ctx.save()
     ctx.globalAlpha *= fill.opacity
-    if (i === 0) applyEffects(ctx, pass, effects)
+    if (fill.blendMode !== 'normal') ctx.globalCompositeOperation = fill.blendMode
+    if (i === 0) drawDropShadows(ctx, pass, effects, silhouette, true)
     if (fill.type === 'radial') fillRadial(ctx, fill, node, fillRuleOf(node))
     else {
       ctx.fillStyle = paintStyle(ctx, fill, node)
@@ -335,6 +635,7 @@ function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'stro
   for (const stroke of node.strokes) {
     ctx.save()
     ctx.globalAlpha *= stroke.opacity
+    if (stroke.blendMode !== 'normal') ctx.globalCompositeOperation = stroke.blendMode
     ctx.strokeStyle = paintStyle(ctx, stroke, node, node.strokeWidth)
     ctx.stroke()
     ctx.restore()
@@ -377,10 +678,8 @@ function conicGradient(ctx: CanvasRenderingContext2D, paint: ConicGradient, size
 
 /** 円形のグラデーションの楕円を単位円に写す変換（ノードの座標系で）。楕円がつぶれていれば null */
 function radialMatrix(paint: RadialGradient, size: Size): Matrix | null {
-  const rx = paint.rx * size.width
-  const ry = paint.ry * size.height
-  const m: Matrix = [rx, 0, 0, ry, paint.cx * size.width, paint.cy * size.height]
-  return rx > 0 && ry > 0 && m.every(Number.isFinite) ? m : null
+  const m = radialTransform(paint, size)
+  return paint.rx * size.width > 0 && paint.ry * size.height > 0 && m.every(Number.isFinite) ? m : null
 }
 
 /** 中心から半径 1 の円で色を変える CanvasGradient。楕円にするのは変換行列の役目 */
@@ -450,14 +749,77 @@ function drawFitted(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, node: Im
 }
 
 /**
- * 効果（影）を、次に描くものに付ける。影のずれは回転に従わない（図形を回しても、影は同じ向きに落ちる）。
- * Canvas は 1 回の描画に影を 1 つしか付けられないので、2 つ目からは図形を画面外へずらして影だけを先に描く
+ * 落ち影を描く。影のずれは回転に従わない（図形を回しても、影は同じ向きに落ちる）。attach なら最後の影は次に描くものに付ける。
+ * Canvas は 1 回の描画に影を 1 つしか付けられないので、ほかは図形を画面外へずらして影だけを先に描く。
+ * 広がりのある影は、太らせた形を別のキャンバスに描いてから影だけを落とす（drawMaskedShadow）
  */
-function applyEffects(ctx: CanvasRenderingContext2D, pass: Pass, all: readonly Effect[]): void {
-  const effects = splitEffects(all).drop
-  if (effects.length === 0) return
-  for (const effect of effects.slice(0, -1)) drawShadowOnly(ctx, pass, effect)
-  setShadow(ctx, pass, effects[effects.length - 1])
+function drawDropShadows(
+  ctx: CanvasRenderingContext2D,
+  pass: Pass,
+  all: readonly Effect[],
+  silhouette: Silhouette,
+  attach: boolean,
+): void {
+  const drops = splitEffects(all).drop
+  if (drops.length === 0) return
+  const plain = drops.filter((shadow) => shadow.spread === 0)
+  for (const shadow of drops) if (shadow.spread !== 0) drawMaskedShadow(ctx, pass, shadow, silhouette, false)
+  // 描画モードのある影は、図形と一緒に描くと図形にも描画モードがかかるので、付けずに先に描く
+  const last = attach && plain.at(-1)?.blendMode === 'normal' ? plain.pop() : undefined
+  for (const shadow of plain) drawShadowOnly(ctx, pass, shadow)
+  if (last) setShadow(ctx, pass, last)
+}
+
+/**
+ * 形（silhouette）を別のキャンバスに描き、その影だけを ctx に落とす。inner なら、形の外側（細らせた形をくり抜いた全体）を描いて、
+ * 影を形の内側へ落とす（呼ぶ側が形で切り抜いておく）
+ */
+function drawMaskedShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow, silhouette: Silhouette, inner: boolean): void {
+  const mask = acquireLayer(ctx, pass.layerDepth)
+  mask.fillStyle = '#000000'
+  mask.strokeStyle = '#000000'
+  if (inner) {
+    mask.save()
+    mask.setTransform(1, 0, 0, 1, 0, 0)
+    mask.fillRect(0, 0, mask.canvas.width, mask.canvas.height)
+    mask.restore()
+    // 内側の影の広がりは、くり抜く形を細らせる
+    mask.globalCompositeOperation = 'destination-out'
+    silhouette(mask, -shadow.spread)
+    mask.globalCompositeOperation = 'source-over'
+  } else silhouette(mask, shadow.spread)
+  const far = 100_000
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  setShadow(ctx, pass, shadow)
+  blendShadow(ctx, shadow)
+  ctx.shadowOffsetX += far
+  ctx.drawImage(mask.canvas, -far, 0)
+  ctx.restore()
+}
+
+/**
+ * 文字の内側の影。影を別のキャンバスに描き、文字の形（silhouette）で切り抜いてから ctx に重ねる
+ */
+function drawTextInnerShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow, silhouette: Silhouette): void {
+  const layer = acquireLayer(ctx, pass.layerDepth)
+  pass.layerDepth++
+  drawMaskedShadow(layer, pass, shadow, silhouette, true)
+  // 文字は行ごとに描くので、形を別のキャンバスにまとめてから 1 回で切り抜く（destination-in は 1 回の描画の外を消すため）
+  const shape = acquireLayer(ctx, pass.layerDepth)
+  pass.layerDepth--
+  shape.fillStyle = '#000000'
+  silhouette(shape, 0)
+  layer.save()
+  layer.setTransform(1, 0, 0, 1, 0, 0)
+  layer.globalCompositeOperation = 'destination-in'
+  layer.drawImage(shape.canvas, 0, 0)
+  layer.restore()
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  blendShadow(ctx, shadow)
+  ctx.drawImage(layer.canvas, 0, 0)
+  ctx.restore()
 }
 
 /**
@@ -469,7 +831,7 @@ function drawInnerShadows(
   pass: Pass,
   node: Size & { fillRule?: CanvasFillRule },
   effects: readonly Effect[],
-  outline: () => void,
+  outline: Outline,
 ): void {
   const inner = splitEffects(effects).inner
   if (inner.length === 0) return
@@ -477,6 +839,10 @@ function drawInnerShadows(
   ctx.save()
   ctx.clip(rule)
   for (const shadow of inner) {
+    if (shadow.spread !== 0) {
+      drawMaskedShadow(ctx, pass, shadow, filledSilhouette(outline, rule), true)
+      continue
+    }
     const pad = Math.max(node.width, node.height) + shadow.blur * 2 + Math.abs(shadow.x) + Math.abs(shadow.y)
     if (!Number.isFinite(pad)) continue
     outline()
@@ -484,6 +850,7 @@ function drawInnerShadows(
     ctx.rect(-pad, -pad, node.width + pad * 2, node.height + pad * 2)
     ctx.save()
     setShadow(ctx, pass, shadow)
+    blendShadow(ctx, shadow)
     ctx.fillStyle = '#000000'
     ctx.fill('evenodd')
     ctx.restore()
@@ -492,7 +859,12 @@ function drawInnerShadows(
   outline()
 }
 
-function setShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Effect): void {
+/** 影の描画モード（既存のデザインツールの影ごとの描画モード）。呼ぶ側が save / restore で囲む */
+function blendShadow(ctx: CanvasRenderingContext2D, shadow: Shadow): void {
+  if (shadow.blendMode !== 'normal') ctx.globalCompositeOperation = shadow.blendMode
+}
+
+function setShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow): void {
   const alpha = Math.round(shadow.opacity * 255)
   ctx.shadowColor = shadow.color + alpha.toString(16).padStart(2, '0')
   ctx.shadowBlur = shadow.blur * pass.scale
@@ -501,11 +873,12 @@ function setShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Effect): v
 }
 
 /** いま組んであるパスの影だけを描く。パスを画面の外へずらして塗り、影のずれで元の位置へ戻す */
-function drawShadowOnly(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Effect): void {
+function drawShadowOnly(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow): void {
   const far = 100_000
   const inverse = ctx.getTransform().inverse()
   ctx.save()
   setShadow(ctx, pass, shadow)
+  blendShadow(ctx, shadow)
   ctx.shadowOffsetX += far
   // 画面の座標で far だけ左へずらす量を、いまの座標系に直す
   ctx.translate(-far * inverse.a, -far * inverse.b)
@@ -525,6 +898,7 @@ function strokeWithCaps(
   for (const stroke of style.strokes) {
     ctx.save()
     ctx.globalAlpha *= stroke.opacity
+    if (stroke.blendMode !== 'normal') ctx.globalCompositeOperation = stroke.blendMode
     const color = paintStyle(ctx, stroke, style, capMarkerSize(style) + style.strokeWidth)
     ctx.beginPath()
     tracePath(ctx, line, false)
@@ -558,12 +932,19 @@ function clampRadius(radius: CornerRadius, size: Size): number[] {
 }
 
 /** 線の太さや影も含めて、ノードが描かれうる範囲（ノードの座標系） */
-function paintedRect(ctx: CanvasRenderingContext2D, node: SceneNode): Bounds {
-  if (node.type === 'text') return textRect(ctx, node)
-  const stroke = 'strokes' in node && node.strokes.length > 0 ? node.strokeWidth / 2 : 0
-  const effects = 'effects' in node ? node.effects : []
+export function paintedRect(ctx: CanvasRenderingContext2D, node: SceneNode): Bounds {
   // ぼかしは指定した長さより少し外まで広がる。影のずれは回転に従わないので、どの向きにも余裕を取る
-  const spread = Math.max(0, ...effects.map((shadow) => shadow.blur * 2 + Math.max(Math.abs(shadow.x), Math.abs(shadow.y))))
+  const spread = Math.max(
+    0,
+    ...node.effects.map((effect) =>
+      isShadow(effect) ? effect.blur * 2 + Math.max(0, effect.spread) + Math.max(Math.abs(effect.x), Math.abs(effect.y)) : effect.blur * 2,
+    ),
+  )
+  if (node.type === 'text') {
+    const rect = textRect(ctx, node)
+    return { x: rect.x - spread, y: rect.y - spread, width: rect.width + spread * 2, height: rect.height + spread * 2 }
+  }
+  const stroke = 'strokes' in node && node.strokes.length > 0 ? node.strokeWidth / 2 : 0
   // 端の形（矢印などの印、四角の端）は線より外へ張り出す
   const cap = node.type === 'path' && node.strokes.length > 0 ? capReach(node) : 0
   const outset = Math.max(stroke, cap) + spread

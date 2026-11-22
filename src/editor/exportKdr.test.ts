@@ -284,6 +284,7 @@ describe('parseKdr', () => {
       visible: true,
       locked: false,
       opacity: 1,
+      blendMode: 'normal',
       sizing: { width: 'fixed', height: 'fixed' },
       layoutPositioning: 'auto',
       constraints: { horizontal: 'start', vertical: 'start' },
@@ -297,6 +298,8 @@ describe('parseKdr', () => {
       strokeDashes: [],
       effects: [],
       cornerRadius: 0,
+      isMask: false,
+      maskType: 'vector',
     })
     expect(parseOne(rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif' }))).toMatchObject({
       fills: [],
@@ -308,7 +311,10 @@ describe('parseKdr', () => {
     expect(parseOne(rawNode({ type: 'frame', layout: {} }))).toMatchObject({
       children: [],
       clipContent: true,
+      passThrough: false,
       component: null,
+      setDescription: '',
+      booleanOperation: null,
       layout: { direction: 'horizontal', gap: 0, paddingTop: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' },
     })
   })
@@ -386,6 +392,59 @@ describe('parseKdr', () => {
     expect(roundTrip(rawNode({ effects: [inner] })).effects).toEqual([inner])
   })
 
+  it('描画モード（ノード・塗り）を検証する。normal なら省き、書き出しでも省く', () => {
+    const red = { type: 'solid', color: '#ff0000' }
+    const node = parseOne(rawNode({ blendMode: 'multiply', fills: [{ ...red, blendMode: 'screen' }, red] }))
+    expect(node).toMatchObject({ blendMode: 'multiply', fills: [{ blendMode: 'screen' }, { blendMode: 'normal' }] })
+    expect(parseOne(rawNode())).toMatchObject({ blendMode: 'normal' })
+    expect(() => parseOne(rawNode({ blendMode: 'add' }))).toThrow('blendMode')
+    expect(() => parseOne(rawNode({ fills: [{ ...red, blendMode: 'plus' }] }))).toThrow('fills[0].blendMode')
+    const back = roundTrip(rawNode({ blendMode: 'luminosity', fills: [{ ...red, blendMode: 'normal' }, { ...red, blendMode: 'overlay' }] }))
+    expect(back).toMatchObject({ blendMode: 'luminosity', fills: [red, { ...red, blendMode: 'overlay' }] })
+    expect(roundTrip(rawNode({ blendMode: 'normal' }))).not.toHaveProperty('blendMode')
+  })
+
+  it('円形のグラデーションの回す角度を検証する。0 なら省く', () => {
+    const stops = [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }]
+    const radial = { type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.25, stops }
+    expect(parseOne(rawNode({ fills: [radial] }))).toMatchObject({ fills: [{ angle: 0 }] })
+    expect(parseOne(rawNode({ fills: [{ ...radial, angle: 30 }] }))).toMatchObject({ fills: [{ angle: 30 }] })
+    expect(() => parseOne(rawNode({ fills: [{ ...radial, angle: 'x' }] }))).toThrow('fills[0].angle')
+    expect(roundTrip(rawNode({ fills: [{ ...radial, angle: 0 }] })).fills).toEqual([radial])
+    expect(roundTrip(rawNode({ fills: [{ ...radial, angle: -45 }] })).fills).toEqual([{ ...radial, angle: -45 }])
+  })
+
+  it('影の広がりと、ぼかしの効果を検証する。テキストと画像も効果を持つ', () => {
+    const shadow = { type: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000', opacity: 0.25 }
+    expect(parseOne(rawNode({ effects: [shadow] }))).toMatchObject({ effects: [{ spread: 0 }] })
+    expect(parseOne(rawNode({ effects: [{ ...shadow, spread: -2 }] }))).toMatchObject({ effects: [{ spread: -2 }] })
+    expect(() => parseOne(rawNode({ effects: [{ ...shadow, spread: '1' }] }))).toThrow('effects[0].spread')
+    expect(roundTrip(rawNode({ effects: [{ ...shadow, spread: 0 }] })).effects).toEqual([shadow])
+    expect(roundTrip(rawNode({ effects: [{ ...shadow, spread: 3 }] })).effects).toEqual([{ ...shadow, spread: 3 }])
+    // 影の描画モード。normal なら書かない
+    expect(parseOne(rawNode({ effects: [shadow] }))).toMatchObject({ effects: [{ blendMode: 'normal' }] })
+    expect(() => parseOne(rawNode({ effects: [{ ...shadow, blendMode: 'add' }] }))).toThrow('effects[0].blendMode')
+    expect(roundTrip(rawNode({ effects: [{ ...shadow, blendMode: 'normal' }] })).effects).toEqual([shadow])
+    expect(roundTrip(rawNode({ effects: [{ ...shadow, blendMode: 'multiply' }] })).effects).toEqual([{ ...shadow, blendMode: 'multiply' }])
+
+    const blurs = [{ type: 'layer-blur', blur: 4 }, { type: 'background-blur', blur: 12, visible: false }]
+    // ぼかしは影の項目（ずれ・色）を持たない。余計な項目は捨てる
+    expect(parseOne(rawNode({ effects: [{ ...blurs[0], x: 3, color: '#ff0000' }, blurs[1]] }))).toMatchObject({
+      effects: [{ type: 'layer-blur', blur: 4, visible: true }, { type: 'background-blur', blur: 12, visible: false }],
+    })
+    expect(parseOne(rawNode({ effects: [blurs[0]] })).effects[0]).not.toHaveProperty('x')
+    expect(() => parseOne(rawNode({ effects: [{ type: 'layer-blur' }] }))).toThrow('effects[0].blur')
+    expect(() => parseOne(rawNode({ effects: [{ type: 'motion-blur', blur: 1 }] }))).toThrow('effects[0].type')
+    expect(roundTrip(rawNode({ effects: blurs })).effects).toEqual(blurs)
+
+    const text = rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif', effects: [shadow] })
+    expect(parseOne(text)).toMatchObject({ effects: [{ type: 'drop-shadow' }] })
+    expect(parseOne(rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif' }))).toMatchObject({ effects: [] })
+    expect(parseOne(rawNode({ type: 'image', assetId: 'a1', effects: [blurs[0]] }), { a1: PNG })).toMatchObject({
+      effects: [{ type: 'layer-blur' }],
+    })
+  })
+
   it('角丸は数値か 4 隅の配列。0 なら書き出しで省く', () => {
     expect(parseOne(rawNode({ cornerRadius: [1, 2, 3, 4] }))).toMatchObject({ cornerRadius: [1, 2, 3, 4] })
     expect(parseOne(rawNode({ cornerRadius: 8 }))).toMatchObject({ cornerRadius: 8 })
@@ -434,6 +493,49 @@ describe('parseKdr', () => {
     const contours = [{ points: [{ x: 0.5, y: 0.5 }, { x: 0.6, y: 0.6 }], closed: true }]
     const holed = { ...node, strokeDashes: [3, 1], fillRule: 'evenodd' as const, contours }
     expect(fileNode(insertNode(createPage('p'), holed))).toMatchObject({ strokeDashes: [3, 1], fillRule: 'evenodd', contours })
+  })
+
+  it('マスクの指定（isMask）を検証し、既定値なら書かない。テキスト・画像・フレームは持たない', () => {
+    expect(parseOne(rawNode({ isMask: true }))).toMatchObject({ isMask: true })
+    expect(parseOne(rawNode({ type: 'ellipse', isMask: true }))).toMatchObject({ isMask: true })
+    expect(() => parseOne(rawNode({ isMask: 'yes' }))).toThrow('isMask')
+    expect('isMask' in parseOne(rawNode({ type: 'frame', isMask: true }))).toBe(false)
+    expect(roundTrip(rawNode({ isMask: true })).isMask).toBe(true)
+    expect('isMask' in roundTrip(rawNode({ isMask: false }))).toBe(false)
+  })
+
+  it('マスクの種類（maskType）を検証し、形（vector）なら書かない', () => {
+    expect(parseOne(rawNode({ isMask: true, maskType: 'luminance' }))).toMatchObject({ maskType: 'luminance' })
+    expect(parseOne(rawNode({ type: 'path', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], maskType: 'alpha' }))).toMatchObject({ maskType: 'alpha' })
+    expect(() => parseOne(rawNode({ maskType: 'shape' }))).toThrow('maskType')
+    expect('maskType' in parseOne(rawNode({ type: 'frame', maskType: 'alpha' }))).toBe(false)
+    expect(roundTrip(rawNode({ maskType: 'luminance' })).maskType).toBe('luminance')
+    expect('maskType' in roundTrip(rawNode({ maskType: 'vector' }))).toBe(false)
+  })
+
+  it('ブーリアン演算（booleanOperation）を検証し、null なら書かない。フレームだけが持ち、自動で並べるフレームには持てない', () => {
+    expect(parseOne(rawNode({ type: 'frame', booleanOperation: 'subtract' }))).toMatchObject({ booleanOperation: 'subtract' })
+    expect(() => parseOne(rawNode({ type: 'frame', booleanOperation: 'xor' }))).toThrow('booleanOperation')
+    expect(() => parseOne(rawNode({ type: 'frame', booleanOperation: 'union', layout: {} }))).toThrow('booleanOperation')
+    expect('booleanOperation' in parseOne(rawNode({ booleanOperation: 'union' }))).toBe(false)
+    expect(roundTrip(rawNode({ type: 'frame', booleanOperation: 'exclude' })).booleanOperation).toBe('exclude')
+    expect('booleanOperation' in roundTrip(rawNode({ type: 'frame', booleanOperation: null }))).toBe(false)
+  })
+
+  it('通過（passThrough）を検証し、false なら書かない。フレームだけが持つ', () => {
+    expect(parseOne(rawNode({ type: 'frame', passThrough: true }))).toMatchObject({ passThrough: true })
+    expect(() => parseOne(rawNode({ type: 'frame', passThrough: 'yes' }))).toThrow('passThrough')
+    expect('passThrough' in parseOne(rawNode({ passThrough: true }))).toBe(false)
+    expect(roundTrip(rawNode({ type: 'frame', passThrough: true })).passThrough).toBe(true)
+    expect('passThrough' in roundTrip(rawNode({ type: 'frame', passThrough: false }))).toBe(false)
+  })
+
+  it('まとまりの説明文（setDescription）を検証し、空なら書かない。フレームだけが持つ', () => {
+    expect(parseOne(rawNode({ type: 'frame', setDescription: '大きさ' }))).toMatchObject({ setDescription: '大きさ' })
+    expect(() => parseOne(rawNode({ type: 'frame', setDescription: 1 }))).toThrow('setDescription')
+    expect('setDescription' in parseOne(rawNode({ setDescription: 'x' }))).toBe(false)
+    expect(roundTrip(rawNode({ type: 'frame', setDescription: '大きさ' })).setDescription).toBe('大きさ')
+    expect('setDescription' in roundTrip(rawNode({ type: 'frame', setDescription: '' }))).toBe(false)
   })
 
   it('大きさの下限・上限と、並びから外す指定を検証する', () => {

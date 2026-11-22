@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from 'react'
+import { setExportOptions, useExportOptions } from './exportOptions.ts'
 
 type Props = {
   scale: number
@@ -11,7 +12,7 @@ type Props = {
   children: ReactNode
 }
 
-/** PNG 書き出しの倍率と実行ボタン、SVG 書き出しとコピーのボタン */
+/** PNG 書き出しの倍率と実行ボタン、SVG 書き出しとコピーのボタンと、書き出しのオプション（背景は PNG と SVG、id は SVG だけ） */
 export function ExportControls({ scale, onScaleChange, onExport, onExportSvg, onCopySvg, children }: Props) {
   // 「SVG をコピー」を押したあと、少しのあいだ「コピーしました」と出す
   const [copied, setCopied] = useState(false)
@@ -60,6 +61,38 @@ export function ExportControls({ scale, onScaleChange, onExport, onExportSvg, on
           )}
         </div>
       )}
+      <ExportOptionFields svg={Boolean(onExportSvg || onCopySvg)} />
     </>
+  )
+}
+
+/** 書き出しのオプション。背景を敷くか（PNG と SVG。CLI の --background）と、レイヤー名の id を付けるか（SVG だけ。CLI の --no-ids の逆） */
+function ExportOptionFields({ svg }: { svg: boolean }) {
+  const options = useExportOptions()
+  return (
+    <div className="export-row export-options">
+      <label title="書き出す範囲全体に背景の色を敷く（PNG と SVG。外すと透明）">
+        <input
+          type="checkbox"
+          checked={options.background !== null}
+          onChange={(event) => setExportOptions({ background: event.target.checked ? '#ffffff' : null })}
+        />
+        背景
+      </label>
+      {options.background !== null && (
+        <input
+          type="color"
+          aria-label="書き出しの背景の色"
+          value={options.background}
+          onChange={(event) => setExportOptions({ background: event.target.value })}
+        />
+      )}
+      {svg && (
+        <label title="SVG の要素に、レイヤー名から作る id を付ける（取り込み直すとレイヤー名に戻る）">
+          <input type="checkbox" checked={options.ids} onChange={(event) => setExportOptions({ ids: event.target.checked })} />
+          SVG に id
+        </label>
+      )}
+    </div>
   )
 }

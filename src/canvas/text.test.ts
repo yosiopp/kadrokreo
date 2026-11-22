@@ -178,3 +178,31 @@ describe('measureText（高さの下限・上限）', () => {
     expect(measureText(ctx, style({ minHeight: 50, maxHeight: 20 })).height).toBe(50)
   })
 })
+
+describe('layoutText（中身で覚える）', () => {
+  it('別のノードでも、文字・書体・折り返す幅が同じなら測り直さない', () => {
+    let calls = 0
+    const ctx = { font: '', measureText: (text: string) => (calls++, { width: text.length * 10 }) } as unknown as CanvasRenderingContext2D
+    const style = (patch: Partial<TextStyle> = {}): TextStyle => ({
+      text: 'shared layout',
+      fontSize: 13,
+      fontFamily: 'sans-serif',
+      fontWeight: 400,
+      lineHeight: 1,
+      sizing: { width: 'fixed', height: 'hug' },
+      width: 70,
+      minWidth: null,
+      maxWidth: null,
+      minHeight: null,
+      maxHeight: null,
+      ...patch,
+    })
+    const first = layoutText(ctx, style())
+    const measured = calls
+    expect(layoutText(ctx, style({ lineHeight: 2 }))).toBe(first)
+    expect(calls).toBe(measured)
+    // 折り返す幅が違えば測り直す
+    expect(layoutText(ctx, style({ width: 200 })).map((line) => line.text)).toEqual(['shared layout'])
+    expect(calls).toBeGreaterThan(measured)
+  })
+})
