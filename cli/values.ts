@@ -1,5 +1,5 @@
 import { isShadow, solid } from '../src/document/paint.ts'
-import type { Effect, PathPoint, SceneNode } from '../src/document/types.ts'
+import type { Effect, PathContour, PathPoint, SceneNode } from '../src/document/types.ts'
 import { parseDashes } from '../src/editor/dashes.ts'
 import { DEFAULT_SHADOW } from '../src/editor/operations/paints.ts'
 import type { NodePatch } from '../src/editor/operations/tree.ts'
@@ -11,7 +11,8 @@ import { UsageError } from './args.ts'
 // よく使うものには略記がある: fill=色 / stroke=色（単色 1 つの塗り・線にする。null で外す）、
 // shadow.blur=4 など（最初の影。なければ editor のパネルと同じ既定の影 DEFAULT_SHADOW を付けてから変える）、shadow=null（影を外す）、
 // blur=8 / backgroundBlur=8（レイヤーのぼかし・背景のぼかし。最初のその効果を変えるか足す。null か 0 で外す）、
-// cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、dash=4,2（破線。null で実線）、radius=8（パスの頂点の角の丸め。頂点ごとならカンマで並べる）。
+// cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、dash=4,2（破線。null で実線）、radius=8（パスの全部の輪郭の頂点の角の丸め。頂点ごとなら全部の輪郭の通し番号の順にカンマで並べる）、
+// radius.1=8（N 番目の輪郭だけ。0 が最初の輪郭 points、1 からが contours）。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
 
 /** 略記を、本来の項目の「名前=値」に直す。直せないもの（そのノードにない項目）はそのまま返す */
@@ -35,23 +36,6 @@ function expandShorthand(node: SceneNode, path: string, raw: string, draft: Reco
     const dashes = parseDashes(raw)
     if (dashes === null) throw new UsageError(`${path}: 0 以上の数をカンマで並べてください（null で実線）`)
     return ['strokeDashes', dashes]
-  }
-  if (head === 'radius' && rest.length === 0 && node.type === 'path') {
-    // パスの頂点の角の丸め。数値 1 つなら全部の頂点、カンマで並べれば頂点ごと（0 は丸めない）
-    const current = (Object.hasOwn(draft, 'points') ? draft.points : node.points) as PathPoint[]
-    const values = raw.split(',').map((part) => parseValue(part, 0, path))
-    if (values.some((value) => typeof value !== 'number' || !(value >= 0))) throw new UsageError(`${path}: 0 以上の数を指定してください`)
-    if (values.length !== 1 && values.length !== current.length) {
-      throw new UsageError(`${path}: 数値 1 つか、頂点の数（${current.length}）だけ並べてください`)
-    }
-    return [
-      'points',
-      current.map((point, i) => {
-        const { radius: _, ...rest } = point
-        const radius = (values.length === 1 ? values[0] : values[i]) as number
-        return radius > 0 ? { ...rest, radius } : rest
-      }),
-    ]
   }
   const currentEffects = () => (Object.hasOwn(draft, 'effects') ? draft.effects : node.effects) as Effect[]
   if (head === 'shadow') {
@@ -77,6 +61,47 @@ function expandShorthand(node: SceneNode, path: string, raw: string, draft: Reco
     return ['effects', at === -1 ? [...current, effect] : current.with(at, effect)]
   }
   return null
+}
+
+/**
+ * パスの頂点の角の丸め（radius= / radius.N=）を、輪郭の項目（points・contours）の patch に直す。パスでなければ null。
+ * radius= は全部の輪郭の頂点、radius.N= は N 番目の輪郭（0 が points、1 からが contours）だけ。
+ * 数値 1 つなら対象の頂点すべて、カンマで並べれば頂点ごと（対象の輪郭の通し番号の順。0 は丸めない）
+ */
+function expandRadius(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): Record<string, unknown> | null {
+  const [head, ...rest] = path.split('.')
+  if (head !== 'radius' || rest.length > 1 || node.type !== 'path') return null
+  const first = (Object.hasOwn(draft, 'points') ? draft.points : node.points) as PathPoint[]
+  const others = (Object.hasOwn(draft, 'contours') ? draft.contours : node.contours) as PathContour[]
+  const all = [first, ...others.map((contour) => contour.points)]
+  let targets = all.map((_, i) => i)
+  if (rest.length === 1) {
+    const index = Number(rest[0])
+    if (!/^\d+$/.test(rest[0]) || index >= all.length) {
+      throw new UsageError(`${path}: 輪郭の番号は 0〜${all.length - 1} です（0 が最初の輪郭）`)
+    }
+    targets = [index]
+  }
+  const count = targets.reduce((sum, i) => sum + all[i].length, 0)
+  const values = raw.split(',').map((part) => parseValue(part, 0, path))
+  if (values.some((value) => typeof value !== 'number' || !(value >= 0))) throw new UsageError(`${path}: 0 以上の数を指定してください`)
+  if (values.length !== 1 && values.length !== count) {
+    throw new UsageError(`${path}: 数値 1 つか、頂点の数（${count}）だけ並べてください`)
+  }
+  let at = 0
+  const rounded = all.map((points, i) => {
+    if (!targets.includes(i)) return points
+    return points.map((point) => {
+      const { radius: _, ...plain } = point
+      const radius = (values.length === 1 ? values[0] : values[at]) as number
+      at++
+      return radius > 0 ? { ...plain, radius } : plain
+    })
+  })
+  const patch: Record<string, unknown> = {}
+  if (targets.includes(0)) patch.points = rounded[0]
+  if (targets.some((i) => i > 0)) patch.contours = others.map((contour, i) => ({ ...contour, points: rounded[i + 1] }))
+  return patch
 }
 
 /** そのノードの種類が持たない項目や、木構造に関わる項目は変えられない */
@@ -112,6 +137,11 @@ export function buildPatch(node: SceneNode, assignments: readonly [string, strin
   const draft: Record<string, unknown> = {}
   const source = node as unknown as Record<string, unknown>
   for (const [path, raw] of assignments) {
+    const radius = expandRadius(node, path, raw, draft)
+    if (radius) {
+      Object.assign(draft, radius)
+      continue
+    }
     const shorthand = expandShorthand(node, path, raw, draft)
     if (shorthand) {
       draft[shorthand[0]] = shorthand[1]

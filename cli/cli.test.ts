@@ -176,6 +176,26 @@ describe('kadrokreo CLI', () => {
     const again = nodeByName(await h.doc('a.kdr'), 'Tri')
     expect(again.type === 'path' && again.points.map((point) => point.radius)).toEqual([undefined, 4, undefined])
 
+    // 輪郭が 2 つあるパスでは、radius= は両方の輪郭の頂点に効く。radius.N= ならその輪郭だけ
+    const holed = harness()
+    const square = 'M0 0 L100 0 L100 100 L0 100 Z M25 25 L75 25 L75 75 L25 75 Z'
+    expect(await holed.run(['new', '-o', 'h.kdr', '+', 'add', 'path', '--name', 'Ring', '--d', square, '+', 'set', 'Ring', 'radius=8'])).toBe(0)
+    const ring = nodeByName(await holed.doc('h.kdr'), 'Ring')
+    expect(ring.type === 'path' && ring.points.map((point) => point.radius)).toEqual([8, 8, 8, 8])
+    expect(ring.type === 'path' && ring.contours[0].points.map((point) => point.radius)).toEqual([8, 8, 8, 8])
+    expect(await holed.run(['-f', 'h.kdr', '-w', 'set', 'Ring', 'radius.1=4,0,4,0'])).toBe(0)
+    const inner = nodeByName(await holed.doc('h.kdr'), 'Ring')
+    expect(inner.type === 'path' && inner.points.map((point) => point.radius)).toEqual([8, 8, 8, 8])
+    expect(inner.type === 'path' && inner.contours[0].points.map((point) => point.radius)).toEqual([4, undefined, 4, undefined])
+    expect(await holed.run(['-f', 'h.kdr', '-w', 'set', 'Ring', 'radius=1,2,3,4,5,6,7,8', '+', 'set', 'Ring', 'radius.0=0'])).toBe(0)
+    const each = nodeByName(await holed.doc('h.kdr'), 'Ring')
+    expect(each.type === 'path' && each.points.map((point) => point.radius)).toEqual([undefined, undefined, undefined, undefined])
+    expect(each.type === 'path' && each.contours[0].points.map((point) => point.radius)).toEqual([5, 6, 7, 8])
+    expect(await holed.run(['-f', 'h.kdr', 'set', 'Ring', 'radius=1,2,3,4'])).not.toBe(0)
+    expect(holed.stderr).toContain('頂点の数（8）')
+    expect(await holed.run(['-f', 'h.kdr', 'set', 'Ring', 'radius.2=4'])).not.toBe(0)
+    expect(holed.stderr).toContain('輪郭の番号は 0〜1')
+
     const bad = harness()
     expect(await bad.run(['new', '+', 'add', 'path', '--points', '0,0 10,0 5,8', 'radius=1,2'])).not.toBe(0)
     expect(bad.stderr).toContain('radius')
