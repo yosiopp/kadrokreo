@@ -147,6 +147,10 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   'variant-prop-rm': [
     'kdr -f demo.kdr -w variant-add Button --id big 種類=大 + variant-prop-add big サイズ M + variant-prop-rm big サイズ',
   ],
+  'variant-prop-order': [
+    'kdr -f demo.kdr -w variant-add Button --id big 種類=大 + variant-prop-add big サイズ M + variant-prop-order big サイズ 0',
+  ],
+  'variant-value-order': ['kdr -f demo.kdr -w variant-add Button --id big 種類=大 + variant-value-order big 種類 大 0'],
   'variant-value-rename': ['kdr -f demo.kdr -w variant-add Button --id big 種類=大 + variant-value-rename big 種類 大 特大'],
   describe: ['kdr -f demo.kdr -w describe Button "主な操作に使うボタン"'],
   'prop-add': [

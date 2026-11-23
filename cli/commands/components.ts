@@ -32,6 +32,8 @@ import { updateNode } from '../../src/editor/operations/tree.ts'
 import {
   addVariant,
   addVariantProperty,
+  moveVariantProperty,
+  moveVariantValue,
   removeVariantProperty,
   renameVariantProperty,
   renameVariantValue,
@@ -547,5 +549,48 @@ export const variantValueRename: Command = {
       if (next === page) throw new UsageError(`${step.name}: 値は空でなく、「,」「=」を含まないものにしてください: ${to}`)
       return next
     })
+  },
+}
+
+/** 「位置」（0 が先頭の整数）を読む。並びより大きければ最後へ */
+function orderIndex(step: Step, at: number): number {
+  const raw = positional(step, at, '位置')
+  const index = Number(raw)
+  if (!Number.isInteger(index) || index < 0) throw new UsageError(`${step.name}: 位置は 0 以上の整数です: ${raw}`)
+  return index
+}
+
+export const variantPropOrder: Command = {
+  name: 'variant-prop-order',
+  kind: 'edit',
+  usage: 'variant-prop-order まとまり 名前 位置',
+  summary:
+    'バリアントのまとまりのプロパティを、並びの「位置」番目（0 が先頭）へ移す。すべてのバリアントの名前の中のプロパティの順を揃えて書き換える。まとまりの代わりに中のバリアントを指してもよい（editor のバリアントのプロパティのドラッグと同じ）',
+  run({ session }, step) {
+    checkStep(step, { positionals: 3 })
+    const setId = resolveVariantSet(session, positional(step, 0, 'まとまり'), step.name)
+    const key = positional(step, 1, '名前')
+    requireProperty(session.page, setId, key, step.name)
+    const index = orderIndex(step, 2)
+    session.apply((page) => moveVariantProperty(page, setId, key, index))
+  },
+}
+
+export const variantValueOrder: Command = {
+  name: 'variant-value-order',
+  kind: 'edit',
+  usage: 'variant-value-order まとまり プロパティ 値 位置',
+  summary:
+    'バリアントのまとまりのプロパティの値を、並びの「位置」番目（0 が先頭）へ移す。値の順はまとまりの中のバリアントの並び順なので、バリアントの並びを値の順に並べ直す（オートレイアウトのまとまりなら、並びに沿って位置も入れ替わる）。まとまりの代わりに中のバリアントを指してもよい',
+  run({ session }, step) {
+    checkStep(step, { positionals: 4 })
+    const setId = resolveVariantSet(session, positional(step, 0, 'まとまり'), step.name)
+    const key = positional(step, 1, 'プロパティ')
+    const value = positional(step, 2, '値')
+    requireProperty(session.page, setId, key, step.name)
+    const values = variantProperties(session.page, setId).find((property) => property.name === key)!.values
+    if (!values.includes(value)) throw new UsageError(`${step.name}: ${key} に値 ${value} がありません（あるもの: ${values.join(', ')}）`)
+    const index = orderIndex(step, 3)
+    session.apply((page) => moveVariantValue(page, setId, key, value, index))
   },
 }

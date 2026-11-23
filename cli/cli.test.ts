@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { gzipSync, gunzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
 import { KDR_VERSION, decodeKdr, readKdrArchive } from '../src/document/kdr.ts'
-import type { DesignDocument, FrameNode, PathNode, TextNode } from '../src/document/types.ts'
+import type { DesignDocument, FrameNode, PathNode, RectNode, TextNode } from '../src/document/types.ts'
 import { type IO, run } from './run.ts'
 
 /** メモリ上のファイルで run を動かす */
@@ -703,6 +703,82 @@ describe('kadrokreo CLI', () => {
     expect(await bad.run(['-f', 'b.kdr', 'variant-prop-rename', 'btn', 'スタイル', 'a=b'])).toBe(2)
     expect(await bad.run(['-f', 'b.kdr', 'variant-value-rename', 'btn', 'スタイル', '強調', '標準'])).toBe(2) // もうある
     expect(await bad.run(['-f', 'b.kdr', 'variant-value-rename', 'btn', 'スタイル', 'ない', 'x'])).toBe(2)
+  })
+
+  it('variant-prop-order / variant-value-order でバリアントのプロパティ・値を並べ替える', async () => {
+    const h = harness()
+    expect(
+      await h.run([
+        ...argv('new + add frame --name Button --id btn + component btn + variant-add btn --id big'),
+        '種類=大',
+        ...['+', 'variant-prop-add', 'btn', 'サイズ', 'M'],
+        ...['+', 'variant-prop-order', 'big', 'サイズ', '0'],
+        '-o',
+        'a.kdr',
+      ]),
+    ).toBe(0)
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    expect(nodes.btn.name).toBe('サイズ=M, 種類=標準')
+    expect(nodes.big.name).toBe('サイズ=M, 種類=大')
+    const setId = nodes.btn.parentId!
+    const before = (nodes[setId] as FrameNode).children
+    expect(before.indexOf('btn')).toBeLessThan(before.indexOf('big'))
+
+    // 位置が並びより大きければ最後へ。値は並び（子の順）を入れ替える
+    const move = harness(Object.fromEntries(h.fs))
+    expect(await move.run(['-f', 'a.kdr', 'variant-value-order', setId, '種類', '大', '0', '+', 'variant-prop-order', 'btn', 'サイズ', '9', '-o', 'b.kdr'])).toBe(0)
+    const after = (await move.doc('b.kdr')).pages[0].nodes
+    const children = (after[setId] as FrameNode).children
+    expect(children.indexOf('big')).toBeLessThan(children.indexOf('btn'))
+    expect(after.btn.name).toBe('種類=標準, サイズ=M')
+    expect(after.big.x).toBe(nodes.btn.x) // オートレイアウトのまとまりなので、並びに沿って位置も入れ替わる
+
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(['-f', 'a.kdr', 'variant-prop-order', 'btn', 'ない', '0'])).toBe(2)
+    expect(await bad.run(['-f', 'a.kdr', 'variant-prop-order', 'btn', 'サイズ', '-1'])).toBe(2)
+    expect(await bad.run(['-f', 'a.kdr', 'variant-prop-order', 'btn', 'サイズ', '1.5'])).toBe(2)
+    expect(await bad.run(['-f', 'a.kdr', 'variant-value-order', 'btn', '種類', 'ない', '0'])).toBe(2)
+    expect(await bad.run(['-f', 'a.kdr', 'variant-value-order', 'btn', 'ない', '大', '0'])).toBe(2)
+  })
+
+  it('gradient --stop で色を 1 つだけ変え、種類を省くといまの種類のまま変える', async () => {
+    const h = harness()
+    expect(
+      await h.run([
+        ...argv('new + add rect --id a + add rect --id b + gradient radial a --colors #000,#888,#fff --center 0.3,0.3'),
+        ...argv('+ gradient a --stop 1=#ff000080,-1=@90% + set b fill=#123456'),
+        '-o',
+        'a.kdr',
+      ]),
+    ).toBe(0)
+    expect(h.stderr).toBe('')
+    const paint = ((await h.doc('a.kdr')).pages[0].nodes.a as RectNode).fills[0]
+    if (paint.type !== 'radial') throw new Error(`radial ではありません: ${paint.type}`)
+    expect(paint.cx).toBe(0.3) // 種類も向きも受け継ぐ
+    expect(paint.stops).toEqual([
+      { offset: 0, color: '#000000', opacity: 1 },
+      { offset: 0.5, color: '#ff0000', opacity: 0.502 },
+      { offset: 0.9, color: '#ffffff', opacity: 1 },
+    ])
+
+    const edit = harness(Object.fromEntries(h.fs))
+    expect(await edit.run(argv('-f a.kdr gradient linear a --stop 0=#00f -o b.kdr'))).toBe(0)
+    const linear = ((await edit.doc('b.kdr')).pages[0].nodes.a as RectNode).fills[0]
+    expect(linear.type).toBe('linear')
+    if (linear.type !== 'linear') return
+    expect(linear.stops[0].color).toBe('#0000ff')
+
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr gradient a --stop 3=#f00'))).toBe(2) // 範囲の外
+    expect(await bad.run(argv('-f a.kdr gradient a --stop 0=@95%'))).toBe(2) // 位置が戻る
+    expect(await bad.run(argv('-f a.kdr gradient a --stop 1'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient a --stop 1='))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient a --stop x=#f00'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient a --stop 1=red'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient a --from 0,0'))).toBe(2) // radial に --from
+    expect(await bad.run(argv('-f a.kdr gradient b --stop 0=#f00'))).toBe(2) // 単色
+    expect(await bad.run(argv('-f a.kdr gradient a --add --colors #000,#fff'))).toBe(2) // --add に種類がない
   })
 
   it('gradient で直線・円形、3 色以上、塗りごとの不透明度のグラデーションを作る', async () => {

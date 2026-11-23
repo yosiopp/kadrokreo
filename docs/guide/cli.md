@@ -57,7 +57,9 @@ kdr -f demo2.kdr -w set Card fill=#ffffff
 
 # グラデーション（3 色、真ん中の位置は 30%、塗りの不透明度 80%）と、バリアントのプロパティ
 kdr -f demo2.kdr -w gradient linear Card --colors '#5b4cf5,#a99fff@30%,#ffffff' --angle 90 --opacity 0.8
+kdr -f demo2.kdr -w gradient Card --stop '1=#ff000080'   # 2 番目の色だけを半透明の赤に（種類と向きはそのまま）
 kdr -f demo2.kdr -w variant-add Button --id big 種類=大 + variant-prop-add big サイズ M + variant-prop-rename big 種類 スタイル
+kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big スタイル 大 0   # サイズを先頭のプロパティに、値「大」を先頭に
 ```
 
 ## コマンドの一覧
@@ -70,7 +72,7 @@ kdr -f demo2.kdr -w variant-add Button --id big 種類=大 + variant-prop-add bi
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
 | `add 種類 …` | `rect` `ellipse` `frame` `text`（`--text`）`line`（`--from x,y --to x,y`）`path`（`--points "x,y …" [--closed]` か、曲線を含めるなら SVG の path の `--d "M0 0 C…"`。`M` のまとまりが複数なら穴のあるパス）`image`（`--src 画像`。PNG・JPEG・WebP・GIF、32MB・6,400 万画素まで） |
 | `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`sizing.width=fill`、`maxWidth=320`、`constraints.horizontal=end`、`fill=null` で外す）。`fill` / `stroke` / `shadow` は、単色の塗り・線と最初の影の略記（`shadow.spread=4` で影の広がり）。`blur=8` / `backgroundBlur=8` でレイヤー・背景のぼかし（`null` で外す）、`blendMode=multiply` でノードの描画モード。`cornerRadius=8,8,0,0` で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは `radius=8` で全部の輪郭（穴など 2 つ目以降も）の頂点の角を丸める（頂点ごとなら `radius=8,0,8` と、`get ノード d` の順の通し番号で並べる）。特定の輪郭だけなら `radius.N=8`（`N` は 0 から数えた輪郭の番号で、0 が最初の輪郭。`radius.1=4,0,4,0` のように頂点ごとも可）。破線は `dash=4,2`（線の長さ・間隔。`dash=null` で実線）、破線のずれは `dashOffset=2`、線の角の形は `join=round`（`miter` `round` `bevel`）。端の形は `endCap=arrow`（`none` `round` `square` `arrow` `circle` `diamond`）、印の大きさは `capSize=16`。配列は `fills=[…]` と JSON で書くか、`fills.0.color=#ff0000` のように番号でつなぐ |
-| `gradient linear\|radial\|conic ノード… [--colors 色,色@50%,色…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r\|rx,ry] [--focus fx,fy] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N \| --add]` | グラデーションの塗りにする（3 色以上、位置は 0〜1 か %。`#ff000000` のような `#rrggbbaa`・`#rgba` の色は最後の桁が色ごとの透明度）。直線は `--angle` か始点・終点（`--from` / `--to`）、円形の `--angle` は楕円を回す角度、`--focus` は焦点（中心からのずれを半径に対する割合で）、角度（conic）は `--center` と `--angle`（最初の色の向き）。`--blend multiply` で塗りの描画モード。ふつうはいちばん上の塗りを置き換え、`--index` で何番目か（0 が一番下）、`--add` で上に重ねる。`--stroke` なら線。`--hidden` でその塗りを隠す。`--colors` を省くと今の色のまま種類や向きだけ変える。塗り・影を隠すだけなら `set ノード fills.0.visible=false`、内側の影は `set ノード shadow.type=inner-shadow` |
+| `gradient [linear\|radial\|conic] ノード… [--colors 色,色@50%,色…] [--stop N=色[@位置],…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r\|rx,ry] [--focus fx,fy] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N \| --add]` | グラデーションの塗りにする（3 色以上、位置は 0〜1 か %。`#ff000000` のような `#rrggbbaa`・`#rgba` の色は最後の桁が色ごとの透明度）。直線は `--angle` か始点・終点（`--from` / `--to`）、円形の `--angle` は楕円を回す角度、`--focus` は焦点（中心からのずれを半径に対する割合で）、角度（conic）は `--center` と `--angle`（最初の色の向き）。`--blend multiply` で塗りの描画モード。ふつうはいちばん上の塗りを置き換え、`--index` で何番目か（0 が一番下）、`--add` で上に重ねる。`--stroke` なら線。`--hidden` でその塗りを隠す。`--colors` を省くと今の色のまま種類や向きだけ変える。`--stop 1=#ff0000` は N 番目（0 が最初、-1 が最後）の色だけを変える（`0=@20%` なら位置だけ。カンマで区切っていくつでも）。種類を省くと今のグラデーションの種類のまま変える。塗り・影を隠すだけなら `set ノード fills.0.visible=false`、内側の影は `set ノード shadow.type=inner-shadow` |
 | `rm` / `mv (--parent フレーム \| --root)` / `order front\|back\|forward\|backward` / `dup` | 削除、親の付け替え、重なり順、複製 |
 | `boolean union\|subtract\|intersect\|exclude ノード… [--keep]` / `flatten ノード…` | ブーリアン演算（合体・差し引き・交差・除外）。矩形・楕円・パスの塗りの形にかけ、最も背面のものを引き継いだ 1 つのパス（`fillRule=evenodd`）にする。差し引きは最も背面のものから残りを引く。`--keep` なら元の図形を子に残すブーリアン演算のノードにまとめる（演算は `set ノード booleanOperation=intersect` で変えられる）。`flatten` はそのノードを結果のパスに焼き込む |
 | `outline-stroke ノード…` | 線の輪郭化（線の形を線の色で塗るパスにする。塗りのある図形は残して手前に置く） |
@@ -80,7 +82,7 @@ kdr -f demo2.kdr -w variant-add Button --id big 種類=大 + variant-prop-add bi
 | `component フレーム` / `detach フレーム` / `instance 元 [--parent フレーム]` / `swap インスタンス 元` | コンポーネント（`swap` は元の差し替え。インスタンスの中の入れ子のインスタンスも） |
 | `override-push ノード…` / `override-reset ノード…` | インスタンスの上書きを元に反映する・捨てて元に戻す |
 | `variant-add 元 [プロパティ=値…]` / `variant インスタンス… プロパティ=値…` | バリアントを増やす・インスタンスのバリアントを選ぶ（プロパティ名は日本語でもよい） |
-| `variant-prop-add まとまり 名前 [値]` / `variant-prop-rename まとまり 名前 新しい名前` / `variant-prop-rm まとまり 名前` / `variant-value-rename まとまり プロパティ 値 新しい値` | バリアントのプロパティを足す・名前を変える・消す、値の名前を変える（すべてのバリアントの名前を書き換える。まとまりの代わりに中のバリアントを指してもよい） |
+| `variant-prop-add まとまり 名前 [値]` / `variant-prop-rename まとまり 名前 新しい名前` / `variant-prop-rm まとまり 名前` / `variant-value-rename まとまり プロパティ 値 新しい値` / `variant-prop-order まとまり 名前 位置` / `variant-value-order まとまり プロパティ 値 位置` | バリアントのプロパティを足す・名前を変える・消す、値の名前を変える、プロパティ・値を並べ替える（位置は 0 が先頭。値の順はまとまりの中のバリアントの並び順なので、値を並べ替えるとバリアントの並びが変わる。すべてのバリアントの名前を書き換える。まとまりの代わりに中のバリアントを指してもよい） |
 | `describe 元\|まとまり 説明文` / `prop-add 元 text\|boolean\|instance ノード… [--name 名前]` / `prop インスタンス… 名前=値…` | コンポーネント（またはバリアントのまとまり）の説明文、プロパティを作って元の中のノードに結ぶ、インスタンスのプロパティの値を決める |
 | `prop-rename 元 名前 新しい名前` / `prop-order 元 名前 位置` / `prop-prefer 元 名前 [候補の元…]` / `prop-rm 元 名前` / `prop-align まとまり` | 元のプロパティの名前を変える・並べ替える（0 が先頭）・差し替えの候補を決める・消す（元がバリアントなら、まとまりのすべてのバリアントで揃える）、揃っていないバリアントのプロパティを一度に揃える |
 | `svg ファイル.svg [--parent フレーム] [--x N --y N]` | SVG を図形のノードに変換して置く（表せずに落としたものは標準エラーに出る） |

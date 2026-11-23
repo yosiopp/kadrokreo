@@ -19,7 +19,9 @@ import {
   variantAdd,
   variantPropAdd,
   variantPropRename,
+  variantPropOrder,
   variantPropRm,
+  variantValueOrder,
   variantValueRename,
 } from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
@@ -94,7 +96,9 @@ const commands: Command[] = [
   variantPropAdd,
   variantPropRename,
   variantPropRm,
+  variantPropOrder,
   variantValueRename,
+  variantValueOrder,
   describe_,
   propAdd,
   propRename,
