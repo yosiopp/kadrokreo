@@ -2,7 +2,8 @@
 // ブラウザ（editor）では DOMParser で解析し（parseSvgDom）、DOMParser のない Node（CLI と単体テスト）では
 // 自前の小さな XML の読み取り（parseSvgXml）を使う。どちらも同じ形の木を返し、変換（convert.ts）はこの木だけを読む。
 // 解析した結果を DOM に挿入したり表示したりはしない。スクリプトや foreignObject の中身は木に写さない（変換で落としたと知らせるため、要素の名前だけ残す）。
-// foreignObject は、中の要素の style 属性から backdrop-filter の値だけを文字として拾う（背景のぼかしを書き出したツールがこの形を使う）。HTML は解釈しない。
+// foreignObject は、中の要素の style 属性から backdrop-filter と conic-gradient の背景の値だけを文字として拾う
+// （背景のぼかしや角度のグラデーションを書き出したツールがこの形を使う）。HTML は解釈しない。
 // style の中身（CSS）は文字として写し、変換が単純なセレクタだけを読む。
 
 export type SvgNode = SvgElement | string
@@ -20,9 +21,15 @@ export type SvgElement = {
 
 /**
  * foreignObject の中身から拾うもの。backdropFilter は中の要素の style 属性にあった backdrop-filter の値（最初の 1 つ）、
- * other は backdrop-filter だけの空の要素のほかに中身（文字や、ほかの宣言を持つ要素）があったか
+ * conic は background / background-image にあった conic-gradient(…) の値（最初の 1 つ）、conicOpacity はその要素の opacity の値、
+ * other は backdrop-filter・conic-gradient だけの空の要素のほかに中身（文字や、ほかの宣言を持つ要素）があったか
  */
-export type ForeignContent = { backdropFilter: string | null; other: boolean }
+export type ForeignContent = { backdropFilter: string | null; conic: string | null; conicOpacity: string | null; other: boolean }
+
+/** foreignObject の拾い物の初めの値 */
+export function emptyForeign(): ForeignContent {
+  return { backdropFilter: null, conic: null, conicOpacity: null, other: false }
+}
 
 export class SvgParseError extends Error {
   override name = 'SvgParseError'
@@ -41,8 +48,13 @@ const OPAQUE = new Set(['script', 'foreignObject'])
 /** style 属性の中で、背景のぼかしの書き出しに使われる宣言（大きさと切り取りは foreignObject 側で決まる） */
 const BACKDROP_SIDE = /^(?:width|height|clip-path|-webkit-clip-path)$/
 
+/** 拾う conic-gradient の値の長さ（超えたものは拾わずに「ほかの中身がある」とする） */
+const MAX_CONIC_LENGTH = 4000
+
 /** foreignObject の中の要素 1 つの style 属性を見て、拾ったものを content に足す */
 function readForeignStyle(content: ForeignContent, style: string | undefined): void {
+  const declarations: [string, string][] = []
+  let conic: string | null = null
   for (const declaration of (style ?? '').slice(0, 10_000).split(';')) {
     const colon = declaration.indexOf(':')
     if (colon < 0) {
@@ -51,9 +63,24 @@ function readForeignStyle(content: ForeignContent, style: string | undefined): v
     }
     const property = declaration.slice(0, colon).trim().toLowerCase()
     const value = declaration.slice(colon + 1).trim()
+    declarations.push([property, value])
+    if ((property === 'background' || property === 'background-image') && /^conic-gradient\(/i.test(value) && value.length <= MAX_CONIC_LENGTH) {
+      conic ??= value
+    }
+  }
+  for (const [property, value] of declarations) {
     if (property === 'backdrop-filter' || property === '-webkit-backdrop-filter') {
       if (content.backdropFilter === null) content.backdropFilter = value.slice(0, 200)
+    } else if (conic !== null && (property === 'background' || property === 'background-image')) {
+      // 同じ要素の背景が conic-gradient のほかにもあれば、重なり方が読めないので「ほかの中身」とする
+      if (value !== conic) content.other = true
+    } else if (conic !== null && property === 'opacity') {
+      content.conicOpacity = value.slice(0, 50)
     } else if (!BACKDROP_SIDE.test(property)) content.other = true
+  }
+  if (conic !== null) {
+    if (content.conic === null) content.conic = conic
+    else content.other = true
   }
 }
 
@@ -91,7 +118,7 @@ export function parseSvgDom(source: string): SvgElement {
     const result: SvgElement = { name: element.localName, attributes, children: [] }
     if (element.localName === 'foreignObject') {
       // 中身は木に写さず、style 属性と文字だけを見る（解析した文書の中を読むだけで、画面の DOM には入れない）
-      const content: ForeignContent = { backdropFilter: null, other: false }
+      const content = emptyForeign()
       const inner = element.getElementsByTagName('*')
       if (inner.length > MAX_FOREIGN_ELEMENTS) content.other = true
       for (let k = 0; k < Math.min(inner.length, MAX_FOREIGN_ELEMENTS); k++) readForeignStyle(content, inner[k].getAttribute('style') ?? undefined)
@@ -216,7 +243,7 @@ export function parseSvgXml(source: string): SvgElement {
       if (stack.length > MAX_DEPTH) throw new SvgParseError('SVG の入れ子が深すぎます')
       if (stack.length === 1 && top.children.length > 0) throw new SvgParseError('最上位の要素が 2 つあります')
       const element: SvgElement = { name: localName(rawName), attributes, children: [] }
-      if (element.name === 'foreignObject') element.foreign = { backdropFilter: null, other: false }
+      if (element.name === 'foreignObject') element.foreign = emptyForeign()
       current().children.push(element)
       if (!selfClosing) {
         stack.push(element)

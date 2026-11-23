@@ -3,7 +3,7 @@ import { kdrFile, parseKdr } from '../../document/kdr.ts'
 import { pathPoints } from '../../document/path.ts'
 import type { FrameNode, ImageNode, PathNode, RectNode, SceneNode, TextNode } from '../../document/types.ts'
 import { createDocument, pasteIntoPage } from '../operations/document.ts'
-import { type SvgImport, convertSvg } from './convert.ts'
+import { type SvgImport, convertSvg, parseConicGradient } from './convert.ts'
 import { parseTransform } from './values.ts'
 import { SvgParseError, parseSvgXml } from './xml.ts'
 
@@ -883,6 +883,91 @@ describe('背景のぼかし（foreignObject の backdrop-filter）', () => {
     expect(labels(result)).toContain('背景のぼかし（かける図形が 1 つに決まらない）')
     expect(Object.values(result.fragment.nodes).every((node) => !('effects' in node) || node.effects.length === 0)).toBe(true)
     expect(JSON.stringify(result.fragment)).not.toContain('alert')
+  })
+})
+
+describe('角度のグラデーション（foreignObject の conic-gradient）', () => {
+  /** 角度のグラデーションを書き出したツールの形: 図形の形の clipPath で切り取った g の中の、変換を持つ g の中に foreignObject を置く */
+  const angular = (conic: string, transform: string, clip = '<rect width="100" height="60" rx="4"/>') =>
+    '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60">' +
+    `<g clip-path="url(#c)"><g transform="${transform}"><foreignObject x="-1000" y="-1000" width="2000" height="2000">` +
+    `<div xmlns="http://www.w3.org/1999/xhtml" style="background:${conic};height:100%;width:100%;opacity:1"></div></foreignObject></g></g>` +
+    `<defs><clipPath id="c">${clip}</clipPath></defs></svg>`
+
+  it('切り取りの図形を、内側の g の変換で中心と向きを決めた角度のグラデーションで塗る。foreignObject は知らせない', () => {
+    const result = convert(
+      angular('conic-gradient(from 90deg,rgba(255, 0, 0, 1) 0deg,rgba(0, 0, 255, 0.5) 360deg)', 'matrix(0 0.05 -0.05 0 50 30)'),
+    )
+    const [rect] = children(result)
+    expect(rect).toMatchObject({ type: 'rect', x: 0, y: 0, width: 100, height: 60, cornerRadius: 4, strokes: [] })
+    expect((rect as RectNode).fills).toEqual([
+      {
+        type: 'conic',
+        cx: 0.5,
+        cy: 0.5,
+        angle: 90,
+        stops: [
+          { offset: 0, color: '#ff0000', opacity: 1 },
+          { offset: 1, color: '#0000ff', opacity: 0.5 },
+        ],
+        opacity: 1,
+        visible: true,
+        blendMode: 'normal',
+      },
+    ])
+    expect(result.warnings).toEqual([])
+  })
+
+  it('#hex と位置のない色を読む。裏返す変換は回る向きを読み替え、中心がずれていれば中心の位置にする。path の形も塗る', () => {
+    const result = convert(
+      angular('conic-gradient(#ff0000, #00ff00, #0000ff)', 'matrix(-0.05 0 0 0.05 25 15)', '<path d="M0 0H100V60H0Z"/>'),
+    )
+    const [path] = children(result)
+    expect(path.type).toBe('path')
+    const [paint] = (path as PathNode).fills
+    expect(paint).toMatchObject({ type: 'conic', cx: 0.25, cy: 0.25, angle: 270 })
+    if (paint.type !== 'conic') throw new Error('conic ではない')
+    expect(paint.stops).toEqual([
+      { offset: 0, color: '#0000ff', opacity: 1 },
+      { offset: 0.5, color: '#00ff00', opacity: 1 },
+      { offset: 1, color: '#ff0000', opacity: 1 },
+    ])
+    expect(result.warnings).toEqual([])
+  })
+
+  it('読めない conic-gradient（ほかの単位・中心の指定・色の名前）は知らせ、foreignObject も今までどおり知らせる', () => {
+    for (const conic of ['conic-gradient(from 0.25turn, #f00, #00f)', 'conic-gradient(at 50% 50%, #f00, #00f)', 'conic-gradient(red, blue)']) {
+      const result = convert(angular(conic, 'matrix(0.05 0 0 0.05 50 30)'))
+      expect(labels(result).sort()).toEqual(['埋め込み HTML（<foreignObject>）', '読めない角度のグラデーション（conic-gradient）'].sort())
+      expect(Object.values(result.fragment.nodes).some((node) => 'fills' in node && node.fills.some((fill) => fill.type === 'conic'))).toBe(false)
+    }
+  })
+
+  it('形が違う（g の中身がほかにもある・中に文字がある）ときは塗らずに foreignObject を知らせる', () => {
+    const extra = convert(
+      angular('conic-gradient(#f00 0deg, #00f 360deg)', 'matrix(0.05 0 0 0.05 50 30)').replace('</g></g>', '</g><rect width="5" height="5"/></g>'),
+    )
+    expect(labels(extra)).toContain('埋め込み HTML（<foreignObject>）')
+    const text = convert(angular('conic-gradient(#f00 0deg, #00f 360deg)', 'matrix(0.05 0 0 0.05 50 30)').replace('></div>', '>hello</div>'))
+    expect(labels(text)).toContain('埋め込み HTML（<foreignObject>）')
+    expect(JSON.stringify(text.fragment)).not.toContain('hello')
+  })
+
+  it('parseConicGradient: 位置の重なり・逆戻り・2 つの位置を CSS と同じに読み、16 色を超えれば間引く', () => {
+    expect(parseConicGradient('conic-gradient(from -45deg, #000 0 90deg, #fff 45deg)')).toEqual({
+      from: -45,
+      stops: [
+        { offset: 0, color: '#000000', opacity: 1 },
+        { offset: 0.25, color: '#000000', opacity: 1 },
+        { offset: 0.25, color: '#ffffff', opacity: 1 },
+      ],
+    })
+    const many = Array.from({ length: 40 }, (_, i) => `rgb(${i * 6}, 0, ${(i % 2) * 255})`).join(', ')
+    const parsed = parseConicGradient(`conic-gradient(${many})`)
+    expect(parsed?.stops.length).toBeLessThanOrEqual(16)
+    expect(parseConicGradient(`conic-gradient(${Array.from({ length: 65 }, () => '#000').join(', ')})`)).toBeNull()
+    expect(parseConicGradient('conic-gradient(#000 -10deg, #fff)')).toBeNull()
+    expect(parseConicGradient('conic-gradient(#000)')).toBeNull()
   })
 })
 

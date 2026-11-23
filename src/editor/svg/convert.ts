@@ -72,6 +72,7 @@ import {
 // - <text> と <image> にかかる変換が裏返していれば、左右の裏返し（flipX）と回転にする（上下の裏返しは左右の裏返し + 180° の回転）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
 // - foreignObject の中身は読まない。中の要素の style にある backdrop-filter: blur(…) の値だけを文字として拾い（xml.ts）、次の図形の背景のぼかしにする。
+//   background: conic-gradient(…) の値も文字として拾い、clipPath で切り取った g の中に置かれていれば、clipPath の図形を角度のグラデーションで塗る（conicForeign）。
 // - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターン・textPath など）は
 //   近い形に置き換えるか読み飛ばし、warnings で知らせる。
 
@@ -507,7 +508,7 @@ class Converter {
     if (skipped) {
       // 背景のぼかしだけの foreignObject は知らせない（ぼかしは convertChildren が次の図形にかける）
       const foreign = element.foreign
-      if (!(foreign && foreign.backdropFilter !== null && !foreign.other)) this.warn(skipped)
+      if (!(foreign && foreign.backdropFilter !== null && foreign.conic === null && !foreign.other)) this.warn(skipped)
       return []
     }
     if (name === 'style') return []
@@ -524,7 +525,9 @@ class Converter {
       if (attribute === 'filter' && effects !== null) continue
       if (value !== undefined && value.trim() !== 'none') this.warn(label)
     }
-    const ids = this.convertShape(element, matrix, inherited, depth, uses)
+    // 角度のグラデーションを foreignObject の conic-gradient で書いた g は、切り取りの図形 1 つにする（切り取りはもうかけない）
+    const conic = name === 'g' ? this.conicForeign(element, matrix, inherited, depth, uses) : null
+    const ids = conic ?? this.convertShape(element, matrix, inherited, depth, uses)
     if (effects !== null && !SHAPE_ELEMENTS.has(name)) {
       const node = ids.length === 1 ? this.nodes[ids[0]] : undefined
       if (node && 'effects' in node && node.effects.length === 0) this.nodes[ids[0]] = { ...node, effects }
@@ -539,7 +542,80 @@ class Converter {
         for (const id of ids) if (this.nodes[id].blendMode === 'normal') this.nodes[id] = { ...this.nodes[id], blendMode: blend as BlendMode }
       } else this.warn(`描画モード（${blend}）`)
     }
-    return this.clipped(element, ids, matrix, depth)
+    return conic ? ids : this.clipped(element, ids, matrix, depth)
+  }
+
+  /**
+   * 角度のグラデーションを書き出したツールの形: 図形の形の clipPath で切り取った g の中に、変換を持つ g を 1 つ置き、その中の
+   * foreignObject 1 つの空の要素の style に background: conic-gradient(…) を書く（中心と向きは foreignObject の枠の真ん中と
+   * 内側の g の transform で決まる）。これを、clipPath の図形を角度のグラデーションで塗ったノード 1 つにする。
+   * 形が違えば null（ふつうに変換し、foreignObject は今までどおり知らせる）。conic-gradient が読めなければ知らせて null
+   */
+  private conicForeign(element: SvgElement, matrix: Matrix, inherited: Inherited, depth: number, uses: number): NodeId[] | null {
+    const declared = this.declared(element)
+    const clip = /^url\(\s*['"]?#([^'")]*)['"]?\s*\)$/.exec(declared['clip-path']?.trim() ?? '')
+    if (!clip || !isNone(declared.mask) || !isNone(declared.filter)) return null
+    const outer = shapeChildren(element)
+    if (outer.length !== 1 || outer[0].name !== 'g') return null
+    const inner = outer[0]
+    const innerKids = shapeChildren(inner)
+    if (innerKids.length !== 1 || innerKids[0].name !== 'foreignObject') return null
+    const foreign = innerKids[0]
+    const content = foreign.foreign
+    if (!content || content.conic === null || content.other || content.backdropFilter !== null) return null
+    // 内側の g と foreignObject には、変換と不透明度のほかの効き目（切り取り・マスク・フィルタ・隠す）がないこと
+    for (const part of [inner, foreign]) {
+      const style = this.declared(part)
+      if (!isNone(style['clip-path']) || !isNone(style.mask) || !isNone(style.filter) || style.display?.trim() === 'none') return null
+    }
+    const target = this.definitions.get(clip[1].trim())
+    if (target?.name !== 'clipPath' || target.attributes.clipPathUnits?.trim() === 'objectBoundingBox') return null
+    const shapes = shapeChildren(target)
+    if (shapes.length !== 1 || !CONIC_CLIP_SHAPES.has(shapes[0].name)) return null
+    const own = parseTransform(target.attributes.transform)
+    const innerTransform = parseTransform(inner.attributes.transform)
+    const foreignTransform = parseTransform(foreign.attributes.transform)
+    if (!own || !innerTransform || !foreignTransform) return null
+    const gradient = parseConicGradient(content.conic)
+    if (!gradient) {
+      this.warn('読めない角度のグラデーション（conic-gradient）')
+      return null
+    }
+    const made = this.convertElement(shapes[0], multiply(matrix, own), inherited, depth, uses)
+    const node = made.length === 1 ? this.nodes[made[0]] : undefined
+    if (!node || (node.type !== 'rect' && node.type !== 'ellipse' && node.type !== 'path') || node.width === 0 || node.height === 0) {
+      for (const id of made) this.remove(id)
+      return null
+    }
+    // 中心は foreignObject の枠の真ん中。CSS の角度は上向きが 0 で時計回り
+    const a = foreign.attributes
+    const fx = this.length(a.x, 'width') ?? 0
+    const fy = this.length(a.y, 'height') ?? 0
+    const fw = this.length(a.width, 'width') ?? 0
+    const fh = this.length(a.height, 'height') ?? 0
+    const whole = multiply(multiply(matrix, innerTransform), foreignTransform)
+    const toNode = (point: Point) => toNodeSpace(node, applyMatrix(whole, point))
+    const middle = { x: fx + fw / 2, y: fy + fh / 2 }
+    const from = (gradient.from * Math.PI) / 180
+    const center = toNode(middle)
+    const ahead = toNode({ x: middle.x + Math.sin(from), y: middle.y - Math.cos(from) })
+    const start = Math.atan2(ahead.y - center.y, ahead.x - center.x)
+    // 裏返す変換なら回る向きが逆になるので、同じ向きから時計回りに読み替える
+    const reflected = whole[0] * whole[3] - whole[1] * whole[2] < 0
+    const stops = reflected ? gradient.stops.map((stop) => ({ ...stop, offset: round4(1 - stop.offset) })).reverse() : gradient.stops
+    const paint: Paint = {
+      type: 'conic',
+      cx: round4(center.x / node.width),
+      cy: round4(center.y / node.height),
+      angle: round4(((((start * 180) / Math.PI) % 360) + 360) % 360),
+      stops,
+      opacity: round4(clamp01(parseFraction(content.conicOpacity ?? undefined) ?? 1)),
+      visible: true,
+      blendMode: 'normal',
+    }
+    const opacity = node.opacity * this.opacityOf(element) * this.opacityOf(inner) * this.opacityOf(foreign)
+    this.nodes[node.id] = { ...node, name: element.attributes.id ?? node.name, fills: [paint], strokes: [], effects: [], opacity: round4(opacity) }
+    return [node.id]
   }
 
   /** 要素の種類ごとの変換（clip-path / mask は呼び出し側がかける） */
@@ -1928,6 +2004,103 @@ function stopPaint(stop: ColorStop): Paint {
 
 function positive(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
+}
+
+// ── foreignObject の conic-gradient ──
+
+/** conic-gradient を塗る切り取りの形にできる図形 */
+const CONIC_CLIP_SHAPES = new Set(['rect', 'circle', 'ellipse', 'path', 'polygon'])
+/** conic-gradient の中で読む色の数 */
+const MAX_CONIC_STOPS = 64
+
+function isNone(value: string | undefined): boolean {
+  const trimmed = value?.trim()
+  return trimmed === undefined || trimmed === '' || trimmed === 'none'
+}
+
+/** 括弧の外のカンマで分ける */
+function splitTopLevel(value: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let begin = 0
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i]
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === ',' && depth === 0) {
+      parts.push(value.slice(begin, i))
+      begin = i + 1
+    }
+    if (depth < 0) return []
+  }
+  parts.push(value.slice(begin))
+  return depth === 0 ? parts.map((part) => part.trim()) : []
+}
+
+/** 角度（deg。0 だけは単位なし）を度で。読めなければ NaN */
+function parseDegrees(raw: string): number {
+  const match = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(deg)?$/i.exec(raw)
+  if (!match) return NaN
+  const value = Number(match[1])
+  return match[2] === undefined && value !== 0 ? NaN : value
+}
+
+/**
+ * CSS の conic-gradient(from <角度>, <色> <角度>?, …) を読む。色は rgb() / rgba() / #hex、角度は deg に限る（at での中心の指定、
+ * ほかの単位・割合・色の名前・補間の指定は読まない）。位置のない色は CSS と同じく、最初を 0、最後を 360 度にし、間は前後から等分する。
+ * 前の色より小さい位置は前の色の位置にそろえる。0〜360 度の外に出る位置は読まない。16 色を超えれば直線で補える色を間引く
+ */
+export function parseConicGradient(raw: string): { from: number; stops: ColorStop[] } | null {
+  const body = /^conic-gradient\(([\s\S]*)\)$/i.exec(raw.trim())
+  if (!body) return null
+  const parts = splitTopLevel(body[1])
+  if (parts.length === 0) return null
+  let from = 0
+  if (/^from\s/i.test(parts[0])) {
+    from = parseDegrees(parts[0].slice(4).trim())
+    if (!Number.isFinite(from)) return null
+    parts.shift()
+  } else if (/^at\s/i.test(parts[0])) return null
+  if (parts.length < 2 || parts.length > MAX_CONIC_STOPS) return null
+  const listed: { rgba: number[]; at: number | null }[] = []
+  for (const part of parts) {
+    const match = /^(#[0-9a-f]{3,8}|rgba?\([^)]*\))\s*([\s\S]*)$/i.exec(part)
+    if (!match) return null
+    const color = parseColor(match[1])
+    if (!color) return null
+    const rgba = [...hexRgb(color.color), clamp01(color.alpha) * 255]
+    const positions = match[2].trim() === '' ? [] : match[2].trim().split(/\s+/)
+    if (positions.length > 2) return null
+    if (positions.length === 0) listed.push({ rgba, at: null })
+    for (const position of positions) {
+      const at = parseDegrees(position)
+      if (!Number.isFinite(at)) return null
+      listed.push({ rgba, at })
+    }
+  }
+  if (listed.length > MAX_CONIC_STOPS) return null
+  listed[0].at ??= 0
+  listed[listed.length - 1].at ??= 360
+  // 前より小さい位置は前にそろえ、位置のない色は前後の位置の間を等分する
+  let previous = listed[0].at
+  for (let i = 0; i < listed.length; i++) {
+    const at = listed[i].at
+    if (at === null) {
+      let next = i + 1
+      while (listed[next].at === null) next++
+      const end = Math.max(previous, listed[next].at!)
+      for (let k = i; k < next; k++) listed[k].at = previous + ((end - previous) * (k - i + 1)) / (next - i + 1)
+      i = next - 1
+      continue
+    }
+    previous = Math.max(previous, at)
+    listed[i].at = previous
+  }
+  if (listed.some((stop) => stop.at! < 0 || stop.at! > 360)) return null
+  let samples: StopSample[] = listed.map((stop) => ({ offset: stop.at! / 360, rgba: stop.rgba }))
+  if (samples.length > MAX_STOPS) samples = simplifyStops(samples)
+  const stops = samples.map(({ offset, rgba }) => ({ offset: round4(offset), color: rgbHex(rgba), opacity: round4(clamp01(rgba[3] / 255)) }))
+  return { from, stops }
 }
 
 // ── 扇形の pattern ──
