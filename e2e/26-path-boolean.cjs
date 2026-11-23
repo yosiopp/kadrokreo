@@ -1,4 +1,4 @@
-// パスのブーリアン演算（合体・差し引き・交差・除外）。キー（⌥⇧U / S / I / X）と右クリックメニュー、結果が空のときの知らせ
+// パスのブーリアン演算（合体・差し引き・交差・除外）。キー（⌥⇧⌘U / S / I / X）と右クリックメニュー、結果が空のときの知らせ
 const { chromium } = require('playwright-core')
 const path = require('path')
 
@@ -31,9 +31,9 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   await page.waitForTimeout(700)
   const select = async () => { await page.keyboard.press('Escape'); await page.mouse.click(...at(40, 40)); await shiftClick(150, 150) }
 
-  // ── 差し引き（⌥⇧S）: 正方形から円を引く。結果は正方形の名前・色を引き継いだパス ──
+  // ── 差し引き（⌥⇧⌘S）: 正方形から円を引く。結果は正方形の名前・色を引き継いだパス ──
   await select()
-  await page.keyboard.press('Alt+Shift+KeyS')
+  await page.keyboard.press('Alt+Shift+Meta+KeyS')
   await page.waitForTimeout(600)
   let [result] = await named('a')
   check('差し引きで、正方形から円を引いたパスになる', result?.type === 'path' && result.fillRule === 'evenodd' && (await named('b')).length === 0 &&
@@ -56,9 +56,9 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   await page.keyboard.press('Meta+z')
   await page.waitForTimeout(600)
 
-  // ── 交差（⌥⇧I）・除外（⌥⇧X） ──
+  // ── 交差（⌥⇧⌘I）・除外（⌥⇧⌘X） ──
   await select()
-  await page.keyboard.press('Alt+Shift+KeyI')
+  await page.keyboard.press('Alt+Shift+Meta+KeyI')
   await page.waitForTimeout(600)
   ;[result] = await named('a')
   check('交差は重なった所だけ（50×50）', result?.type === 'path' && Math.abs(result.width - 50) < 0.01 && Math.abs(result.height - 50) < 0.01,
@@ -66,7 +66,7 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   await page.keyboard.press('Meta+z')
   await page.waitForTimeout(600)
   await select()
-  await page.keyboard.press('Alt+Shift+KeyX')
+  await page.keyboard.press('Alt+Shift+Meta+KeyX')
   await page.waitForTimeout(600)
   ;[result] = await named('a')
   check('除外は重なりを抜く（範囲は 150×150）', result?.type === 'path' && Math.abs(result.width - 150) < 0.01, JSON.stringify(result && { w: result.width }))
@@ -78,7 +78,7 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   await page.keyboard.press('Escape')
   await page.mouse.click(...at(40, 40))
   await shiftClick(190, 10)
-  await page.keyboard.press('Alt+Shift+KeyI')
+  await page.keyboard.press('Alt+Shift+Meta+KeyI')
   await page.waitForTimeout(400)
   const message = await page.locator('body').textContent()
   check('空になるときは知らせて、何も変えない', message.includes('交差の結果が空') && (await named('a'))[0]?.type === 'rect' && (await named('far')).length === 1)

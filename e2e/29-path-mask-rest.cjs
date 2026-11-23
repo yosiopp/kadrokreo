@@ -1,4 +1,4 @@
-// パスとマスクの残り: 元を残すブーリアン演算のノード（作る・演算を変える・子を動かす・平らにする）、線の輪郭化（⌥⌘O）、
+// パスとマスクの残り: 元を残すブーリアン演算のノード（キー ⌥⇧S と右クリックメニューで作る・演算を変える・子を動かす・平らにする）、線の輪郭化（⌥⌘O）、
 // 明るさのマスク（SVG の mask の取り込みと描画）
 const { chromium } = require('playwright-core')
 const path = require('path')
@@ -50,10 +50,28 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
     '<rect id="edge" x="140" y="10" width="40" height="30" fill="none" stroke="#0000ff" stroke-width="6"/></svg>')
   const background = await pixel(195, 195)
 
+  // ── 元を残す差し引き（⌥⇧S）: キーでもノードができる。Undo で戻す ──
+  await page.keyboard.press('Escape')
+  await page.mouse.click(...at(40, 40))
+  await shiftClick(150, 150)
+  await page.keyboard.press('Alt+Shift+KeyS')
+  await page.waitForTimeout(600)
+  let [keyed] = await named('差し引き')
+  check('⌥⇧S で差し引きのノードができる（焼き込まない）', keyed?.type === 'frame' && keyed.booleanOperation === 'subtract' && (await named('a'))[0]?.type === 'rect',
+    JSON.stringify(keyed && { type: keyed.type, op: keyed.booleanOperation }))
+  await page.keyboard.press('Meta+z')
+  await page.waitForTimeout(600)
+  check('Undo で元の正方形と円に戻る', (await named('差し引き')).length === 0 && (await named('a'))[0]?.parentId !== keyed?.id)
+
   // ── 元を残す差し引き（右クリックメニュー）: 正方形から円を引いたノード。子は描かない ──
   await page.keyboard.press('Escape')
   await page.mouse.click(...at(40, 40))
   await shiftClick(150, 150)
+  await page.mouse.click(...at(40, 40), { button: 'right' })
+  await page.locator('.context-menu-label:text-is("ブーリアン演算（元を残す）")').hover()
+  const shortcut = await page.locator('.context-menu-item:has(.context-menu-label:text-is("差し引き")) .context-menu-shortcut').allTextContents()
+  check('メニューにキー（⌥⇧S。macOS 以外は Alt+Shift+S）が出る', shortcut.includes('⌥⇧S') || shortcut.includes('Alt+Shift+S'), JSON.stringify(shortcut))
+  await page.keyboard.press('Escape')
   await menu(40, 40, 'ブーリアン演算（元を残す）', '差し引き')
   let [node] = await named('差し引き')
   const children = node ? node.children : []

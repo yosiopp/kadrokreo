@@ -70,7 +70,7 @@ const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator
 const MOD = MAC ? '⌘' : 'Ctrl+'
 const SHIFT = MAC ? '⇧' : 'Shift+'
 const ALT = MAC ? '⌥' : 'Alt+'
-/** 右クリックメニューのブーリアン演算（キーは Alt + Shift と組み合わせる） */
+/** 右クリックメニューのブーリアン演算（キーは Alt + Shift で元を残す、⌘/Ctrl も足すと焼き込む） */
 const BOOLEAN_MENU = [
   { op: 'union', key: 'U' },
   { op: 'subtract', key: 'S' },
@@ -835,14 +835,15 @@ export function EditorCanvas({
       {
         label: 'ブーリアン演算（パスに焼き込む）',
         disabled: !canBooleanPaths(page, movableIds()),
-        submenu: BOOLEAN_MENU.map(({ op, key }) => ({ label: BOOLEAN_LABELS[op], shortcut: `${ALT}${SHIFT}${key}`, onSelect: () => commands.booleanOp(op) })),
+        submenu: BOOLEAN_MENU.map(({ op, key }) => ({ label: BOOLEAN_LABELS[op], shortcut: `${ALT}${SHIFT}${MOD}${key}`, onSelect: () => commands.booleanOp(op) })),
       },
       {
         label: 'ブーリアン演算（元を残す）',
         disabled: !canCreateBooleanNode(page, movableIds()) && !canFlattenBoolean(page, movableIds()),
         submenu: [
-          ...BOOLEAN_MENU.map(({ op }) => ({
+          ...BOOLEAN_MENU.map(({ op, key }) => ({
             label: BOOLEAN_LABELS[op],
+            shortcut: `${ALT}${SHIFT}${key}`,
             disabled: !canCreateBooleanNode(page, movableIds()),
             onSelect: () => commands.booleanNode(op),
           })),

@@ -45,7 +45,10 @@ type Options = {
   onMessage: (message: string) => void
 }
 
-/** ブーリアン演算のキー（Alt + Shift と組み合わせる。既存のデザインツールと同じ） */
+/**
+ * ブーリアン演算のキー。Alt + Shift で元を残す演算のノードを作り（既存のデザインツールと同じ）、
+ * ⌘/Ctrl も足すとパスに焼き込む（元の図形が消える方に、押すキーを 1 つ多くする）
+ */
 const BOOLEAN_KEYS: Record<string, BooleanOp> = { KeyU: 'union', KeyS: 'subtract', KeyI: 'intersect', KeyX: 'exclude' }
 
 const TOOL_KEYS: Record<string, Tool> = {
@@ -211,9 +214,10 @@ export function useShortcuts(options: Options) {
       event.preventDefault()
       return
     }
-    if (event.altKey && event.shiftKey && !event.metaKey && !event.ctrlKey && Object.hasOwn(BOOLEAN_KEYS, event.code)) {
+    if (event.altKey && event.shiftKey && Object.hasOwn(BOOLEAN_KEYS, event.code)) {
       // Alt を押すと key が記号になるので code で見る
-      booleanOp(BOOLEAN_KEYS[event.code])
+      if (event.metaKey || event.ctrlKey) booleanOp(BOOLEAN_KEYS[event.code])
+      else booleanNode(BOOLEAN_KEYS[event.code])
       event.preventDefault()
       return
     }
