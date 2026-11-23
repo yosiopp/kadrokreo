@@ -48,6 +48,13 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   let vertexEdit: VertexEdit | null = null
   let gradientEdit: GradientEdit | null = null
   let state = snapshot()
+  /**
+   * 後始末（settle）を終えて落ち着いたページ。演算のノードの枠は結果に合い、自動で並べるフレームは並べ直しても変わらない。
+   * ここからの変更なら、枠合わせと並べ直しは変わったノードのまわりだけを見ればよい（読み込んだばかりのページは、checkSettled で落ち着いていると確かめてから入れる）
+   */
+  const settledPages = new WeakSet<Page>()
+  /** checkSettled で確かめたドキュメント */
+  const checkedDocs = new WeakSet<DesignDocument>()
   const listeners = new Set<() => void>()
 
   function snapshot(): EditorState {
@@ -132,6 +139,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
    */
   function settle(before: DesignDocument, after: DesignDocument): DesignDocument {
     if (after === before) return after
+    checkSettled(before)
     // まとまりの外へ出した・中へ入れたバリアントの名前を合わせてから、上書きを覚える
     let current = captureOverrides(before, fitMovedVariants(before, after))
     let base = before
@@ -141,12 +149,33 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
       const arranged = mapPages(current, (page) =>
         previous.pages.includes(page) ? page : arrange(previous.pages.find((prior) => prior.id === page.id), page),
       )
-      const synced = syncComponents(arranged, fitText)
-      if (synced === current) break
+      // 前の回の結果（最初は変更の前）が合っていれば、そこから変わったところに関わるインスタンスだけを見る
+      const synced = syncComponents(arranged, fitText, pass === 0 ? before : current)
+      if (synced === current) {
+        // 変わったページは、どれもどこかの回で後始末して落ち着いた。次の変更では、ここからの差分だけを後始末する
+        // （変わっていないページは前のまま。読み込んだまま一度も後始末していないページを落ち着いたことにしない）
+        for (const page of current.pages) if (!before.pages.includes(page)) settledPages.add(page)
+        break
+      }
       base = current
       current = synced
     }
     return current
+  }
+
+  /**
+   * 後始末を通っていないドキュメント（読み込んだばかりなど）が、もう落ち着いているかを一度だけ確かめて覚える。
+   * 落ち着いていれば、そこからの変更（読み込んだ直後のドラッグの 1 歩ずつ）も変わったノードのまわりだけを見られる。
+   * 落ち着いていなければ何も覚えず、今までどおり全部を見る（ファイルの値は書き換えない）
+   */
+  function checkSettled(doc: DesignDocument) {
+    if (checkedDocs.has(doc)) return
+    checkedDocs.add(doc)
+    // 合っていれば同期の覚え書き（syncedDocs）に入る
+    syncComponents(doc, fitText)
+    for (const page of doc.pages) {
+      if (!settledPages.has(page) && fitBooleanNodes(page) === page && relayout(page, fitText) === page) settledPages.add(page)
+    }
   }
 
   /**
@@ -159,11 +188,13 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
       const followed = applyConstraints(from, to, resized)
       return fitText && resized.length > 0 ? fitText(followed, resized) : followed
     }
+    // 後始末を終えたページからの変更なら、枠合わせと並べ直しは変わったノードのまわりだけを見る
+    const base = prior && settledPages.has(prior) ? prior : undefined
     // ブーリアン演算のノードの枠を結果に合わせる。子をずらして合わせるので、子を辺に追従させる前の比べ元にする
-    const constrained = fitBooleanNodes(prior ? follow(prior, page) : page)
-    const arranged = relayout(constrained, fitText)
+    const constrained = fitBooleanNodes(prior ? follow(prior, page) : page, base)
+    const arranged = relayout(constrained, fitText, base)
     const followed = follow(constrained, arranged)
-    return followed === arranged ? arranged : relayout(followed, fitText)
+    return followed === arranged ? arranged : relayout(followed, fitText, base)
   }
 
   function mapPages(doc: DesignDocument, change: (page: Page) => Page): DesignDocument {

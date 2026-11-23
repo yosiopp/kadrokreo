@@ -1,6 +1,7 @@
 import { getWorldCenter, getWorldRotation, poseInParent } from '../../document/geometry.ts'
 import { MAX_DEPTH } from '../../document/kdr.ts'
 import type { NodeId, Scene, SceneNode } from '../../document/types.ts'
+import { noteNodeChanges } from '../../document/nodeChanges.ts'
 
 // ドキュメントもページも不変として扱い、どの操作も新しいものを返す。
 // 変化がなければ同じ参照を返すので、履歴側は参照比較で「何も起きなかった」を判定できる。
@@ -25,6 +26,7 @@ export function insertNode<T extends Scene>(
 ): T {
   if (Object.hasOwn(scene.nodes, node.id)) throw new Error(`node already exists: ${node.id}`)
   const withNode = { ...scene, nodes: { ...scene.nodes, [node.id]: { ...node, parentId } } }
+  noteNodeChanges(withNode.nodes, scene.nodes, [node.id])
   return updateSiblings(withNode, parentId, (ids) => insertAt(ids, node.id, index))
 }
 
@@ -52,6 +54,7 @@ export function patchNodes<T extends Scene>(
   patchFor: (node: SceneNode) => NodePatch | null,
 ): T {
   let nodes: Record<NodeId, SceneNode> | null = null
+  const changed: NodeId[] = []
   for (const id of ids) {
     const node = (nodes ?? scene.nodes)[id]
     if (!node) continue
@@ -60,8 +63,12 @@ export function patchNodes<T extends Scene>(
     if (next === node) continue
     nodes ??= { ...scene.nodes }
     nodes[id] = next
+    changed.push(id)
   }
-  return nodes ? { ...scene, nodes } : scene
+  if (!nodes) return scene
+  // 変えたノードを覚えておく（ストアの後始末が、全部のノードを比べ直さずに済む）
+  noteNodeChanges(nodes, scene.nodes, changed)
+  return { ...scene, nodes }
 }
 
 export function updateNode<T extends Scene>(scene: T, id: NodeId, patch: NodePatch): T {
@@ -82,13 +89,15 @@ export function removeNodes<T extends Scene>(scene: T, ids: readonly NodeId[]): 
   if (doomed.size === 0) return scene
 
   const nodes: Record<NodeId, SceneNode> = {}
+  const changed = [...doomed]
   for (const [id, node] of Object.entries(scene.nodes)) {
     if (doomed.has(id)) continue
-    nodes[id] =
-      node.type === 'frame' && node.children.some((childId) => doomed.has(childId))
-        ? { ...node, children: node.children.filter((childId) => !doomed.has(childId)) }
-        : node
+    if (node.type === 'frame' && node.children.some((childId) => doomed.has(childId))) {
+      nodes[id] = { ...node, children: node.children.filter((childId) => !doomed.has(childId)) }
+      changed.push(id)
+    } else nodes[id] = node
   }
+  noteNodeChanges(nodes, scene.nodes, changed)
   return { ...scene, nodes, rootIds: scene.rootIds.filter((id) => !doomed.has(id)) }
 }
 
@@ -155,7 +164,10 @@ export function reparentNodes<T extends Scene>(
   ids: readonly NodeId[],
   parentId: NodeId | null,
 ): T {
-  return sortByDocumentOrder(scene, topLevelIds(scene, ids)).reduce((next, id) => {
+  // 動かすものだけを重なり順に並べる（ドラッグの 1 歩ごとに呼ばれ、たいていは何も動かないので、木全体をたどらない）
+  const moving = topLevelIds(scene, ids).filter((id) => scene.nodes[id].parentId !== parentId && !isSelfOrAncestor(scene, id, parentId))
+  if (moving.length === 0) return scene
+  return (moving.length === 1 ? moving : sortByDocumentOrder(scene, moving)).reduce((next, id) => {
     if (next.nodes[id].parentId === parentId || isSelfOrAncestor(next, id, parentId)) return next
     return moveNode(next, id, parentId)
   }, scene)
@@ -227,7 +239,9 @@ function updateSiblings<T extends Scene>(
   const ids = update(siblingsOf(scene, parentId))
   if (parentId === null) return { ...scene, rootIds: ids }
   const parent = scene.nodes[parentId]
-  return { ...scene, nodes: { ...scene.nodes, [parentId]: { ...parent, children: ids } as SceneNode } }
+  const nodes = { ...scene.nodes, [parentId]: { ...parent, children: ids } as SceneNode }
+  noteNodeChanges(nodes, scene.nodes, [parentId])
+  return { ...scene, nodes }
 }
 
 function insertAt(ids: NodeId[], id: NodeId, index = ids.length): NodeId[] {

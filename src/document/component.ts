@@ -8,6 +8,7 @@ import type {
   Scene,
   SceneNode,
 } from './types.ts'
+import { findNodeOrigin } from './nodeChanges.ts'
 
 // コンポーネントのつながりを読むための関数。同期や編集（editor/components.ts）と、viewer の表示の両方が使う。
 
@@ -58,21 +59,49 @@ export function instanceOf(scene: Scene, id: NodeId): InstanceNode | null {
   return isInstance(node) ? node : owningInstance(scene, id)
 }
 
-// ページは不変なので、ページごとに一度だけ元を集めておく（探すたびに全ノードを見ない）
-const mainsByPage = new WeakMap<Page, ReadonlyMap<string, MainNode>>()
+// ノードの表は不変なので、表ごとに一度だけ元を集めておく（探すたびに全ノードを見ない）
+type PageMains = { byComponent: ReadonlyMap<string, MainNode>; all: readonly MainNode[] }
+const mainsByNodes = new WeakMap<Page['nodes'], PageMains>()
+
+function pageMains(page: Scene): PageMains {
+  let mains = mainsByNodes.get(page.nodes)
+  if (!mains) {
+    mains = inheritedMains(page.nodes) ?? collectPageMains(page.nodes)
+    mainsByNodes.set(page.nodes, mains)
+  }
+  return mains
+}
 
 /** ページにある元を、コンポーネントの id から引けるようにしたもの。同じ id の元が複数あれば、先にあるもの */
 export function mainsOf(page: Page): ReadonlyMap<string, MainNode> {
-  let mains = mainsByPage.get(page)
-  if (!mains) {
-    const found = new Map<string, MainNode>()
-    for (const node of Object.values(page.nodes)) {
-      if (isMain(node) && !found.has(node.component.id)) found.set(node.component.id, node)
-    }
-    mainsByPage.set(page, found)
-    mains = found
+  return pageMains(page).byComponent
+}
+
+/** ページにある元の全部（同じコンポーネントの id の元が複数あれば、どれも。並びは決まっていない） */
+export function mainNodesOf(page: Scene): readonly MainNode[] {
+  return pageMains(page).all
+}
+
+function collectPageMains(nodes: Page['nodes']): PageMains {
+  const byComponent = new Map<string, MainNode>()
+  const all: MainNode[] = []
+  for (const node of Object.values(nodes)) {
+    if (!isMain(node)) continue
+    all.push(node)
+    if (!byComponent.has(node.component.id)) byComponent.set(node.component.id, node)
   }
-  return mains
+  return { byComponent, all }
+}
+
+/**
+ * 写しの元の表で集めたものが使えれば、それ。変わったノードが（変わる前も後も）どれも元でなければ、元の集まりは同じ
+ * （元のノードそのものも変わっていないので、同じ参照を指したままでよい）
+ */
+function inheritedMains(nodes: Page['nodes']): PageMains | null {
+  const origin = findNodeOrigin(nodes, (table) => mainsByNodes.get(table))
+  if (!origin) return null
+  for (const id of origin.ids) if (isMain(nodes[id]) || isMain(origin.table[id])) return null
+  return origin.value
 }
 
 /**
@@ -80,8 +109,8 @@ export function mainsOf(page: Page): ReadonlyMap<string, MainNode> {
  * 同期はインスタンスの中身だけを入れ替え、元のノードには触らないので、毎回ページの全部のノードを見直さずに済む
  */
 export function inheritMains(next: Page, page: Page): void {
-  const mains = mainsByPage.get(page)
-  if (mains && !mainsByPage.has(next)) mainsByPage.set(next, mains)
+  const mains = mainsByNodes.get(page.nodes)
+  if (mains && !mainsByNodes.has(next.nodes)) mainsByNodes.set(next.nodes, mains)
 }
 
 /** ドキュメントの中から、コンポーネントの元を探す */

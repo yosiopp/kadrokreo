@@ -9,6 +9,7 @@ import {
 } from '../document/geometry.ts'
 import { clampSize, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import type { AutoLayout, FrameNode, NodeId, Scene, SceneNode, Sizing } from '../document/types.ts'
+import { nodeChangesSince } from '../document/nodeChanges.ts'
 import { createFrame } from './nodes.ts'
 import {
   type NodePatch,
@@ -34,10 +35,11 @@ const MAX_PASSES = 4
  * 自動で並べるフレームをすべて並べ直す。何も動かなければ同じ参照を返す。
  * fitText を渡すと、親いっぱいに伸ばして幅が変わったテキストの高さを測り直す。
  */
-export function relayout<T extends Scene>(scene: T, fitText?: FitText): T {
+export function relayout<T extends Scene>(scene: T, fitText?: FitText, arranged?: Scene): T {
   let current = scene
   for (let pass = 0; pass < MAX_PASSES; pass++) {
-    const next = relayoutOnce(current, fitText)
+    const changed = arranged ? nodeChangesSince(arranged.nodes, current.nodes) : null
+    const next = changed ? relayoutAround(current, fitText, changed) : relayoutOnce(current, fitText)
     if (next === current) break
     current = next
   }
@@ -56,13 +58,59 @@ function relayoutOnce<T extends Scene>(scene: T, fitText: FitText | undefined): 
     }
   }
   visit(scene.rootIds)
-  const arranged = frames.reduce((next, id) => layoutFrame(next, id), scene)
+  return fitStretchedTexts(scene, frames.reduce((next, id) => layoutFrame(next, id), scene), fitText)
+}
+
+/** 伸ばして幅が変わった、折り返すテキストの高さを測り直す */
+function fitStretchedTexts<T extends Scene>(scene: T, arranged: T, fitText: FitText | undefined): T {
   if (!fitText || arranged === scene) return arranged
-  // 伸ばして幅が変わった、折り返すテキスト
-  const resized = Object.values(arranged.nodes).flatMap((node) =>
-    node.type === 'text' && node.sizing.width !== 'hug' && scene.nodes[node.id].width !== node.width ? [node.id] : [],
+  const changed = nodeChangesSince(scene.nodes, arranged.nodes)
+  const candidates = changed ? [...changed].flatMap((id) => arranged.nodes[id] ?? []) : Object.values(arranged.nodes)
+  const resized = candidates.flatMap((node) =>
+    node.type === 'text' && node.sizing.width !== 'hug' && scene.nodes[node.id]?.width !== node.width ? [node.id] : [],
   )
   return resized.length > 0 ? fitText(arranged, resized) : arranged
+}
+
+/**
+ * 並べ終えていた（並べ直しても変わらない）表から changed のノードだけを変えた scene を、1 回並べ直す（relayoutOnce と同じ結果）。
+ * 並びが変わりうるのは、変わったノード自身と、変わったノードの（前と今の）親の、自動で並べるフレームだけ。
+ * 子のフレームを先に並べ、並べて変わったフレームの親も続けて並べる（深いものから）
+ */
+function relayoutAround<T extends Scene>(scene: T, fitText: FitText | undefined, changed: ReadonlySet<NodeId>): T {
+  const byDepth = new Map<number, Set<NodeId>>()
+  const depthOf = (id: NodeId) => {
+    let count = 0
+    for (let parent = scene.nodes[id].parentId; parent !== null; parent = scene.nodes[parent].parentId) count++
+    return count
+  }
+  const add = (id: NodeId | null | undefined, depth?: number) => {
+    if (id == null) return
+    const node = scene.nodes[id]
+    if (node?.type !== 'frame' || !node.layout) return
+    const at = depth ?? depthOf(id)
+    let bucket = byDepth.get(at)
+    if (!bucket) byDepth.set(at, (bucket = new Set()))
+    bucket.add(id)
+  }
+  for (const id of changed) {
+    const node = scene.nodes[id]
+    if (node) {
+      add(id)
+      add(node.parentId)
+    }
+  }
+  // 子を消した・外へ出したフレームは、children が変わるので自分が changed に入っている
+  let current = scene
+  const deepest = Math.max(-1, ...byDepth.keys())
+  for (let depth = deepest; depth >= 0; depth--) {
+    for (const id of byDepth.get(depth) ?? []) {
+      const next = layoutFrame(current, id)
+      if (next.nodes[id] !== current.nodes[id] && depth > 0) add(scene.nodes[id].parentId, depth - 1)
+      current = next
+    }
+  }
+  return fitStretchedTexts(scene, current, fitText)
 }
 
 /** 親の座標系で、子を囲む矩形。回っている子は、囲む矩形の大きさで場所を取る */

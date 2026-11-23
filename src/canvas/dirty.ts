@@ -1,5 +1,6 @@
 import { type Bounds, type Matrix, type Size, contentMatrix, getWorldMatrix, multiply, transformRect } from '../document/geometry.ts'
 import type { Asset, AssetId, NodeId, Scene, SceneNode } from '../document/types.ts'
+import { nodeChangesBetween } from '../document/nodeChanges.ts'
 import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
 import { paintedRect } from './render.ts'
 import type { Viewport } from './viewport.ts'
@@ -102,6 +103,16 @@ function toRegions(world: readonly Bounds[], screen: readonly Bounds[], viewport
 /** 参照が変わったノード（足された・消されたものを含む）。多すぎれば null */
 function changedIds(prev: Scene, next: Scene): NodeId[] | null {
   const ids: NodeId[] = []
+  // 編集の側が変えた id を覚えていれば、それだけを比べる（全部のノードを見ずに済む）
+  const known = nodeChangesBetween(prev.nodes, next.nodes)
+  if (known) {
+    for (const id of known) {
+      if (prev.nodes[id] === next.nodes[id]) continue
+      ids.push(id)
+      if (ids.length > MAX_CHANGED) return null
+    }
+    return ids
+  }
   for (const id in next.nodes) {
     if (prev.nodes[id] !== next.nodes[id]) {
       ids.push(id)

@@ -5,6 +5,7 @@ import type { BooleanOperation, FrameNode, NodeId, PathNode, Scene } from '../..
 import { createFrame, createPath } from '../nodes.ts'
 import { MAX_PATH_POINTS } from './paths.ts'
 import { insertNode, moveNode, patchNodes, removeNodes, sortByDocumentOrder, topLevelIds } from './tree.ts'
+import { nodeChangesSince, noteNodeChanges } from '../../document/nodeChanges.ts'
 
 // ブーリアン演算のノード（元の図形を子に残し、結果を描くフレーム。document/booleanNode.ts）を作る・変える・平らにする操作と、
 // 枠を結果に合わせる後始末。どれも純粋な関数で、何も変わらなければ同じ参照を返す。
@@ -126,7 +127,9 @@ const FIT_EPSILON = 0.02
  * 子をずらしてノードの左上を結果の左上にし、ページ上の見た目は変えない。入れ子は内側から合わせる。
  * 結果が空のノードはそのまま。ストアが変更のたびに通す
  */
-export function fitBooleanNodes<T extends Scene>(scene: T): T {
+export function fitBooleanNodes<T extends Scene>(scene: T, fitted?: Scene): T {
+  const changed = fitted ? nodeChangesSince(fitted.nodes, scene.nodes) : null
+  if (changed) return fitAround(scene, changed)
   const order: NodeId[] = []
   const visit = (ids: readonly NodeId[]) => {
     for (const id of ids) {
@@ -138,6 +141,23 @@ export function fitBooleanNodes<T extends Scene>(scene: T): T {
   }
   visit(scene.rootIds)
   return order.reduce((current, id) => fitOne(current, id), scene)
+}
+
+/**
+ * 枠が合っていた fitted から changed のノードだけを変えた scene の、演算のノードの枠を合わせる。
+ * 結果が変わりうるのは、変わったノードとその祖先の演算のノードだけ。深いものから（内側から）合わせる
+ */
+function fitAround<T extends Scene>(scene: T, changed: ReadonlySet<NodeId>): T {
+  const depths = new Map<NodeId, number>()
+  for (const id of changed) {
+    if (!scene.nodes[id]) continue
+    const chain: NodeId[] = []
+    for (let current: NodeId | null = id; current !== null; current = scene.nodes[current].parentId) chain.push(current)
+    chain.forEach((ancestor, index) => {
+      if (!depths.has(ancestor) && isBooleanNode(scene.nodes[ancestor])) depths.set(ancestor, chain.length - 1 - index)
+    })
+  }
+  return [...depths].sort((a, b) => b[1] - a[1]).reduce((current, [id]) => fitOne(current, id), scene)
 }
 
 function fitOne<T extends Scene>(scene: T, id: NodeId): T {
@@ -160,5 +180,6 @@ function fitOne<T extends Scene>(scene: T, id: NodeId): T {
     if (child) nodes[childId] = { ...child, x: tidy(child.x - box.x), y: tidy(child.y - box.y) }
   }
   nodes[id] = { ...node, x: tidy(target.x - offset.x), y: tidy(target.y - offset.y), width, height }
+  noteNodeChanges(nodes, scene.nodes, [id, ...node.children])
   return { ...scene, nodes }
 }

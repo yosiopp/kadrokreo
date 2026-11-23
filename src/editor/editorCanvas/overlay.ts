@@ -13,6 +13,7 @@ import type { Gradient, NodeId, PathNode, Scene } from '../../document/types.ts'
 import { type Vertex, isLine, mapVertices, roundCorners, tracePath } from '../../document/path.ts'
 import { contourSegment, flatVertices } from '../pathEdit.ts'
 import { isVariantSet } from '../../document/variants.ts'
+import { mainNodesOf } from '../../document/component.ts'
 import { handlePoint } from '../resize.ts'
 import { drawConstraintMarks } from './constraintMarks.ts'
 import type { Gesture } from './drag.ts'
@@ -105,8 +106,11 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
   ctx.save()
   ctx.strokeStyle = OVERLAY_COMPONENT
   ctx.setLineDash([4, 3])
-  for (const node of Object.values(page.nodes)) {
-    if (node.type === 'frame' && node.visible && isVariantSet(page, node.id)) outlineNode(node.id)
+  // まとまりは元を子に持つフレームなので、元の親だけを見る（ドラッグの 1 歩ごとに全部のノードを見ない）
+  const parents = new Set<NodeId>()
+  for (const main of mainNodesOf(page)) if (main.parentId !== null) parents.add(main.parentId)
+  for (const id of parents) {
+    if (page.nodes[id]?.visible && isVariantSet(page, id)) outlineNode(id)
   }
   ctx.restore()
 

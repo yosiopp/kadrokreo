@@ -39,6 +39,7 @@ import {
   swapChain,
 } from '../document/componentSource.ts'
 import { stretchedAxes } from '../document/autoLayout.ts'
+import { nodeChangesSince, noteNodeChanges } from '../document/nodeChanges.ts'
 import { variantSetOf } from '../document/variants.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
@@ -375,7 +376,10 @@ export function captureOverrides(before: DesignDocument, after: DesignDocument):
     const old = before.pages.find((candidate) => candidate.id === page.id)
     if (!old || old === page) return page
     let next = page
-    for (const node of Object.values(page.nodes)) {
+    // 変わったノードが分かれば、それだけを見る（ほかは前と同じ参照なので比べるまでもない）
+    const changedIds = nodeChangesSince(old.nodes, page.nodes)
+    const candidates = changedIds ? [...changedIds].flatMap((id) => page.nodes[id] ?? []) : Object.values(page.nodes)
+    for (const node of candidates) {
       const previous = old.nodes[node.id]
       if (!previous || previous === node || previous.type !== node.type) continue
       const keys = OVERRIDE_KEYS.filter((key) => !sameValue(valueOf(previous, key), valueOf(node, key)))
@@ -530,20 +534,71 @@ export function resetOverrides(
  * 元がなくなったインスタンスは、ただのフレームにする。すでに合っていれば同じ参照を返す。
  * fitText を渡すと、文言を上書きしたテキストの大きさを測り直す。
  */
-export function syncComponents(doc: DesignDocument, fitText?: FitText): DesignDocument {
+export function syncComponents(doc: DesignDocument, fitText?: FitText, from?: DesignDocument): DesignDocument {
   // 前に確かめて合っていたドキュメント（ストアの preview の繰り返しなど）は、見直さない
-  if (syncedDocs.has(doc) && syncedDocs.get(doc) === fitText) return doc
+  if (isSynced(doc, fitText)) return doc
+  // from が合っていたドキュメントなら、そこから変わったところに関わるインスタンスだけを見る
+  let scope = from !== undefined && isSynced(from, fitText) ? syncScope(from, doc) : null
   // 元の中にインスタンスがあると、内側から順に直す必要がある。変化がなくなるまで繰り返す
   let current = doc
   for (let pass = 0; pass < MAX_PASSES; pass++) {
-    const next = syncOnce(current, fitText)
+    const next = syncOnce(current, fitText, scope)
     if (next === current) {
       syncedDocs.set(current, fitText)
       break
     }
+    // 見たインスタンスは合わせたので、次の回はこの回で書き換えたところに関わるものだけ見ればよい
+    scope = scope ? syncScope(current, next) : null
     current = next
   }
   return current
+}
+
+function isSynced(doc: DesignDocument, fitText: FitText | undefined): boolean {
+  return syncedDocs.has(doc) && syncedDocs.get(doc) === fitText
+}
+
+/** ページごとの、見直すインスタンスの id。null は全部を見る */
+type SyncScope = ReadonlyMap<PageId, ReadonlySet<NodeId>>
+
+/**
+ * どのインスタンスも合っていた from から doc への変更で、合わなくなったかもしれないインスタンス。
+ * インスタンスの姿は、自分と中身・親（伸ばすかどうか）・祖先（循環の確かめ）・元とその中身で決まるので、
+ * 変わったノードの祖先と子と（親が変わったなら）子孫のインスタンスを見る。元やその中身が変わったときは、
+ * ほかのページのインスタンスまで変わりうるので全部を見る（null）。変わったノードが分からないときも null
+ */
+function syncScope(from: DesignDocument, doc: DesignDocument): SyncScope | null {
+  if (from.pages.length !== doc.pages.length) return null
+  const scope = new Map<PageId, Set<NodeId>>()
+  for (const [index, page] of doc.pages.entries()) {
+    const prior = from.pages[index]
+    if (prior.id !== page.id) return null
+    if (prior.nodes === page.nodes) continue
+    const ids = nodeChangesSince(prior.nodes, page.nodes)
+    if (!ids) return null
+    const check = new Set<NodeId>()
+    const addAncestors = (scene: Scene, id: NodeId) => {
+      for (let current: NodeId | null = id; current !== null; current = scene.nodes[current]?.parentId ?? null) {
+        if (isInstance(page.nodes[current])) check.add(current)
+      }
+    }
+    for (const id of ids) {
+      const node = page.nodes[id]
+      const old = prior.nodes[id]
+      if (isMain(node) || isMain(old)) return null
+      if (node && enclosingMain(page, id) !== null) return null
+      if (old && enclosingMain(prior, id) !== null) return null
+      if (old) addAncestors(prior, id)
+      if (!node) continue
+      addAncestors(page, id)
+      if (node.type === 'frame') for (const child of node.children) if (isInstance(page.nodes[child])) check.add(child)
+      if (!old || old.parentId !== node.parentId) {
+        for (const inner of subtreeIds(page, id)) if (isInstance(page.nodes[inner])) check.add(inner)
+      }
+    }
+    scope.set(page.id, check)
+  }
+  return scope
 }
 
 // 同期を飛ばすための覚え書き。ドキュメントもノードも書き換えない（変えるときは作り直す）ので、
@@ -580,7 +635,7 @@ function sameKey(a: readonly unknown[] | undefined, b: readonly unknown[]): bool
 /** 入れ子の深さの上限を兼ねる。これより深い入れ子は、次の変更のときに続きが直る */
 const MAX_PASSES = 8
 
-function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocument {
+function syncOnce(doc: DesignDocument, fitText: FitText | undefined, scope: SyncScope | null): DesignDocument {
   const mains = collectMains(doc)
   const reaches = componentReach(doc, mains)
   const ctx: SyncContext = { doc, mains, reaches }
@@ -599,15 +654,19 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
       owned = true
       return next.nodes
     }
-    for (const node of Object.values(page.nodes)) {
+    // 書き換えた id（あとでノードの表に覚えておく。null は分からなくなった）
+    let touched: Set<NodeId> | null = new Set()
+    const ids = scope ? (scope.get(page.id) ?? []) : Object.keys(page.nodes)
+    for (const id of ids) {
       // 作り直しの途中で消えたノードは飛ばす
-      const instance = next.nodes[node.id]
+      const instance = next.nodes[id]
       if (!isInstance(instance)) continue
       const main = mains.get(instance.component.id)
       // 元がない、または自分自身を含むことになる（循環する）なら、ただのフレームにする
       const enclosing = enclosingMain(next, instance.id)
       if (!main || (enclosing !== null && reaches(instance.component.id, enclosing))) {
         own()[instance.id] = { ...instance, component: null }
+        touched?.add(instance.id)
         continue
       }
       const key = syncKey(next, instance, main.page, main.node, fitText)
@@ -619,7 +678,11 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
       }
       if (plan.strays.length > 0) {
         // 写しを外へ出してしまったときだけ。めったにないので、ふつうに消して新しい表を持ち直す
+        const kept = next.nodes
         next = removeNodes(next, plan.strays)
+        const removed = nodeChangesSince(kept, next.nodes)
+        if (removed && touched) for (const id of removed) touched.add(id)
+        else touched = null
         owned = true
         keepsMains = false
       }
@@ -627,8 +690,10 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
       for (const id of plan.currentIds) {
         if (isMain(nodes[id])) keepsMains = false
         delete nodes[id]
+        touched?.add(id)
       }
       Object.assign(nodes, plan.expected)
+      if (touched) for (const id of Object.keys(plan.expected)) touched.add(id)
       // 作り直した姿は、いまの元に合っている。覚えておけば、次の回（変化がないことを確かめる回）で比べ直さずに済む。
       // 同じ回のうちに親や元が変われば、次の回のキーが合わなくなって、今までどおり比べ直す
       const rebuilt = nodes[instance.id]
@@ -639,6 +704,7 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined): DesignDocu
     }
     if (next !== page) {
       changed = true
+      if (touched) noteNodeChanges(next.nodes, page.nodes, touched)
       if (keepsMains) inheritMains(next, page)
     }
     return next

@@ -2,6 +2,7 @@ import { nodeMatrix, tidy, transformRect } from '../document/geometry.ts'
 import { followsConstraints } from '../document/autoLayout.ts'
 import type { Constraint, FrameNode, NodeId, Scene, SceneNode } from '../document/types.ts'
 import { type NodePatch, patchNodes } from './operations/tree.ts'
+import { nodeChangesSince } from '../document/nodeChanges.ts'
 
 // 親のフレームの大きさが変わったときに、子を親の辺に追従させる（既存のデザインツールの constraints）。
 // 効くのは、親が自動で並べないフレームの子と、自動で並べるフレームの並びから外した子。
@@ -44,18 +45,43 @@ export function constrain(
 export function applyConstraints<T extends Scene>(before: Scene, after: T, resized: NodeId[] = []): T {
   if (before === after) return after
   let current = after
-  const visit = (ids: readonly NodeId[]) => {
-    for (const id of ids) {
-      const node = current.nodes[id]
-      if (node.type !== 'frame') continue
-      const previous = before.nodes[id]
-      if (previous?.type === 'frame' && (previous.width !== node.width || previous.height !== node.height)) {
-        current = followParent(before, after, current, previous, node, resized)
-      }
-      visit((current.nodes[id] as FrameNode).children)
-    }
+  const resizedFrame = (id: NodeId): [FrameNode, FrameNode] | null => {
+    const node = current.nodes[id]
+    const previous = before.nodes[id]
+    if (node?.type !== 'frame' || previous?.type !== 'frame') return null
+    return previous.width !== node.width || previous.height !== node.height ? [previous, node] : null
   }
-  visit(after.rootIds)
+  const changed = nodeChangesSince(before.nodes, after.nodes)
+  if (!changed) {
+    // 変わったノードが分からなければ、全部のフレームを上から見る
+    const visit = (ids: readonly NodeId[]) => {
+      for (const id of ids) {
+        if (current.nodes[id].type !== 'frame') continue
+        const pair = resizedFrame(id)
+        if (pair) current = followParent(before, after, current, pair[0], pair[1], resized)
+        visit((current.nodes[id] as FrameNode).children)
+      }
+    }
+    visit(after.rootIds)
+    return current
+  }
+  // 大きさが変わりうるのは、変えたノードと、追従して大きさが変わった子だけ。親から先に（子は親に追従してから比べる）
+  const done = new Set<NodeId>()
+  const follow = (id: NodeId) => {
+    if (done.has(id)) return
+    done.add(id)
+    const pair = resizedFrame(id)
+    if (!pair) return
+    current = followParent(before, after, current, pair[0], pair[1], resized)
+    for (const child of (current.nodes[id] as FrameNode).children) follow(child)
+  }
+  const starts = [...changed].filter((id) => resizedFrame(id) !== null)
+  const depth = (id: NodeId) => {
+    let count = 0
+    for (let parent = after.nodes[id].parentId; parent !== null; parent = after.nodes[parent].parentId) count++
+    return count
+  }
+  for (const id of starts.map((id) => [depth(id), id] as const).sort((a, b) => a[0] - b[0])) follow(id[1])
   return current
 }
 
