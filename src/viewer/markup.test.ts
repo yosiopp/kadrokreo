@@ -259,8 +259,8 @@ describe('nodeMarkup', () => {
       x2: 1,
       y2: 0.5,
       stops: [
-        { offset: 0, color: '#ff0000' },
-        { offset: 1, color: '#0000ff' },
+        { offset: 0, color: '#ff0000', opacity: 1 },
+        { offset: 1, color: '#0000ff', opacity: 1 },
       ],
       opacity: 1,
       visible: true,

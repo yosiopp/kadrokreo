@@ -1438,13 +1438,15 @@ class Converter {
     const [x, y, angle, paintOpacity] = source
     const stops: ColorStop[] = []
     for (const item of rawStops.split(',')) {
-      const match = /^\s*([\d.eE+-]+)\s+(#[0-9a-fA-F]{6})\s*$/.exec(item)
+      const match = /^\s*([\d.eE+-]+)\s+(#[0-9a-fA-F]{6})(?:\s+([\d.eE+-]+))?\s*$/.exec(item)
       const offset = match ? Number(match[1]) : NaN
-      if (!match || !(offset >= 0 && offset <= 1) || (stops.length > 0 && offset < stops[stops.length - 1].offset)) return null
-      stops.push({ offset, color: match[2].toLowerCase() })
+      const opacity = match?.[3] === undefined ? 1 : Number(match[3])
+      if (!match || !(offset >= 0 && offset <= 1) || !(opacity >= 0 && opacity <= 1)) return null
+      if (stops.length > 0 && offset < stops[stops.length - 1].offset) return null
+      stops.push({ offset, color: match[2].toLowerCase(), opacity })
     }
     if (stops.length < 2 || stops.length > MAX_STOPS || !(paintOpacity >= 0 && paintOpacity <= 1)) return null
-    if (node.width === 0 || node.height === 0) return solidPaint(stops[0].color, paintOpacity)
+    if (node.width === 0 || node.height === 0) return solidPaint(stops[0].color, stops[0].opacity * paintOpacity)
     const center = toNodeSpace(node, applyMatrix(matrix, { x, y }))
     return {
       type: 'conic',
@@ -1502,13 +1504,17 @@ class Converter {
     return alphas.size === 1 ? [...alphas][0] : null
   }
 
+  /**
+   * グラデーションの色。透明度（stop-color の alpha と stop-opacity の積）がすべて同じなら塗りの不透明度に写すので（paint）色は不透明のまま、
+   * 色ごとに違えば色ごとの不透明度に写す
+   */
   private stops(element: SvgElement, inherited: Inherited): ColorStop[] {
     const owner = this.gradientChain(element).find((item) =>
       item.children.some((child) => typeof child !== 'string' && child.name === 'stop'),
     )
     if (!owner) return []
+    const uniform = this.uniformStopOpacity(element, inherited) !== null
     const stops: ColorStop[] = []
-    let translucent = false
     let previous = 0
     for (const child of owner.children) {
       if (typeof child === 'string' || child.name !== 'stop') continue
@@ -1517,12 +1523,9 @@ class Converter {
       previous = offset
       const rawColor = (style['stop-color'] ?? 'black').trim()
       const color = (rawColor === 'currentColor' ? parseColor(inherited.color) : parseColor(rawColor)) ?? { color: '#000000', alpha: 1 }
-      const opacity = parseFraction(style['stop-opacity']) ?? 1
-      if (color.alpha * opacity < 1) translucent = true
-      stops.push({ offset, color: color.color })
+      const opacity = uniform ? 1 : round4(clamp01(color.alpha * (parseFraction(style['stop-opacity']) ?? 1)))
+      stops.push({ offset, color: color.color, opacity })
     }
-    // すべての色が同じ透明度なら、塗りの不透明度に写す（paint）。色ごとに違うときだけ知らせる
-    if (translucent && this.uniformStopOpacity(element, inherited) === null) this.warn('グラデーションの色ごとに違う透明度（不透明にした）')
     if (stops.length > MAX_STOPS) {
       this.warn(`${MAX_STOPS} 色を超えるグラデーション（間引いた）`)
       const picked = Array.from({ length: MAX_STOPS }, (_, i) => stops[Math.round((i * (stops.length - 1)) / (MAX_STOPS - 1))])
@@ -1543,7 +1546,7 @@ class Converter {
   ): Paint | null {
     const stops = this.stops(element, inherited)
     if (stops.length === 0) return null
-    if (stops.length === 1) return solidPaint(stops[0].color)
+    if (stops.length === 1) return stopPaint(stops[0])
     const chain = this.gradientChain(element)
     const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
     const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
@@ -1560,16 +1563,16 @@ class Converter {
     if (userSpace) toPage = multiply(matrix, gradientTransform)
     else {
       // 枠に対する割合の座標。幅や高さが 0 の枠には SVG もグラデーションを描かない
-      if (userBox.width === 0 || userBox.height === 0) return solidPaint(stops[stops.length - 1].color)
+      if (userBox.width === 0 || userBox.height === 0) return stopPaint(stops[stops.length - 1])
       toPage = multiply(multiply(matrix, [userBox.width, 0, 0, userBox.height, userBox.x, userBox.y]), gradientTransform)
     }
     const start = toNodeSpace(node, applyMatrix(toPage, p1))
     const end = toNodeSpace(node, applyMatrix(toPage, p2))
-    if (Math.hypot(end.x - start.x, end.y - start.y) < 1e-9) return solidPaint(stops[stops.length - 1].color)
+    if (Math.hypot(end.x - start.x, end.y - start.y) < 1e-9) return stopPaint(stops[stops.length - 1])
     // 始点・終点は枠に対する割合で持つ。幅や高さが 0 の向きは中央に置く
     const ratio = (value: number, length: number) => (length > 0 ? round4(value / length) : 0.5)
     const line = { x1: ratio(start.x, node.width), y1: ratio(start.y, node.height), x2: ratio(end.x, node.width), y2: ratio(end.y, node.height) }
-    if (!Object.values(line).every(Number.isFinite)) return solidPaint(stops[stops.length - 1].color)
+    if (!Object.values(line).every(Number.isFinite)) return stopPaint(stops[stops.length - 1])
     if (node.width === 0 || node.height === 0) {
       // つぶれた枠では、SVG の向きの線を枠の割合で表せないので、向きの線に色の位置を写す
       return this.projectedLinear(start, end, stops, node)
@@ -1599,7 +1602,7 @@ class Converter {
     const mapped = stops.map((stop) => {
       const offset = Math.max(previous, clamp01(round4(t1 + stop.offset * (t2 - t1))))
       previous = offset
-      return { offset, color: stop.color }
+      return { ...stop, offset }
     })
     return { type: 'linear', ...linearFromAngle(angle, node), stops: mapped, opacity: 1, visible: true, blendMode: 'normal' }
   }
@@ -1617,8 +1620,8 @@ class Converter {
   ): Paint | null {
     const stops = this.stops(element, inherited)
     if (stops.length === 0) return null
-    const last: Paint = solidPaint(stops[stops.length - 1].color)
-    if (stops.length === 1) return solidPaint(stops[0].color)
+    const last: Paint = stopPaint(stops[stops.length - 1])
+    if (stops.length === 1) return stopPaint(stops[0])
     const chain = this.gradientChain(element)
     const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
     const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
@@ -1710,6 +1713,11 @@ function decodeDataUri(uri: string): Uint8Array<ArrayBuffer> | null {
   } catch {
     return null
   }
+}
+
+/** グラデーションの代わりに 1 色で塗るときの塗り。色の不透明度を塗りの不透明度にする */
+function stopPaint(stop: ColorStop): Paint {
+  return solidPaint(stop.color, stop.opacity)
 }
 
 function positive(value: number): number {

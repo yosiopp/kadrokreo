@@ -198,8 +198,8 @@ describe('nodeCss', () => {
 
   it('グラデーションの角度は、CSS の向き（0deg が上向き）に直す', () => {
     const stops = [
-      { offset: 0, color: '#000000' },
-      { offset: 1, color: '#ffffff' },
+      { offset: 0, color: '#000000', opacity: 1 },
+      { offset: 1, color: '#ffffff', opacity: 1 },
     ]
     const gradient = (angle: number) => css(sceneOf(rect({ fills: [{ type: 'linear', ...linearFromAngle(angle, rect()), stops, opacity: 1, visible: true, blendMode: 'normal' as const }] })), 'rect').at(-1)
     // 0° は左から右、90° は上から下
@@ -208,10 +208,21 @@ describe('nodeCss', () => {
     expect(gradient(-135)).toBe('background: linear-gradient(315deg, #000000 0%, #ffffff 100%);')
   })
 
+  it('グラデーションの色ごとの不透明度は、塗りの不透明度と掛け合わせて CSS の色の透明度にし、パネルにも出す', () => {
+    const stops = [
+      { offset: 0, color: '#ff0000', opacity: 1 },
+      { offset: 1, color: '#ff0000', opacity: 0.5 },
+    ]
+    const fill = { type: 'linear' as const, ...linearFromAngle(0, rect()), stops, opacity: 0.5, visible: true, blendMode: 'normal' as const }
+    const scene = sceneOf(rect({ fills: [fill] }))
+    expect(css(scene, 'rect').at(-1)).toBe('background: linear-gradient(90deg, rgba(255, 0, 0, 0.5) 0%, rgba(255, 0, 0, 0.25) 100%);')
+    expect(rowsOf(scene, 'rect', '塗り')).toContain('100%=#FF0000・不透明度 50%')
+  })
+
   it('塗りが重なっていれば background を手前から並べ、重ねる単色は同じ色のグラデーションにする。影はカンマでつなぐ', () => {
     const stops = [
-      { offset: 0, color: '#000000' },
-      { offset: 1, color: '#ffffff' },
+      { offset: 0, color: '#000000', opacity: 1 },
+      { offset: 1, color: '#ffffff', opacity: 1 },
     ]
     const node = rect({
       fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }, { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops, opacity: 1, visible: true, blendMode: 'normal' as const }, { type: 'solid', color: '#00ff00', opacity: 1, visible: true, blendMode: 'normal' as const }],
@@ -232,16 +243,16 @@ describe('nodeCss', () => {
 
   it('円形のグラデーションは、枠に対する % の楕円の radial-gradient にする', () => {
     const stops = [
-      { offset: 0, color: '#ffffff' },
-      { offset: 0.5, color: '#ff0000' },
-      { offset: 1, color: '#000000' },
+      { offset: 0, color: '#ffffff', opacity: 1 },
+      { offset: 0.5, color: '#ff0000', opacity: 1 },
+      { offset: 1, color: '#000000', opacity: 1 },
     ]
     const lines = css(sceneOf(rect({ fills: [{ type: 'radial', cx: 0.25, cy: 0.5, rx: 0.5, ry: 1, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }] })), 'rect')
     expect(lines).toContain('background: radial-gradient(50% 100% at 25% 50%, #ffffff 0%, #ff0000 50%, #000000 100%);')
   })
 
   it('直線の始点・終点を自由に置いたら、CSS の線に写した位置へ色の位置を移す', () => {
-    const stops = [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }]
+    const stops = [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }]
     // 枠（100 × 50）の左から 1/4 〜 3/4 で、横向き
     const scene = sceneOf(rect({ fills: [{ type: 'linear', x1: 0.25, y1: 0.2, x2: 0.75, y2: 0.2, stops, opacity: 1, visible: true, blendMode: 'normal' as const }] }))
     expect(css(scene, 'rect')).toContain('background: linear-gradient(90deg, #000000 25%, #ffffff 75%);')
@@ -252,7 +263,7 @@ describe('nodeCss', () => {
   })
 
   it('角度のグラデーションは conic-gradient にする（CSS の from は 0deg が真上）', () => {
-    const stops = [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }]
+    const stops = [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }]
     const scene = sceneOf(rect({ fills: [{ type: 'conic', cx: 0.25, cy: 0.5, angle: 0, stops, opacity: 1, visible: true, blendMode: 'normal' as const }] }))
     expect(css(scene, 'rect')).toContain('background: conic-gradient(from 90deg at 25% 50%, #ff0000 0%, #0000ff 100%);')
     expect(rowsOf(scene, 'rect', '塗り')).toEqual(['角度のグラデーション=中心 25% 50%・0°から', '0%=#FF0000', '100%=#0000FF'])
@@ -363,7 +374,7 @@ describe('nodeCss', () => {
   })
 
   it('回した円形のグラデーション。90° なら半径を入れ替えて同じ形に、ほかの角度は回さずに書いて知らせる', () => {
-    const stops = [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }]
+    const stops = [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }]
     const radial = (angle: number) => ({ type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.25, angle, stops, opacity: 1, visible: true, blendMode: 'normal' as const })
     // 100 × 50 の枠。横の半径 50px・縦の半径 12.5px を 90° 回すと、横 12.5px（12.5%）・縦 50px（100%）
     const turned = sceneOf(rect({ fills: [radial(90)] }))
@@ -398,7 +409,7 @@ describe('nodeCss', () => {
   })
 
   it('テキストに重ねた塗りも、背景を文字の形で切り抜いて表す', () => {
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
     const lines = css(sceneOf(text({ fills: [...solid('#00ff00'), radial] })), 'text')
     expect(lines.slice(0, 2)).toEqual([
       'background: radial-gradient(50% 50% at 50% 50%, #ff0000 0%, #0000ff 100%), #00ff00;',
@@ -408,8 +419,8 @@ describe('nodeCss', () => {
 
   it('テキストのグラデーションは、背景を文字の形で切り抜いて表す', () => {
     const stops = [
-      { offset: 0, color: '#ff0000' },
-      { offset: 1, color: '#0000ff' },
+      { offset: 0, color: '#ff0000', opacity: 1 },
+      { offset: 1, color: '#0000ff', opacity: 1 },
     ]
     const lines = css(sceneOf(text({ fills: [{ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops, opacity: 1, visible: true, blendMode: 'normal' as const }] })), 'text')
     expect(lines.slice(0, 3)).toEqual([
@@ -587,8 +598,8 @@ describe('inspectNode', () => {
 
   it('塗りの色には色見本を付ける。グラデーションは色ごとに出す', () => {
     const stops = [
-      { offset: 0, color: '#4f46e5' },
-      { offset: 1, color: '#c026d3' },
+      { offset: 0, color: '#4f46e5', opacity: 1 },
+      { offset: 1, color: '#c026d3', opacity: 1 },
     ]
     const scene = sceneOf(rect({ fills: [{ type: 'linear', ...linearFromAngle(30, rect()), stops, opacity: 1, visible: true, blendMode: 'normal' as const }] }))
     const section = inspectNode(docOf(scene), scene, 'rect').find((item) => item.title === '塗り')
@@ -823,7 +834,7 @@ describe('inspectNode', () => {
 
   it('塗りごとの不透明度は、塗りの節に出し、CSS では色の alpha にする', () => {
     const half = { type: 'solid' as const, color: '#ff0000', opacity: 0.5, visible: true, blendMode: 'normal' as const }
-    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.25, visible: true, blendMode: 'normal' as const }
+    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 0.25, visible: true, blendMode: 'normal' as const }
     const scene = sceneOf(rect({ fills: [half] }), rect({ id: 'g', fills: [fade], strokes: [{ ...half, color: '#00ff00' }], strokeWidth: 2 }))
     expect(rowsOf(scene, 'rect', '塗り')).toEqual(['色=#FF0000', '不透明度=50%'])
     expect(css(scene, 'rect')).toContain('background: rgba(255, 0, 0, 0.5);')
@@ -878,7 +889,7 @@ describe('inspectSelection', () => {
 
 describe('色の書き方と rem の基準', () => {
   const shadow = { type: 'drop-shadow' as const, x: 0, y: 2, blur: 4, color: '#000000', opacity: 0.25, visible: true, spread: 0 , blendMode: 'normal' as const}
-  const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, blendMode: 'normal' as const }
+  const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const }
 
   it('CSS の色を RGB や HSL で書ける。影は透明度つき', () => {
     const scene = sceneOf(rect({ fills: solid('#4f46e5'), strokes: solid('#ffffff'), strokeWidth: 2, effects: [shadow] }))
@@ -943,7 +954,7 @@ describe('マスク', () => {
 describe('不透明度・明るさのマスクの CSS', () => {
   const gradient: Paint = {
     type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, opacity: 1, visible: true, blendMode: 'normal',
-    stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }],
+    stops: [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }],
   }
   const scene = sceneOf(
     frame({ id: 'frame', name: 'Card', width: 200, height: 200, children: ['mask', 'photo'] }),

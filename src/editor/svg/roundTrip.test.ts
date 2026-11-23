@@ -92,10 +92,10 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
 
   it('楕円の直線状のグラデーション・矩形の円形のグラデーションは向きと色が揃う', () => {
     const ellipse = named(createEllipse({ x: 0, y: 0, width: 100, height: 50 }), 'Dot', {
-      fills: [{ type: 'linear', x1: 0.1, y1: 0.2, x2: 0.8, y2: 1.1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, blendMode: 'normal' as const }],
+      fills: [{ type: 'linear', x1: 0.1, y1: 0.2, x2: 0.8, y2: 1.1, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const rect = named(createRect({ x: 120, y: 0, width: 80, height: 40 }), 'Glow', {
-      fills: [{ type: 'radial', cx: 0.3, cy: 0.4, rx: 0.5, ry: 0.25, stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }],
+      fills: [{ type: 'radial', cx: 0.3, cy: 0.4, rx: 0.5, ry: 0.25, stops: [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }],
     })
     const scene = sceneOf(ellipse, rect)
     const { byName, imported, origin } = roundTrip(scene)
@@ -127,7 +127,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
   it('塗りごとの不透明度は、塗りと線で違っても読み戻すと同じになる（グラデーションも）', () => {
     const gradient = {
       type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, opacity: 0.6, visible: true, blendMode: 'normal' as const,
-      stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }],
+      stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }],
     }
     const rect = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Half', {
       fills: [{ type: 'solid', color: '#ff0000', opacity: 0.4, visible: true, blendMode: 'normal' as const }],
@@ -405,7 +405,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
   })
 
   it('回した円形のグラデーションは gradientTransform で書き、読み戻すと同じ角度になる', () => {
-    const stops = [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }]
+    const stops = [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }]
     const rect = named(createRect({ x: 0, y: 0, width: 80, height: 40 }), 'Tilt', {
       fills: [{ type: 'radial', cx: 0.4, cy: 0.5, rx: 0.5, ry: 0.25, angle: 30, stops, opacity: 1, visible: true, blendMode: 'normal' }],
     })
@@ -482,7 +482,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
           cx: 0.5,
           cy: 0.5,
           angle: 0,
-          stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }],
+          stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }],
           opacity: 0.5,
           visible: true,
           blendMode: 'normal',
@@ -501,6 +501,34 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect((byName('Wheel') as RectNode).fills).toEqual(rect.fills)
   })
 
+  it('グラデーションの色ごとの不透明度は stop-opacity（塗りの不透明度と掛け合わせる）で書き、読み戻すと色ごとの不透明度になる', () => {
+    const stops = [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#ff0000', opacity: 0 }]
+    const common = { visible: true, blendMode: 'normal' as const }
+    const linear = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Fade', {
+      fills: [{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops, opacity: 1, ...common }],
+    })
+    const radial = named(createRect({ x: 50, y: 0, width: 40, height: 20 }), 'Glow', {
+      fills: [{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, angle: 0, stops: [stops[0], { ...stops[1], opacity: 0.5 }], opacity: 0.5, ...common }],
+    })
+    const conic = named(createRect({ x: 100, y: 0, width: 40, height: 20 }), 'Spin', {
+      fills: [{ type: 'conic', cx: 0.5, cy: 0.5, angle: 0, stops: [stops[0], { ...stops[1], opacity: 0.25 }], opacity: 1, ...common }],
+    })
+    const { svg, warnings, byName } = roundTrip(sceneOf(linear, radial, conic))
+    expect(svg).toMatch(/<stop offset="0" stop-color="#ff0000"\/><stop offset="1" stop-color="#ff0000" stop-opacity="0"\/>/)
+    expect(svg).toMatch(/<stop offset="0" stop-color="#ff0000" stop-opacity="0.5"\/><stop offset="1" stop-color="#ff0000" stop-opacity="0.25"\/>/)
+    expect(svg).toContain('data-kdr-stops="0 #ff0000,1 #ff0000 0.25"')
+    expect(svg).toContain('fill-opacity=')
+    expect(warnings).toEqual([])
+    expect((byName('Fade') as RectNode).fills[0]).toMatchObject({ type: 'linear', opacity: 1, stops })
+    // 塗りの不透明度は色ごとの不透明度に掛け合わせて戻る（見た目は同じ）
+    expect((byName('Glow') as RectNode).fills[0]).toMatchObject({
+      type: 'radial',
+      opacity: 1,
+      stops: [{ offset: 0, color: '#ff0000', opacity: 0.5 }, { offset: 1, color: '#ff0000', opacity: 0.25 }],
+    })
+    expect((byName('Spin') as RectNode).fills).toEqual(conic.fills)
+  })
+
   it('角度のグラデーションは回した図形・中心のずれ・向きも往復する。data 属性のない pattern は知らせて読まない', () => {
     const fills = [
       {
@@ -508,7 +536,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
         cx: 0.25,
         cy: 0.75,
         angle: 45,
-        stops: [{ offset: 0, color: '#ff0000' }, { offset: 0.4, color: '#00ff00' }, { offset: 1, color: '#0000ff' }],
+        stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 0.4, color: '#00ff00', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }],
         opacity: 1,
         visible: true,
         blendMode: 'normal' as const,
@@ -541,7 +569,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     const rect = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Layers', {
       fills: [
         { type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const },
-        { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.5, visible: true, blendMode: 'normal' as const },
+        { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 0.5, visible: true, blendMode: 'normal' as const },
       ],
     })
     const frame = named(createFrame({ x: 20, y: 0, width: 50, height: 50 }), 'Box', {
@@ -558,7 +586,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
   it('グラデーションの線の矢印は、端の図形も同じグラデーションで塗る', () => {
     const line = named(createLine({ x: 0, y: 0, width: 100, height: 20 }), 'Grad', {
       endCap: 'arrow',
-      strokes: [{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, blendMode: 'normal' as const }],
+      strokes: [{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const { svg } = roundTrip(sceneOf(line))
     const id = /<linearGradient id="([^"]+)"/.exec(svg)![1]
@@ -675,7 +703,7 @@ describe('マスク', () => {
     const outer = named(createFrame({ x: 0, y: 0, width: 200, height: 200 }), 'Card', { fills: [] })
     const fade = {
       type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, opacity: 1, visible: true, blendMode: 'normal' as const,
-      stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }],
+      stops: [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }],
     }
     const mask = named(createRect({ x: 10, y: 10, width: 100, height: 80 }), 'Fade', { parentId: 'Card', isMask: true, maskType: 'luminance', fills: [fade] })
     const photo = named(createRect({ x: 0, y: 0, width: 150, height: 150 }), 'Photo', { parentId: 'Card' })
@@ -719,7 +747,7 @@ describe('1 つのノードを g にまとめた書き出しを、1 つのノー
   const solid = (color: string, opacity = 1) => ({ type: 'solid' as const, color, opacity, visible: true, blendMode: 'normal' as const })
 
   it('塗りが 2 つの矩形は、塗り 2 つの矩形 1 つに戻る（フレームにならない）', () => {
-    const fills = [solid('#ff0000'), { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.5, visible: true, blendMode: 'normal' as const }]
+    const fills = [solid('#ff0000'), { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 0.5, visible: true, blendMode: 'normal' as const }]
     const rect = named(createRect({ x: 10, y: 20, width: 80, height: 40 }), 'Layers', {
       fills,
       strokes: [solid('#0000ff')],

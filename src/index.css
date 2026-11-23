@@ -1159,6 +1159,16 @@ input.document-name:focus {
   flex: 1;
 }
 
+/* 色・位置・不透明度・消すを 1 行に並べるので、詰める（入力欄は 3 桁が入る幅） */
+.stop-row .field {
+  gap: 3px;
+}
+
+.stop-row .field input {
+  flex: none;
+  width: 44px;
+}
+
 .paint-row-head .section-title {
   flex: 1;
 }

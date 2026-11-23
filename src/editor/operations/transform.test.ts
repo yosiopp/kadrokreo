@@ -230,7 +230,7 @@ describe('flipNodes', () => {
       fills: [
         { type: 'linear' as const, x1: 0.1, y1: 0.2, x2: 0.7, y2: 0.9, stops: [], opacity: 1, visible: true, blendMode: 'normal' as const },
         { type: 'radial' as const, cx: 0.2, cy: 0.3, rx: 0.5, ry: 0.5, stops: [], opacity: 1, visible: true, angle: 20, blendMode: 'normal' as const },
-        { type: 'conic' as const, cx: 0.2, cy: 0.3, angle: 30, stops: [{ offset: 0, color: '#000000' }, { offset: 0.25, color: '#ffffff' }], opacity: 1, visible: true, blendMode: 'normal' as const },
+        { type: 'conic' as const, cx: 0.2, cy: 0.3, angle: 30, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 0.25, color: '#ffffff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const },
       ],
       effects: [
         { type: 'drop-shadow' as const, x: 4, y: 6, blur: 2, color: '#000000', opacity: 0.5, visible: true, spread: 0 , blendMode: 'normal' as const},
@@ -252,7 +252,7 @@ describe('flipNodes', () => {
         // 回した楕円は、軸の向きの符号が変わる
         { cx: 0.8, cy: 0.3, angle: -20 },
         // 角度は回る向きが逆になるので、色の並びも逆にする
-        { cx: 0.8, angle: 150, stops: [{ offset: 0.75, color: '#ffffff' }, { offset: 1, color: '#000000' }] },
+        { cx: 0.8, angle: 150, stops: [{ offset: 0.75, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }] },
       ],
       effects: [{ x: -4, y: 6 }, { type: 'layer-blur', blur: 2, visible: true }],
     })

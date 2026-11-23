@@ -364,6 +364,24 @@ describe('parseKdr', () => {
     expect(roundTrip(rawNode({ fills: [{ ...red, opacity: 1 }, { ...linear, opacity: 0.5 }] })).fills).toEqual([red, { ...linear, opacity: 0.5 }])
   })
 
+  it('グラデーションの色ごとの不透明度を検証する。省くと 1 で、1 なら書き出しで省く', () => {
+    const linear = (stops: unknown[]) => ({ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops })
+    const clear = linear([{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#ff0000', opacity: 0 }])
+    expect(parseOne(rawNode({ fills: [clear] }))).toMatchObject({
+      fills: [{ stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#ff0000', opacity: 0 }] }],
+    })
+    expect(() => parseOne(rawNode({ fills: [linear([{ offset: 0, color: '#000000', opacity: 1.2 }, { offset: 1, color: '#000000' }])] }))).toThrow(
+      'fills[0].stops[0].opacity',
+    )
+    expect(() => parseOne(rawNode({ strokes: [linear([{ offset: 0, color: '#000000' }, { offset: 1, color: '#000000', opacity: '0' }])] }))).toThrow(
+      'strokes[0].stops[1].opacity',
+    )
+    // 1 は省き、それ以外は残す
+    expect(roundTrip(rawNode({ fills: [linear([{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#ff0000', opacity: 0.25 }])] })).fills).toEqual([
+      linear([{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#ff0000', opacity: 0.25 }]),
+    ])
+  })
+
   it('角度のグラデーションを検証する', () => {
     const stops = [{ offset: 0, color: '#000000' }, { offset: 0.5, color: '#ff0000' }, { offset: 1, color: '#000000' }]
     const conic = { type: 'conic', cx: 0.25, cy: 1.5, angle: -45, stops }

@@ -212,7 +212,7 @@ function randomNumber(r: Random, min: number, max: number): number {
 function randomPaint(r: Random) {
   if (r.chance(0.6)) return { type: 'solid', color: r.pick(['#ff0000', '#00ff00', '#123456', '#abcdef']), opacity: 1, visible: r.chance(0.8), ...(r.chance(0.2) ? { blendMode: 'overlay' } : {}) }
   const count = r.int(2, 4)
-  const stops = Array.from({ length: count }, (_, i) => ({ offset: i / (count - 1), color: r.pick(['#000000', '#ffffff', '#ff8800']) }))
+  const stops = Array.from({ length: count }, (_, i) => ({ offset: i / (count - 1), color: r.pick(['#000000', '#ffffff', '#ff8800']), opacity: 1 }))
   if (r.chance(0.25)) {
     return { type: 'conic', cx: randomNumber(r, -1, 2), cy: randomNumber(r, -1, 2), angle: randomNumber(r, -720, 720), stops }
   }
@@ -759,7 +759,7 @@ describe('kdr の読み込みの極端な入力', () => {
 
   it('極端に大きい・回ったノードとグラデーションも描画で落ちない', () => {
     const big = 1e308
-    const gradient = { type: 'linear', x1: 0, y1: 0, x2: 1, y2: 1, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 1 }
+    const gradient = { type: 'linear', x1: 0, y1: 0, x2: 1, y2: 1, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 1 }
     const children = [
       { type: 'rect', id: 'a', name: 'A', x: -big, y: -big, width: big, height: big, rotation: 1e308, fills: [gradient], strokes: [gradient], strokeWidth: big, cornerRadius: big, blendMode: 'multiply', effects: [{ type: 'drop-shadow', x: big, y: -big, blur: big, spread: big, color: '#000000', opacity: 1 }, { type: 'inner-shadow', x: big, y: -big, blur: big, spread: -big, color: '#000000', opacity: 1 }, { type: 'layer-blur', blur: big }, { type: 'background-blur', blur: big }] },
       { type: 'ellipse', id: 'b', name: 'B', x: 0, y: 0, width: big, height: 5e-324, rotation: 33.3, fills: [gradient, { type: 'conic', cx: big, cy: -big, angle: big, stops: gradient.stops }] },

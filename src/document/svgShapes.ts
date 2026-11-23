@@ -21,7 +21,7 @@ export type SvgPaintOptions = {
 /**
  * グラデーションの定義（linearGradient / radialGradient。角度のグラデーションは SVG にないので pattern で近似する）。size はノードの枠。
  * 中心と半径・向きはノードの座標系の値（userSpaceOnUse）で書くので、要素はノードの座標系で置くこと。
- * 塗りの不透明度は、どの色にも stop-opacity で付ける
+ * 色ごとの不透明度と塗りの不透明度は、掛け合わせて stop-opacity で付ける
  */
 export function gradientDef(
   paint: Exclude<Paint, { type: 'solid' }>,
@@ -30,9 +30,12 @@ export function gradientDef(
   options: SvgPaintOptions,
 ): string {
   const { jsx = false } = options
-  const opacity = paint.opacity < 1 ? ` ${jsx ? 'stopOpacity' : 'stop-opacity'}="${tidy(paint.opacity)}"` : ''
+  const opacity = (stop: ColorStop) => {
+    const value = stop.opacity * paint.opacity
+    return value < 1 ? ` ${jsx ? 'stopOpacity' : 'stop-opacity'}="${tidy(value)}"` : ''
+  }
   const stops = paint.stops
-    .map((stop) => `<stop offset="${tidy(stop.offset)}" ${jsx ? 'stopColor' : 'stop-color'}="${escapeXml(options.color(stop.color))}"${opacity}/>`)
+    .map((stop) => `<stop offset="${tidy(stop.offset)}" ${jsx ? 'stopColor' : 'stop-color'}="${escapeXml(options.color(stop.color))}"${opacity(stop)}/>`)
     .join('')
   if (paint.type === 'conic') return conicPatternDef(paint, size, id, options)
   if (paint.type === 'radial') {
@@ -50,8 +53,9 @@ export const CONIC_WEDGES = 120
 /**
  * 角度のグラデーションを、扇形を並べた pattern で近似する（SVG に conic のグラデーションはない）。
  * 扇形は 1 つずつ真ん中の角度の色で塗るので、色は 3° ずつの段になる。継ぎ目が見えないよう扇形を少し重ね、
- * 塗りの不透明度は重なりで濃くならないよう g にかける。線のはみ出しも覆えるよう、pattern は枠より外まで広げる。
- * 元の値は data-kdr-conic（中心 x y・向き・不透明度）と data-kdr-stops（位置 色,…）に残し、取り込み（editor/svg/convert.ts）で戻す
+ * 塗りの不透明度は重なりで濃くならないよう g にかける。色ごとの不透明度は扇形の fill-opacity にし、そのときは重なりが濃く見えないよう扇形を重ねない。
+ * 線のはみ出しも覆えるよう、pattern は枠より外まで広げる。
+ * 元の値は data-kdr-conic（中心 x y・向き・不透明度）と data-kdr-stops（位置 色[ 不透明度],…）に残し、取り込み（editor/svg/convert.ts）で戻す
  */
 function conicPatternDef(paint: ConicGradient, size: { width: number; height: number }, id: string, options: SvgPaintOptions): string {
   const { width, height } = size
@@ -68,32 +72,36 @@ function conicPatternDef(paint: ConicGradient, size: { width: number; height: nu
     Math.max(...[box.x, box.x + box.width].flatMap((x) => [box.y, box.y + box.height].map((y) => Math.hypot(x - cx, y - cy)))) * 1.01 + 1
   const step = (Math.PI * 2) / CONIC_WEDGES
   const start = ((paint.angle % 360) * Math.PI) / 180
-  const overlap = step * 0.1
+  const translucent = paint.stops.some((stop) => stop.opacity < 1)
+  const overlap = translucent ? 0 : step * 0.1
   const wedges = Array.from({ length: CONIC_WEDGES }, (_, i) => {
     const a0 = start + i * step - overlap
     const a1 = start + (i + 1) * step + overlap
     const point = (a: number) => `${tidy(cx + Math.cos(a) * radius)} ${tidy(cy + Math.sin(a) * radius)}`
-    return `<path d="M${tidy(cx)} ${tidy(cy)} L${point(a0)} L${point(a1)} Z" fill="${color(stopColorAt(paint.stops, (i + 0.5) / CONIC_WEDGES))}"/>`
+    const at = stopAt(paint.stops, (i + 0.5) / CONIC_WEDGES)
+    const fillOpacity = at.opacity < 1 ? ` fill-opacity="${tidy(Math.round(at.opacity * 1000) / 1000)}"` : ''
+    return `<path d="M${tidy(cx)} ${tidy(cy)} L${point(a0)} L${point(a1)} Z" fill="${color(at.color)}"${fillOpacity}/>`
   }).join('')
   const group = paint.opacity < 1 ? `<g opacity="${tidy(paint.opacity)}">${wedges}</g>` : wedges
   // 取り込み直したときに角度のグラデーションへ戻せるよう、元の値を data 属性に残す（中心はこの座標系のピクセル、色は #rrggbb）
   const source =
     ` data-kdr-conic="${[cx, cy, paint.angle, paint.opacity].map(tidy).join(' ')}"` +
-    ` data-kdr-stops="${escapeXml(paint.stops.map((stop) => `${tidy(stop.offset)} ${stop.color}`).join(','))}"`
+    ` data-kdr-stops="${escapeXml(paint.stops.map((stop) => `${tidy(stop.offset)} ${stop.color}${stop.opacity < 1 ? ` ${tidy(stop.opacity)}` : ''}`).join(','))}"`
   return (
     `<pattern id="${escapeXml(id)}"${source} patternUnits="userSpaceOnUse" ` +
     `x="${tidy(box.x)}" y="${tidy(box.y)}" width="${tidy(box.width)}" height="${tidy(box.height)}">${group}</pattern>`
   )
 }
 
-/** グラデーションの色の並びの、位置 t（0〜1）での色（#rrggbb。間は RGB で混ぜる） */
-function stopColorAt(stops: readonly ColorStop[], t: number): string {
+/** グラデーションの色の並びの、位置 t（0〜1）での色（#rrggbb。間は RGB で混ぜる）と不透明度 */
+function stopAt(stops: readonly ColorStop[], t: number): { color: string; opacity: number } {
   const next = stops.findIndex((stop) => stop.offset > t)
-  if (next === -1) return stops[stops.length - 1].color
-  if (next === 0) return stops[0].color
+  if (next === -1) return stops[stops.length - 1]
+  if (next === 0) return stops[0]
   const a = stops[next - 1]
   const b = stops[next]
-  return mixColor(a.color, b.color, b.offset === a.offset ? 0 : (t - a.offset) / (b.offset - a.offset))
+  const k = b.offset === a.offset ? 0 : (t - a.offset) / (b.offset - a.offset)
+  return { color: mixColor(a.color, b.color, k), opacity: a.opacity + (b.opacity - a.opacity) * k }
 }
 
 export type PathSvgOptions = SvgPaintOptions & {

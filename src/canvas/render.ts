@@ -9,7 +9,7 @@ import {
   transformRect,
 } from '../document/geometry.ts'
 import { type Vertex, capMarkerSize, capReach, cappedStroke, pathOutlines, tracePath } from '../document/path.ts'
-import { alignFactor, blurRadius, clampedRadii, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, textInkBox, withoutHidden } from '../document/paint.ts'
+import { alignFactor, blurRadius, clampedRadii, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, stopCssColor, textInkBox, withoutHidden } from '../document/paint.ts'
 import type {
   Asset,
   AssetId,
@@ -647,9 +647,9 @@ function paintStyle(ctx: CanvasRenderingContext2D, paint: Paint, size: Size, mar
   // 枠の中心を通る、angle の向きの線に沿って色を変える
   const [from, to] = gradientLine(paint, size)
   // 枠が極端に大きいと端が Infinity になり、createLinearGradient が例外を投げる。そのときは最初の色で塗る
-  if (![from.x, from.y, to.x, to.y].every(Number.isFinite)) return paint.stops[0].color
+  if (![from.x, from.y, to.x, to.y].every(Number.isFinite)) return stopCssColor(paint.stops[0])
   const gradient = ctx.createLinearGradient(from.x, from.y, to.x, to.y)
-  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stop.color)
+  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stopCssColor(stop))
   return gradient
 }
 
@@ -657,10 +657,10 @@ function paintStyle(ctx: CanvasRenderingContext2D, paint: Paint, size: Size, mar
 function conicGradient(ctx: CanvasRenderingContext2D, paint: ConicGradient, size: Size): string | CanvasGradient {
   const x = paint.cx * size.width
   const y = paint.cy * size.height
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return paint.stops[0].color
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return stopCssColor(paint.stops[0])
   // 極端に大きい角度でラジアンが Infinity にならないよう、先に 1 周に収める
   const gradient = ctx.createConicGradient(((paint.angle % 360) * Math.PI) / 180, x, y)
-  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stop.color)
+  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stopCssColor(stop))
   return gradient
 }
 
@@ -673,7 +673,7 @@ function radialMatrix(paint: RadialGradient, size: Size): Matrix | null {
 /** 中心から半径 1 の円で色を変える CanvasGradient。楕円にするのは変換行列の役目 */
 function unitRadial(ctx: CanvasRenderingContext2D, paint: RadialGradient): CanvasGradient {
   const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
-  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stop.color)
+  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stopCssColor(stop))
   return gradient
 }
 
@@ -684,7 +684,7 @@ function unitRadial(ctx: CanvasRenderingContext2D, paint: RadialGradient): Canva
 function fillRadial(ctx: CanvasRenderingContext2D, paint: RadialGradient, size: Size, rule: CanvasFillRule = 'nonzero'): void {
   const m = radialMatrix(paint, size)
   if (!m) {
-    ctx.fillStyle = paint.stops[paint.stops.length - 1].color
+    ctx.fillStyle = stopCssColor(paint.stops[paint.stops.length - 1])
   } else {
     ctx.transform(...m)
     ctx.fillStyle = unitRadial(ctx, paint)
@@ -700,7 +700,7 @@ const PATTERN_SIZE = 256
  * 絵の外は透明になるので、margin に線の太さなどのはみ出す分を渡す
  */
 function radialPattern(ctx: CanvasRenderingContext2D, paint: RadialGradient, size: Size, margin: number): string | CanvasPattern {
-  const last = paint.stops[paint.stops.length - 1].color
+  const last = stopCssColor(paint.stops[paint.stops.length - 1])
   const m = radialMatrix(paint, size)
   const width = size.width + margin * 2
   const height = size.height + margin * 2

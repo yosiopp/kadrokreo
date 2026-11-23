@@ -25,6 +25,13 @@ export function paintColor(paint: Paint): string {
   return paint.type === 'solid' ? paint.color : paint.stops[0].color
 }
 
+/** グラデーションの色を Canvas・CSS の色の文字列にする。不透明なら #rrggbb のまま、透明度があれば rgba() */
+export function stopCssColor(stop: { color: string; opacity: number }): string {
+  if (stop.opacity >= 1) return stop.color
+  const channel = (i: number) => parseInt(stop.color.slice(1 + i * 2, 3 + i * 2), 16)
+  return `rgba(${channel(0)}, ${channel(1)}, ${channel(2)}, ${Math.round(stop.opacity * 1000) / 1000})`
+}
+
 /** 2 つの #rrggbb を t（0 なら a、1 なら b）の割合で混ぜた色（RGB で混ぜる）。既定は中間 */
 export function mixColor(a: string, b: string, t = 0.5): string {
   const channel = (color: string, i: number) => parseInt(color.slice(1 + i * 2, 3 + i * 2), 16)

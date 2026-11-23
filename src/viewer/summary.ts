@@ -15,10 +15,10 @@ export type TextStyleUse = Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeigh
 }
 export type ShadowUse = { shadow: Shadow; count: number; nodes: NodeId[] }
 
-/** 下の塗りを隠すか。グラデーションも枠全体を覆う（端の色が外まで続く）ので、どの色も不透明なら隠す */
+/** 下の塗りを隠すか。グラデーションも枠全体を覆う（端の色が外まで続く）ので、どの色も（色ごとの不透明度も）不透明なら隠す */
 function isOpaque(paint: Paint): boolean {
   if (paint.opacity < 1) return false
-  return paint.type === 'solid' ? colorAlpha(paint.color) >= 1 : paint.stops.every((stop) => colorAlpha(stop.color) >= 1)
+  return paint.type === 'solid' ? colorAlpha(paint.color) >= 1 : paint.stops.every((stop) => stop.opacity >= 1 && colorAlpha(stop.color) >= 1)
 }
 
 /**
@@ -73,7 +73,8 @@ export function summarizePage(scene: Scene): {
     const countPaints = (paints: readonly Paint[]) => {
       for (const paint of visiblePaints(paints, seeThrough)) {
         if (paint.type === 'solid') countColor(paint.color)
-        else for (const stop of paint.stops) countColor(stop.color)
+        // 完全に透明な色（不透明度 0）は見えないので数えない
+        else for (const stop of paint.stops) if (stop.opacity > 0) countColor(stop.color)
       }
     }
     if (node.type === 'text') {

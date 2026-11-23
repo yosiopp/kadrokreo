@@ -51,10 +51,23 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   await page.locator('[aria-label="塗りの2 番目の色"]').fill('#0000ff')
   await set('角度', 0)
   let rect = await byName('Rectangle 1')
-  check('グラデーションが保存される', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, blendMode: 'normal' }]), JSON.stringify(rect.fills))
+  check('グラデーションが保存される', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' }]), JSON.stringify(rect.fills))
   await deselect()
   const left = await pixel(103, 150), right = await pixel(297, 150), middle = await pixel(200, 150)
   check('左から右へ色が変わる', reddish(left) && bluish(right) && middle[0] > 80 && middle[2] > 80, `${left} / ${middle} / ${right}`)
+
+  // 色ごとの不透明度: 2 番目の色を透明にすると、右の端はほぼ透明になる（キャンバスの画素の alpha が小さい）
+  await page.mouse.click(...at(200, 150))
+  const stopOpacity = page.locator('.stop-row').nth(1).locator('.field:has(.field-label:text-is("不透明 %")) input')
+  await stopOpacity.fill('0'); await stopOpacity.press('Enter')
+  rect = await byName('Rectangle 1')
+  check('グラデーションの色ごとの不透明度が保存される', rect.fills[0].stops[1].opacity === 0, JSON.stringify(rect.fills[0].stops))
+  await deselect()
+  const faded = await pixel(297, 150)
+  check('透明にした色は下が透ける', faded[3] < 30, `${faded}`)
+  await page.mouse.click(...at(200, 150))
+  await stopOpacity.fill('100'); await stopOpacity.press('Enter')
+  await deselect()
 
   await page.mouse.click(...at(200, 150))
   await set('角度', 90)
@@ -142,7 +155,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   await page.locator('[aria-label="塗りの2 番目の色を消す"]').click()
   await page.locator('[aria-label="塗りの1 番目の色"]').fill('#ff0000')
   rect = await byName('Rectangle 1')
-  check('直線に戻して色を消せる', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 1, visible: true, blendMode: 'normal' }]), JSON.stringify(rect.fills))
+  check('直線に戻して色を消せる', JSON.stringify(rect.fills) === JSON.stringify([{ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' }]), JSON.stringify(rect.fills))
   await page.screenshot({ path: path.join(OUT, '29-gradient.png') })
 
   // ── PNG 書き出し ──

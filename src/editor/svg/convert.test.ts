@@ -200,6 +200,29 @@ describe('塗りと線', () => {
     expect(result.warnings).toEqual([])
   })
 
+  it('色ごとに違う stop-opacity・色の alpha は、グラデーションの色ごとの不透明度に写す', () => {
+    const result = convert(`<svg>
+      <defs>
+        <linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="0.5" stop-color="rgba(0, 0, 255, 0.5)"/><stop offset="1" stop-color="red" stop-opacity="0"/></linearGradient>
+        <radialGradient id="r"><stop offset="0" stop-color="#fff" stop-opacity="0.8"/><stop offset="1" stop-color="#fff" stop-opacity="0.2"/></radialGradient>
+      </defs>
+      <rect width="10" height="10" fill="url(#g)"/>
+      <rect width="10" height="10" fill="url(#r)"/>
+    </svg>`)
+    const [a, b] = children(result) as RectNode[]
+    expect(a.fills[0]).toMatchObject({
+      type: 'linear',
+      opacity: 1,
+      stops: [
+        { offset: 0, color: '#ff0000', opacity: 1 },
+        { offset: 0.5, color: '#0000ff', opacity: 0.5 },
+        { offset: 1, color: '#ff0000', opacity: 0 },
+      ],
+    })
+    expect(b.fills[0]).toMatchObject({ type: 'radial', opacity: 1, stops: [{ opacity: 0.8 }, { opacity: 0.2 }] })
+    expect(result.warnings).toEqual([])
+  })
+
   it('linearGradient を直線状のグラデーションにし、始点と終点を枠に対する割合にする', () => {
     const result = convert(`<svg>
       <defs>
@@ -212,7 +235,7 @@ describe('塗りと線', () => {
       <rect width="100" height="50" fill="url(#g3)"/>
     </svg>`)
     const [a, b, c] = children(result) as Extract<SceneNode, { fills: unknown }>[]
-    const stops = [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }]
+    const stops = [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }]
     expect(a.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 1, y2: 0, stops, opacity: 1, visible: true, blendMode: 'normal' as const }])
     expect(b.fills).toEqual([{ type: 'linear', x1: 0.25, y1: 0, x2: 0.75, y2: 0, stops, opacity: 1, visible: true, blendMode: 'normal' as const }])
     expect(c.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 0, y2: 1, stops, opacity: 1, visible: true, blendMode: 'normal' as const }])
@@ -228,7 +251,7 @@ describe('塗りと線', () => {
       <rect width="100" height="50" fill="url(#f)"/>
     </svg>`)
     const [circle, rect, focal] = children(result) as Extract<SceneNode, { fills: unknown }>[]
-    const stops = [{ offset: 0, color: '#ffd700' }, { offset: 1, color: '#000000' }]
+    const stops = [{ offset: 0, color: '#ffd700', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }]
     expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
     expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
     expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])

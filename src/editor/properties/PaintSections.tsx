@@ -17,6 +17,7 @@ import {
   updatePaints,
   withStopAdded,
   withStopColor,
+  withStopOpacity,
   withStopOffset,
   withLinearAngle,
   withStopRemoved,
@@ -351,6 +352,13 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
                   min={0}
                   max={100}
                   onCommit={(percent) => patchGradient((g) => withStopOffset(g, j, percent / 100))}
+                />
+                <NumberField
+                  label="不透明 %"
+                  value={toPercent(common(gradients.map((gradient) => gradient.stops[j].opacity)))}
+                  min={0}
+                  max={100}
+                  onCommit={(percent) => patchGradient((g) => withStopOpacity(g, j, percent / 100))}
                 />
                 <button
                   type="button"

@@ -22,6 +22,17 @@ export function withStopColor<G extends Gradient>(gradient: G, index: number, co
   return { ...gradient, stops: gradient.stops.with(at, { ...gradient.stops[at], color }) }
 }
 
+/** index 番目の色の不透明度（0〜1）を変えたグラデーション */
+export function withStopOpacity<G extends Gradient>(gradient: G, index: number, opacity: number): G {
+  const clamped = Math.min(1, Math.max(0, opacity))
+  return { ...gradient, stops: gradient.stops.with(index, { ...gradient.stops[index], opacity: clamped }) }
+}
+
+/** 2 つの不透明度の間（t = 0 なら a、1 なら b）。小数 3 桁に丸める */
+function mixOpacity(a: number, b: number, t = 0.5): number {
+  return Math.round((a + (b - a) * t) * 1000) / 1000
+}
+
 /** index 番目の色の位置を変えたグラデーション。位置の順に並べ直す */
 export function withStopOffset<G extends Gradient>(gradient: G, index: number, offset: number): G {
   const clamped = Math.min(1, Math.max(0, offset))
@@ -44,7 +55,8 @@ export function withStopAdded<G extends Gradient>(gradient: G): G {
   }
   const offset = Math.round(((stops[at].offset + stops[at + 1].offset) / 2) * 1000) / 1000
   const color = mixColor(stops[at].color, stops[at + 1].color)
-  return { ...gradient, stops: stops.toSpliced(at + 1, 0, { offset, color }) }
+  const opacity = mixOpacity(stops[at].opacity, stops[at + 1].opacity)
+  return { ...gradient, stops: stops.toSpliced(at + 1, 0, { offset, color, opacity }) }
 }
 
 /** offset（0〜1）の位置に、そこでの色を 1 つ足したグラデーション。上限なら変えない。足した色の番号も返す */
@@ -57,13 +69,14 @@ export function withStopAt<G extends Gradient>(gradient: G, offset: number): { g
   const index = next === -1 ? stops.length : next
   const before = stops[index - 1]
   const after = stops[index]
-  const color =
+  const t = before && after ? (after.offset === before.offset ? 0.5 : (at - before.offset) / (after.offset - before.offset)) : 0
+  const stop: ColorStop =
     before === undefined
-      ? after.color
+      ? { ...after, offset: at }
       : after === undefined
-        ? before.color
-        : mixColor(before.color, after.color, after.offset === before.offset ? 0.5 : (at - before.offset) / (after.offset - before.offset))
-  return { gradient: { ...gradient, stops: stops.toSpliced(index, 0, { offset: at, color }) }, index }
+        ? { ...before, offset: at }
+        : { offset: at, color: mixColor(before.color, after.color, t), opacity: mixOpacity(before.opacity, after.opacity, t) }
+  return { gradient: { ...gradient, stops: stops.toSpliced(index, 0, stop) }, index }
 }
 
 /** index 番目の色を取り除いたグラデーション。2 色より減らさない */
@@ -84,8 +97,8 @@ export function convertPaint(paint: Paint, type: PaintType): Paint {
   const stops =
     paint.type === 'solid'
       ? [
-          { offset: 0, color: paint.color },
-          { offset: 1, color: '#ffffff' },
+          { offset: 0, color: paint.color, opacity: 1 },
+          { offset: 1, color: '#ffffff', opacity: 1 },
         ]
       : paint.stops
   // 中心を持つものどうし（円形と角度）は中心を受け継ぐ

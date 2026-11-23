@@ -19,6 +19,7 @@ import {
   withStopAt,
   withStopColor,
   withStopOffset,
+  withStopOpacity,
   withStopRemoved,
 } from './paints.ts'
 import { insertNode, updateNode } from './tree.ts'
@@ -46,14 +47,14 @@ describe('塗り・グラデーション・影', () => {
       y1: 0,
       x2: 0.5,
       y2: 1,
-      stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }],
+      stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }],
       opacity: 1,
       visible: true,
       blendMode: 'normal' as const,
     }
     expect(withStopColor(gradient, -1, '#ff0000').stops).toEqual([
-      { offset: 0, color: '#000000' },
-      { offset: 1, color: '#ff0000' },
+      { offset: 0, color: '#000000', opacity: 1 },
+      { offset: 1, color: '#ff0000', opacity: 1 },
     ])
     expect(withStopColor(gradient, 0, '#00ff00').stops[0].color).toBe('#00ff00')
     expect(gradient.stops[1].color).toBe('#ffffff')
@@ -62,7 +63,7 @@ describe('塗り・グラデーション・影', () => {
   it('塗りの種類を変えると、色を受け継ぐ', () => {
     const red = { type: 'solid' as const, color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }
     const linear = convertPaint(red, 'linear')
-    expect(linear).toEqual({ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#ffffff' }], opacity: 1, visible: true, blendMode: 'normal' as const })
+    expect(linear).toEqual({ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const })
     const radial = convertPaint(linear, 'radial')
     expect(radial).toEqual({ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: linear.type === 'linear' ? linear.stops : [], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const })
     expect(convertPaint(radial, 'solid')).toEqual(red)
@@ -78,15 +79,15 @@ describe('塗り・グラデーション・影', () => {
     const gradient = convertPaint({ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }, 'linear') as Extract<ReturnType<typeof convertPaint>, { type: 'linear' }>
     const three = withStopAdded(gradient)
     expect(three.stops).toEqual([
-      { offset: 0, color: '#000000' },
-      { offset: 0.5, color: '#808080' },
-      { offset: 1, color: '#ffffff' },
+      { offset: 0, color: '#000000', opacity: 1 },
+      { offset: 0.5, color: '#808080', opacity: 1 },
+      { offset: 1, color: '#ffffff', opacity: 1 },
     ])
     // いちばん離れた隣どうしの間に足す
     expect(withStopAdded(three).stops.map((stop) => stop.offset)).toEqual([0, 0.25, 0.5, 1])
     // 位置を変えると並べ直す
     expect(withStopOffset(three, 0, 0.8).stops.map((stop) => stop.color)).toEqual(['#808080', '#000000', '#ffffff'])
-    expect(withStopOffset(three, 0, 2).stops).toContainEqual({ offset: 1, color: '#000000' })
+    expect(withStopOffset(three, 0, 2).stops).toContainEqual({ offset: 1, color: '#000000', opacity: 1 })
     expect(withStopRemoved(three, 1).stops).toEqual(gradient.stops)
     // 2 色より減らさない
     expect(withStopRemoved(gradient, 0)).toBe(gradient)
@@ -97,15 +98,24 @@ describe('塗り・グラデーション・影', () => {
     const added = withStopAt(gradient, 0.25)
     expect(added.index).toBe(1)
     expect(added.gradient.stops).toEqual([
-      { offset: 0, color: '#000000' },
-      { offset: 0.25, color: '#404040' },
-      { offset: 1, color: '#ffffff' },
+      { offset: 0, color: '#000000', opacity: 1 },
+      { offset: 0.25, color: '#404040', opacity: 1 },
+      { offset: 1, color: '#ffffff', opacity: 1 },
     ])
     // 端より外は端の色
-    expect(withStopAt({ ...gradient, stops: [{ offset: 0.5, color: '#ff0000' }, { offset: 1, color: '#ffffff' }] }, 0.1)).toMatchObject({
+    expect(withStopAt({ ...gradient, stops: [{ offset: 0.5, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }] }, 0.1)).toMatchObject({
       index: 0,
-      gradient: { stops: [{ offset: 0.1, color: '#ff0000' }, { offset: 0.5 }, { offset: 1 }] },
+      gradient: { stops: [{ offset: 0.1, color: '#ff0000', opacity: 1 }, { offset: 0.5 }, { offset: 1 }] },
     })
+  })
+
+  it('色ごとの不透明度を変え、色を足すときは前後の不透明度の間にする', () => {
+    const gradient = convertPaint({ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }, 'linear') as Extract<ReturnType<typeof convertPaint>, { type: 'linear' }>
+    const fading = withStopOpacity(gradient, 1, 0)
+    expect(fading.stops[1]).toEqual({ offset: 1, color: '#ffffff', opacity: 0 })
+    expect(withStopOpacity(gradient, 0, 2).stops[0].opacity).toBe(1)
+    expect(withStopAdded(fading).stops[1]).toEqual({ offset: 0.5, color: '#808080', opacity: 0.5 })
+    expect(withStopAt(fading, 0.25).gradient.stops[1]).toEqual({ offset: 0.25, color: '#404040', opacity: 0.75 })
   })
 
   it('塗りの不透明度は、種類や色を変えても保つ', () => {

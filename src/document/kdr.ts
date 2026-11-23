@@ -637,6 +637,8 @@ function parsePaint(value: unknown, path: string): Paint {
     return {
       offset: ratio(rawStop.offset, `${path}.stops[${i}].offset`),
       color: color(rawStop.color, `${path}.stops[${i}].color`),
+      // 色の不透明度は 1 なら省く（paintFile）
+      opacity: rawStop.opacity === undefined ? 1 : ratio(rawStop.opacity, `${path}.stops[${i}].opacity`),
     }
   })
   if (stops.length < 2 || stops.length > MAX_STOPS) throw new KdrError(`${path}.stops: 色の数が不正です`)
@@ -816,6 +818,8 @@ function paintFile(paint: Paint): Partial<Paint> {
   const out: Record<string, unknown> = { ...rest }
   // 円形のグラデーションの回す角度は 0 なら省く
   if (out.type === 'radial' && out.angle === 0) delete out.angle
+  // グラデーションの色の不透明度は 1 なら省く
+  if ('stops' in rest) out.stops = rest.stops.map(({ opacity: stopOpacity, ...stop }) => (stopOpacity === 1 ? stop : { ...stop, opacity: stopOpacity }))
   return {
     ...out,
     ...(opacity === 1 ? {} : { opacity }),

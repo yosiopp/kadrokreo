@@ -20,7 +20,7 @@ describe('summarizePage', () => {
   })
 
   it('グラデーションは各色を数える。太さ 0 の線は数えない', () => {
-    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }], opacity: 1, visible: true, blendMode: 'normal' as const }
+    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111', opacity: 1 }, { offset: 1, color: '#222222', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const }
     const scene = sceneOf(rect({ fills: [gradient], strokes: solid('#333333'), strokeWidth: 0 }))
     expect(summarizePage(scene).colors.map((use) => use.color)).toEqual(['#111111', '#222222'])
   })
@@ -69,7 +69,7 @@ describe('summarizePage', () => {
   })
 
   it('不透明な塗りの下に重ねて隠れた色は数えない。線とテキストも同じ', () => {
-    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111' }, { offset: 1, color: '#222222' }], opacity: 1, visible: true, blendMode: 'normal' as const }
+    const gradient = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#111111', opacity: 1 }, { offset: 1, color: '#222222', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const }
     const scene = sceneOf(
       // 塗りは下から順。いちばん上の #ff0000 が全体を覆う
       rect({ id: 'a', fills: [...solid('#00ff00'), gradient, ...solid('#ff0000')], strokes: [...solid('#0000ff'), ...solid('#000000')], strokeWidth: 1 }),
@@ -104,7 +104,7 @@ describe('summarizePage', () => {
   })
 
   it('上の塗りが半透明（#rrggbbaa、グラデーションの止めに半透明）なら、その下も見える', () => {
-    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#00000080' }], opacity: 1, visible: true, blendMode: 'normal' as const }
+    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#00000080', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const }
     expect(visiblePaints([...solid('#111111'), ...solid('#222222'), ...solid('#33333380')])).toEqual([...solid('#222222'), ...solid('#33333380')])
     expect(visiblePaints([...solid('#111111'), fade])).toEqual([...solid('#111111'), fade])
     expect(visiblePaints([...solid('#11111180'), ...solid('#22222280')])).toHaveLength(2)
@@ -115,8 +115,15 @@ describe('summarizePage', () => {
   it('塗りごとの不透明度が 1 未満の塗りは、下を隠さない', () => {
     const half = { type: 'solid' as const, color: '#333333', opacity: 0.5, visible: true, blendMode: 'normal' as const }
     expect(visiblePaints([...solid('#111111'), ...solid('#222222'), half])).toEqual([...solid('#222222'), half])
-    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.9, visible: true, blendMode: 'normal' as const }
+    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 0.9, visible: true, blendMode: 'normal' as const }
     expect(visiblePaints([...solid('#111111'), fade])).toHaveLength(2)
+  })
+
+  it('色ごとの不透明度が 1 未満のグラデーションは下を隠さない。不透明度 0 の色は数えない', () => {
+    const fade = { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 0 }], opacity: 1, visible: true, blendMode: 'normal' as const }
+    expect(visiblePaints([...solid('#111111'), fade])).toHaveLength(2)
+    const colors = summarizePage(sceneOf(rect({ id: 'r', fills: [...solid('#111111'), fade] }))).colors.map((use) => use.color)
+    expect(colors.toSorted()).toEqual(['#000000', '#111111'])
   })
 
   it('隠した塗りは数えず、下の塗りを隠さない。隠した影も数えない', () => {

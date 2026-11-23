@@ -731,10 +731,10 @@ describe('kadrokreo CLI', () => {
         visible: true,
         blendMode: 'normal',
         stops: [
-          { offset: 0, color: '#ff0000' },
-          { offset: 0.25, color: '#00ff00' },
-          { offset: 0.625, color: '#0000ff' },
-          { offset: 1, color: '#ffffff' },
+          { offset: 0, color: '#ff0000', opacity: 1 },
+          { offset: 0.25, color: '#00ff00', opacity: 1 },
+          { offset: 0.625, color: '#0000ff', opacity: 1 },
+          { offset: 1, color: '#ffffff', opacity: 1 },
         ],
       },
     ])
@@ -751,8 +751,8 @@ describe('kadrokreo CLI', () => {
         visible: true,
         blendMode: 'normal',
         stops: [
-          { offset: 0, color: '#000000' },
-          { offset: 1, color: '#ffffff' },
+          { offset: 0, color: '#000000', opacity: 1 },
+          { offset: 1, color: '#ffffff', opacity: 1 },
         ],
       },
     ])
@@ -761,6 +761,15 @@ describe('kadrokreo CLI', () => {
     expect(c.fills.map((paint) => paint.type)).toEqual(['linear', 'radial'])
     expect(c.fills[0].stops?.[0].color).toBe('#123456')
     expect(c.fills[1].stops?.[0].offset).toBe(0.2)
+
+    // #rrggbbaa・#rgba の色は、最後の桁を色ごとの不透明度にする
+    const alpha = harness(Object.fromEntries(h.fs))
+    expect(await alpha.run(argv('-f a.kdr gradient linear a --colors #ff0000,#ff000080,#f000 -o f.kdr'))).toBe(0)
+    expect(((await alpha.doc('f.kdr')).pages[0].nodes.a as unknown as { fills: { stops: unknown[] }[] }).fills[0].stops).toEqual([
+      { offset: 0, color: '#ff0000', opacity: 1 },
+      { offset: 0.5, color: '#ff0000', opacity: 0.502 },
+      { offset: 1, color: '#ff0000', opacity: 0 },
+    ])
 
     // --colors を省くと、いまのグラデーションの色のまま種類と向きだけ変える
     const edit = harness(Object.fromEntries(h.fs))
@@ -790,6 +799,7 @@ describe('kadrokreo CLI', () => {
     expect(await bad.run(argv('-f a.kdr gradient linear a --colors #000'))).toBe(2) // 1 色
     expect(await bad.run(argv('-f a.kdr gradient linear a --colors #000@60%,#fff@30%'))).toBe(2) // 位置が戻る
     expect(await bad.run(argv('-f a.kdr gradient linear a --colors red,#fff'))).toBe(2)
+    expect(await bad.run(argv('-f a.kdr gradient linear a --colors #00000,#fff'))).toBe(2) // 5 桁
     expect(await bad.run(argv('-f a.kdr gradient linear a --center 0.5,0.5'))).toBe(2)
     expect(await bad.run(argv('-f a.kdr gradient radial a --blend nope'))).toBe(2)
     expect(await bad.run(argv('-f a.kdr gradient linear a --index 3'))).toBe(2)

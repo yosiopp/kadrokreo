@@ -21,7 +21,7 @@ export const gradient: Command = {
     'gradient linear|radial|conic ノード… [--colors 色,色@50%,色…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r|rx,ry] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N | --add]',
   summary:
     'グラデーションの塗りにする。ふつうはいちばん上の塗り（なければ足す）を置き換え、--index N は N 番目（0 が一番下、-1 がいちばん上）、--add は上に重ねる。' +
-    '--stroke なら線。--colors は 2〜16 色で、@ の後に位置（0〜1 か %）。位置を省いた色は前後の間に等しく並べる。' +
+    '--stroke なら線。--colors は 2〜16 色で、@ の後に位置（0〜1 か %）。#rrggbbaa・#rgba の色は最後の桁が色ごとの透明度。位置を省いた色は前後の間に等しく並べる。' +
     '--colors を省くと、いまの塗りの色を受け継ぐ。直線は --angle（0 が左から右、90 が上から下。枠の中心を通り、枠の角が両端の色になる線）か、' +
     '--from と --to（始点・終点。枠に対する割合か %）、円形は --center と --radius（枠に対する割合か %）と --angle（楕円を回す角度。時計回り）、' +
     '角度（conic）は --center と --angle（最初の色の向き。0 が右で時計回り）。--opacity は塗りごとの不透明度、--blend は塗りの描画モード（multiply など）、--hidden はその塗りを隠す（消さずに残す）',
@@ -125,12 +125,13 @@ function pairOption(step: Step, name: string, one: boolean): [number, number] | 
   return [parts[0], parts[1]]
 }
 
-/** #rgb / #rrggbb を #rrggbb（小文字）に */
-function parseColor(raw: string): string {
+/** #rgb / #rrggbb を #rrggbb（小文字）に。#rgba / #rrggbbaa なら最後の 2 桁（1 桁）を色の不透明度にする */
+function parseColor(raw: string): { color: string; opacity: number } {
   const text = raw.trim().toLowerCase()
-  if (/^#[0-9a-f]{6}$/.test(text)) return text
-  if (/^#[0-9a-f]{3}$/.test(text)) return `#${[...text.slice(1)].map((c) => c + c).join('')}`
-  throw new UsageError(`gradient: 色は #rrggbb か #rgb です: ${raw}`)
+  const long = /^#[0-9a-f]{3,4}$/.test(text) ? `#${[...text.slice(1)].map((c) => c + c).join('')}` : text
+  if (/^#[0-9a-f]{6}$/.test(long)) return { color: long, opacity: 1 }
+  if (/^#[0-9a-f]{8}$/.test(long)) return { color: long.slice(0, 7), opacity: Math.round((parseInt(long.slice(7), 16) / 255) * 1000) / 1000 }
+  throw new UsageError(`gradient: 色は #rrggbb・#rgb（透明度つきは #rrggbbaa・#rgba）です: ${raw}`)
 }
 
 /**
@@ -140,10 +141,10 @@ function parseColor(raw: string): string {
 function parseStops(raw: string): ColorStop[] {
   const items = raw.split(',').map((item) => {
     const at = item.indexOf('@')
-    const color = parseColor(at === -1 ? item : item.slice(0, at))
+    const { color, opacity } = parseColor(at === -1 ? item : item.slice(0, at))
     const offset = at === -1 ? null : fraction(item.slice(at + 1), `gradient: ${item.trim()} の位置`)
     if (offset !== null && !(offset >= 0 && offset <= 1)) throw new UsageError(`gradient: 位置は 0〜1（0%〜100%）です: ${item.trim()}`)
-    return { color, offset }
+    return { color, opacity, offset }
   })
   if (items.length < 2 || items.length > MAX_STOPS) throw new UsageError(`gradient: --colors は 2〜${MAX_STOPS} 色です（${items.length} 色）`)
   const offsets = items.map((item) => item.offset)
@@ -160,5 +161,5 @@ function parseStops(raw: string): ColorStop[] {
   for (let i = 1; i < offsets.length; i++) {
     if (offsets[i]! < offsets[i - 1]!) throw new UsageError(`gradient: 色の位置は小さい順に並べてください: ${raw}`)
   }
-  return items.map((item, i) => ({ offset: offsets[i]!, color: item.color }))
+  return items.map((item, i) => ({ offset: offsets[i]!, color: item.color, opacity: item.opacity }))
 }

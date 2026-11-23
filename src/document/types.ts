@@ -60,8 +60,11 @@ type BaseNode = {
   maxHeight: number | null
 }
 
-/** グラデーションの色の位置。offset（0〜1）の小さい順に並べる */
-export type ColorStop = { offset: number; color: string }
+/**
+ * グラデーションの色の位置。offset（0〜1）の小さい順に並べる。
+ * opacity（0〜1）はその色の不透明度（SVG の stop-opacity）。色の間は透明度も滑らかにつなぐ。塗りの opacity とは別に重なる
+ */
+export type ColorStop = { offset: number; color: string; opacity: number }
 
 /**
  * 塗り（面・線・文字に使う）。色は #rrggbb。

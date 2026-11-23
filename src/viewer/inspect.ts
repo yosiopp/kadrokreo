@@ -142,7 +142,11 @@ export function inspectNode(
                       (paint.angle !== 0 ? `・${num(paint.angle)}° 回す` : ''),
                   },
             paint.type === 'radial' && !radialCssExact(paint) && { label: 'CSS', value: '回した楕円は表せないので、回さない楕円で書いている' },
-            ...paint.stops.map((stop) => ({ label: percent(stop.offset), value: hex(stop.color), color: stop.color })),
+            ...paint.stops.map((stop) => ({
+              label: percent(stop.offset),
+              value: stop.opacity < 1 ? `${hex(stop.color)}・不透明度 ${percent(stop.opacity)}` : hex(stop.color),
+              color: stop.color,
+            })),
           ].filter((row) => row !== false)
   // マスク（自分は描かず、手前の兄弟を形で切り取る）と、かかっているマスク
   const maskId = maskOf(scene, node.id)
@@ -590,7 +594,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
  */
 function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
   const stopList = (offset: (value: number) => number) =>
-    gradient.stops.map((stop) => `${paintCssColor(stop.color, gradient.opacity, style)} ${percent(offset(stop.offset))}`)
+    gradient.stops.map((stop) => `${paintCssColor(stop.color, gradient.opacity * stop.opacity, style)} ${percent(offset(stop.offset))}`)
   const stops = stopList((offset) => offset)
   if (gradient.type === 'conic') {
     // CSS の from は 0deg が真上。ドキュメントは 0° が右なので 90° ずれる
@@ -609,7 +613,8 @@ function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
   const [start, end] = gradientLine(gradient, size)
   if (start.x === end.x && start.y === end.y) {
     // 始点と終点が重なると、色は最後の色だけになる（描画と同じ）
-    const last = paintCssColor(gradient.stops[gradient.stops.length - 1].color, gradient.opacity, style)
+    const lastStop = gradient.stops[gradient.stops.length - 1]
+    const last = paintCssColor(lastStop.color, gradient.opacity * lastStop.opacity, style)
     return `linear-gradient(${last}, ${last})`
   }
   const [from, to] = angleLine(angle, size)
@@ -641,7 +646,7 @@ function paintCssColor(color: string, opacity: number, style: CodeStyle): string
 
 /** 塗りの代表の色（単色ならその色、グラデーションなら始まりの色）の CSS。不透明度も含める */
 function topColorCss(paint: Paint, style: CodeStyle): string {
-  return paintCssColor(paintColor(paint), paint.opacity, style)
+  return paintCssColor(paintColor(paint), paint.opacity * (paint.type === 'solid' ? 1 : paint.stops[0].opacity), style)
 }
 
 /** 角丸の値。4 隅が同じなら 1 つ、違えば左上・右上・右下・左下 */

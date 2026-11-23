@@ -4,9 +4,9 @@ import { paint, rect } from '../../document/testNodes.ts'
 import { dragGradient, gradientHandles, gradientPartAt, gradientToEdit, offsetOnAxis } from './gradientHandles.ts'
 
 const stops = [
-  { offset: 0, color: '#000000' },
-  { offset: 0.5, color: '#ff0000' },
-  { offset: 1, color: '#ffffff' },
+  { offset: 0, color: '#000000', opacity: 1 },
+  { offset: 0.5, color: '#ff0000', opacity: 1 },
+  { offset: 1, color: '#ffffff', opacity: 1 },
 ]
 const linear: LinearGradient = { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops, opacity: 1, visible: true, blendMode: 'normal' as const }
 const radial: RadialGradient = { type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
@@ -35,7 +35,7 @@ describe('グラデーションのハンドル', () => {
     expect(handles.axis[1].x).toBeCloseTo(100)
     expect(handles.axis[1].y).toBeCloseTo(100)
     const near = (target: { x: number; y: number }) => (point: { x: number; y: number }) => Math.hypot(point.x - target.x, point.y - target.y) < 4
-    const two = { ...conic, stops: [{ offset: 0.2, color: '#000000' }, { offset: 0.8, color: '#ffffff' }] }
+    const two = { ...conic, stops: [{ offset: 0.2, color: '#000000', opacity: 1 }, { offset: 0.8, color: '#ffffff', opacity: 1 }] }
     const twoHandles = gradientHandles(two, size)
     expect(gradientPartAt(twoHandles, two, near({ x: 100, y: 50 }))).toEqual({ kind: 'center' })
     expect(gradientPartAt(twoHandles, two, near({ x: 150, y: 50 }))).toEqual({ kind: 'end' })
@@ -52,7 +52,7 @@ describe('グラデーションのハンドル', () => {
     expect(gradientPartAt(handles, linear, near({ x: 101, y: 50 }))).toEqual({ kind: 'stop', index: 1 })
     expect(gradientPartAt(handles, linear, near({ x: 60, y: 50 }))).toBeNull()
     const two = { ...radial, stops: [stops[0], stops[2]] }
-    const radialHandles = gradientHandles({ ...two, stops: [{ offset: 0.2, color: '#000000' }, { offset: 0.8, color: '#ffffff' }] }, size)
+    const radialHandles = gradientHandles({ ...two, stops: [{ offset: 0.2, color: '#000000', opacity: 1 }, { offset: 0.8, color: '#ffffff', opacity: 1 }] }, size)
     expect(gradientPartAt(radialHandles, two, near({ x: 100, y: 50 }))).toEqual({ kind: 'center' })
     expect(gradientPartAt(radialHandles, two, near({ x: 200, y: 50 }))).toEqual({ kind: 'radiusX' })
     expect(gradientPartAt(radialHandles, two, near({ x: 100, y: 100 }))).toEqual({ kind: 'radiusY' })
@@ -80,9 +80,9 @@ describe('dragGradient', () => {
   it('色の位置は線に沿って動き、追い越すと並べ直して、選んでいる色の番号も付いてくる', () => {
     const moved = dragGradient(linear, { kind: 'stop', index: 0 }, { x: 150, y: 80 }, size, false)
     expect(moved.gradient.stops).toEqual([
-      { offset: 0.5, color: '#ff0000' },
-      { offset: 0.75, color: '#000000' },
-      { offset: 1, color: '#ffffff' },
+      { offset: 0.5, color: '#ff0000', opacity: 1 },
+      { offset: 0.75, color: '#000000', opacity: 1 },
+      { offset: 1, color: '#ffffff', opacity: 1 },
     ])
     expect(moved.stop).toBe(1)
     // 線の外は端で止める。同じ位置の色は元の順に並ぶ
