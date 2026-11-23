@@ -68,6 +68,7 @@ import {
 // - clip-path / mask は、中身が矩形・円 1 つで、軸に沿って置かれているときは、切り取るフレーム（角丸）にする。
 //   ほかの形（パス・多角形・回った矩形・いくつもの形・objectBoundingBox）は、形をマスク（isMask）のパスにして中身と一緒にフレームにまとめる（maskShape）。
 // - <image> は data URI の PNG / JPEG / WebP / GIF を画像のノードに、SVG（data:image/svg+xml）を別の文書として変換したフレームにする（外部の URL は読まない）。
+// - <text> と <image> にかかる変換が裏返していれば、左右の裏返し（flipX）と回転にする（上下の裏返しは左右の裏返し + 180° の回転）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
 // - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターン・textPath など）は
 //   近い形に置き換えるか読み飛ばし、warnings で知らせる。
@@ -1106,17 +1107,21 @@ class Converter {
     const height = this.length(a.height, 'height') ?? info.height
     if (!(width > 0 && height > 0)) return []
     const userBox = { x: this.length(a.x, 'width') ?? 0, y: this.length(a.y, 'height') ?? 0, width, height }
-    let pose = decompose(matrix)
+    // 裏返していれば、枠の中心で左右に映し戻した変換で置き、裏返しは flipX で持つ（上下の裏返しは左右の裏返し + 180° の回転になる）
+    const flipped = isFlipped(matrix)
+    const placement = flipped ? multiply(matrix, mirrorAt(userBox.x + userBox.width / 2)) : matrix
+    let pose = decompose(placement)
     if (!pose) {
-      this.warn('歪めたり裏返したりした画像（回転と拡大だけにした）')
-      pose = { rotation: (Math.atan2(matrix[1], matrix[0]) * 180) / Math.PI, scaleX: Math.hypot(matrix[0], matrix[1]), scaleY: Math.hypot(matrix[2], matrix[3]) }
+      this.warn('歪めた画像（回転と拡大だけにした）')
+      pose = { rotation: (Math.atan2(placement[1], placement[0]) * 180) / Math.PI, scaleX: Math.hypot(placement[0], placement[1]), scaleY: Math.hypot(placement[2], placement[3]) }
     }
     const assetId = sha256Hex(bytes)
     this.assets[assetId] ??= { mime: info.mime, bytes }
     const [align = 'xMidYMid', mode = 'meet'] = (a.preserveAspectRatio ?? 'xMidYMid meet').trim().split(/\s+/)
     const fit: ImageNode['fit'] = align === 'none' ? 'stretch' : mode === 'slice' ? 'cover' : 'contain'
     const node: ImageNode = {
-      ...this.placed(createImage({ x: 0, y: 0, width: 0, height: 0 }, assetId), userBox, matrix, pose),
+      ...this.placed(createImage({ x: 0, y: 0, width: 0, height: 0 }, assetId), userBox, placement, pose),
+      flipX: flipped,
       name: a.id ?? 'Image',
       fit,
       positionX: align.startsWith('xMin') ? 0 : align.startsWith('xMax') ? 1 : 0.5,
@@ -1198,17 +1203,14 @@ class Converter {
     return [this.wrap(children, this.boundsOf(children)!, { ...props, clipContent: false })]
   }
 
-  private text(element: SvgElement, matrix: Matrix, inherited: Inherited): NodeId[] {
+  private text(element: SvgElement, given: Matrix, inherited: Inherited): NodeId[] {
     const lines = textLines(element)
     if (lines.length === 0) return []
     if (hasDescendant(element, 'textPath')) this.warn('線に沿った文字（<textPath>。まっすぐ並べた）')
     const a = element.attributes
     const x = (parseNumbers(a.x)?.[0] ?? 0) + (parseNumbers(a.dx)?.[0] ?? 0)
     const y = (parseNumbers(a.y)?.[0] ?? 0) + (parseNumbers(a.dy)?.[0] ?? 0)
-    const pose = decompose(matrix)
-    if (!pose) this.warn('歪めたり裏返したりしたテキスト（回転と拡大だけにした）')
-    const scale = lengthScale(matrix)
-    const rotation = pose ? pose.rotation : (Math.atan2(matrix[1], matrix[0]) * 180) / Math.PI
+    const scale = lengthScale(given)
     const anchor = inherited.textAnchor === 'middle' ? 'center' : inherited.textAnchor === 'end' ? 'right' : 'left'
     const base = createText({ x: 0, y: 0, width: 0, height: 0 }, lines.join('\n'))
     const lineHeight = lineHeightOf(element, lines.length, inherited.fontSize)
@@ -1225,6 +1227,12 @@ class Converter {
     // SVG の (x, y) は 1 行目の基線の、text-anchor の側の端。kadrokreo のテキストは枠の左上で置く
     const baseline = textBaseline(node, (this.options.textMetrics ?? estimateTextMetrics)(node))
     const offsetX = anchor === 'center' ? -size.width / 2 : anchor === 'right' ? -size.width : 0
+    // 裏返していれば、文字の枠の中心で左右に映し戻した変換で置き、裏返しは flipX で持つ
+    const flipped = isFlipped(given)
+    const matrix = flipped ? multiply(given, mirrorAt(x + (offsetX + size.width / 2) / (scale || 1))) : given
+    const pose = decompose(matrix)
+    if (!pose) this.warn('歪めたテキスト（回転と拡大だけにした）')
+    const rotation = pose ? pose.rotation : (Math.atan2(matrix[1], matrix[0]) * 180) / Math.PI
     const origin = applyMatrix(matrix, { x, y })
     const center = rotateVector({ x: offsetX + size.width / 2, y: -baseline + size.height / 2 }, rotation)
     node = {
@@ -1232,6 +1240,7 @@ class Converter {
       x: origin.x + center.x - size.width / 2,
       y: origin.y + center.y - size.height / 2,
       rotation: rotationOf(rotation),
+      flipX: flipped,
       name: a.id ?? lines[0].slice(0, 40),
       visible: inherited.visible,
       opacity: this.opacityOf(element),
@@ -1889,4 +1898,14 @@ function textLines(element: SvgElement): string[] {
   }
   walk(element.children)
   return lines.map((line) => line.replace(/\s+/g, ' ').trim()).filter((line) => line !== '')
+}
+
+/** 変換が裏返しを含むか（行列式が負） */
+function isFlipped(m: Matrix): boolean {
+  return m[0] * m[3] - m[1] * m[2] < 0
+}
+
+/** 縦の線 x = cx で左右に映す変換 */
+function mirrorAt(cx: number): Matrix {
+  return [-1, 0, 0, 1, 2 * cx, 0]
 }

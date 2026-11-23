@@ -288,6 +288,8 @@ const DEFAULTS = {
   positionX: 0.5,
   positionY: 0.5,
   scale: 1,
+  flipX: false,
+  flipY: false,
   clipContent: true,
   passThrough: false,
   layout: null,
@@ -412,6 +414,8 @@ function parseNode(
         fontWeight: optional('fontWeight', fontWeight),
         textAlign: optional('textAlign', (v, p) => oneOf(v, ['left', 'center', 'right'] as const, p)),
         lineHeight: optional('lineHeight', size),
+        flipX: optional('flipX', boolean),
+        flipY: optional('flipY', boolean),
       }
     case 'image': {
       const assetId = nodeId(raw.assetId, at('assetId'))
@@ -427,6 +431,8 @@ function parseNode(
         positionX: optional('positionX', ratio),
         positionY: optional('positionY', ratio),
         scale: optional('scale', imageScale),
+        flipX: optional('flipX', boolean),
+        flipY: optional('flipY', boolean),
       }
     }
     case 'frame':
@@ -567,6 +573,8 @@ function parseOverrides(value: unknown, path: string, assets: AssetContext): Rec
     if (Object.hasOwn(raw, 'fontSize')) override.fontSize = size(raw.fontSize, at('fontSize'))
     if (Object.hasOwn(raw, 'fontFamily')) override.fontFamily = fontFamily(raw.fontFamily, at('fontFamily'))
     if (Object.hasOwn(raw, 'fontWeight')) override.fontWeight = fontWeight(raw.fontWeight, at('fontWeight'))
+    if (Object.hasOwn(raw, 'flipX')) override.flipX = boolean(raw.flipX, at('flipX'))
+    if (Object.hasOwn(raw, 'flipY')) override.flipY = boolean(raw.flipY, at('flipY'))
     if (Object.hasOwn(raw, 'assetId')) {
       override.assetId = nodeId(raw.assetId, at('assetId'))
       // 画像を差し替える上書きも、ファイルの中の画像を指していなければならない

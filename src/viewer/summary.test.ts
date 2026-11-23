@@ -50,7 +50,7 @@ describe('summarizePage', () => {
       isMask: false,
       maskType: 'vector',
     }
-    const image = { ...base, id: 'image', type: 'image', effects: [] as never[], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 } as const
+    const image = { ...base, id: 'image', type: 'image', effects: [] as never[], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1, flipX: false, flipY: false } as const
     expect(summarizePage(sceneOf(line, image)).colors).toEqual([{ color: '#abcdef', count: 1, nodes: ['line'] }])
   })
 

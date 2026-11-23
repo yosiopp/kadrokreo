@@ -26,6 +26,8 @@ export const OVERRIDE_KEYS = [
   'fontFamily',
   'fontWeight',
   'assetId',
+  'flipX',
+  'flipY',
   'componentId',
 ] as const satisfies readonly (keyof Override)[]
 

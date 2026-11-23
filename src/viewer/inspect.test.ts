@@ -176,6 +176,19 @@ describe('nodeCss', () => {
     expect(css(hug, 'frame')).toContain('gap: 4px;')
   })
 
+  it('テキスト・画像の裏返しは回転のあとの scale で書き、影のずれは打ち消して書く。インスペクトにも出す', () => {
+    const shadow = { type: 'drop-shadow' as const, x: 2, y: 4, blur: 6, color: '#000000', opacity: 1, visible: true, spread: 0, blendMode: 'normal' as const }
+    const flipped = text({ flipX: true, rotation: 15, effects: [shadow] })
+    const lines = css(sceneOf(flipped), 'text')
+    expect(lines).toContain('transform: rotate(15deg) scale(-1, 1);')
+    expect(lines).toContain('text-shadow: -2px 4px 6px rgba(0, 0, 0, 1);')
+    expect(css(sceneOf(text({ flipY: true })), 'text')).toContain('transform: scale(1, -1);')
+    expect(css(sceneOf(text({ flipX: true, flipY: true })), 'text')).toContain('transform: scale(-1, -1);')
+    expect(css(sceneOf(text()), 'text').join('\n')).not.toContain('transform')
+    expect(rowsOf(sceneOf(flipped), 'text', '位置とサイズ')).toContain('裏返し=左右')
+    expect(rowsOf(sceneOf(text()), 'text', '位置とサイズ')?.some((row) => row.startsWith('裏返し'))).toBe(false)
+  })
+
   it('線・角丸・影・回転・不透明度', () => {
     const node = rect({
       strokes: solid('#000000'),
@@ -486,7 +499,7 @@ describe('nodeCss', () => {
       effects: [],
       assetId: 'a1',
       cornerRadius: 4,
-      fit: 'stretch', positionX: 0.5, positionY: 0.5, scale: 1,
+      fit: 'stretch', positionX: 0.5, positionY: 0.5, scale: 1, flipX: false, flipY: false,
     }
     expect(css(sceneOf(image), 'image').slice(2)).toEqual(['object-fit: fill;', 'border-radius: 4px;'])
     // 切り抜く位置を寄せていれば object-position
@@ -838,7 +851,7 @@ describe('inspectNode', () => {
 
   it('画像は収め方と形式を出す', () => {
     const image: ImageNode = { ...base, id: 'image', type: 'image',
-      effects: [], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
+      effects: [], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1, flipX: false, flipY: false }
     expect(rowsOf(sceneOf(image), 'image', '画像')).toEqual(['収め方=枠を埋めて切り抜く', '形式=PNG'])
     // 寄せる位置と切り抜きの拡大は、既定でなければ出す
     expect(rowsOf(sceneOf({ ...image, positionX: 0, scale: 2 }), 'image', '画像')).toEqual([
@@ -863,7 +876,7 @@ describe('inspectNode', () => {
 
   it('切り抜きの拡大は object-view-box で、拡大した画像の寄せる位置まで描画と同じにする', () => {
     const image: ImageNode = { ...base, id: 'image', type: 'image',
-      effects: [], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 2 }
+      effects: [], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 2, flipX: false, flipY: false }
     expect(css(sceneOf(image), 'image')).toContain('object-view-box: inset(25% 25% 25% 25%);')
     expect(css(sceneOf({ ...image, positionX: 0, positionY: 1, scale: 4 }), 'image')).toContain('object-view-box: inset(75% 75% 0% 0%);')
     expect(css(sceneOf({ ...image, scale: 1 }), 'image').join('\n')).not.toContain('object-view-box')

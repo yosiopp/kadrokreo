@@ -180,8 +180,9 @@ export type FlipDirection = 'horizontal' | 'vertical'
  * 選択範囲の中心を通る線で、左右（horizontal）か上下（vertical）に裏返す。
  * kdr は裏返しを持たないので、形に焼き込む: 位置を鏡に映し、角度の符号を変え、
  * 中身（パスの頂点（輪郭すべて）・フレームの子・角丸の 4 隅・グラデーション・影のずれ・親の辺への固定）を鏡に映す。
- * テキストと画像は字や絵を裏返せないので、位置と向きだけを映す。インスタンスも中身は元のまま（位置と向きだけ）。
- * 自動で並べるフレームの並びの順は入れ替えない（並びから外した子は映す）。
+ * テキストと画像は裏返しの項目（flipX / flipY）を切り替えて字や絵そのものを映す。
+ * インスタンスは中身が元の写しで配置を上書きできないので、位置と向きだけを映す。
+ * 自動で並べるフレームの並びの順は入れ替えない（並びの順は中身の順（コードの要素の順）なので。並びから外した子は映す）。
  */
 export function flipNodes<T extends Scene>(scene: T, ids: readonly NodeId[], direction: FlipDirection): T {
   const tops = topLevelIds(scene, ids)
@@ -214,13 +215,20 @@ type Axis = 'x' | 'y'
 
 /** node の座標系で axis の向きに中身を鏡に映すパッチを add へ積む。子孫もたどる */
 function mirrorContent(scene: Scene, node: SceneNode, axis: Axis, add: (id: NodeId, patch: NodePatch) => void) {
-  // 字・絵・インスタンスの中身（元の写し）は映せない
-  if (node.type === 'text' || node.type === 'image' || isInstance(node)) return
+  // インスタンスの中身（元の写し）は映せない
+  if (isInstance(node)) return
   // 影のずれはページの向きで持つが、裏返す向きはどの深さでもページの同じ向きになる（回転の符号が変わるだけ）
+  const effects = node.effects.map((effect) => ('x' in effect ? { ...effect, [axis]: -effect[axis] || 0 } : effect))
+  // 字と絵は裏返しの項目で映す。塗り・角丸・画像の寄せる位置は裏返した中身と一緒に映るので、そのままにする。
+  // ページの左右に映すと、回転の符号が変わったノードの座標系でも左右（x）の裏返しになる（M·R(θ) = R(-θ)·M）
+  if (node.type === 'text' || node.type === 'image') {
+    add(node.id, axis === 'x' ? { flipX: !node.flipX, effects } : { flipY: !node.flipY, effects })
+    return
+  }
   const patch: Record<string, unknown> = {
     fills: node.fills.map((paint) => mirrorPaint(paint, axis)),
     strokes: node.strokes.map((paint) => mirrorPaint(paint, axis)),
-    effects: node.effects.map((effect) => ('x' in effect ? { ...effect, [axis]: -effect[axis] || 0 } : effect)),
+    effects,
   }
   if (node.type === 'rect' || node.type === 'frame') patch.cornerRadius = mirrorRadius(node.cornerRadius, axis)
   if (node.type === 'path') {

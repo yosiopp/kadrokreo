@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getAbsoluteBounds } from '../../document/geometry.ts'
+import { getAbsoluteBounds, getContentWorldMatrix, multiply } from '../../document/geometry.ts'
 import { pathFromContours, pathOutlines, pathPoints } from '../../document/path.ts'
 import { sha256Hex } from '../../document/sha256.ts'
 import { estimateTextMetrics, exportSvg, textBaseline } from '../../document/svgExport.ts'
@@ -308,6 +308,28 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect(back.assetId).toBe(id)
     expect(Object.keys(result.assets)).toEqual([id])
     expectSameBounds(scene, 'Photo', result.imported, back.id, result.origin)
+  })
+
+  it('裏返したテキストと画像は transform の裏返しで書き、読み戻すと中身の描かれ方と影のずれが揃う', () => {
+    const bytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0, 0, 0, 0,
+    ])
+    const id = sha256Hex(bytes)
+    const shadow: Effect = { type: 'drop-shadow', x: 3, y: 2, blur: 4, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.5, visible: true }
+    const text = named(createText({ x: 30, y: 40, width: 0, height: 0 }, 'Mirror'), 'Mirror', { flipX: true, rotation: 20, textAlign: 'center', effects: [shadow] })
+    const image = named(createImage({ x: 120, y: 10, width: 40, height: 20 }, id), 'Photo', { fit: 'stretch', flipY: true, rotation: 10 }) as ImageNode
+    const scene = sceneOf(text, image)
+    const result = roundTrip(scene, { [id]: { mime: 'image/png', bytes } })
+    expect(result.svg).toContain('matrix(')
+    expect(result.warnings).toEqual([])
+    for (const name of ['Mirror', 'Photo']) {
+      const back = result.byName(name)
+      // 上下の裏返しは、左右の裏返しと 180° の回転として読み戻る
+      expect(back).toMatchObject({ flipX: true, flipY: false })
+      const expected = multiply([1, 0, 0, 1, -result.origin.x, -result.origin.y], getContentWorldMatrix(scene, name))
+      getContentWorldMatrix(result.imported, back.id).forEach((value, i) => close(value, expected[i]))
+    }
+    expect((result.byName('Mirror') as TextNode).effects).toMatchObject([{ type: 'drop-shadow', x: 3, y: 2 }])
   })
 
   it('非表示のノードは書き出さない。影は filter に、ずれはノードの向きに直して書く', () => {

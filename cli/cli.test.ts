@@ -502,6 +502,17 @@ describe('kadrokreo CLI', () => {
     expect(await bad.run(argv('-f a.kdr flip diagonal a'))).toBe(2)
   })
 
+  it('テキストの flip は字そのものを裏返し（flipX / flipY）、set でも変えられる', async () => {
+    const h = harness()
+    await h.run(argv('new + add text --id t --text Hi + flip horizontal t + add text --id u --text Yo + set u flipY=true -o a.kdr'))
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    expect(nodes.t).toMatchObject({ flipX: true, flipY: false })
+    expect(nodes.u).toMatchObject({ flipX: false, flipY: true })
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(argv('-f a.kdr set t flipX=yes'))).not.toBe(0)
+  })
+
   it('上書きを元に反映・元に戻す、インスタンスの元の差し替え', async () => {
     const h = harness()
     await h.run(argv(

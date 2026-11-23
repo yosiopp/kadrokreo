@@ -1,4 +1,4 @@
-import { type Bounds, type Matrix, type Size, getWorldMatrix, multiply, nodeMatrix, transformRect } from '../document/geometry.ts'
+import { type Bounds, type Matrix, type Size, contentMatrix, getWorldMatrix, multiply, transformRect } from '../document/geometry.ts'
 import type { Asset, AssetId, NodeId, Scene, SceneNode } from '../document/types.ts'
 import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
 import { paintedRect } from './render.ts'
@@ -146,7 +146,8 @@ export function hasBlur(next: Scene, prev: Scene | null, changed: readonly NodeI
 /** ノードとその子孫が描かれうる範囲（ページ座標）を out に足す。切り取るフレームの中は、フレームの範囲で足りる */
 function collectPainted(scene: Scene, id: NodeId, parent: Matrix, measure: CanvasRenderingContext2D, out: Bounds[]): void {
   const node = scene.nodes[id]
-  const world = multiply(parent, nodeMatrix(node))
+  // テキストのはみ出しは裏返すと反対側に出るので、裏返しも掛ける（子を持つのはフレームだけで、フレームは裏返さない）
+  const world = multiply(parent, contentMatrix(node))
   out.push(transformRect(world, paintedRect(measure, node)))
   if (node.type === 'frame' && !node.clipContent) {
     for (const child of node.children) collectPainted(scene, child, world, measure, out)

@@ -265,6 +265,16 @@ export type PathNode = BaseNode &
 /** パスの 2 つ目以降の輪郭 */
 export type PathContour = { points: PathPoint[]; closed: boolean }
 
+/**
+ * 字や絵そのものの裏返し（テキストと画像だけが持つ）。枠の中心を通る縦（flipX）・横（flipY）の線で中身を鏡に映して描く。
+ * 枠の位置・大きさは変わらない（裏返しても枠は同じ矩形）。回転は裏返した後にかかる（CSS の transform: rotate() scale(-1, 1) と同じ順）。
+ * 影のずれはほかの効果と同じくページの向きのままで、裏返さない
+ */
+export type Flippable = {
+  flipX: boolean
+  flipY: boolean
+}
+
 export type TextNode = BaseNode & {
   type: 'text'
   /** 効果（Style の effects と同じ）。内側の影は文字の形の内側に描く（CSS の text-shadow では表せないので、Dev モードのコードには含めない） */
@@ -279,7 +289,7 @@ export type TextNode = BaseNode & {
   textAlign: 'left' | 'center' | 'right'
   /** 行の高さ。fontSize に対する倍率 */
   lineHeight: number
-}
+} & Flippable
 
 /**
  * fit は、枠と画像の縦横比が違うときの収め方。
@@ -303,7 +313,7 @@ export type ImageNode = BaseNode & {
    * positionX / positionY の割合で寄せて、枠からはみ出した分を切り落とす。1 は拡大しない
    */
   scale: number
-}
+} & Flippable
 
 /**
  * フレームの中身を自動で並べる設定。子は children の順に、direction の向きへ並ぶ。
@@ -405,6 +415,9 @@ export type Override = {
   fontWeight?: number
   /** 画像の差し替え。ドキュメントの assets にあるもの */
   assetId?: AssetId
+  /** テキスト・画像の裏返し（Flippable と同じ） */
+  flipX?: boolean
+  flipY?: boolean
   /**
    * 入れ子のインスタンスの差し替え。キーのノードが main の中に置いたインスタンスのとき、
    * そこをこの id のコンポーネントのインスタンスにする。そのほかのノードや、元が見つからない・循環するときは無視する

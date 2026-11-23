@@ -140,6 +140,15 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   check('回したテキストの入力欄も同じ向きに回る', transform === 'rotate(-25deg)', transform)
   await page.screenshot({ path: path.join(OUT, '22-rotated-text-editing.png') })
   await page.keyboard.press('Escape')
+  // テキストを左右に反転すると、字そのものが裏返り（flipX）、向きの符号が変わる
+  await page.keyboard.press('Shift+H')
+  const flipLeftRight = page.locator('.check-field:has-text("左右") input')
+  await flipLeftRight.waitFor()
+  await page.waitForTimeout(700)
+  const flippedText = Object.values((await saved()).nodes).find((n) => n.type === 'text')
+  check('テキストを反転すると字が裏返り、パネルの「左右」に印が付く',
+    (await flipLeftRight.isChecked()) && flippedText?.flipX === true && flippedText.rotation === 25, JSON.stringify(flippedText && { flipX: flippedText.flipX, rotation: flippedText.rotation }))
+  await page.screenshot({ path: path.join(OUT, '22b-flipped-text.png') })
   await deselect()
   await page.screenshot({ path: path.join(OUT, '23-rotation-done.png') })
 
@@ -149,7 +158,8 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const rotations = Object.values(json.document.pages[0].nodes).map((n) => n.rotation).sort((a, b) => a - b)
-  check('kdr に角度が入る', json.version === 16 && rotations.join() === '-25,0,20,30', rotations.join())
+  check('kdr に角度が入る', json.version === 16 && rotations.join() === '0,20,25,30', rotations.join())
+  check('kdr にテキストの裏返しが入る', JSON.stringify(json.raw).includes('"flipX":true') && !JSON.stringify(json.raw).includes('"flipY"'))
 
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')

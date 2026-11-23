@@ -73,6 +73,8 @@ export function inspectNode(
     inFlexParent(scene, node.id) && node.layoutPositioning === 'absolute' && { label: '配置', value: '並びから外す' },
     ...constraintRows(scene, node),
     node.rotation !== 0 && { label: '回転', value: `${num(node.rotation)}°` },
+    (node.type === 'text' || node.type === 'image') && (node.flipX || node.flipY) &&
+      { label: '裏返し', value: node.flipX && node.flipY ? '左右と上下' : node.flipX ? '左右' : '上下' },
     'cornerRadius' in node && isRounded(node.cornerRadius) && { label: '角丸', value: radiusText(node.cornerRadius, num) },
     node.opacity < 1 && { label: '不透明度', value: percent(node.opacity) },
     node.blendMode !== 'normal' && { label: '描画モード', value: BLEND_MODE_LABELS[node.blendMode] },
@@ -483,7 +485,10 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   ] as const) {
     if (value !== null && limited[axis]) add(property, px(value))
   }
-  if (node.rotation !== 0) add('transform', `rotate(${num(node.rotation)}deg)`)
+  // テキスト・画像の裏返しは、回転のあとに書く scale（回してから裏返すのではなく、裏返した中身を回す）
+  const flip = flipOf(node)
+  const transforms = [node.rotation !== 0 && `rotate(${num(node.rotation)}deg)`, flip && `scale(${flip.x}, ${flip.y})`].filter((t) => typeof t === 'string')
+  if (transforms.length > 0) add('transform', transforms.join(' '))
   if (node.opacity < 1) add('opacity', num(node.opacity))
   // 塗りが 1 つだけなら、塗りの描画モードは要素ごと後ろに混ぜるのと同じ（ノードの描画モードが normal のとき）
   const fills = 'fills' in node ? node.fills : []
@@ -554,7 +559,9 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     const filters: string[] = []
     // レイヤーのぼかしは影も含めてぼかす（描画と同じ）。CSS の blur() の値は半径の半分（標準偏差）
     const layerBlur = blurRadius(node.effects, 'layer-blur')
-    const drops = splitEffects(node.effects).drop.toReversed()
+    // transform の scale は影のずれも裏返すので、影のずれ（ページの向き）を先に裏返して打ち消す
+    const unflip = (shadow: Shadow): Shadow => (flip ? { ...shadow, x: shadow.x * flip.x || 0, y: shadow.y * flip.y || 0 } : shadow)
+    const drops = splitEffects(node.effects).drop.toReversed().map(unflip)
     if (node.type === 'path') {
       // パスの影は、枠ではなく形に沿って落ちる。filter の drop-shadow には内側の影と広がりがないので、落ち影だけを広がりなしで
       filters.push(...drops.map((shadow) => `drop-shadow(${shadowCss({ ...shadow, spread: 0 }, style)})`))
@@ -562,7 +569,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       // 文字の影は text-shadow。内側の影と広がりは表せない
       if (drops.length > 0) add('text-shadow', drops.map((shadow) => shadowCss({ ...shadow, spread: 0 }, style)).join(', '))
     } else {
-      const shadows = node.effects.filter(isShadow).toReversed()
+      const shadows = node.effects.filter(isShadow).toReversed().map(unflip)
       if (shadows.length > 0) add('box-shadow', shadows.map((shadow) => shadowCss(shadow, style)).join(', '))
     }
     if (layerBlur > 0) filters.push(`blur(${length(tidy(layerBlur / 2), style)})`)
@@ -727,6 +734,12 @@ function limitRows(scene: Scene, node: SceneNode): InspectRow[] {
 function paddingCss(layout: AutoLayout, px: (value: number) => string): string | null {
   const values = paddingValues(layout)
   return values.every((value) => value === 0) ? null : values.map(px).join(' ')
+}
+
+/** テキスト・画像の裏返しの CSS の scale の値。裏返していなければ null */
+function flipOf(node: SceneNode): { x: 1 | -1; y: 1 | -1 } | null {
+  if ((node.type !== 'text' && node.type !== 'image') || (!node.flipX && !node.flipY)) return null
+  return { x: node.flipX ? -1 : 1, y: node.flipY ? -1 : 1 }
 }
 
 /** CSS の box-shadow の値。内側の影は inset を付け、広がりは 0 でなければ書く */

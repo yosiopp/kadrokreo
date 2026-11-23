@@ -1,4 +1,4 @@
-import { IDENTITY, type Matrix, getWorldMatrix, multiply, nodeMatrix, rotateVector, tidy, transformRect } from './geometry.ts'
+import { IDENTITY, type Matrix, contentMatrix, flipMatrix, getWorldMatrix, invert, multiply, nodeMatrix, tidy, transformRect } from './geometry.ts'
 import { drawnNode } from './booleanNode.ts'
 import { readImageInfo } from './imageInfo.ts'
 import { type TextLinesOf, alignFactor, blurRadius, clampedRadii, getPaintedBounds, hasStroke, imageRect, isRounded, isShadow, solidPaint, splitEffects, withoutHidden } from './paint.ts'
@@ -163,7 +163,10 @@ class SvgWriter {
     if (!node.visible || node.opacity === 0) return ''
     // マスクは描かない（兄弟を切り取る clipPath / mask になる。children）
     if (isMaskNode(node)) return ''
-    const world = multiply(parentWorld, nodeMatrix(node))
+    // テキスト・画像の裏返しは、要素の transform に含める（枠の中心で鏡に映す）
+    const flip = flipMatrix(node)
+    if (flip) m = multiply(m, flip)
+    const world = multiply(parentWorld, contentMatrix(node))
     const parts = this.content(node, world)
     if (parts.length === 0) return ''
     const effects = 'effects' in node ? node.effects : []
@@ -383,9 +386,9 @@ class SvgWriter {
   ): string {
     const effects = [...drop, ...inner]
     if (effects.length === 0) return ''
-    // 影のずれはページの向きで決まる（回転に従わない）ので、ノードの向きに直す
-    const angle = (Math.atan2(world[1], world[0]) * 180) / Math.PI
-    const local = (effect: Shadow) => rotateVector({ x: effect.x, y: effect.y }, -angle)
+    // 影のずれはページの向きで決まる（回転・裏返しに従わない）ので、ノードの向きに直す
+    const [a, b, c, d] = invert(world)
+    const local = (effect: Shadow) => ({ x: a * effect.x + c * effect.y, y: b * effect.x + d * effect.y })
     const spread =
       Math.max(...effects.map((e) => e.blur * 2 + Math.abs(e.spread) + Math.abs(e.x) + Math.abs(e.y))) + ('strokeWidth' in node ? node.strokeWidth : 0)
     // 広がりは形（の外側）を四角く太らせる・細らせる

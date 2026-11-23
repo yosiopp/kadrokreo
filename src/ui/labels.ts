@@ -141,5 +141,7 @@ export const OVERRIDE_LABELS: Record<keyof Override, string> = {
   fontFamily: '書体',
   fontWeight: '太さ',
   assetId: '画像',
+  flipX: '左右の裏返し',
+  flipY: '上下の裏返し',
   componentId: '入れ子のインスタンスの元',
 }

@@ -43,6 +43,8 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
   const separate = rounded.some((node) => typeof node.cornerRadius !== 'number')
   const [cornersOpen, setCornersOpen] = useState(false)
   const fits = common(images.map((node) => node.fit))
+  // 字や絵そのものの裏返し。インスタンスの中のテキスト・画像でも変えられる（上書きになる）
+  const flippable = nodes.filter((node) => node.type === 'text' || node.type === 'image')
 
   return (
     <>
@@ -102,6 +104,25 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
           <OpenFileButton accept={IMAGE_MIME_TYPES.join(',')} onFiles={(files) => onReplaceImage(files[0])}>
             画像を差し替え
           </OpenFileButton>
+        </Section>
+      )}
+
+      {flippable.length > 0 && flippable.length === nodes.length && (
+        <Section title="裏返し" overridden={overridden.has('flipX') || overridden.has('flipY')}>
+          <div className="field-grid">
+            <CheckField
+              label="左右"
+              overridden={overridden.has('flipX')}
+              value={common(flippable.map((node) => node.flipX))}
+              onChange={(flipX) => apply({ flipX })}
+            />
+            <CheckField
+              label="上下"
+              overridden={overridden.has('flipY')}
+              value={common(flippable.map((node) => node.flipY))}
+              onChange={(flipY) => apply({ flipY })}
+            />
+          </div>
         </Section>
       )}
 

@@ -450,6 +450,21 @@ describe('インスタンスごとの上書き', () => {
     expect(joined.pages[0].nodes[backgroundCopy]).toMatchObject({ strokeJoin: 'miter' })
   })
 
+  it('写しのテキストを裏返すと上書きになり、元を変えても残る。図形の裏返しは当てない', () => {
+    const { doc, label, instanceId } = withInstance()
+    const [backgroundCopy, labelCopy] = frameOf(doc.pages[0], instanceId).children
+    const edited = edit(doc, (page) => updateNode(page, labelCopy, { flipX: true }))
+    expect(overridesOf(edited, instanceId)).toEqual({ [label.id]: { flipX: true } })
+    expect(edited.pages[0].nodes[labelCopy]).toMatchObject({ flipX: true, flipY: false })
+    expect(edited.pages[0].nodes[label.id]).toMatchObject({ flipX: false })
+    const restyled = edit(edited, (page) => updateNode(page, label.id, { text: 'はい', flipY: true }))
+    expect(restyled.pages[0].nodes[labelCopy]).toMatchObject({ text: 'はい', flipX: true, flipY: true })
+    expect(syncComponents(restyled)).toBe(restyled)
+    // 図形は裏返しの項目を持たないので、上書きに入っていても当てない
+    const shaped = edit(doc, (page) => updateNode(page, backgroundCopy, { flipX: true } as never))
+    expect(overridesOf(shaped, instanceId)).toEqual({})
+  })
+
   it('上書きできない項目を変えても覚えず、元に戻る', () => {
     const { doc, instanceId } = withInstance()
     const labelCopy = frameOf(doc.pages[0], instanceId).children[1]

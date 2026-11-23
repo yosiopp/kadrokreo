@@ -5,6 +5,7 @@ import {
   type Size,
   intersects,
   multiply,
+  contentMatrix,
   nodeMatrix,
   transformRect,
 } from '../document/geometry.ts'
@@ -226,7 +227,8 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
   // マスクは描かない（形で兄弟を切り取るだけ）
   if (isMaskNode(node)) return
 
-  const local = nodeMatrix(node)
+  // テキスト・画像の裏返しは中身を描くときだけ掛ける（枠は同じ矩形）。影のずれは画面の向きで付くので裏返らない
+  const local = contentMatrix(node)
   const world = multiply(parent, local)
   // はみ出した子を描くフレーム以外は、画面外なら丸ごと省ける
   const selfContained = node.type !== 'frame' || node.clipContent

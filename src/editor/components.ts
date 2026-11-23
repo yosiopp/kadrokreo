@@ -802,6 +802,10 @@ function applyOverride<N extends SceneNode>(node: N, values: Override | undefine
     if (values.fontWeight !== undefined) patch.fontWeight = values.fontWeight
   }
   if (values.assetId !== undefined && node.type === 'image') patch.assetId = values.assetId
+  if (node.type === 'text' || node.type === 'image') {
+    if (values.flipX !== undefined) patch.flipX = values.flipX
+    if (values.flipY !== undefined) patch.flipY = values.flipY
+  }
   // values.componentId !== undefined（入れ子のインスタンスの差し替え）は、写しを作る前に swappedSource で当てている
   return { ...node, ...patch }
 }

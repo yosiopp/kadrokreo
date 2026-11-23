@@ -102,7 +102,7 @@ describe('nodeMarkup', () => {
       effects: [],
       assetId: 'a1',
       cornerRadius: 0,
-      fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1,
+      fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1, flipX: false, flipY: false,
     }
     const scene = sceneOf(frame({ children: ['line', 'path', 'image'] }), line, path, image)
     const assets = { a1: { mime: 'image/jpeg', bytes: new Uint8Array([0, 0, 0]) } }
@@ -432,7 +432,7 @@ describe('nodeMarkup の出力形式', () => {
 
   it('画像は JSX では閉じた img にする', () => {
     const image: ImageNode = { ...base, id: 'image', name: 'Photo', type: 'image',
-      effects: [], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
+      effects: [], assetId: 'a1', cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1, flipX: false, flipY: false }
     const { html } = nodeMarkup(sceneOf(image), 'image', { style: { format: 'react' } })
     expect(html).toContain(`<img style={{ width: 100, height: 50, objectFit: 'cover' }} src="photo.png" alt="Photo" />`)
   })

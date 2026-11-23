@@ -308,6 +308,8 @@ describe('parseKdr', () => {
       fontWeight: 400,
       textAlign: 'left',
       lineHeight: 1.2,
+      flipX: false,
+      flipY: false,
       sizing: { width: 'fixed', height: 'hug' },
     })
     expect(parseOne(rawNode({ type: 'frame', layout: {} }))).toMatchObject({
@@ -576,6 +578,18 @@ describe('parseKdr', () => {
     expect('setDescription' in roundTrip(rawNode({ type: 'frame', setDescription: '' }))).toBe(false)
   })
 
+  it('テキスト・画像の裏返し（flipX / flipY）を検証し、false なら書かない。ほかのノードは持たない', () => {
+    const text = (patch: RawNode) => rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif', ...patch })
+    expect(parseOne(text({ flipX: true }))).toMatchObject({ flipX: true, flipY: false })
+    expect(parseOne(rawNode({ type: 'image', assetId: 'a1', flipY: true }), { a1: PNG })).toMatchObject({ flipX: false, flipY: true })
+    expect(() => parseOne(text({ flipX: 'yes' }))).toThrow('flipX')
+    expect(() => parseOne(rawNode({ type: 'image', assetId: 'a1', flipY: 1 }), { a1: PNG })).toThrow('flipY')
+    expect('flipX' in parseOne(rawNode({ flipX: true }))).toBe(false)
+    expect(roundTrip(text({ flipX: true, flipY: true }))).toMatchObject({ flipX: true, flipY: true })
+    const plain = roundTrip(text({ flipX: false }))
+    expect('flipX' in plain || 'flipY' in plain).toBe(false)
+  })
+
   it('大きさの下限・上限と、並びから外す指定を検証する', () => {
     expect(parseOne(rawNode({ minWidth: 20, maxHeight: null }))).toMatchObject({ minWidth: 20, maxHeight: null })
     expect(() => parseOne(rawNode({ minWidth: -1 }))).toThrow('minWidth')
@@ -742,6 +756,7 @@ describe('parseKdr', () => {
       n4: { fontSize: 24, fontFamily: 'serif', fontWeight: 700 },
       n5: { strokeDashes: [4, 2], strokeDashOffset: 1.5 },
       n6: { strokeDashes: [] },
+      n7: { flipX: true, flipY: false },
     }
     expect(parseOne(withOverrides(overrides))).toMatchObject({ component: { id: 'c1', role: 'instance', overrides } })
     // 知らない項目は捨てる。省けば上書きなし
@@ -756,6 +771,8 @@ describe('parseKdr', () => {
     expect(() => parseOne(withOverrides({ n1: { fontWeight: 450 } }))).toThrow('overrides.n1.fontWeight')
     expect(() => parseOne(withOverrides({ n1: { assetId: 'nothing' } }))).toThrow('上書きの画像データがありません')
     expect(() => parseOne(withOverrides({ n1: { visible: 'no' } }))).toThrow('overrides.n1.visible')
+    expect(() => parseOne(withOverrides({ n1: { flipX: 'yes' } }))).toThrow('overrides.n1.flipX')
+    expect(() => parseOne(withOverrides({ n1: { flipY: 0 } }))).toThrow('overrides.n1.flipY')
     expect(() => parseOne(withOverrides({ n1: { strokeDashes: [-1] } }))).toThrow('overrides.n1.strokeDashes')
     expect(() => parseOne(withOverrides({ n1: { strokeDashOffset: null } }))).toThrow('overrides.n1.strokeDashOffset')
     // 入れ子のインスタンスの差し替え。差し替え先のコンポーネントは、ファイルになくても読める（同期で無視される）

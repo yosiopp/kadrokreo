@@ -1,4 +1,4 @@
-import { type Bounds, type Matrix, type Point, type Size, getWorldMatrix, normalizeAngle, transformRect, unionBounds } from './geometry.ts'
+import { type Bounds, type Matrix, type Point, type Size, getContentWorldMatrix, normalizeAngle, transformRect, unionBounds } from './geometry.ts'
 import { capReach, flattenPath, pathOutlines } from './path.ts'
 import type { Blur, CornerRadius, Effect, ImageNode, LinearGradient, NodeId, Paint, PathNode, RadialGradient, Scene, Shadow, Style, TextNode } from './types.ts'
 
@@ -314,7 +314,8 @@ function unit(x: number, y: number): Point | null {
 
 function paintedBoundsOf(scene: Scene, id: NodeId, textLines?: TextLinesOf): Bounds | null {
   const node = scene.nodes[id]
-  const world = getWorldMatrix(scene, id)
+  // テキストのはみ出しは、裏返すと反対側に出る
+  const world = getContentWorldMatrix(scene, id)
   let box = transformRect(world, { x: 0, y: 0, width: node.width, height: node.height })
   let content = box
   if (node.type === 'frame' && !node.clipContent) {

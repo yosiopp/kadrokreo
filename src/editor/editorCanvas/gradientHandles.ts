@@ -1,4 +1,4 @@
-import { type Point, type Size, applyMatrix, getWorldMatrix, invert, normalizeAngle } from '../../document/geometry.ts'
+import { type Point, type Size, applyMatrix, getContentWorldMatrix, invert, normalizeAngle } from '../../document/geometry.ts'
 import { fitFocus, gradientLine, radialTransform } from '../../document/paint.ts'
 import type { Gradient, NodeId, Paint, Scene, SceneNode } from '../../document/types.ts'
 import { type PaintKey, withStopOffset } from '../operations/paints.ts'
@@ -89,7 +89,8 @@ export function stopMarkers(axis: readonly [Point, Point], points: readonly Poin
 /** ページ座標でのハンドルの位置 */
 export function worldGradientHandles(scene: Scene, id: NodeId, gradient: Gradient): GradientHandles {
   const node = scene.nodes[id]
-  const matrix = getWorldMatrix(scene, id)
+  // 塗りは裏返した中身と一緒に映る
+  const matrix = getContentWorldMatrix(scene, id)
   const local = gradientHandles(gradient, node)
   const map = (point: Point) => applyMatrix(matrix, point)
   return {
@@ -233,7 +234,7 @@ export function dragGradient(
 
 /** ページ座標の点を、ノードの座標系に直す */
 export function toNodeSpace(scene: Scene, id: NodeId, world: Point): Point {
-  return applyMatrix(invert(getWorldMatrix(scene, id)), world)
+  return applyMatrix(invert(getContentWorldMatrix(scene, id)), world)
 }
 
 /**

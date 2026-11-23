@@ -66,6 +66,23 @@ export function nodeMatrix(node: Placed): Matrix {
   return [cos, sin, -sin, cos, node.x + cx - cos * cx + sin * cy, node.y + cy - sin * cx - cos * cy]
 }
 
+/**
+ * テキスト・画像の裏返し（flipX / flipY）の変換。枠の中心を通る線で中身を鏡に映す（ノードの座標系の中で、回転より先にかかる）。
+ * 裏返していなければ null。枠は同じ矩形のままなので、当たり判定や配置には使わず、中身を描くときだけ掛ける
+ */
+export function flipMatrix(node: object & Size): Matrix | null {
+  const flipX = 'flipX' in node && node.flipX === true
+  const flipY = 'flipY' in node && node.flipY === true
+  if (!flipX && !flipY) return null
+  return [flipX ? -1 : 1, 0, 0, flipY ? -1 : 1, flipX ? node.width : 0, flipY ? node.height : 0]
+}
+
+/** ノードの座標系から親の座標系への、中身を描くときの変換（nodeMatrix に裏返しを足したもの） */
+export function contentMatrix(node: Placed): Matrix {
+  const flip = flipMatrix(node)
+  return flip ? multiply(nodeMatrix(node), flip) : nodeMatrix(node)
+}
+
 /** 親の座標系の点を、ノードの座標系（枠の左上が原点、回す前の向き）に直す */
 export function toNodeSpace(node: Placed, point: Point): Point {
   const local = { x: point.x - node.x, y: point.y - node.y }
@@ -83,6 +100,12 @@ export function getWorldMatrix(scene: Scene, id: NodeId | null): Matrix {
     matrix = multiply(nodeMatrix(scene.nodes[current]), matrix)
   }
   return matrix
+}
+
+/** 中身（字・絵・塗り）を描く座標系からページ座標系への変換。getWorldMatrix にテキスト・画像の裏返しを足したもの */
+export function getContentWorldMatrix(scene: Scene, id: NodeId): Matrix {
+  const flip = flipMatrix(scene.nodes[id])
+  return flip ? multiply(getWorldMatrix(scene, id), flip) : getWorldMatrix(scene, id)
 }
 
 /** 祖先の分も合わせた、ページ上での向き */

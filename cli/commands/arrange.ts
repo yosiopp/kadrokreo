@@ -76,7 +76,7 @@ export const flip: Command = {
   name: 'flip',
   kind: 'edit',
   usage: 'flip horizontal|vertical ノード…',
-  summary: '全体を囲む矩形の中心で、左右か上下に裏返す（editor の Shift + H / V と同じ。テキストと画像は位置と向きだけ）',
+  summary: '全体を囲む矩形の中心で、左右か上下に裏返す（editor の Shift + H / V と同じ。テキストと画像は字や絵も裏返し、インスタンスは位置と向きだけ）',
   run({ session }, step) {
     checkStep(step, {})
     const direction = positional(step, 0, '向き（horizontal / vertical）')

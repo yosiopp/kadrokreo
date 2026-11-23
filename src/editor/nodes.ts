@@ -120,11 +120,13 @@ export function createText(bounds: Bounds, text = ''): TextNode {
     fontWeight: 400,
     textAlign: 'left',
     lineHeight: 1.2,
+    flipX: false,
+    flipY: false,
   }
 }
 
 export function createImage(bounds: Bounds, assetId: AssetId): ImageNode {
-  return { ...base('Image', bounds), type: 'image', assetId, effects: [], cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1 }
+  return { ...base('Image', bounds), type: 'image', assetId, effects: [], cornerRadius: 0, fit: 'cover', positionX: 0.5, positionY: 0.5, scale: 1, flipX: false, flipY: false }
 }
 
 export function createFrame(bounds: Bounds): FrameNode {

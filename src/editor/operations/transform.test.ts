@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { getAbsoluteBounds, getCorners, getWorldCenter, getWorldRotation } from '../../document/geometry.ts'
-import { createFrame, createLine, createPath, createRect, createText } from '../nodes.ts'
+import { type Matrix, getAbsoluteBounds, getContentWorldMatrix, getCorners, getNodesBounds, getWorldCenter, getWorldRotation, multiply } from '../../document/geometry.ts'
+import { createFrame, createImage, createLine, createPath, createRect, createText } from '../nodes.ts'
 import { alignNodes } from './arrange.ts'
 import { copyFragment, pasteFragment } from './clipboard.ts'
 import { createPage } from './document.ts'
@@ -258,7 +258,32 @@ describe('flipNodes', () => {
     })
   })
 
-  it('テキストは位置と向きだけを映す', () => {
+  it('テキストと画像は裏返しの項目を切り替え、中身の描かれ方がちょうど鏡に映る', () => {
+    const shadow = { type: 'drop-shadow' as const, x: 3, y: 4, blur: 2, spread: 0, color: '#000000', opacity: 0.5, visible: true, blendMode: 'normal' as const }
+    const text = { ...createText({ x: 10, y: 5, width: 50, height: 20 }, 'abc'), rotation: 25, effects: [shadow] }
+    const frame = { ...createFrame({ x: 100, y: 0, width: 80, height: 60 }), rotation: 30 }
+    const image = { ...createImage({ x: 10, y: 10, width: 30, height: 20 }, 'a1'), rotation: -15 }
+    let doc = createPage()
+    doc = insertNode(doc, text)
+    doc = insertNode(doc, frame)
+    doc = insertNode(doc, image, frame.id)
+    const bounds = getNodesBounds(doc, [text.id, frame.id])!
+    const middle = bounds.x + bounds.width / 2
+    const next = flipNodes(doc, [text.id, frame.id], 'horizontal')
+    expect(next.nodes[text.id]).toMatchObject({ flipX: true, flipY: false, effects: [{ x: -3, y: 4 }] })
+    expect(next.nodes[image.id]).toMatchObject({ flipX: true, flipY: false })
+    // 鏡に映した後の中身の変換 = ページの鏡 × 映す前の中身の変換
+    const mirror: Matrix = [-1, 0, 0, 1, 2 * middle, 0]
+    for (const id of [text.id, image.id]) {
+      const expected = multiply(mirror, getContentWorldMatrix(doc, id))
+      getContentWorldMatrix(next, id).forEach((value, i) => expect(value).toBeCloseTo(expected[i], 1))
+    }
+    // もう一度映すと元に戻る。上下に映すと flipY が切り替わる
+    expect(flipNodes(next, [text.id, frame.id], 'horizontal').nodes[text.id]).toMatchObject({ flipX: false, rotation: 25 })
+    expect(flipNodes(doc, [text.id], 'vertical').nodes[text.id]).toMatchObject({ flipX: false, flipY: true, effects: [{ x: 3, y: -4 }] })
+  })
+
+  it('テキストは位置と向きも映す', () => {
     const text = { ...createText({ x: 0, y: 0, width: 50, height: 20 }, 'abc'), rotation: 10 }
     const rect = createRect({ x: 150, y: 0, width: 50, height: 20 })
     let doc = createPage()
