@@ -35,7 +35,9 @@ import type {
 // - 描画モードのある影は、filter の中では後ろと混ぜられないので、影だけを出す要素（carrier）に分けて mix-blend-mode を付ける
 //   （落ち影は図形の下、内側の影は塗りの上・線の下。落ち影のどれかが描画モードを持てば、落ち影は全部を描画と同じ順の carrier にする。内側の影も同じ）。
 // - 半透明の通過のフレームは、子が重ならず 1 枚の絵ならフレームの不透明度を子に配る（passThrough.ts）。配れなければ g の opacity でまとめ、コメントを残す。
-//   clip-path の g も中身を後ろから切り離すので、配るときは切り取りを書かない（子が枠からはみ出して切り取りが要るなら配らない）。
+// - 切り取るフレームは、子を clipPath の g で囲む。ただしブラウザは clip-path をかけた g の中を後ろから切り離すので、
+//   子が描画モードで後ろと混ざるなら、g を使わず clip-path を子の要素に 1 つずつかける（clipEach。描画モードを持つ要素まで降りてかける）。
+//   そのときは子を印（data-kdr-clip。フレームの枠の clipPath を指す）だけの g で囲み、取り込みはそれを切り取りとして読む（要素ごとの切り取りは読まない）。
 // - レイヤーのぼかしは feGaussianBlur の filter を g に付ける。背景のぼかしは SVG で表せないので書かない（コメントを残す）。
 // - テキストの影は text に filter で付ける（落ち影は一番下の塗り、内側の影は一番上の塗り）。画像の影は、枠の形の黒い要素に影だけを出す filter を付けて、画像の下（内側の影は上）に置く。
 // - 角度のグラデーションは SVG にないので、扇形を並べた pattern で近似する（svgShapes.ts の gradientDef）。
@@ -168,10 +170,8 @@ class SvgWriter {
     const node = withoutHidden(drawnNode(this.scene, source))
     if (!node.visible || node.opacity === 0) return ''
     // 通過のフレームの不透明度を子に配れるなら、フレームは不透明に書き、子に掛ける（fade は親から配られた不透明度）
-    // clip-path をかけた g の中は後ろから切り離される（ブラウザで確かめた）ので、切り取りが要る（子が枠からはみ出す）なら配れない。
-    // 子が枠に収まれば、切り取りは何もしないので書かない
-    let passFade = passThroughFade(this.scene, source, this.options.textLines)
-    if (passFade !== null && source.type === 'frame' && source.clipContent && !this.childrenInside(source)) passFade = null
+    // 切り取るフレームでも配れる（子が描画モードで後ろと混ざるなら、切り取りは子に 1 つずつかける。content）
+    const passFade = passThroughFade(this.scene, source, this.options.textLines)
     const opacity = (passFade === null ? node.opacity : 1) * fade
     // マスクは描かない（兄弟を切り取る clipPath / mask になる。children）
     if (isMaskNode(node)) return ''
@@ -179,7 +179,7 @@ class SvgWriter {
     const flip = flipMatrix(node)
     if (flip) m = multiply(m, flip)
     const world = multiply(parentWorld, contentMatrix(node))
-    const parts = this.content(node, world, passFade ?? 1, passFade === null)
+    const parts = this.content(node, world, passFade ?? 1)
     if (parts.length === 0) return ''
     const effects = 'effects' in node ? node.effects : []
     const blur = blurRadius(effects, 'layer-blur')
@@ -204,18 +204,6 @@ class SvgWriter {
     const clash = extra !== '' && / (style|filter)="/.test(parts[0].slice(0, parts[0].indexOf('>')))
     if (node.type !== 'frame' && parts.length === 1 && !parts[0].startsWith('<g') && !clash) return note + parts[0].replace(/^<(\w+)/, `<$1${attrs}`)
     return `${note}<g${attrs}${shapeMark(node)}>${parts.join('')}</g>`
-  }
-
-  /** フレームの子の描かれる範囲が、どれもフレームの枠に収まるか（切り取りが何もしないか） */
-  private childrenInside(frame: SceneNode & { children: readonly NodeId[] }): boolean {
-    const toFrame = invert(multiply(getWorldMatrix(this.scene, frame.parentId), nodeMatrix(frame)))
-    const eps = 1e-6
-    return frame.children.every((id) => {
-      const bounds = getPaintedBounds(this.scene, [id], this.options.textLines)
-      if (!bounds || !this.scene.nodes[id].visible) return true
-      const box = transformRect(toFrame, bounds)
-      return box.x >= -eps && box.y >= -eps && box.x + box.width <= frame.width + eps && box.y + box.height <= frame.height + eps
-    })
   }
 
   /** レイヤーのぼかしの filter を定義して、付ける属性を返す。範囲は枠と、影・ぼかしのはみ出し */
@@ -290,7 +278,7 @@ class SvgWriter {
   }
 
   /** ノードの中身の要素（ノードの座標系） */
-  private content(node: SceneNode, world: Matrix, fade: number, clip: boolean): string[] {
+  private content(node: SceneNode, world: Matrix, fade: number): string[] {
     switch (node.type) {
       case 'rect':
         return this.styled(node, world, (decls) => boxShape(node, node.cornerRadius, decls))
@@ -309,7 +297,14 @@ class SvgWriter {
         const shape = (decls: string) => boxShape(node, node.cornerRadius, decls)
         const background = this.styled({ ...node, strokes: [] }, world, shape)
         let children = this.children(node.children, world, fade)
-        if (children !== '' && node.clipContent && clip) children = this.clipToBox(node, children)
+        if (children !== '' && node.clipContent) {
+          // 子が描画モードで後ろと混ざるなら、clip-path の g は中を後ろから切り離すので、子の要素に 1 つずつかける
+          if (children.includes('mix-blend-mode')) {
+            const box = this.defId('clip')
+            this.defs.push(`<clipPath id="${box}">${boxShape(node, node.cornerRadius, '')}</clipPath>`)
+            children = `<g data-kdr-clip="${box}">${this.clipEach(children, node, IDENTITY, box)}</g>`
+          } else children = this.clipToBox(node, children)
+        }
         // 枠線は子より手前に描く（影は塗りに付けたので、ここでは付けない）
         const border = hasStroke(node) ? this.styled({ ...node, fills: [], effects: [] }, world, shape) : []
         return [...background, ...(children === '' ? [] : [children]), ...border]
@@ -538,6 +533,58 @@ class SvgWriter {
     return [this.clipToBox(node, image)]
   }
 
+  /**
+   * 要素の並び（fragment）の要素ごとに、frame の枠で切り取る clip-path をかける。toLocal はフレームの座標系から fragment の座標系への変換。
+   * 中を後ろから切り離さない g（不透明度・描画モード・filter・切り取りを持たない）で、中に描画モードがあれば、g ではなく中の要素にかける。
+   * clipPath は要素の座標系（自身の transform のあと）で読まれるので、枠の形を要素の transform の逆で置く
+   */
+  private clipEach(fragment: string, frame: SceneNode & { cornerRadius: CornerRadius }, toLocal: Matrix, box: string): string {
+    return topLevelElements(fragment)
+      .map((element) => {
+        if (!element.startsWith('<') || element.startsWith('<!--')) return element
+        const open = element.slice(0, element.indexOf('>') + 1)
+        const name = /^<([\w:-]+)/.exec(open)![1]
+        const own = parseOwnTransform(open)
+        const local = multiply(invert(own), toLocal)
+        const isolates = / (opacity|style|filter|clip-path|mask)="/.test(open)
+        if (name === 'g' && !isolates && !open.endsWith('/>') && element.includes('mix-blend-mode')) {
+          const inner = element.slice(open.length, element.length - '</g>'.length)
+          return open + this.clipEach(inner, frame, local, box) + '</g>'
+        }
+        // mask を持つ要素は中を切り離しているので、外側の g で切り取る（clipPath は親の座標系）
+        if (/ mask="/.test(open)) return `<g clip-path="url(#${this.frameClip(frame, toLocal, box)})">${element}</g>`
+        const id = this.frameClip(frame, local, box)
+        const existing = / clip-path="url\(#([^)"]+)\)"/.exec(open)
+        // すでに切り取りを持てば、その clipPath にこの切り取りを重ねる（clipPath の clip-path は同じ要素の座標系で読まれる）
+        if (existing) {
+          this.chainClip(existing[1], id)
+          return element
+        }
+        const end = open.endsWith('/>') ? open.length - 2 : open.length - 1
+        return `${element.slice(0, end)} clip-path="url(#${id})"${element.slice(end)}`
+      })
+      .join('')
+  }
+
+  /** frame の枠を m（フレームの座標系から要素の座標系への変換）で置いた clipPath を定義して id を返す。data-kdr-clip-of で印の clipPath を指す */
+  private frameClip(frame: SceneNode & { cornerRadius: CornerRadius }, m: Matrix, box: string): string {
+    const id = this.defId('clip')
+    const shape = boxShape(frame, frame.cornerRadius, matrixAttr(m))
+    this.defs.push(`<clipPath id="${id}" data-kdr-clip-of="${box}">${shape}</clipPath>`)
+    return id
+  }
+
+  /** 定義済みの clipPath（とそれが重ねている clipPath）の最後に、clip を重ねる */
+  private chainClip(target: string, clip: string): void {
+    const index = this.defs.findIndex((def) => def.startsWith(`<clipPath id="${escapeXml(target)}"`))
+    if (index < 0) return
+    const def = this.defs[index]
+    const open = def.slice(0, def.indexOf('>'))
+    const chained = / clip-path="url\(#([^)"]+)\)"/.exec(open)
+    if (chained) this.chainClip(chained[1], clip)
+    else this.defs[index] = `${open} clip-path="url(#${clip})"${def.slice(open.length)}`
+  }
+
   /** content を node の枠（角丸を含む）で切り取る g */
   private clipToBox(node: SceneNode & { cornerRadius: CornerRadius }, content: string): string {
     const clip = this.defId('clip')
@@ -597,6 +644,50 @@ function blendStyle(mode: BlendMode): string {
 }
 
 /** 変換の属性。平行移動だけなら translate、回転を含めば translate と rotate、どちらでもなければ matrix */
+/** 要素の並び（この書き出しが書いた整った XML）を、一番外側の要素・コメント・文字ごとに分ける */
+function topLevelElements(fragment: string): string[] {
+  const items: string[] = []
+  let depth = 0
+  let start = 0
+  for (const match of fragment.matchAll(/<!--[\s\S]*?-->|<\/?[^>]+>|[^<]+/g)) {
+    const token = match[0]
+    if (token.startsWith('</')) depth--
+    else if (token.startsWith('<') && !token.startsWith('<!--') && !token.endsWith('/>')) depth++
+    if (depth === 0) {
+      items.push(fragment.slice(start, match.index + token.length))
+      start = match.index + token.length
+    }
+  }
+  return items
+}
+
+/** 開きタグの transform 属性（この書き出しが書く translate・rotate・scale・matrix）の行列。なければ単位行列 */
+function parseOwnTransform(open: string): Matrix {
+  const value = / transform="([^"]*)"/.exec(open)?.[1]
+  let m: Matrix = IDENTITY
+  if (!value) return m
+  for (const [, kind, args] of value.matchAll(/(\w+)\(([^)]*)\)/g)) {
+    const n = args.trim().split(/[\s,]+/).map(Number)
+    if (kind === 'translate') m = multiply(m, [1, 0, 0, 1, n[0], n[1] ?? 0])
+    else if (kind === 'scale') m = multiply(m, [n[0], 0, 0, n[1] ?? n[0], 0, 0])
+    else if (kind === 'matrix') m = multiply(m, [n[0], n[1], n[2], n[3], n[4], n[5]])
+    else if (kind === 'rotate') {
+      const r = (n[0] * Math.PI) / 180
+      const turn: Matrix = [Math.cos(r), Math.sin(r), -Math.sin(r), Math.cos(r), 0, 0]
+      m = n.length >= 3 ? multiply(multiply(multiply(m, [1, 0, 0, 1, n[1], n[2]]), turn), [1, 0, 0, 1, -n[1], -n[2]]) : multiply(m, turn)
+    }
+  }
+  return m
+}
+
+/** 変換を丸めずに書いた transform 属性（切り取りの形を要素の座標系に置く。単位行列なら書かない） */
+function matrixAttr(m: Matrix): string {
+  const n = (value: number) => Math.round(value * 1e6) / 1e6
+  const values = m.map(n)
+  if (values.join(' ') === '1 0 0 1 0 0') return ''
+  return ` transform="matrix(${values.join(' ')})"`
+}
+
 function transformAttr(m: Matrix): string {
   const [a, b, c, d, e, f] = m
   const near = (x: number, y: number) => Math.abs(x - y) < 1e-9

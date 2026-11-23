@@ -66,6 +66,7 @@ import {
 // - 塗りは単色と linearGradient・radialGradient。fill-opacity・stroke-opacity・色の alpha・揃った stop-opacity は塗りの不透明度（Paint.opacity）に写す。
 // - <style> の CSS はセレクタ（要素名・#id・.class・属性・結合子・静的に決まる疑似クラス。css.ts）を読み、属性 < CSS < style 属性 < CSS の !important の順に重ねる。
 // - clip-path / mask は、中身が矩形・円 1 つで、軸に沿って置かれているときは、切り取るフレーム（角丸）にする。
+//   kadrokreo の書き出しが切り取りを子の要素ごとにかけたもの（data-kdr-clip の g と data-kdr-clip-of の clipPath）は、印の g を 1 つの切り取るフレームに戻す。
 //   ほかの形（パス・多角形・回った矩形・いくつもの形・objectBoundingBox）は、形をマスク（isMask）のパスにして中身と一緒にフレームにまとめる（maskShape）。
 // - <image> は data URI の PNG / JPEG / WebP / GIF を画像のノードに、SVG（data:image/svg+xml）を別の文書として変換したフレームにする（外部の URL は読まない）。
 // - <text> と <image> にかかる変換が裏返していれば、左右の裏返し（flipX）と回転にする（上下の裏返しは左右の裏返し + 180° の回転）。
@@ -489,6 +490,8 @@ class Converter {
     switch (name) {
       case 'g':
         if (attributes['data-kdr-shape'] !== undefined) return this.kdrShape(element, matrix, inherited, depth, uses)
+        // kadrokreo の書き出しが、切り取りを子の要素ごとにかけた印の g（data-kdr-clip）は、フレームにせず中身を返す（clipped が切り取る）
+        if (attributes['data-kdr-clip'] !== undefined) return this.convertChildren(element, matrix, inherited, depth, uses)
         return this.group(element, this.convertChildren(element, matrix, inherited, depth + 1, uses), depth)
       case 'a':
       case 'switch':
@@ -643,8 +646,14 @@ class Converter {
     if (ids.length === 0) return ids
     const declared = this.declared(element)
     let result = ids
-    for (const [property, kind] of [['clip-path', 'clipPath'], ['mask', 'mask']] as const) {
-      const raw = declared[property]?.trim()
+    // kadrokreo の書き出しの印（data-kdr-clip）は、指す clipPath（フレームの枠）での切り取りとして読む
+    const marked = element.name === 'g' ? element.attributes['data-kdr-clip']?.trim() : undefined
+    const sources = [
+      ...(marked ? [[`url(#${marked})`, 'clipPath'] as const] : []),
+      [declared['clip-path']?.trim(), 'clipPath'] as const,
+      [declared.mask?.trim(), 'mask'] as const,
+    ]
+    for (const [raw, kind] of sources) {
       if (raw === undefined || raw === 'none' || raw === '') continue
       const label = kind === 'clipPath' ? 'クリップパス' : 'マスク'
       const url = /^url\(\s*['"]?([^'")]*)['"]?\s*\)$/.exec(raw)
@@ -657,6 +666,8 @@ class Converter {
         this.warn(`たどれない${label}の参照`)
         continue
       }
+      // 書き出しが印の g の中の要素に 1 つずつかけた切り取り（data-kdr-clip-of）は読まない（印の g で 1 つのフレームに戻す）
+      if (target.attributes['data-kdr-clip-of'] !== undefined) continue
       if (depth > MAX_FRAME_DEPTH) {
         this.warn('深すぎるグループの入れ子（フレームにせずにまとめた）')
         continue

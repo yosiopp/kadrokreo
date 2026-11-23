@@ -408,15 +408,71 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect(result.svg).toContain('<rect id="Right" transform="translate(20 0)" opacity="0.25"')
     expect(result.byName('Left')).toMatchObject({ opacity: 0.5, blendMode: 'multiply' })
     expect(result.byName('Right')).toMatchObject({ opacity: 0.25 })
-    // 切り取るフレームから子がはみ出せば、clip-path の g が中身を後ろから切り離すので配れない。切り取らないなら配る
+    // 切り取るフレームから子がはみ出しても配る（切り取りは子の要素ごとにかける）
     const outside = { ...right, x: 35 }
-    expect(roundTrip(sceneOf({ ...group, clipContent: true }, left, outside)).svg).toContain('<!-- Group: 通過は')
-    expect(roundTrip(sceneOf({ ...group, clipContent: false }, left, outside)).svg).not.toContain('<!--')
-    expect(result.svg).not.toContain('clip-path')
+    const clipped = roundTrip(sceneOf({ ...group, clipContent: true }, left, outside))
+    expect(clipped.svg).not.toContain('<!--')
+    expect(clipped.svg).toMatch(/<rect id="Left" opacity="0.5" style="mix-blend-mode:multiply" [^>]*clip-path="url\(#kdr-clip-\d+\)"/)
+    expect(roundTrip(sceneOf({ ...group, clipContent: false }, left, outside)).svg).not.toContain('clip-path')
     // レイヤーのぼかしがあれば描画も 1 枚の絵にまとめるので、配らずコメントも付けない
     const blurred = roundTrip(sceneOf({ ...group, effects: [{ type: 'layer-blur', blur: 4, visible: true }] }, left, right))
     expect(blurred.svg).not.toContain('通過')
     expect(blurred.svg).toMatch(/<g id="Group" opacity="0.5"/)
+  })
+
+  it('切り取るフレームの子に描画モードがあれば、clip-path を g ではなく子の要素にかけ、読み戻すと 1 つの切り取るフレームに戻る', () => {
+    const frame = named(createFrame({ x: 10, y: 20, width: 100, height: 60 }), 'Frame', { cornerRadius: 6, fills: [] })
+    // 枠からはみ出す乗算の子（回して置く）と、描画モードのない子
+    const multiply = named(createRect({ x: 60, y: -10, width: 80, height: 40 }), 'Multiply', { parentId: 'Frame', rotation: 15, blendMode: 'multiply' })
+    const plain = named(createEllipse({ x: 5, y: 30, width: 20, height: 20 }), 'Plain', { parentId: 'Frame' })
+    const result = roundTrip(sceneOf(frame, multiply, plain))
+    expect(result.svg).toMatch(/<g data-kdr-clip="kdr-clip-\d+">/)
+    // 子の要素の切り取りは、要素の transform の逆で枠を置く
+    expect(result.svg).toMatch(/<rect id="Multiply" transform="[^"]*" style="mix-blend-mode:multiply" [^>]*clip-path="url\(#kdr-clip-\d+\)"\/>/)
+    expect(result.svg).toMatch(/<clipPath id="kdr-clip-\d+" data-kdr-clip-of="kdr-clip-\d+"><rect width="100" height="60" rx="6" transform="matrix\(/)
+    expect(result.svg).not.toMatch(/<g clip-path=/)
+    expect(result.warnings).toEqual([])
+    // 読み戻すと、子 2 つを持つ切り取るフレーム（角丸）に戻る（回したフレームは、今までどおりマスクのパスになる）
+    const back = result.byName('Multiply')
+    const clip = result.imported.nodes[back.parentId!]
+    expect(clip).toMatchObject({ type: 'frame', clipContent: true, cornerRadius: 6 })
+    expect((clip as { children: string[] }).children.map((id) => result.imported.nodes[id].name)).toEqual(['Multiply', 'Plain'])
+    expect(back).toMatchObject({ blendMode: 'multiply' })
+    expectSameBounds(sceneOf(frame, multiply, plain), 'Multiply', result.imported, back.id, result.origin)
+    // 描画モードのある子がなければ、今までどおり clip-path の g で囲む
+    const normal = roundTrip(sceneOf(frame, { ...multiply, blendMode: 'normal' }, plain))
+    expect(normal.svg).toMatch(/<g clip-path="url\(#kdr-clip-\d+\)">/)
+    expect(normal.svg).not.toContain('data-kdr-clip')
+  })
+
+  it('切り取りを子に配るとき、描画モードを中に持つ g は中の要素まで降りてかけ、すでに切り取りを持つ要素は clipPath を重ねる', () => {
+    const outer = named(createFrame({ x: 0, y: 0, width: 100, height: 60 }), 'Outer', { fills: [] })
+    // 中を切り離さないフレーム（不透明・normal）の中の乗算の子
+    const inner = named(createFrame({ x: 20, y: 10, width: 120, height: 40 }), 'Inner', { parentId: 'Outer', clipContent: false })
+    const deep = named(createRect({ x: 50, y: 0, width: 60, height: 30 }), 'Deep', { parentId: 'Inner', blendMode: 'multiply' })
+    // 塗りに描画モードを持つ、塗りが 2 つの矩形（g data-kdr-shape になる）
+    const fills = named(createRect({ x: 0, y: 30, width: 30, height: 40 }), 'Fills', {
+      parentId: 'Outer',
+      fills: [
+        { type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' },
+        { type: 'solid', color: '#00ff00', opacity: 1, visible: true, blendMode: 'screen' },
+      ],
+    })
+    // 中身を切り取るフレーム（入れ子の切り取り）
+    const nested = named(createFrame({ x: 70, y: 40, width: 50, height: 40 }), 'Nested', { parentId: 'Outer', fills: [] })
+    const nestedChild = named(createRect({ x: 10, y: 10, width: 60, height: 10 }), 'NestedChild', { parentId: 'Nested', blendMode: 'darken' })
+    const scene = sceneOf(outer, inner, deep, fills, nested, nestedChild)
+    const result = roundTrip(scene)
+    expect(result.svg).toMatch(/<rect id="Deep" [^>]*clip-path="url\(#kdr-clip-\d+\)"\/>/)
+    expect(result.svg).toMatch(/<g id="Inner" transform="translate\(20 10\)">/)
+    expect(result.svg).toMatch(/<g id="Fills" transform="translate\(0 30\)" data-kdr-shape="rect"><rect [^>]*clip-path=/)
+    // 入れ子の子は内側の切り取りを持ち、その clipPath に外側の切り取りを重ねる
+    expect(result.svg).toMatch(/<clipPath id="kdr-clip-\d+" data-kdr-clip-of="kdr-clip-\d+" clip-path="url\(#kdr-clip-\d+\)">/)
+    expect(result.svg).not.toMatch(/<g clip-path=/)
+    expect(result.warnings).toEqual([])
+    expect(result.byName('Fills')).toMatchObject({ type: 'rect' })
+    expect(result.byName('Deep')).toMatchObject({ blendMode: 'multiply' })
+    for (const name of ['Deep', 'NestedChild', 'Fills']) expect(result.imported.nodes[result.byName(name).parentId!]).toBeDefined()
   })
 
   it('描画モードのある影は、影だけの要素に分けて mix-blend-mode を付け、読み戻すと影の描画モードに戻る', () => {
