@@ -40,9 +40,24 @@ function savedDocument(page) {
     const open = indexedDB.open('kadrokreo')
     open.onerror = () => reject(open.error)
     open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
+      // ノードの表は ['nodes', 番号] のレコードに分けて書いてある（src/editor/persistence.ts）。ページに戻して返す
+      const store = open.result.transaction('document').objectStore('document')
+      const request = store.get('current')
+      const chunks = store.getAll(IDBKeyRange.bound(['nodes', 0], ['nodes', Infinity]))
       request.onerror = () => reject(request.error)
-      request.onsuccess = () => resolve(request.result.document)
+      chunks.onerror = () => reject(chunks.error)
+      chunks.onsuccess = () => {
+        const { document, chunks: count } = request.result
+        if (typeof count !== 'number') return resolve(document)
+        const parts = chunks.result.slice(0, count)
+        resolve({
+          ...document,
+          pages: document.pages.map((page, index) => ({
+            ...page,
+            nodes: Object.fromEntries(parts.filter((chunk) => chunk.page === index).flatMap((chunk) => Object.entries(chunk.nodes))),
+          })),
+        })
+      }
     }
   }))
 }

@@ -3,7 +3,7 @@ const path = require('path')
 const fs = require('fs')
 const { lineDirection } = require('./kdr.cjs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 require('fs').mkdirSync(OUT, { recursive: true })
 
 ;(async () => {
@@ -26,14 +26,10 @@ require('fs').mkdirSync(OUT, { recursive: true })
   const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
   const num = async (label) => Number(await field(label).inputValue())
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(((doc) => ({ ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }))(request.result.document))
-    }
-  }))
+  const saved = async () => {
+    const doc = await savedDocument(page)
+    return { ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }
+  }
   const byName = async (name) => { await page.waitForTimeout(700); return Object.values((await saved()).nodes).find((n) => n.name === name) }
   // 描画は requestAnimationFrame でまとめられるので、2 フレーム待ってから読む
   const pixel = (x, y) => page.evaluate(async ([x, y]) => {

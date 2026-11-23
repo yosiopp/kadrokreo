@@ -3,7 +3,7 @@ const path = require('path')
 
 // editor の細かい改善: レイヤーの Shift 範囲選択、選択枠の内側をつかんで移動、複製を元の直上に置く、
 // 右クリックメニュー、選択へズーム、別のページへ移す
-const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, check, finish, watchErrors, savedDocument } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -32,19 +32,7 @@ const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
   const menu = page.locator('.context-menu').first()
   const item = (name) => page.getByRole('menuitem', { name, exact: false }).first()
   const zoom = async () => Number((await page.locator('.zoom-value').textContent()).replace('%', ''))
-  const saved = () =>
-    page.evaluate(
-      () =>
-        new Promise((resolve, reject) => {
-          const open = indexedDB.open('kadrokreo')
-          open.onerror = () => reject(open.error)
-          open.onsuccess = () => {
-            const request = open.result.transaction('document').objectStore('document').get('current')
-            request.onerror = () => reject(request.error)
-            request.onsuccess = () => resolve(request.result.document)
-          }
-        }),
-    )
+  const saved = () => savedDocument(page)
   const nodeOf = async (name, pageIndex = 0) =>
     Object.values((await saved()).pages[pageIndex].nodes).find((n) => n.name === name)
 

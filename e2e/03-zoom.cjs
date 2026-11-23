@@ -1,6 +1,6 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
-const { OUT, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 require('fs').mkdirSync(OUT, { recursive: true })
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -21,19 +21,10 @@ require('fs').mkdirSync(OUT, { recursive: true })
     await page.mouse.up()
   }
   const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
-  const saved = () =>
-    page.evaluate(
-      () =>
-        new Promise((resolve, reject) => {
-          const open = indexedDB.open('kadrokreo')
-          open.onerror = () => reject(open.error)
-          open.onsuccess = () => {
-            const request = open.result.transaction('document').objectStore('document').get('current')
-            request.onerror = () => reject(request.error)
-            request.onsuccess = () => resolve(((doc) => ({ ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }))(request.result.document))
-          }
-        }),
-    )
+  const saved = async () => {
+    const doc = await savedDocument(page)
+    return { ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }
+  }
 
   // 画面をずらして拡大した状態で描く
   await page.mouse.move(...at(300, 300))

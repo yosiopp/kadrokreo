@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 require('fs').mkdirSync(OUT, { recursive: true })
 
 ;(async () => {
@@ -28,17 +28,19 @@ require('fs').mkdirSync(OUT, { recursive: true })
   const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`)
   const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
   const num = async (label) => Number(await field(label).inputValue())
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const db = open.result
-      const tx = db.transaction(['document', 'assets'])
-      const doc = tx.objectStore('document').get('current')
-      const keys = tx.objectStore('assets').getAllKeys()
-      tx.oncomplete = () => resolve({ ...((doc) => ({ ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }))(doc.result.document), assetKeys: keys.result })
-    }
-  }))
+  const saved = async () => {
+    const doc = await savedDocument(page)
+    const assetKeys = await page.evaluate(() => new Promise((resolve, reject) => {
+      const open = indexedDB.open('kadrokreo')
+      open.onerror = () => reject(open.error)
+      open.onsuccess = () => {
+        const request = open.result.transaction('assets').objectStore('assets').getAllKeys()
+        request.onerror = () => reject(request.error)
+        request.onsuccess = () => resolve(request.result)
+      }
+    }))
+    return { ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)), assetKeys }
+  }
   const byName = async (name) => Object.values((await saved()).nodes).find((n) => n.name === name)
 
   // テスト用の画像を作る

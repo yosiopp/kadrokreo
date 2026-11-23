@@ -4,7 +4,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
 
 ;(async () => {
@@ -16,15 +16,10 @@ const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
   page.on('dialog', (d) => d.accept())
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const tx = open.result.transaction(['document'])
-      const doc = tx.objectStore('document').get('current')
-      tx.oncomplete = () => resolve({ ...doc.result.document, nodes: Object.assign({}, ...doc.result.document.pages.map((p) => p.nodes)) })
-    }
-  }))
+  const saved = async () => {
+    const doc = await savedDocument(page)
+    return { ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }
+  }
   const byName = (doc, name) => Object.values(doc.nodes).filter((n) => n.name === name)
   const layers = () => page.locator('.layer-row .layer-name').allTextContents()
 

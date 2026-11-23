@@ -1,7 +1,7 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 
-const { OUT, EDITOR, VIEWER, check, finish, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, watchErrors, savedDocument } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -28,19 +28,10 @@ const { OUT, EDITOR, VIEWER, check, finish, watchErrors } = require('./harness.c
   const selected = () => page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()
   const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`)
   const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
-  const saved = () =>
-    page.evaluate(
-      () =>
-        new Promise((resolve, reject) => {
-          const open = indexedDB.open('kadrokreo')
-          open.onerror = () => reject(open.error)
-          open.onsuccess = () => {
-            const request = open.result.transaction('document').objectStore('document').get('current')
-            request.onerror = () => reject(request.error)
-            request.onsuccess = () => resolve(((doc) => ({ ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }))(request.result.document))
-          }
-        }),
-    )
+  const saved = async () => {
+    const doc = await savedDocument(page)
+    return { ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }
+  }
   const byName = async (name) => Object.values((await saved()).nodes).find((n) => n.name === name)
 
   // 素材: フレーム 1 つ、長方形 2 つ（ページ直下）
