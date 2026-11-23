@@ -66,7 +66,18 @@ type Pass = {
   scale: number
   /** 半透明のフレームを合成中の入れ子の数 */
   layerDepth: number
+  /**
+   * 中身を描いている途中の合成用のキャンバスと、それを描き終えたら親へ重ねる方法。
+   * 背景のぼかしが、合成の途中でもフレームの外側の絵まで見られるようにする（backdropOf）
+   */
+  open: Map<CanvasRenderingContext2D, OpenLayer>
 }
+
+/** 合成用のキャンバス（layer）を親（target）に重ねる。どちらも変換行列はそのまま渡し、呼ばれた側で単位行列にする */
+type Merge = (target: CanvasRenderingContext2D, layer: CanvasRenderingContext2D) => void
+
+/** 中身を描いている途中の合成用のキャンバス */
+type OpenLayer = { parent: CanvasRenderingContext2D; merge: Merge }
 
 /** 1 ページ分を描く */
 export function renderScene(
@@ -105,6 +116,7 @@ export function renderScene(
     },
     scale: viewport.zoom * pixelRatio,
     layerDepth: 0,
+    open: new Map(),
   }
 
   ctx.save()
@@ -173,9 +185,7 @@ function drawMasked(ctx: CanvasRenderingContext2D, pass: Pass, mask: MaskNode, p
     ctx.restore()
     return
   }
-  const content = acquireLayer(ctx, pass.layerDepth)
-  pass.layerDepth++
-  draw(content)
+  // マスクの不透明度を先に作っておく。中身の背景のぼかしが、マスクをかけたあとの見た目を元にできるように
   const alpha = acquireLayer(ctx, pass.layerDepth)
   pass.layerDepth++
   // マスクは塗りだけを見る（線と効果は見ない）。ノードの不透明度は効く
@@ -187,6 +197,26 @@ function drawMasked(ctx: CanvasRenderingContext2D, pass: Pass, mask: MaskNode, p
   drawContent(alpha, pass, shape, multiply(parent, local))
   alpha.restore()
   if (mask.maskType === 'luminance') luminanceToAlpha(alpha)
+  const content = acquireLayer(ctx, pass.layerDepth)
+  pass.layerDepth++
+  // 途中の見た目は、中身の写しをマスクで切り抜いて重ねたもの（中身そのものは描き終えるまで切り抜けない）
+  pass.open.set(content, {
+    parent: ctx,
+    merge: (target, layer) => {
+      const cut = acquireScratch(maskScratch, layer)
+      maskScratch = cut
+      cut.drawImage(layer.canvas, 0, 0)
+      cut.globalCompositeOperation = 'destination-in'
+      cut.drawImage(alpha.canvas, 0, 0)
+      cut.globalCompositeOperation = 'source-over'
+      target.save()
+      target.setTransform(1, 0, 0, 1, 0, 0)
+      target.drawImage(cut.canvas, 0, 0)
+      target.restore()
+    },
+  })
+  draw(content)
+  pass.open.delete(content)
   content.save()
   content.setTransform(1, 0, 0, 1, 0, 0)
   content.globalCompositeOperation = 'destination-in'
@@ -249,40 +279,36 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
     layer.setTransform(1, 0, 0, 1, 0, 0)
     layer.drawImage(ctx.canvas, 0, 0)
     layer.setTransform(ctx.getTransform())
-    pass.layerDepth++
-    layer.transform(...local)
-    drawContent(layer, pass, node, world)
-    pass.layerDepth--
-
     // 後ろ × (1 - 不透明度) + 混ぜた絵 × 不透明度。写しの外は後ろと同じなので変わらない
     const alpha = ctx.globalAlpha * node.opacity
-    ctx.save()
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.globalAlpha = alpha
-    ctx.globalCompositeOperation = 'destination-out'
-    ctx.fillStyle = '#000000'
-    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-    ctx.globalCompositeOperation = 'lighter'
-    ctx.drawImage(layer.canvas, 0, 0)
-    ctx.restore()
+    const merge: Merge = (target, drawn) => {
+      target.save()
+      target.setTransform(1, 0, 0, 1, 0, 0)
+      target.globalAlpha = alpha
+      target.globalCompositeOperation = 'destination-out'
+      target.fillStyle = '#000000'
+      target.fillRect(0, 0, target.canvas.width, target.canvas.height)
+      target.globalCompositeOperation = 'lighter'
+      target.drawImage(drawn.canvas, 0, 0)
+      target.restore()
+    }
+    drawLayer(ctx, pass, layer, merge, node, local, world)
     return
   }
   const group = node.type === 'frame' && node.children.length > 0 && (node.opacity < 1 || node.blendMode !== 'normal')
   if (group || layerBlur > 0) {
-    const layer = acquireLayer(ctx, pass.layerDepth)
-    pass.layerDepth++
-    layer.transform(...local)
-    drawContent(layer, pass, node, world)
-    pass.layerDepth--
-
-    ctx.save()
-    ctx.globalAlpha *= node.opacity
-    if (node.blendMode !== 'normal') ctx.globalCompositeOperation = node.blendMode
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    // ぼかしの半径の半分が標準偏差（CSS の blur() の値）。filter の長さは変換行列に従わないので、拡大率を掛ける
-    if (layerBlur > 0) drawBlurred(ctx, layer, (layerBlur / 2) * pass.scale)
-    else ctx.drawImage(layer.canvas, 0, 0)
-    ctx.restore()
+    const alpha = ctx.globalAlpha * node.opacity
+    const merge: Merge = (target, drawn) => {
+      target.save()
+      target.globalAlpha = alpha
+      if (node.blendMode !== 'normal') target.globalCompositeOperation = node.blendMode
+      target.setTransform(1, 0, 0, 1, 0, 0)
+      // ぼかしの半径の半分が標準偏差（CSS の blur() の値）。filter の長さは変換行列に従わないので、拡大率を掛ける
+      if (layerBlur > 0) drawBlurred(target, drawn, (layerBlur / 2) * pass.scale)
+      else target.drawImage(drawn.canvas, 0, 0)
+      target.restore()
+    }
+    drawLayer(ctx, pass, acquireLayer(ctx, pass.layerDepth), merge, node, local, world)
     return
   }
 
@@ -294,24 +320,34 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
   ctx.restore()
 }
 
+/** ノードの中身を合成用のキャンバス（layer）に描き、merge で ctx に重ねる。描いている間は pass.open に載せておく */
+function drawLayer(ctx: CanvasRenderingContext2D, pass: Pass, layer: CanvasRenderingContext2D, merge: Merge, node: SceneNode, local: Matrix, world: Matrix): void {
+  pass.layerDepth++
+  pass.open.set(layer, { parent: ctx, merge })
+  layer.transform(...local)
+  drawContent(layer, pass, node, world)
+  pass.open.delete(layer)
+  pass.layerDepth--
+  merge(ctx, layer)
+}
+
 /** 通過のフレームとして描くか。不透明なら、まとめずに描くふつうの道と同じ見た目なので、写しを作らない */
 function isPassThrough(node: SceneNode): boolean {
   return node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && node.opacity < 1 && node.children.length > 0
 }
 
 /**
- * 背景のぼかし。ノードの形で切り抜き、いま描いてあるキャンバスの絵をぼかして描き直す（ノードの不透明度にはよらない）。
- * 半透明のフレームの中など、別のキャンバスに描いている途中なら、そのキャンバスの絵（同じフレームの中のもの）だけがぼける
+ * 背景のぼかし。ノードの形で切り抜き、後ろに見えている絵をぼかして描き直す（ノードの不透明度にはよらない）。
+ * 半透明のフレームの中など、別のキャンバスに描いている途中でも、フレームの外側の絵までぼかす（backdropOf）。
+ * ぼかした絵はそのフレームの中身の一部になり、ほかの中身と同じくフレームの不透明度・描画モードで後ろに重なる
  */
 function blurBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: SceneNode, local: Matrix, blur: number): void {
   if (node.type === 'text') {
     if (node.id !== pass.options.hiddenId) blurTextBackdrop(ctx, pass, node, local, blur)
     return
   }
-  // いまの絵を写しておき、形の内側を消してから、写しをぼかして描き戻す（そのまま重ねると、ぼけた絵の下に元の絵が残る）
-  const copy = acquireLayer(ctx, pass.layerDepth)
-  copy.setTransform(1, 0, 0, 1, 0, 0)
-  copy.drawImage(ctx.canvas, 0, 0)
+  // 後ろの絵を写しておき、形の内側を消してから、写しをぼかして描き戻す（そのまま重ねると、ぼけた絵の下に元の絵が残る）
+  const copy = backdropOf(ctx, pass)
   ctx.save()
   ctx.transform(...local)
   traceShape(ctx, node)
@@ -329,9 +365,7 @@ function blurBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: SceneNode
  * 同じ形で切り抜いたぼかした絵を重ねる
  */
 function blurTextBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: TextNode, local: Matrix, blur: number): void {
-  const copy = acquireLayer(ctx, pass.layerDepth)
-  copy.setTransform(1, 0, 0, 1, 0, 0)
-  copy.drawImage(ctx.canvas, 0, 0)
+  const copy = backdropOf(ctx, pass)
   const shape = acquireLayer(ctx, pass.layerDepth + 1)
   shape.transform(...local)
   shape.fillStyle = '#000000'
@@ -402,6 +436,44 @@ function traceShape(ctx: CanvasRenderingContext2D, node: Exclude<SceneNode, Text
     default:
       ctx.roundRect(0, 0, node.width, node.height, clampedRadii(node.cornerRadius, node.width, node.height))
   }
+}
+
+/**
+ * 背景のぼかしの元にする、いま後ろに見えている絵の写し（変換行列は単位行列）。ふつうは ctx の絵の写し。
+ * ctx が合成の途中のキャンバスなら、外側から順に、開いている合成をすべて今の時点で重ねた絵（ページを描き終えたときと同じ重ね方）にする。
+ * 親が切り取っている範囲は分からないので、写しでは切り取らない（ぼかしのにじみに、切り取られて見えない中身が少し入りうる）
+ */
+function backdropOf(ctx: CanvasRenderingContext2D, pass: Pass): CanvasRenderingContext2D {
+  const chain: [CanvasRenderingContext2D, OpenLayer][] = []
+  let base = ctx
+  for (let open = pass.open.get(base); open; open = pass.open.get(base)) {
+    chain.unshift([base, open])
+    base = open.parent
+  }
+  const copy = chain.length === 0 ? acquireLayer(ctx, pass.layerDepth) : (backdropScratch = acquireScratch(backdropScratch, ctx))
+  copy.setTransform(1, 0, 0, 1, 0, 0)
+  copy.drawImage(base.canvas, 0, 0)
+  for (const [layer, open] of chain) open.merge(copy, layer)
+  copy.setTransform(1, 0, 0, 1, 0, 0)
+  return copy
+}
+
+let backdropScratch: CanvasRenderingContext2D | null = null
+let maskScratch: CanvasRenderingContext2D | null = null
+
+/** 合成の深さによらない作業用のキャンバス。target と同じ大きさにし、空にして単位行列で返す */
+function acquireScratch(scratch: CanvasRenderingContext2D | null, target: CanvasRenderingContext2D): CanvasRenderingContext2D {
+  const c = scratch ?? document.createElement('canvas').getContext('2d')!
+  const { width, height } = target.canvas
+  if (c.canvas.width !== width || c.canvas.height !== height) {
+    c.canvas.width = width
+    c.canvas.height = height
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0)
+  c.globalAlpha = 1
+  c.globalCompositeOperation = 'source-over'
+  c.clearRect(0, 0, width, height)
+  return c
 }
 
 const layers: CanvasRenderingContext2D[] = []
