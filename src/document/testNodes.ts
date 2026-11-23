@@ -79,6 +79,7 @@ export const frame = (patch: Partial<FrameNode> = {}): FrameNode => ({
   component: null,
   setDescription: '',
   booleanOperation: null,
+  booleanIncludeStrokes: false,
   ...patch,
 })
 export const text = (patch: Partial<TextNode> = {}): TextNode => ({

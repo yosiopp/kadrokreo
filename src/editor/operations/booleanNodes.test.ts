@@ -110,6 +110,59 @@ describe('ブーリアン演算のノード', () => {
     const withText = { ...scene, nodes: { ...scene.nodes, t: { ...scene.nodes.t, parentId: id! }, [id!]: { ...(scene.nodes[id!] as FrameNode), children: ['a', 'b', 't'] } } }
     expect(contoursArea(booleanResult(withText, withText.nodes[id!] as never))).toBeCloseTo(17500, 3)
   })
+
+  it('線を含めると、子の線の外形まで結果に入る（線のない子は形のまま）', () => {
+    const black = [{ type: 'solid' as const, color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }]
+    const scene = sceneOf(
+      rect({ id: 'a', x: 0, y: 0, width: 100, height: 100, strokes: black, strokeWidth: 10 }),
+      rect({ id: 'b', x: 50, y: 50, width: 100, height: 100, strokes: black, strokeWidth: 10 }),
+    )
+    const { scene: plain, id } = createBooleanNode(scene, ['a', 'b'], 'union')
+    expect(contoursArea(booleanResult(plain, plain.nodes[id!] as never))).toBeCloseTo(17500, 3)
+    const included = fitBooleanNodes(updateNode(plain, id!, { booleanIncludeStrokes: true }))
+    const node = included.nodes[id!] as FrameNode
+    // 線は輪郭の内と外へ半分ずつ（5px）出る: 110 角の正方形 2 つが 60 角で重なる
+    expect(contoursArea(booleanResult(included, node as never))).toBeCloseTo(110 * 110 * 2 - 60 * 60, 1)
+    expect(node).toMatchObject({ x: -5, y: -5, width: 160, height: 160 })
+    // 線のない子は形のまま
+    const bare = fitBooleanNodes(updateNode(included, 'b', { strokes: [] }))
+    expect(contoursArea(booleanResult(bare, bare.nodes[id!] as never))).toBeCloseTo(110 * 110 + 100 * 100 - 55 * 55, 1)
+  })
+
+  it('線を含めると、直線（開いたパス）も線の太さの形で入る', () => {
+    const scene = sceneOf(
+      rect({ id: 'a', x: 0, y: 0, width: 100, height: 100 }),
+      path({ id: 'l', x: 50, y: 150, width: 100, height: 0, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], strokeWidth: 4 }),
+    )
+    const { scene: next, id } = createBooleanNode(scene, ['a', 'l'], 'union')
+    expect(contoursArea(booleanResult(next, next.nodes[id!] as never))).toBeCloseTo(10000, 3)
+    const included = updateNode(next, id!, { booleanIncludeStrokes: true })
+    expect(contoursArea(booleanResult(included, included.nodes[id!] as never))).toBeCloseTo(10000 + 100 * 4, 1)
+    // 差し引きでは、線の太さの分だけ削られる
+    const cut = createBooleanNode(sceneOf(rect({ id: 'a', x: 0, y: 0, width: 100, height: 100 }), path({ id: 'l', x: 0, y: 50, width: 100, height: 0, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], strokeWidth: 4 })), ['a', 'l'], 'subtract')
+    const cutIncluded = updateNode(cut.scene, cut.id!, { booleanIncludeStrokes: true })
+    expect(booleanResult(cutIncluded, cutIncluded.nodes[cut.id!] as never)).toHaveLength(2)
+    expect(contoursArea(booleanResult(cutIncluded, cutIncluded.nodes[cut.id!] as never))).toBeCloseTo(10000 - 400, 1)
+  })
+
+  it('線を含めると、子のフレームの枠の線と入れ子の演算のノードの線も入る', () => {
+    const black = [{ type: 'solid' as const, color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }]
+    const scene = sceneOf(
+      frame({ id: 'f', x: 0, y: 0, width: 100, height: 100, strokes: black, strokeWidth: 10 }),
+      rect({ id: 'b', x: 200, y: 0, width: 50, height: 50 }),
+      rect({ id: 'c', x: 225, y: 25, width: 50, height: 50 }),
+    )
+    const inner = createBooleanNode(scene, ['b', 'c'], 'union')
+    const innerStroked = updateNode(inner.scene, inner.id!, { strokes: black, strokeWidth: 2 })
+    const { scene: next, id } = createBooleanNode(innerStroked, ['f', inner.id!], 'union')
+    const plainArea = contoursArea(booleanResult(next, next.nodes[id!] as never))
+    expect(plainArea).toBeCloseTo(10000 + 50 * 50 * 2 - 25 * 25, 1)
+    const included = updateNode(next, id!, { booleanIncludeStrokes: true })
+    // 枠の線 110 角と、入れ子の結果を 1px 太らせた形（周 300 × 1 と角の分）
+    const area = contoursArea(booleanResult(included, included.nodes[id!] as never))
+    expect(area - plainArea).toBeGreaterThan(110 * 110 - 10000 + 300)
+    expect(area - plainArea).toBeLessThan(110 * 110 - 10000 + 310)
+  })
 })
 
 describe('線の輪郭化', () => {

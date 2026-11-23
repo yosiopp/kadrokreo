@@ -37,9 +37,10 @@ export function MaskSection({ ctx }: { ctx: PanelContext }) {
 
 /** ブーリアン演算のノードの演算。元の図形（子）を変えると結果も変わる */
 export function BooleanSection({ ctx }: { ctx: PanelContext }) {
-  const { nodes, store, selection, inner } = ctx
+  const { nodes, store, selection, inner, apply } = ctx
   if (inner || !nodes.every(isBooleanNode)) return null
   const op = common(nodes.flatMap((node) => (isBooleanNode(node) ? [node.booleanOperation] : [])))
+  const strokes = common(nodes.flatMap((node) => (isBooleanNode(node) ? [node.booleanIncludeStrokes] : [])))
   return (
     <Section title="ブーリアン演算">
       <SelectField
@@ -48,6 +49,7 @@ export function BooleanSection({ ctx }: { ctx: PanelContext }) {
         options={Object.entries(BOOLEAN_OPERATION_LABELS) as [BooleanOperation, string][]}
         onChange={(value: BooleanOperation) => store.apply((base) => setBooleanOperation(base, selection, value))}
       />
+      <CheckField label="線を含める" value={strokes} onChange={(checked) => apply({ booleanIncludeStrokes: checked })} />
       <p className="panel-hint">元の図形は子として残っています。ダブルクリックで選んで動かすと、結果も変わります。</p>
     </Section>
   )

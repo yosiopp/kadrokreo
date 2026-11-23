@@ -319,6 +319,7 @@ describe('parseKdr', () => {
       component: null,
       setDescription: '',
       booleanOperation: null,
+      booleanIncludeStrokes: false,
       layout: { direction: 'horizontal', gap: 0, paddingTop: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' },
     })
   })
@@ -560,6 +561,15 @@ describe('parseKdr', () => {
     expect('booleanOperation' in parseOne(rawNode({ booleanOperation: 'union' }))).toBe(false)
     expect(roundTrip(rawNode({ type: 'frame', booleanOperation: 'exclude' })).booleanOperation).toBe('exclude')
     expect('booleanOperation' in roundTrip(rawNode({ type: 'frame', booleanOperation: null }))).toBe(false)
+  })
+
+  it('ブーリアン演算で線を含めるか（booleanIncludeStrokes）を検証し、false なら書かない。フレームだけが持つ', () => {
+    expect(parseOne(rawNode({ type: 'frame', booleanOperation: 'union', booleanIncludeStrokes: true }))).toMatchObject({ booleanIncludeStrokes: true })
+    expect(parseOne(rawNode({ type: 'frame' }))).toMatchObject({ booleanIncludeStrokes: false })
+    expect(() => parseOne(rawNode({ type: 'frame', booleanIncludeStrokes: 'yes' }))).toThrow('booleanIncludeStrokes')
+    expect('booleanIncludeStrokes' in parseOne(rawNode({ booleanIncludeStrokes: true }))).toBe(false)
+    expect(roundTrip(rawNode({ type: 'frame', booleanOperation: 'union', booleanIncludeStrokes: true })).booleanIncludeStrokes).toBe(true)
+    expect('booleanIncludeStrokes' in roundTrip(rawNode({ type: 'frame', booleanIncludeStrokes: false }))).toBe(false)
   })
 
   it('通過（passThrough）を検証し、false なら書かない。フレームだけが持つ', () => {

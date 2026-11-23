@@ -1039,4 +1039,9 @@ describe('ブーリアン演算の元の図形の数', () => {
     )
     expect(rowsOf(scene, 'op', 'ブーリアン演算')).toEqual(['演算=合体', '元の図形=2 個'])
   })
+
+  it('線を含める演算のノードは、そう書く', () => {
+    const scene = sceneOf(frame({ id: 'op', children: ['a'], booleanOperation: 'union', booleanIncludeStrokes: true }), rect({ id: 'a', parentId: 'op' }))
+    expect(rowsOf(scene, 'op', 'ブーリアン演算')).toEqual(['演算=合体', '元の図形=1 個', '線=元の図形の線も含める'])
+  })
 })

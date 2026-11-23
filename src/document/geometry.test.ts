@@ -54,6 +54,7 @@ function box(id: string, parentId: string | null, x: number, y: number, rotation
     component: null,
     setDescription: '',
     booleanOperation: null,
+    booleanIncludeStrokes: false,
   } as SceneNode
 }
 

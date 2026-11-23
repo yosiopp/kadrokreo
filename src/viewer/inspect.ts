@@ -175,6 +175,7 @@ export function inspectNode(
     add('ブーリアン演算', [
       { label: '演算', value: BOOLEAN_OPERATION_LABELS[original.booleanOperation] },
       { label: '元の図形', value: `${parts.length} 個` },
+      original.booleanIncludeStrokes && { label: '線', value: '元の図形の線も含める' },
     ])
   }
 

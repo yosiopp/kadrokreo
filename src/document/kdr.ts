@@ -296,6 +296,7 @@ const DEFAULTS = {
   component: null,
   setDescription: '',
   booleanOperation: null,
+  booleanIncludeStrokes: false,
 } as const
 
 /** オートレイアウトの省略できる項目 */
@@ -449,6 +450,7 @@ function parseNode(
         component: optional('component', (v, p) => (v === null ? null : parseComponent(v, p, assets))),
         setDescription: optional('setDescription', string),
         booleanOperation: booleanOperation(),
+        booleanIncludeStrokes: optional('booleanIncludeStrokes', boolean),
       }
   }
 }

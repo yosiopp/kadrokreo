@@ -1,8 +1,10 @@
 import { type Bounds, applyMatrix, nodeMatrix, unionBounds } from './geometry.ts'
-import { maskFillRule, roundedRectContour, shapeContours } from './mask.ts'
+import { type MaskNode, maskFillRule, roundedRectContour, shapeContours } from './mask.ts'
+import { strokeOutline } from './outlineStroke.ts'
+import { hasStroke } from './paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds } from './path.ts'
 import { type BooleanShape, booleanContours } from './pathBoolean.ts'
-import type { BooleanOperation, FrameNode, PathNode, PathPoint, Scene, SceneNode } from './types.ts'
+import type { BooleanOperation, FrameNode, PathNode, PathPoint, RectNode, Scene, SceneNode } from './types.ts'
 
 // ブーリアン演算のノード（FrameNode の booleanOperation が null でないもの）。子を描かず、子の形に演算をかけた結果を描く。
 // 描画・当たり判定・SVG の書き出し・Dev モードは、演算のノードを drawnNode で「結果の形を持つパス」に置き換えて扱う。
@@ -37,6 +39,36 @@ function ownShape(scene: Scene, node: SceneNode): BooleanShape | null {
   }
 }
 
+/**
+ * 子の線の形（子の座標系、線の輪郭化と同じ形）。線を含める演算のノードで、子の形に合体する。
+ * 線を持たない種類（テキスト・画像）と、線のない子は null。フレームは枠の角丸の矩形、入れ子の演算のノードは結果のパスの線
+ */
+function strokeShape(scene: Scene, node: SceneNode): BooleanShape | null {
+  let stroked: MaskNode
+  switch (node.type) {
+    case 'text':
+    case 'image':
+      return null
+    case 'rect':
+    case 'path':
+    case 'ellipse':
+      stroked = node
+      break
+    case 'frame':
+      stroked = isBooleanNode(node) ? booleanPath(scene, node) : ({ ...node, type: 'rect' } as unknown as RectNode)
+      break
+  }
+  if (!hasStroke(stroked)) return null
+  const contours = strokeOutline(stroked)
+  return contours.length === 0 ? null : { contours, fillRule: 'nonzero' }
+}
+
+/** 子の形に線の形を合体したもの（線を含める演算のノードの子）。線がなければ形のまま */
+function withStroke(scene: Scene, node: SceneNode, shape: BooleanShape): BooleanShape {
+  const stroke = strokeShape(scene, node)
+  return stroke ? { contours: booleanContours([shape, stroke], 'union'), fillRule: 'evenodd' } : shape
+}
+
 /** 演算に入る子（見えていて、演算に入れられる種類のもの）。Dev モードの「元の図形 N 個」も、これを数える */
 export function booleanParts(scene: Scene, node: BooleanNode): SceneNode[] {
   return node.children.flatMap((id) => {
@@ -48,8 +80,9 @@ export function booleanParts(scene: Scene, node: BooleanNode): SceneNode[] {
 /** 演算のノードの子の形（演算のノードの座標系）。隠した子と、入らない子は除く */
 function booleanShapes(scene: Scene, node: BooleanNode): BooleanShape[] {
   return booleanParts(scene, node).flatMap((child) => {
-    const shape = ownShape(scene, child)
-    if (!shape) return []
+    const own = ownShape(scene, child)
+    if (!own) return []
+    const shape = node.booleanIncludeStrokes ? withStroke(scene, child, own) : own
     const m = nodeMatrix(child)
     return [{ fillRule: shape.fillRule, contours: shape.contours.map((c) => ({ vertices: mapVertices(c.vertices, (p) => applyMatrix(m, p)), closed: true })) }]
   })

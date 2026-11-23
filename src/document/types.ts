@@ -453,6 +453,11 @@ export type FrameNode = BaseNode &
      * 演算のノードでは layout は null で、clipContent と cornerRadius は意味はない。枠は editor が結果を囲む矩形に合わせる
      */
     booleanOperation: BooleanOperation | null
+    /**
+     * ブーリアン演算のノードで、子の線の形も演算に含めるか。true なら、子ごとに線を輪郭化した形（document/outlineStroke.ts）を
+     * 子の形に合体してから演算する（線の外形まで結果に入る）。false なら子の形だけ。演算のノードでなければ意味はない
+     */
+    booleanIncludeStrokes: boolean
   }
 
 /** ブーリアン演算の種類（document/pathBoolean.ts の BooleanOp と同じ） */

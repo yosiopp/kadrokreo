@@ -348,6 +348,20 @@ describe('kadrokreo CLI', () => {
     expect(await h.run(argv('new + add rect --name A + add text --name T --text hi + boolean union A T --keep'))).not.toBe(0)
   })
 
+  it('boolean --keep --strokes で、元の図形の線の外形も演算に含める', async () => {
+    const h = harness()
+    const base = 'new -o s.kdr + add rect --name A --width 100 --height 100 + set A stroke=#000000 strokeWidth=10 + add rect --name B --x 50 --y 50 --width 100 --height 100'
+    expect(await h.run(argv(`${base} + boolean union A B --keep --strokes + set @ name=Shape`))).toBe(0)
+    let doc = await h.doc('s.kdr')
+    expect(nodeByName(doc, 'Shape')).toMatchObject({ booleanIncludeStrokes: true, x: -5, y: -5, width: 155, height: 155 })
+    // set で外すと、塗りの形だけに戻る
+    expect(await h.run(argv('-f s.kdr -w set Shape booleanIncludeStrokes=false'))).toBe(0)
+    doc = await h.doc('s.kdr')
+    expect(nodeByName(doc, 'Shape')).toMatchObject({ booleanIncludeStrokes: false, x: 0, y: 0, width: 150, height: 150 })
+    expect(await h.run(argv('-f s.kdr -w set Shape booleanIncludeStrokes=maybe'))).not.toBe(0)
+    expect(await h.run(argv(`${base} + boolean union A B --strokes`))).not.toBe(0)
+  })
+
   it('outline-stroke で線を線の形のパスにし、mask --type で明るさのマスクにする', async () => {
     const h = harness()
     expect(await h.run(argv('new -o o.kdr + add rect --name Box --width 100 --height 100 + set Box stroke=#ff0000 strokeWidth=10 + outline-stroke Box + set @ name=Edge'))).toBe(0)

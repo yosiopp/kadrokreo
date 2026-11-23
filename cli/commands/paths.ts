@@ -1,7 +1,8 @@
 import type { NodeId } from '../../src/document/types.ts'
 import type { BooleanOp } from '../../src/document/pathBoolean.ts'
 import { BOOLEAN_LABELS, MAX_PATH_POINTS, applyMask, booleanPaths, joinPaths, splitPaths } from '../../src/editor/operations/paths.ts'
-import { createBooleanNode, flattenBooleanNodes } from '../../src/editor/operations/booleanNodes.ts'
+import { createBooleanNode, fitBooleanNodes, flattenBooleanNodes } from '../../src/editor/operations/booleanNodes.ts'
+import { updateNode } from '../../src/editor/operations/tree.ts'
 import { outlineStrokes } from '../../src/editor/operations/outline.ts'
 import type { MaskType } from '../../src/document/types.ts'
 import { UsageError } from '../args.ts'
@@ -68,24 +69,26 @@ const BOOLEAN_OPS: readonly BooleanOp[] = ['union', 'subtract', 'intersect', 'ex
 export const boolean: Command = {
   name: 'boolean',
   kind: 'edit',
-  usage: 'boolean union|subtract|intersect|exclude ノード… [--keep]',
-  flags: ['keep'],
+  usage: 'boolean union|subtract|intersect|exclude ノード… [--keep [--strokes]]',
+  flags: ['keep', 'strokes'],
   summary:
     'ブーリアン演算（合体・差し引き・交差・除外）。差し引きは最も背面のものから残りを引く。既定では矩形・楕円・パスの塗りの形にかけ、結果を最も背面のものの名前・塗り・線を引き継いだ 1 つのパス（fillRule=evenodd）にして残りは消す。' +
-    '--keep なら元の図形（テキスト以外）を子に残すブーリアン演算のノード（booleanOperation を持つフレーム）にまとめ、子を変えると結果も変わる（演算は set ノード booleanOperation=… で変えられる）。結果は「@」で指せる',
+    '--keep なら元の図形（テキスト以外）を子に残すブーリアン演算のノード（booleanOperation を持つフレーム）にまとめ、子を変えると結果も変わる（演算は set ノード booleanOperation=… で変えられる）。--strokes を付けると、元の図形の線の外形も演算に含める（set ノード booleanIncludeStrokes=true でも変えられる）。結果は「@」で指せる',
   run({ session }, step) {
-    checkStep(step, { options: ['keep'] })
+    checkStep(step, { options: ['keep', 'strokes'] })
     const [op, ...names] = step.positionals
     if (!BOOLEAN_OPS.includes(op as BooleanOp)) throw new UsageError(`boolean: 演算は ${BOOLEAN_OPS.join(' / ')} のどれかです`)
     const ids = session.resolveAll(names)
     const keep = flag(step, 'keep')
+    const strokes = flag(step, 'strokes')
+    if (strokes && !keep) throw new UsageError('boolean: --strokes は --keep と一緒に指定してください')
     let result: NodeId | null = null
     let error: 'empty' | 'too-many' | undefined
     session.apply((page) => {
       const next = keep ? createBooleanNode(page, ids, op as BooleanOp) : booleanPaths(page, ids, op as BooleanOp)
       result = next.id
       error = 'error' in next ? (next.error as typeof error) : undefined
-      return next.scene
+      return strokes && next.id !== null ? fitBooleanNodes(updateNode(next.scene, next.id, { booleanIncludeStrokes: true })) : next.scene
     })
     const label = BOOLEAN_LABELS[op as BooleanOp]
     if (error === 'empty') throw new UsageError(`boolean: ${label}の結果が空になります`)
