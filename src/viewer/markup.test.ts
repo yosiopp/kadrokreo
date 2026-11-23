@@ -302,7 +302,7 @@ describe('nodeMarkup', () => {
       '<stop offset="0" stop-color="#ff0000" stop-opacity="0.5"/><stop offset="1" stop-color="#0000ff" stop-opacity="0.5"/>',
     )
     // 円形のグラデーションは、半径 1 の円を変換で枠に合わせた楕円にする
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: gradient.stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: gradient.stops, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }
     expect(nodeMarkup(sceneOf({ ...path, fills: [radial] }), 'path').html).toContain(
       '<radialGradient id="blob-fill" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(50 0 0 25 50 25)">',
     )

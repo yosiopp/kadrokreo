@@ -19,6 +19,7 @@ import {
   withStopAt,
   withStopColor,
   withStopOffset,
+  withFocus,
   withStopOpacity,
   withStopRemoved,
 } from './paints.ts'
@@ -65,7 +66,7 @@ describe('塗り・グラデーション・影', () => {
     const linear = convertPaint(red, 'linear')
     expect(linear).toEqual({ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const })
     const radial = convertPaint(linear, 'radial')
-    expect(radial).toEqual({ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: linear.type === 'linear' ? linear.stops : [], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const })
+    expect(radial).toEqual({ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: linear.type === 'linear' ? linear.stops : [], opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const })
     expect(convertPaint(radial, 'solid')).toEqual(red)
     expect(convertPaint(red, 'solid')).toBe(red)
     // 角度は、円形から中心を、直線から向きを受け継ぐ。隠した塗りは隠したまま
@@ -118,6 +119,16 @@ describe('塗り・グラデーション・影', () => {
     expect(withStopAt(fading, 0.25).gradient.stops[1]).toEqual({ offset: 0.25, color: '#404040', opacity: 0.75 })
   })
 
+  it('withFocus は焦点を楕円の中に収め、変えた向きを優先する', () => {
+    const radial = convertPaint({ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }, 'radial') as Extract<ReturnType<typeof convertPaint>, { type: 'radial' }>
+    expect(radial).toMatchObject({ fx: 0, fy: 0 })
+    expect(withFocus(radial, { fx: 0.3, fy: -0.4 })).toMatchObject({ fx: 0.3, fy: -0.4 })
+    const tilted = { ...radial, fx: 0, fy: 0.8 }
+    expect(withFocus(tilted, { fx: 0.8, fy: 0.8 })).toMatchObject({ fx: 0.8, fy: 0.6 })
+    expect(withFocus({ ...radial, fx: 0.8 }, { fx: 0.8, fy: -0.8 })).toMatchObject({ fx: 0.6, fy: -0.8 })
+    expect(withFocus(radial, { fx: 3, fy: 0 })).toMatchObject({ fx: 1, fy: 0 })
+  })
+
   it('塗りの不透明度は、種類や色を変えても保つ', () => {
     const half = { type: 'solid' as const, color: '#ff0000', opacity: 0.5, visible: true, blendMode: 'normal' as const }
     expect(convertPaint(half, 'radial').opacity).toBe(0.5)
@@ -155,7 +166,7 @@ describe('塗り・グラデーション・影', () => {
     const { page, rect } = shapes()
     const layered = updateNode(page, rect.id, { fills: [...solid('#000000'), convertPaint(solid('#ff0000')[0], 'radial')] })
     const moved = patchGradientAt(layered, [rect.id], 'fills', 1, (g) => (g.type === 'radial' ? { ...g, cx: 0.2 } : g))
-    expect(moved.nodes[rect.id]).toMatchObject({ fills: [{ type: 'solid' }, { type: 'radial', cx: 0.2, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }] })
+    expect(moved.nodes[rect.id]).toMatchObject({ fills: [{ type: 'solid' }, { type: 'radial', cx: 0.2, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }] })
     expect(patchGradientAt(layered, [rect.id], 'fills', 0, (g) => ({ ...g, stops: [] }))).toEqual(layered)
     const recolored = patchPaintAt(layered, [rect.id], 'fills', 0, () => solid('#00ff00')[0])
     expect(recolored.nodes[rect.id]).toMatchObject({ fills: [...solid('#00ff00'), { type: 'radial' }] })

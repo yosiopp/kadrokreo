@@ -9,7 +9,7 @@ const stops = [
   { offset: 1, color: '#ffffff', opacity: 1 },
 ]
 const linear: LinearGradient = { type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops, opacity: 1, visible: true, blendMode: 'normal' as const }
-const radial: RadialGradient = { type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
+const radial: RadialGradient = { type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }
 const conic: ConicGradient = { type: 'conic', cx: 0.5, cy: 0.5, angle: 0, stops, opacity: 1, visible: true, blendMode: 'normal' as const }
 const size = { width: 200, height: 100 }
 
@@ -18,6 +18,7 @@ describe('グラデーションのハンドル', () => {
     expect(gradientHandles(linear, size)).toEqual({
       axis: [{ x: 0, y: 50 }, { x: 200, y: 50 }],
       radiusY: null,
+      focus: null,
       stops: [{ x: 0, y: 50 }, { x: 100, y: 50 }, { x: 200, y: 50 }],
     })
   })
@@ -102,6 +103,25 @@ describe('dragGradient', () => {
     expect(dragGradient(radial, { kind: 'radiusX' }, { x: 140, y: 52 }, size, true).gradient).toMatchObject({ angle: 0 })
     const circle = dragGradient(radial, { kind: 'radiusX' }, { x: 140, y: 50 }, size, true).gradient
     expect(circle).toMatchObject({ rx: 0.2, ry: 0.4 })
+  })
+
+  it('円形の焦点は、ずらしてあればハンドルになり、楕円の中へ動かせる（外なら楕円の上、Shift で近い軸の上）', () => {
+    expect(gradientHandles(radial, size).focus).toBeNull()
+    const focal = { ...radial, fx: 0.5, fy: -0.5 }
+    // 中心 (100, 50)、横の半径 100px・縦の半径 50px
+    const handles = gradientHandles(focal, size)
+    expect(handles.focus).toEqual({ x: 150, y: 25 })
+    expect(gradientPartAt(handles, focal, (point) => Math.hypot(point.x - 150, point.y - 25) < 4)).toEqual({ kind: 'focus' })
+    // 中心と重なるときは中心が先（色の印は線の横に離して出すので、ここでは外す）
+    const near = { ...gradientHandles({ ...radial, fx: 0.01, fy: 0 }, size), stops: [] }
+    expect(gradientPartAt(near, focal, (point) => Math.hypot(point.x - 100, point.y - 50) < 4)).toEqual({ kind: 'center' })
+    expect(dragGradient(focal, { kind: 'focus' }, { x: 80, y: 75 }, size, false).gradient).toMatchObject({ fx: -0.2, fy: 0.5 })
+    expect(dragGradient(focal, { kind: 'focus' }, { x: 400, y: 50 }, size, false).gradient).toMatchObject({ fx: 1, fy: 0 })
+    expect(dragGradient(focal, { kind: 'focus' }, { x: 130, y: 60 }, size, true).gradient).toMatchObject({ fx: 0.3, fy: 0 })
+    // 回した楕円では、焦点も回した軸に沿う
+    const turned = gradientHandles({ ...radial, angle: 90, fx: 0.5, fy: 0 }, size).focus!
+    expect(turned.x).toBeCloseTo(100)
+    expect(turned.y).toBeCloseTo(100)
   })
 
   it('回した円形のハンドルは、回した軸の上', () => {

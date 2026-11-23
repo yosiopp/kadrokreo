@@ -139,9 +139,11 @@ export function inspectNode(
                     label: '円形のグラデーション',
                     value:
                       `中心 ${percent(paint.cx)} ${percent(paint.cy)}・半径 ${percent(paint.rx)} ${percent(paint.ry)}` +
-                      (paint.angle !== 0 ? `・${num(paint.angle)}° 回す` : ''),
+                      (paint.angle !== 0 ? `・${num(paint.angle)}° 回す` : '') +
+                      (paint.fx !== 0 || paint.fy !== 0 ? `・焦点 ${percent(paint.fx)} ${percent(paint.fy)}` : ''),
                   },
             paint.type === 'radial' && !radialCssExact(paint) && { label: 'CSS', value: '回した楕円は表せないので、回さない楕円で書いている' },
+            paint.type === 'radial' && (paint.fx !== 0 || paint.fy !== 0) && { label: 'CSS', value: '焦点は表せないので、中心から始まるグラデーションで書いている' },
             ...paint.stops.map((stop) => ({
               label: percent(stop.offset),
               value: stop.opacity < 1 ? `${hex(stop.color)}・不透明度 ${percent(stop.opacity)}` : hex(stop.color),
@@ -602,7 +604,7 @@ function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
   }
   if (gradient.type === 'radial') {
     // 楕円の大きさの % は、CSS も枠の幅・高さに対する割合。CSS は楕円を回せないので、横・縦が入れ替わる向き（90°・270°）だけ写し、
-    // ほかの角度は回さない楕円で代える（パネルに知らせる）
+    // ほかの角度は回さない楕円で代える（パネルに知らせる）。焦点も CSS では持てないので、中心から始める（パネルに知らせる）
     const { cx, cy } = gradient
     const swap = Math.abs(((gradient.angle % 180) + 180) % 180 - 90) < 1e-9
     const rx = swap ? (gradient.ry * size.height) / (size.width || 1) : gradient.rx

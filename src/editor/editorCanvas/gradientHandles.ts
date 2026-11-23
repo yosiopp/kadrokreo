@@ -1,11 +1,11 @@
 import { type Point, type Size, applyMatrix, getWorldMatrix, invert, normalizeAngle } from '../../document/geometry.ts'
-import { gradientLine, radialTransform } from '../../document/paint.ts'
+import { fitFocus, gradientLine, radialTransform } from '../../document/paint.ts'
 import type { Gradient, NodeId, Paint, Scene, SceneNode } from '../../document/types.ts'
 import { type PaintKey, withStopOffset } from '../operations/paints.ts'
 
 // キャンバスでグラデーションを動かすハンドルの位置と、つかんで動かしたときのグラデーション。
 // 直線は始点・終点をつかんで、それぞれ自由に置く（Shift で、もう一方の端を中心に向きを 15° 刻みにする）。
-// 円形は中心と、横・縦の半径の先をつかむ（半径の先を回すと楕円も回る）。角度は中心と、最初の色の向きを示す先（end）をつかむ。
+// 円形は中心と、横・縦の半径の先をつかむ（半径の先を回すと楕円も回る）。焦点を中心からずらしてあれば、焦点もつかめる（楕円の中に限る）。角度は中心と、最初の色の向きを示す先（end）をつかむ。
 // 色の位置（停止点）は、直線は始点から終点、円形は中心から横の半径の先、角度は中心から向きの先の線の上を動く（既存のデザインツールと同じ）
 
 /** キャンバスで動かしているグラデーション。stop は選んでいる色の番号（なければ null） */
@@ -18,6 +18,7 @@ export type GradientPart =
   | { kind: 'center' }
   | { kind: 'radiusX' }
   | { kind: 'radiusY' }
+  | { kind: 'focus' }
   | { kind: 'stop'; index: number }
 
 /** ハンドルの位置（ノードの座標系）。axis は色が並ぶ線の両端（直線は始点・終点、円形は中心と横の半径の先） */
@@ -25,6 +26,8 @@ export type GradientHandles = {
   axis: [Point, Point]
   /** 円形の縦の半径の先。直線なら null */
   radiusY: Point | null
+  /** 円形の焦点。焦点が中心と同じか、円形でなければ null */
+  focus: Point | null
   stops: Point[]
 }
 
@@ -40,6 +43,7 @@ export function editedGradient(scene: Scene, edit: GradientEdit): Gradient | nul
 export function gradientHandles(gradient: Gradient, size: Size): GradientHandles {
   let axis: [Point, Point]
   let radiusY: Point | null = null
+  let focus: Point | null = null
   if (gradient.type === 'linear') {
     axis = gradientLine(gradient, size)
   } else if (gradient.type === 'conic') {
@@ -52,13 +56,14 @@ export function gradientHandles(gradient: Gradient, size: Size): GradientHandles
     const [a, b, c, d, cx, cy] = radialTransform(gradient, size)
     axis = [{ x: cx, y: cy }, { x: cx + a, y: cy + b }]
     radiusY = { x: cx + c, y: cy + d }
+    if (gradient.fx !== 0 || gradient.fy !== 0) focus = { x: cx + a * gradient.fx + c * gradient.fy, y: cy + b * gradient.fx + d * gradient.fy }
   }
   const [from, to] = axis
   const stops = gradient.stops.map((stop) => ({
     x: from.x + (to.x - from.x) * stop.offset,
     y: from.y + (to.y - from.y) * stop.offset,
   }))
-  return { axis, radiusY, stops }
+  return { axis, radiusY, focus, stops }
 }
 
 /** 角度のグラデーションの、中心から向きの先のハンドルまでの長さ（枠の短い辺の半分。つぶれた枠なら長い辺の半分） */
@@ -90,6 +95,7 @@ export function worldGradientHandles(scene: Scene, id: NodeId, gradient: Gradien
   return {
     axis: [map(local.axis[0]), map(local.axis[1])],
     radiusY: local.radiusY && map(local.radiusY),
+    focus: local.focus && map(local.focus),
     stops: local.stops.map(map),
   }
 }
@@ -120,6 +126,8 @@ export function gradientPartAt(
   if (near(handles.axis[0])) return { kind: 'center' }
   if (near(handles.axis[1])) return { kind: 'radiusX' }
   if (handles.radiusY && near(handles.radiusY)) return { kind: 'radiusY' }
+  // 焦点は中心と重なりうるので、中心より後に調べる（重なったときはパネルの「焦点」の欄で離す）
+  if (handles.focus && near(handles.focus)) return { kind: 'focus' }
   return null
 }
 
@@ -209,6 +217,14 @@ export function dragGradient(
           part.kind === 'radiusX' ? { ...base, angle, rx: round(px / size.width, 4) } : { ...base, angle, ry: round(px / size.height, 4) },
         stop: null,
       }
+    }
+    case 'focus': {
+      // 楕円を単位円に写した座標にし、円の外なら円の上に寄せる。Shift なら近いほうの軸の上に置く
+      let unit = applyMatrix(invert(radialTransform(base, size)), point)
+      // 楕円がつぶれていれば（半径 0）動かさない
+      if (!Number.isFinite(unit.x) || !Number.isFinite(unit.y)) return { gradient: base, stop: null }
+      if (constrain) unit = Math.abs(unit.x) >= Math.abs(unit.y) ? { x: unit.x, y: 0 } : { x: 0, y: unit.y }
+      return { gradient: { ...base, ...fitFocus(unit) }, stop: null }
     }
     default:
       return { gradient: base, stop: null }

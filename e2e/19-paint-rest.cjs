@@ -103,6 +103,20 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   rect = await byName('Rectangle 1')
   check('半径の先を回すと楕円が回る', rect.fills[0].angle === 90 && rect.fills[0].rx === 0.2, JSON.stringify(rect.fills[0]))
   await drag([150, 170], [190, 130])
+  // 焦点: パネルで中心からずらすと、キャンバスのハンドルになる（中心 (150, 130)、半径 40px の円）
+  await set('焦点 横 %', 50)
+  rect = await byName('Rectangle 1')
+  check('円形の焦点をパネルで変えられる', rect.fills[0].fx === 0.5 && rect.fills[0].fy === 0, JSON.stringify(rect.fills[0]))
+  await drag([170, 130], [150, 150])
+  rect = await byName('Rectangle 1')
+  check('円形の焦点をキャンバスで動かせる', rect.fills[0].fx === 0 && rect.fills[0].fy === 0.5, JSON.stringify(rect.fills[0]))
+  // 焦点 (150, 150) のそばは始まりの色（赤）。中心から同じ距離の反対側 (150, 102) は、焦点から遠いので終わりの色（青）に寄る
+  await page.keyboard.press('Escape')
+  await deselect()
+  const nearFocus = await pixel(150, 158), farSide = await pixel(150, 102)
+  check('焦点から色が始まる', nearFocus[0] > farSide[0] + 80 && farSide[2] > nearFocus[2] + 80, `${nearFocus} / ${farSide}`)
+  await page.mouse.click(...at(200, 150))
+  await canvasButton.click()
   // 別の図形を選ぶと抜ける
   await deselect()
   await page.mouse.click(...at(200, 150))

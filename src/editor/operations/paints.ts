@@ -1,8 +1,8 @@
 import { MAX_PAINTS, MAX_STOPS } from '../../document/kdr.ts'
 import { isLine } from '../../document/path.ts'
 import { normalizeAngle } from '../../document/geometry.ts'
-import { compactRadius, cornerRadii, linearAngle, linearFromAngle, mixColor } from '../../document/paint.ts'
-import type { Blur, ColorStop, Effect, Gradient, NodeId, Paint, Scene, SceneNode, Shadow } from '../../document/types.ts'
+import { compactRadius, cornerRadii, fitFocus, linearAngle, linearFromAngle, mixColor } from '../../document/paint.ts'
+import type { Blur, ColorStop, Effect, Gradient, NodeId, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../../document/types.ts'
 import { patchNodes } from './tree.ts'
 
 // 塗り・線・影の変更。塗りの配列は先頭が一番下（いちばん上に見えるのは最後の要素）
@@ -20,6 +20,18 @@ export { MAX_PAINTS, MAX_STOPS }
 export function withStopColor<G extends Gradient>(gradient: G, index: number, color: string): G {
   const at = index < 0 ? gradient.stops.length + index : index
   return { ...gradient, stops: gradient.stops.with(at, { ...gradient.stops[at], color }) }
+}
+
+/**
+ * 円形のグラデーションの焦点を focus（半径に対する割合）にしたもの。楕円の外なら、変えた向きを優先して楕円の上に寄せる
+ * （横を変えたなら縦を縮める）
+ */
+export function withFocus(gradient: RadialGradient, focus: { fx: number; fy: number }): RadialGradient {
+  const fx = Math.min(1, Math.max(-1, focus.fx))
+  const fy = Math.min(1, Math.max(-1, focus.fy))
+  if (fx * fx + fy * fy <= 1) return { ...gradient, fx, fy }
+  if (fx !== gradient.fx) return { ...gradient, ...fitFocus({ x: fx, y: Math.sign(fy) * Math.sqrt(1 - fx * fx) }) }
+  return { ...gradient, ...fitFocus({ x: Math.sign(fx) * Math.sqrt(1 - fy * fy), y: fy }) }
 }
 
 /** index 番目の色の不透明度（0〜1）を変えたグラデーション */
@@ -108,7 +120,7 @@ export function convertPaint(paint: Paint, type: PaintType): Paint {
       // 角度からは、その向きの線（正方形の枠として）。ほかは上から下
       return { type, ...linearFromAngle(paint.type === 'conic' ? paint.angle : 90, { width: 1, height: 1 }), stops, ...common }
     case 'radial':
-      return { type, ...center, rx: 0.5, ry: 0.5, angle: 0, stops, ...common }
+      return { type, ...center, rx: 0.5, ry: 0.5, angle: 0, fx: 0, fy: 0, stops, ...common }
     case 'conic':
       return { type, ...center, angle: paint.type === 'linear' ? linearAngle(paint, { width: 1, height: 1 }) : 0, stops, ...common }
   }

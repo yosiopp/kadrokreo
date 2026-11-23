@@ -364,6 +364,17 @@ describe('parseKdr', () => {
     expect(roundTrip(rawNode({ fills: [{ ...red, opacity: 1 }, { ...linear, opacity: 0.5 }] })).fills).toEqual([red, { ...linear, opacity: 0.5 }])
   })
 
+  it('円形のグラデーションの焦点を検証する。省くと中心（0 / 0）で、中心なら書き出しで省く', () => {
+    const stops = [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }]
+    const radial = { type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.25, stops }
+    expect(parseOne(rawNode({ fills: [radial] }))).toMatchObject({ fills: [{ fx: 0, fy: 0 }] })
+    expect(parseOne(rawNode({ fills: [{ ...radial, fx: -0.6, fy: 0.8 }] }))).toMatchObject({ fills: [{ fx: -0.6, fy: 0.8 }] })
+    expect(() => parseOne(rawNode({ fills: [{ ...radial, fx: 0.8, fy: 0.8 }] }))).toThrow('fills[0].fx')
+    expect(() => parseOne(rawNode({ strokes: [{ ...radial, fy: 'top' }] }))).toThrow('strokes[0].fy')
+    expect(roundTrip(rawNode({ fills: [{ ...radial, fx: 0, fy: 0 }] })).fills).toEqual([radial])
+    expect(roundTrip(rawNode({ fills: [{ ...radial, fx: 0.5, fy: 0 }] })).fills).toEqual([{ ...radial, fx: 0.5, fy: 0 }])
+  })
+
   it('グラデーションの色ごとの不透明度を検証する。省くと 1 で、1 なら書き出しで省く', () => {
     const linear = (stops: unknown[]) => ({ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops })
     const clear = linear([{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#ff0000', opacity: 0 }])

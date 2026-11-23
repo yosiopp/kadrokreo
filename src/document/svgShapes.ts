@@ -41,7 +41,9 @@ export function gradientDef(
   if (paint.type === 'radial') {
     // 半径 1 の円を、変換で枠に対する割合の（回した）楕円にする（描画と同じ）
     const matrix = radialTransform(paint, size)
-    return `<radialGradient id="${escapeXml(id)}" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="matrix(${matrix.map(tidy).join(' ')})">${stops}</radialGradient>`
+    // 焦点は単位円の座標のまま書ける（中心なら書かない）
+    const focus = paint.fx !== 0 || paint.fy !== 0 ? ` fx="${tidy(paint.fx)}" fy="${tidy(paint.fy)}"` : ''
+    return `<radialGradient id="${escapeXml(id)}" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1"${focus} gradientTransform="matrix(${matrix.map(tidy).join(' ')})">${stops}</radialGradient>`
   }
   const [from, to] = gradientLine(paint, size)
   return `<linearGradient id="${escapeXml(id)}" gradientUnits="userSpaceOnUse" x1="${tidy(from.x)}" y1="${tidy(from.y)}" x2="${tidy(to.x)}" y2="${tidy(to.y)}">${stops}</linearGradient>`

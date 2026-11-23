@@ -77,6 +77,8 @@ export type ColorStop = { offset: number; color: string; opacity: number }
  * 中心が最初の色、半径の楕円の上が最後の色で、その外は最後の色のまま。既定（枠に内接する楕円）は 0.5 が 4 つ。
  * angle は楕円を中心のまわりに回す角度（度、時計回り）。横・縦の半径をピクセル（rx × 幅、ry × 高さ）にしてから回すので、
  * rx は angle の向き、ry はそれに直交する向きの半径になる。0 なら回さない（軸に沿った楕円）。
+ * fx / fy は焦点（最初の色が始まる点）で、中心からのずれを横・縦の半径に対する割合で持つ（楕円の軸に沿う。回せば一緒に回る）。
+ * 0 / 0 なら中心と同じ（焦点なし）。楕円の中か上（fx² + fy² ≤ 1）に限る（SVG の radialGradient の fx / fy を、楕円の単位円で表したもの）。
  * conic は角度のグラデーション（CSS の conic-gradient）で、中心 cx / cy は radial と同じく枠に対する割合。
  * angle は最初の色を置く向き（度）で、直線の向きと同じく 0 が右、90 が下（時計回り）。CSS の `from` は angle + 90 になる。
  * 色の位置 0〜1 が、その向きから時計回りに 1 周する角度に当たる。
@@ -90,7 +92,7 @@ export type Paint = PaintCommon &
   (
     | { type: 'solid'; color: string }
     | { type: 'linear'; x1: number; y1: number; x2: number; y2: number; stops: ColorStop[] }
-    | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; angle: number; stops: ColorStop[] }
+    | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; angle: number; fx: number; fy: number; stops: ColorStop[] }
     | { type: 'conic'; cx: number; cy: number; angle: number; stops: ColorStop[] }
   )
 

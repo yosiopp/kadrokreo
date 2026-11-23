@@ -95,7 +95,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
       fills: [{ type: 'linear', x1: 0.1, y1: 0.2, x2: 0.8, y2: 1.1, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const rect = named(createRect({ x: 120, y: 0, width: 80, height: 40 }), 'Glow', {
-      fills: [{ type: 'radial', cx: 0.3, cy: 0.4, rx: 0.5, ry: 0.25, stops: [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }],
+      fills: [{ type: 'radial', cx: 0.3, cy: 0.4, rx: 0.5, ry: 0.25, stops: [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }], opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }],
     })
     const scene = sceneOf(ellipse, rect)
     const { byName, imported, origin } = roundTrip(scene)
@@ -407,7 +407,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
   it('回した円形のグラデーションは gradientTransform で書き、読み戻すと同じ角度になる', () => {
     const stops = [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }]
     const rect = named(createRect({ x: 0, y: 0, width: 80, height: 40 }), 'Tilt', {
-      fills: [{ type: 'radial', cx: 0.4, cy: 0.5, rx: 0.5, ry: 0.25, angle: 30, stops, opacity: 1, visible: true, blendMode: 'normal' }],
+      fills: [{ type: 'radial', cx: 0.4, cy: 0.5, rx: 0.5, ry: 0.25, angle: 30, fx: 0, fy: 0, stops, opacity: 1, visible: true, blendMode: 'normal' }],
     })
     const result = roundTrip(sceneOf(rect))
     expect(result.warnings).toEqual([])
@@ -418,6 +418,23 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     close(fill.rx, 0.5, 3)
     close(fill.ry, 0.25, 3)
     close(fill.cx, 0.4, 3)
+  })
+
+  it('円形のグラデーションの焦点は fx / fy で書き、回した楕円・回した図形でも読み戻すと同じ焦点になる', () => {
+    const stops = [{ offset: 0, color: '#ffffff', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }]
+    const fill = (angle: number, fx: number, fy: number) => ({ type: 'radial' as const, cx: 0.4, cy: 0.6, rx: 0.5, ry: 0.25, angle, fx, fy, stops, opacity: 1, visible: true, blendMode: 'normal' as const })
+    const plain = named(createRect({ x: 0, y: 0, width: 80, height: 40 }), 'Plain', { fills: [fill(0, 0.5, -0.25)] })
+    const tilted = named(createRect({ x: 100, y: 0, width: 80, height: 40 }), 'Tilted', { fills: [fill(30, -0.6, 0.8)] })
+    const turned = named(createEllipse({ x: 0, y: 100, width: 60, height: 40 }), 'Turned', { rotation: 45, fills: [fill(-60, 0.3, 0.3)] })
+    const result = roundTrip(sceneOf(plain, tilted, turned))
+    expect(result.svg).toContain('fx="0.5" fy="-0.25"')
+    expect(result.warnings).toEqual([])
+    for (const [name, fx, fy] of [['Plain', 0.5, -0.25], ['Tilted', -0.6, 0.8], ['Turned', 0.3, 0.3]] as const) {
+      const back = (result.byName(name) as RectNode).fills[0]
+      if (back.type !== 'radial') throw new Error(`${name} が円形ではない`)
+      close(back.fx, fx, 3)
+      close(back.fy, fy, 3)
+    }
   })
 
   it('テキストの落ち影と画像の影を書き、読み戻すと効果になる', () => {
@@ -508,7 +525,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
       fills: [{ type: 'linear', x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops, opacity: 1, ...common }],
     })
     const radial = named(createRect({ x: 50, y: 0, width: 40, height: 20 }), 'Glow', {
-      fills: [{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, angle: 0, stops: [stops[0], { ...stops[1], opacity: 0.5 }], opacity: 0.5, ...common }],
+      fills: [{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, angle: 0, fx: 0, fy: 0, stops: [stops[0], { ...stops[1], opacity: 0.5 }], opacity: 0.5, ...common }],
     })
     const conic = named(createRect({ x: 100, y: 0, width: 40, height: 20 }), 'Spin', {
       fills: [{ type: 'conic', cx: 0.5, cy: 0.5, angle: 0, stops: [stops[0], { ...stops[1], opacity: 0.25 }], opacity: 1, ...common }],

@@ -247,7 +247,7 @@ describe('nodeCss', () => {
       { offset: 0.5, color: '#ff0000', opacity: 1 },
       { offset: 1, color: '#000000', opacity: 1 },
     ]
-    const lines = css(sceneOf(rect({ fills: [{ type: 'radial', cx: 0.25, cy: 0.5, rx: 0.5, ry: 1, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }] })), 'rect')
+    const lines = css(sceneOf(rect({ fills: [{ type: 'radial', cx: 0.25, cy: 0.5, rx: 0.5, ry: 1, stops, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }] })), 'rect')
     expect(lines).toContain('background: radial-gradient(50% 100% at 25% 50%, #ffffff 0%, #ff0000 50%, #000000 100%);')
   })
 
@@ -375,7 +375,7 @@ describe('nodeCss', () => {
 
   it('回した円形のグラデーション。90° なら半径を入れ替えて同じ形に、ほかの角度は回さずに書いて知らせる', () => {
     const stops = [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }]
-    const radial = (angle: number) => ({ type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.25, angle, stops, opacity: 1, visible: true, blendMode: 'normal' as const })
+    const radial = (angle: number) => ({ type: 'radial' as const, fx: 0, fy: 0, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.25, angle, stops, opacity: 1, visible: true, blendMode: 'normal' as const })
     // 100 × 50 の枠。横の半径 50px・縦の半径 12.5px を 90° 回すと、横 12.5px（12.5%）・縦 50px（100%）
     const turned = sceneOf(rect({ fills: [radial(90)] }))
     expect(css(turned, 'rect')).toContain('background: radial-gradient(12.5% 100% at 50% 50%, #ff0000 0%, #0000ff 100%);')
@@ -384,6 +384,14 @@ describe('nodeCss', () => {
     const tilted = sceneOf(rect({ fills: [radial(30)] }))
     expect(css(tilted, 'rect')).toContain('background: radial-gradient(50% 25% at 50% 50%, #ff0000 0%, #0000ff 100%);')
     expect(rowsOf(tilted, 'rect', '塗り')).toContain('CSS=回した楕円は表せないので、回さない楕円で書いている')
+  })
+
+  it('円形のグラデーションの焦点はパネルに出し、CSS では中心から始めて知らせる', () => {
+    const stops = [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }]
+    const focal = sceneOf(rect({ fills: [{ type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, angle: 0, fx: 0.3, fy: -0.2, stops, opacity: 1, visible: true, blendMode: 'normal' as const }] }))
+    expect(css(focal, 'rect')).toContain('background: radial-gradient(50% 50% at 50% 50%, #ff0000 0%, #0000ff 100%);')
+    expect(rowsOf(focal, 'rect', '塗り')).toContain('円形のグラデーション=中心 50% 50%・半径 50% 50%・焦点 30% -20%')
+    expect(rowsOf(focal, 'rect', '塗り')).toContain('CSS=焦点は表せないので、中心から始まるグラデーションで書いている')
   })
 
   it('隠した塗り・線・効果は CSS にもインスペクトにも出さない', () => {
@@ -409,7 +417,7 @@ describe('nodeCss', () => {
   })
 
   it('テキストに重ねた塗りも、背景を文字の形で切り抜いて表す', () => {
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 1 }], opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }
     const lines = css(sceneOf(text({ fills: [...solid('#00ff00'), radial] })), 'text')
     expect(lines.slice(0, 2)).toEqual([
       'background: radial-gradient(50% 50% at 50% 50%, #ff0000 0%, #0000ff 100%), #00ff00;',
@@ -609,7 +617,7 @@ describe('inspectNode', () => {
       { label: '100%', value: '#C026D3', color: '#c026d3' },
     ])
     expect(rowsOf(sceneOf(rect({ fills: [] })), 'rect', '塗り')).toBeUndefined()
-    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.75, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }
+    const radial = { type: 'radial' as const, cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.75, stops, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }
     expect(rowsOf(sceneOf(rect({ fills: [radial] })), 'rect', '塗り')?.[0]).toBe('円形のグラデーション=中心 50% 50%・半径 50% 75%')
   })
 

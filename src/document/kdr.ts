@@ -622,6 +622,14 @@ function imageScale(value: unknown, path: string): number {
   return n
 }
 
+/** 円形のグラデーションの焦点（中心からのずれ。半径に対する割合）。楕円の中か上に限る */
+function focus(raw: Record<string, unknown>, path: string): { fx: number; fy: number } {
+  const fx = raw.fx === undefined ? 0 : number(raw.fx, `${path}.fx`)
+  const fy = raw.fy === undefined ? 0 : number(raw.fy, `${path}.fy`)
+  if (fx * fx + fy * fy > 1 + 1e-9) throw new KdrError(`${path}.fx: 焦点が楕円の外にあります`)
+  return { fx, fy }
+}
+
 function parsePaint(value: unknown, path: string): Paint {
   const raw = record(value, path)
   const type = oneOf(raw.type, ['solid', 'linear', 'radial', 'conic'] as const, `${path}.type`)
@@ -654,6 +662,8 @@ function parsePaint(value: unknown, path: string): Paint {
       ry: size(raw.ry, `${path}.ry`),
       // 回す角度は 0 なら省く（paintFile）
       angle: raw.angle === undefined ? 0 : number(raw.angle, `${path}.angle`),
+      // 焦点は 0 / 0（中心）なら省く（paintFile）
+      ...focus(raw, path),
       stops,
       ...common,
     }
@@ -818,6 +828,11 @@ function paintFile(paint: Paint): Partial<Paint> {
   const out: Record<string, unknown> = { ...rest }
   // 円形のグラデーションの回す角度は 0 なら省く
   if (out.type === 'radial' && out.angle === 0) delete out.angle
+  // 焦点は中心（0 / 0）なら省く
+  if (out.type === 'radial' && out.fx === 0 && out.fy === 0) {
+    delete out.fx
+    delete out.fy
+  }
   // グラデーションの色の不透明度は 1 なら省く
   if ('stops' in rest) out.stops = rest.stops.map(({ opacity: stopOpacity, ...stop }) => (stopOpacity === 1 ? stop : { ...stop, opacity: stopOpacity }))
   return {

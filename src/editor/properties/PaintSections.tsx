@@ -17,6 +17,7 @@ import {
   updatePaints,
   withStopAdded,
   withStopColor,
+  withFocus,
   withStopOpacity,
   withStopOffset,
   withLinearAngle,
@@ -327,6 +328,21 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
             value={common(gradients.map((gradient) => (gradient.type === 'radial' ? gradient.angle : 0)))}
             onCommit={(angle) => patchGradient((g) => (g.type === 'radial' ? { ...g, angle: normalizeAngle(angle) } : g))}
           />
+          {(
+            [
+              ['fx', '焦点 横 %'],
+              ['fy', '焦点 縦 %'],
+            ] as const
+          ).map(([key, name]) => (
+            <NumberField
+              key={key}
+              label={name}
+              value={toPercent(common(gradients.map((gradient) => (gradient.type === 'radial' ? gradient[key] : 0))))}
+              min={-100}
+              max={100}
+              onCommit={(percent) => patchGradient((g) => (g.type === 'radial' ? withFocus(g, { ...g, [key]: percent / 100 }) : g))}
+            />
+          ))}
         </div>
       )}
 

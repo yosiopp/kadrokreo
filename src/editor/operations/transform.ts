@@ -260,9 +260,11 @@ function mirrorPaint(paint: Paint, axis: Axis): Paint {
     return axis === 'x' ? { ...paint, x1: tidy(1 - paint.x1), x2: tidy(1 - paint.x2) } : { ...paint, y1: tidy(1 - paint.y1), y2: tidy(1 - paint.y2) }
   }
   if (paint.type === 'radial') {
-    // 楕円の軸の向きは、どちらの向きに映しても符号が変わる
+    // 楕円の軸の向きは、どちらの向きに映しても符号が変わる。焦点は軸に沿ったずれなので、横に映せば横の、縦に映せば縦のずれの符号が変わる
     const angle = paint.angle === 0 ? 0 : tidy(normalizeAngle(-paint.angle))
-    return axis === 'x' ? { ...paint, cx: tidy(1 - paint.cx), angle } : { ...paint, cy: tidy(1 - paint.cy), angle }
+    return axis === 'x'
+      ? { ...paint, cx: tidy(1 - paint.cx), angle, fx: -paint.fx || 0 }
+      : { ...paint, cy: tidy(1 - paint.cy), angle, fy: -paint.fy || 0 }
   }
   if (paint.type === 'conic') {
     // 鏡に映すと回る向きが逆になるので、始まりの向きを映し、色の並びを逆にする（位置 t の色は 1 - t へ）

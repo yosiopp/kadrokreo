@@ -238,7 +238,7 @@ export function drawEditorOverlay(ctx: CanvasRenderingContext2D, viewport: Viewp
 }
 
 /**
- * グラデーションのハンドル（画面座標で受け取る）。色が並ぶ線と、両端（直線の始点・終点、円形の中心と半径の先）の小さな丸、
+ * グラデーションのハンドル（画面座標で受け取る）。色が並ぶ線と、両端（直線の始点・終点、円形の中心と半径の先）の小さな丸、円形の焦点（ずらしてあれば）、
  * 線の横に離して並べた色の印（その色で塗った丸。線の上の位置と細い線で結ぶ）を出す。円形は楕円も破線でなぞる。選んでいる色は太い縁で囲む
  */
 function drawGradientHandles(ctx: CanvasRenderingContext2D, gradient: NonNullable<OverlayState['gradient']>, accent: string) {
@@ -292,6 +292,12 @@ function drawGradientHandles(ctx: CanvasRenderingContext2D, gradient: NonNullabl
   }
   const ends = type === 'radial' && handles.radiusY ? [from, to, handles.radiusY] : [from, to]
   for (const end of ends) knob(end, 4, '#ffffff', 'rgba(0, 0, 0, 0.6)', 1)
+  if (type === 'radial' && handles.focus) {
+    // 焦点は中心と細い線で結び、塗りつぶした丸で区別する
+    line([from, handles.focus], [2, 2])
+    ctx.setLineDash([])
+    knob(handles.focus, 4, accent, '#ffffff', 1.5)
+  }
   handles.stops.forEach((marker, i) => {
     // 外側に白い縁、内側にその色
     knob(marker, HANDLE_SIZE / 2 + 2, '#ffffff', i === selected ? accent : 'rgba(0, 0, 0, 0.6)', i === selected ? 2 : 1)

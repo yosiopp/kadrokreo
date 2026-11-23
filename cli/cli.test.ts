@@ -747,6 +747,8 @@ describe('kadrokreo CLI', () => {
         rx: 0.8,
         ry: 0.8,
         angle: 0,
+        fx: 0,
+        fy: 0,
         opacity: 1,
         visible: true,
         blendMode: 'normal',
@@ -761,6 +763,13 @@ describe('kadrokreo CLI', () => {
     expect(c.fills.map((paint) => paint.type)).toEqual(['linear', 'radial'])
     expect(c.fills[0].stops?.[0].color).toBe('#123456')
     expect(c.fills[1].stops?.[0].offset).toBe(0.2)
+
+    // 円形の焦点（中心からのずれ。半径に対する割合）
+    const focal = harness(Object.fromEntries(h.fs))
+    expect(await focal.run(argv('-f a.kdr gradient radial b --stroke --focus -50%,0.25 -o g.kdr'))).toBe(0)
+    expect(((await focal.doc('g.kdr')).pages[0].nodes.b as unknown as { strokes: unknown[] }).strokes[0]).toMatchObject({ type: 'radial', fx: -0.5, fy: 0.25 })
+    expect(await focal.run(argv('-f a.kdr gradient radial b --focus 1,1'))).toBe(2) // 楕円の外
+    expect(await focal.run(argv('-f a.kdr gradient linear a --focus 0,0'))).toBe(2)
 
     // #rrggbbaa・#rgba の色は、最後の桁を色ごとの不透明度にする
     const alpha = harness(Object.fromEntries(h.fs))
@@ -969,7 +978,7 @@ describe('kadrokreo CLI', () => {
       blendMode: 'multiply',
       // 影の略記は、ぼかしの前に影を足す
       effects: [{ type: 'drop-shadow', spread: 2 }, { type: 'layer-blur', blur: 6 }, { type: 'background-blur', blur: 10 }],
-      fills: [{ type: 'radial', angle: 30, blendMode: 'screen' }],
+      fills: [{ type: 'radial', angle: 30, fx: 0, fy: 0, blendMode: 'screen' }],
     })
     expect(nodeByName(doc, 'Label')).toMatchObject({ effects: [{ type: 'drop-shadow', blur: 3 }] })
     await h.run(argv('-f a.kdr -w set Box blur=null shadow=null'))
@@ -990,7 +999,7 @@ describe('kadrokreo CLI', () => {
     ])
     expect(h.stderr).toBe('')
     const doc = await h.doc('a.kdr')
-    expect(nodeByName(doc, 'Tab')).toMatchObject({ cornerRadius: [8, 8, 0, 0], fills: [{ type: 'radial', rx: 0.5, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }] })
+    expect(nodeByName(doc, 'Tab')).toMatchObject({ cornerRadius: [8, 8, 0, 0], fills: [{ type: 'radial', rx: 0.5, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }] })
     expect(nodeByName(doc, 'Label')).toMatchObject({ fontWeight: 300 })
     await h.run(argv('-f a.kdr -w set Tab cornerRadius=4'))
     expect(nodeByName(await h.doc('a.kdr'), 'Tab')).toMatchObject({ cornerRadius: 4 })

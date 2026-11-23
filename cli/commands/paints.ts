@@ -18,15 +18,15 @@ export const gradient: Command = {
   kind: 'edit',
   flags: ['stroke', 'add', 'hidden'],
   usage:
-    'gradient linear|radial|conic ノード… [--colors 色,色@50%,色…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r|rx,ry] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N | --add]',
+    'gradient linear|radial|conic ノード… [--colors 色,色@50%,色…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r|rx,ry] [--focus fx,fy] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N | --add]',
   summary:
     'グラデーションの塗りにする。ふつうはいちばん上の塗り（なければ足す）を置き換え、--index N は N 番目（0 が一番下、-1 がいちばん上）、--add は上に重ねる。' +
     '--stroke なら線。--colors は 2〜16 色で、@ の後に位置（0〜1 か %）。#rrggbbaa・#rgba の色は最後の桁が色ごとの透明度。位置を省いた色は前後の間に等しく並べる。' +
     '--colors を省くと、いまの塗りの色を受け継ぐ。直線は --angle（0 が左から右、90 が上から下。枠の中心を通り、枠の角が両端の色になる線）か、' +
-    '--from と --to（始点・終点。枠に対する割合か %）、円形は --center と --radius（枠に対する割合か %）と --angle（楕円を回す角度。時計回り）、' +
+    '--from と --to（始点・終点。枠に対する割合か %）、円形は --center と --radius（枠に対する割合か %）と --angle（楕円を回す角度。時計回り）、--focus（焦点。中心からのずれを横・縦の半径に対する割合か % で。楕円の中に限る）、' +
     '角度（conic）は --center と --angle（最初の色の向き。0 が右で時計回り）。--opacity は塗りごとの不透明度、--blend は塗りの描画モード（multiply など）、--hidden はその塗りを隠す（消さずに残す）',
   run({ session }, step) {
-    checkStep(step, { options: ['colors', 'angle', 'from', 'to', 'center', 'radius', 'opacity', 'blend', 'hidden', 'stroke', 'index', 'add'] })
+    checkStep(step, { options: ['colors', 'angle', 'from', 'to', 'center', 'radius', 'focus', 'opacity', 'blend', 'hidden', 'stroke', 'index', 'add'] })
     const type = positional(step, 0, '種類（linear / radial / conic）') as GradientType
     if (!GRADIENT_TYPES.includes(type)) throw new UsageError(`gradient: 種類は ${GRADIENT_TYPES.join(' / ')} です: ${type}`)
     const ids = session.resolveAll(step.positionals.slice(1))
@@ -50,6 +50,9 @@ export const gradient: Command = {
     const hidden = flag(step, 'hidden')
     if (type === 'linear' && center) throw new UsageError('gradient: --center は radial と conic のときだけです')
     if (type !== 'radial' && radius) throw new UsageError('gradient: --radius は radial のときだけです')
+    const focus = pairOption(step, 'focus', false)
+    if (type !== 'radial' && focus) throw new UsageError('gradient: --focus は radial のときだけです')
+    if (focus && focus[0] ** 2 + focus[1] ** 2 > 1) throw new UsageError(`gradient: --focus は楕円の中（fx² + fy² ≤ 1）です: ${option(step, 'focus')}`)
     const blend = option(step, 'blend')
     if (blend !== undefined && !(BLEND_MODES as readonly string[]).includes(blend)) {
       throw new UsageError(`gradient: --blend は ${BLEND_MODES.join(' / ')} のどれかです: ${blend}`)
@@ -73,6 +76,7 @@ export const gradient: Command = {
         if (center) paint = { ...paint, cx: center[0], cy: center[1] }
         if (radius) paint = { ...paint, rx: radius[0], ry: radius[1] }
         if (angle !== undefined) paint = { ...paint, angle: normalizeAngle(angle) }
+        if (focus) paint = { ...paint, fx: focus[0], fy: focus[1] }
       }
       return paint
     }
@@ -114,7 +118,7 @@ function fraction(raw: string, label: string): number {
   return percent ? value / 100 : value
 }
 
-/** --center x,y / --radius r|rx,ry（割合か %）。one が true なら 1 つで両方 */
+/** --center x,y / --focus fx,fy / --radius r|rx,ry（割合か %）。one が true なら 1 つで両方 */
 function pairOption(step: Step, name: string, one: boolean): [number, number] | null {
   const raw = option(step, name)
   if (raw === undefined) return null

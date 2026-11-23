@@ -113,6 +113,29 @@ export function radialTransform(paint: Pick<RadialGradient, 'cx' | 'cy' | 'rx' |
   return [rx * cos, rx * sin, -ry * sin, ry * cos, paint.cx * size.width, paint.cy * size.height]
 }
 
+/**
+ * 円形のグラデーションの焦点を、単位円の中（上を含む）に収めて小数 4 桁にしたもの。円の外なら円の上に寄せる。
+ * 丸めで円の外に出るとき（読み込みで拒まれる）だけ、切り捨てる
+ */
+export function fitFocus(point: Point): { fx: number; fy: number } {
+  const length = Math.hypot(point.x, point.y)
+  const x = length > 1 ? point.x / length : point.x
+  const y = length > 1 ? point.y / length : point.y
+  const rounded = { fx: Math.round(x * 10000) / 10000 + 0, fy: Math.round(y * 10000) / 10000 + 0 }
+  if (rounded.fx ** 2 + rounded.fy ** 2 <= 1 + 1e-9) return rounded
+  return { fx: Math.trunc(x * 10000) / 10000 + 0, fy: Math.trunc(y * 10000) / 10000 + 0 }
+}
+
+/**
+ * 円形のグラデーションの焦点（楕円を単位円に写した座標）。描画用に、円のちょうど上なら少しだけ内側に寄せる
+ * （始まりの円が終わりの円に接すると、Canvas はその外側を塗らないため）
+ */
+export function radialFocus(paint: Pick<RadialGradient, 'fx' | 'fy'>): Point {
+  const length = Math.hypot(paint.fx, paint.fy)
+  const limit = 0.999
+  return length > limit ? { x: (paint.fx / length) * limit, y: (paint.fy / length) * limit } : { x: paint.fx, y: paint.fy }
+}
+
 /** 直線状のグラデーションの始点と終点（ノードの座標系）。描画（canvas）と SVG の出力で同じ線にする */
 export function gradientLine(paint: Pick<LinearGradient, 'x1' | 'y1' | 'x2' | 'y2'>, size: Size): [Point, Point] {
   return [

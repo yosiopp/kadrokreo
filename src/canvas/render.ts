@@ -9,7 +9,7 @@ import {
   transformRect,
 } from '../document/geometry.ts'
 import { type Vertex, capMarkerSize, capReach, cappedStroke, pathOutlines, tracePath } from '../document/path.ts'
-import { alignFactor, blurRadius, clampedRadii, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, stopCssColor, textInkBox, withoutHidden } from '../document/paint.ts'
+import { alignFactor, blurRadius, clampedRadii, radialFocus, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, stopCssColor, textInkBox, withoutHidden } from '../document/paint.ts'
 import type {
   Asset,
   AssetId,
@@ -670,9 +670,10 @@ function radialMatrix(paint: RadialGradient, size: Size): Matrix | null {
   return paint.rx * size.width > 0 && paint.ry * size.height > 0 && m.every(Number.isFinite) ? m : null
 }
 
-/** 中心から半径 1 の円で色を変える CanvasGradient。楕円にするのは変換行列の役目 */
+/** 焦点から半径 1 の円へ色を変える CanvasGradient。楕円にするのは変換行列の役目 */
 function unitRadial(ctx: CanvasRenderingContext2D, paint: RadialGradient): CanvasGradient {
-  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
+  const focus = radialFocus(paint)
+  const gradient = ctx.createRadialGradient(focus.x, focus.y, 0, 0, 0, 1)
   for (const stop of paint.stops) gradient.addColorStop(stop.offset, stopCssColor(stop))
   return gradient
 }

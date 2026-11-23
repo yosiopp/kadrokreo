@@ -16,7 +16,7 @@ import {
 import { isImageTooLarge, readImageInfo } from '../../document/imageInfo.ts'
 import { KAPPA, ellipseVertices } from '../../document/mask.ts'
 import { BLEND_MODES, CAPS, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES, MAX_DASHES, MAX_PAINTS, MAX_PATH_POINTS, MAX_STOPS } from '../../document/kdr.ts'
-import { angleLine, linearFromAngle, solidPaint } from '../../document/paint.ts'
+import { angleLine, fitFocus, linearFromAngle, solidPaint } from '../../document/paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
 import { sha256Hex } from '../../document/sha256.ts'
@@ -1609,7 +1609,7 @@ class Converter {
 
   /**
    * radialGradient を kadrokreo の円形のグラデーションにする。中心と横・縦の半径をノードの枠に対する割合に直す。
-   * 回した楕円は angle に写す。焦点（fx / fy）と、傾けた（軸が直交しない）楕円は持てないので、中心と半径の長さだけを写す
+   * 回した楕円は angle に、焦点（fx / fy）は中心からのずれを半径に対する割合にして写す。傾けた（軸が直交しない）楕円は持てないので、中心と半径の長さだけを写す
    */
   private radialGradient(
     element: SvgElement,
@@ -1633,10 +1633,12 @@ class Converter {
     }
     const c = { x: coordinate('cx', 'width'), y: coordinate('cy', 'height') }
     const r = coordinate('r', 'diagonal')
+    // 焦点（省けば中心）。中心からのずれを半径に対する割合にし、円の外なら円の上に寄せる（SVG 1.1 と同じ）
+    let focal = { x: 0, y: 0 }
     if (attribute('fx') !== undefined || attribute('fy') !== undefined) {
       const fx = attribute('fx') === undefined ? c.x : coordinate('fx', 'width')
       const fy = attribute('fy') === undefined ? c.y : coordinate('fy', 'height')
-      if (fx !== c.x || fy !== c.y) this.warn('円形のグラデーションの焦点（中心に寄せた）')
+      if (r > 0) focal = clampToUnit({ x: (fx - c.x) / r, y: (fy - c.y) / r })
     }
     const gradientTransform = parseTransform(attribute('gradientTransform')) ?? IDENTITY
     let toPage: Matrix
@@ -1664,7 +1666,21 @@ class Converter {
     const values = [center.x / node.width, center.y / node.height, rx / node.width, ry / node.height].map(round4)
     if (!values.every(Number.isFinite)) return last
     const [cx, cy, rxRatio, ryRatio] = values
-    return { type: 'radial', cx, cy, rx: rxRatio, ry: ryRatio, angle: round4(turn) + 0, stops, opacity: 1, visible: true, blendMode: 'normal' }
+    // 焦点をページを経てノードの座標系に写し、kadrokreo の楕円の軸（回した向き）に沿った、半径に対する割合に直す
+    let fx = 0
+    let fy = 0
+    if (focal.x !== 0 || focal.y !== 0) {
+      const point = toNodeSpace(node, applyMatrix(toPage, { x: c.x + focal.x * r, y: c.y + focal.y * r }))
+      const radians = (turn * Math.PI) / 180
+      const dx = point.x - center.x
+      const dy = point.y - center.y
+      const unit = fitFocus({
+        x: (dx * Math.cos(radians) + dy * Math.sin(radians)) / rx,
+        y: (-dx * Math.sin(radians) + dy * Math.cos(radians)) / ry,
+      })
+      if (Number.isFinite(unit.fx) && Number.isFinite(unit.fy)) ({ fx, fy } = unit)
+    }
+    return { type: 'radial', cx, cy, rx: rxRatio, ry: ryRatio, angle: round4(turn) + 0, fx, fy, stops, opacity: 1, visible: true, blendMode: 'normal' }
   }
 
   // ── 長さ ──
@@ -1713,6 +1729,12 @@ function decodeDataUri(uri: string): Uint8Array<ArrayBuffer> | null {
   } catch {
     return null
   }
+}
+
+/** 原点からの長さが 1 を超えていれば、長さ 1 に縮める */
+function clampToUnit(point: Point): Point {
+  const length = Math.hypot(point.x, point.y)
+  return length > 1 ? { x: point.x / length, y: point.y / length } : point
 }
 
 /** グラデーションの代わりに 1 色で塗るときの塗り。色の不透明度を塗りの不透明度にする */

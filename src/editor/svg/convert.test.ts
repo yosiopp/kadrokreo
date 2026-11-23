@@ -241,21 +241,25 @@ describe('塗りと線', () => {
     expect(c.fills).toEqual([{ type: 'linear', x1: 0, y1: 0, x2: 0, y2: 1, stops, opacity: 1, visible: true, blendMode: 'normal' as const }])
   })
 
-  it('円形のグラデーションは、中心と半径を枠に対する割合にする', () => {
+  it('円形のグラデーションは、中心と半径を枠に対する割合にし、焦点は中心からのずれを半径に対する割合にする', () => {
     const result = convert(`<svg>
       <radialGradient id="r"><stop offset="0" stop-color="gold"/><stop offset="1" stop-color="black"/></radialGradient>
       <radialGradient id="u" gradientUnits="userSpaceOnUse" cx="25" cy="10" r="20" href="#r"/>
       <radialGradient id="f" fx="0.2" href="#r"/>
+      <radialGradient id="o" gradientUnits="userSpaceOnUse" cx="50" cy="25" r="10" fx="50" fy="5" href="#r"/>
       <circle r="5" fill="url(#r)"/>
       <rect width="100" height="50" fill="url(#u)"/>
       <rect width="100" height="50" fill="url(#f)"/>
+      <rect width="100" height="50" fill="url(#o)"/>
     </svg>`)
-    const [circle, rect, focal] = children(result) as Extract<SceneNode, { fills: unknown }>[]
+    const [circle, rect, focal, outside] = children(result) as Extract<SceneNode, { fills: unknown }>[]
     const stops = [{ offset: 0, color: '#ffd700', opacity: 1 }, { offset: 1, color: '#000000', opacity: 1 }]
-    expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
-    expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
-    expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, blendMode: 'normal' as const }])
-    expect(labels(result)).toContain('円形のグラデーションの焦点（中心に寄せた）')
+    expect(circle.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }])
+    expect(rect.fills).toEqual([{ type: 'radial', cx: 0.25, cy: 0.2, rx: 0.2, ry: 0.4, stops, opacity: 1, visible: true, angle: 0, fx: 0, fy: 0, blendMode: 'normal' as const }])
+    expect(focal.fills).toEqual([{ type: 'radial', cx: 0.5, cy: 0.5, rx: 0.5, ry: 0.5, stops, opacity: 1, visible: true, angle: 0, fx: -0.6, fy: 0, blendMode: 'normal' as const }])
+    // 円の外の焦点は円の上に寄せる（SVG 1.1 と同じ）
+    expect(outside.fills).toMatchObject([{ type: 'radial', cx: 0.5, cy: 0.5, fx: 0, fy: -1 }])
+    expect(result.warnings).toEqual([])
   })
 })
 

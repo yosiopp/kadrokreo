@@ -196,7 +196,13 @@ export function EditorCanvas({
     const toScreen = (point: Point) => worldToScreen(viewport, point)
     const axis: [Point, Point] = [toScreen(handles.axis[0]), toScreen(handles.axis[1])]
     const onLine = handles.stops.map(toScreen)
-    return { axis, radiusY: handles.radiusY && toScreen(handles.radiusY), stops: stopMarkers(axis, onLine), onLine }
+    return {
+      axis,
+      radiusY: handles.radiusY && toScreen(handles.radiusY),
+      focus: handles.focus && toScreen(handles.focus),
+      stops: stopMarkers(axis, onLine),
+      onLine,
+    }
   }
 
   /** screen の近くにある、グラデーションのハンドル */
