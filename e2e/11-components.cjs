@@ -179,18 +179,18 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   await page.mouse.click(...at(425, 318))
   const swapSelect = page.locator('[aria-label="インスタンスの元"]')
   check('インスタンスでは、元を選べる', (await swapSelect.locator('option').allTextContents()).join() === 'Frame 1,Frame 4', (await swapSelect.locator('option').allTextContents()).join())
+  // 幅は文字の幅で決まり、書体で 1px ほど変わる（Linux の CI では 105）ので、差し替える前の幅と比べる
+  const widthBefore = instances(await nodesOf()).find((n) => n.x === 400 && n.y === 300).width
   await swapSelect.selectOption({ label: 'Frame 4' })
   nodes = await nodesOf()
   const frame4 = nodes.find((n) => n.type === 'frame' && n.component && n.component.role === 'main' && n.x === 600)
   const swapped = instances(nodes).find((n) => n.x === 400 && n.y === 300)
   check('元を差し替えると、新しい元の大きさと中身になる', swapped && swapped.component.id === frame4.component.id && swapped.width === 300 && swapped.name === 'Frame 4',
     JSON.stringify(swapped && [swapped.name, swapped.width]))
-  // 選択欄にフォーカスが残っていると、editor はショートカットを受けない（Linux の Chrome では残る。Mac では残らない）
-  const focused = await page.evaluate(() => { const tag = document.activeElement?.tagName; document.activeElement?.blur(); return tag })
   await page.keyboard.press('Meta+z')
   nodes = await nodesOf()
-  check('undo で元に戻る', instances(nodes).some((n) => n.x === 400 && n.y === 300 && n.width === 104),
-    JSON.stringify({ focused, instances: instances(nodes).map((n) => [n.x, n.y, n.width]) }))
+  check('undo で元に戻る', instances(nodes).some((n) => n.x === 400 && n.y === 300 && n.width === widthBefore),
+    JSON.stringify({ widthBefore, instances: instances(nodes).map((n) => [n.x, n.y, n.width]) }))
 
   // ── バリアント ──
   await row('Frame 4').first().click()
