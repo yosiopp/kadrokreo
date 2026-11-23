@@ -1,5 +1,5 @@
 import type { Size } from '../document/geometry.ts'
-import { FRAME_LABEL_FONT } from './render.ts'
+import { FRAME_LABEL_FONT } from './labels.ts'
 import { type TextStyle, measureText } from './text.ts'
 
 // 文字の幅を測る。測るためだけのキャンバスを 1 つ持つ（ブラウザでしか使えない）

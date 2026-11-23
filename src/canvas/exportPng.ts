@@ -1,4 +1,5 @@
 import { type Bounds, getWorldMatrix } from '../document/geometry.ts'
+import { paintOrder } from '../document/layers.ts'
 import { type TextLinesOf, getPaintedBounds } from '../document/paint.ts'
 import type { Asset, AssetId, DesignDocument, NodeId, Page, Scene } from '../document/types.ts'
 import { loadImage } from './images.ts'
@@ -105,6 +106,20 @@ export function pngBaseName(doc: Pick<DesignDocument, 'name'>, page: Page, targe
   if (whole || targets.length === 0) return `${doc.name} - ${page.name}`
   if (targets.length === 1) return page.nodes[targets[0]].name
   return `${page.nodes[targets[0]].name} ほか ${targets.length - 1} 個`
+}
+
+/**
+ * 書き出す範囲（描く順。祖先と一緒に選んだものは除く）とファイル名（拡張子・倍率の前。safeFileName は通す前）。
+ * ids が null か空なら表示中のページ全体。viewer / editor / CLI で揃える（どれもこれを使う）
+ */
+export function exportTargets(
+  doc: Pick<DesignDocument, 'name'>,
+  page: Page,
+  ids: readonly NodeId[] | null,
+): { targets: NodeId[]; name: string } {
+  const whole = !ids || ids.length === 0
+  const targets = whole ? page.rootIds : paintOrder(page, ids)
+  return { targets, name: pngBaseName(doc, page, targets, whole) }
 }
 
 /** 倍率つきのファイル名。等倍なら倍率は付けない */

@@ -107,7 +107,7 @@ export type PointPart = 'vertex' | 'in' | 'out'
  * 頂点を編集中に出す制御点のハンドル。選んだ頂点の 2 つと、両隣の頂点のうち選んだ頂点へ向かう辺の制御点
  * （どちらの端の曲がり具合も、選んだ頂点のまわりで直せるように）。頂点を複数選んでいれば、それぞれの分をまとめる
  */
-export function visibleControls(
+function visibleControls(
   vertices: readonly Vertex[],
   selected: readonly number[],
   closed: boolean,

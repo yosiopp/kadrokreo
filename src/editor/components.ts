@@ -27,6 +27,7 @@ import {
   type SourceContext as SyncContext,
   collectMains,
   componentReach,
+  copySourceId,
   enclosingMain,
   isInside,
   moveOverrides,
@@ -194,9 +195,7 @@ function sourceOf(doc: DesignDocument, scene: Scene, id: NodeId): Source | null 
   if (!main) return null
   if (instance.id === id) return { instance, source: main.node, scene: main.page }
   const source = effectiveSource(doc, scene, instance, main)
-  const sourceId = subtreeIds(source, main.node.id).find(
-    (candidate) => candidate !== main.node.id && derivedId(instance.id, candidate) === id,
-  )
+  const sourceId = copySourceId(source, main.node.id, instance.id, id)
   return sourceId === undefined ? null : { instance, source: source.nodes[sourceId], scene: source }
 }
 

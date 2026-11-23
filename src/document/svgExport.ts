@@ -1,13 +1,14 @@
 import { IDENTITY, type Matrix, getWorldMatrix, multiply, nodeMatrix, rotateVector, tidy, transformRect } from './geometry.ts'
 import { drawnNode } from './booleanNode.ts'
 import { readImageInfo } from './imageInfo.ts'
-import { type TextLinesOf, blurRadius, cornerRadii, getPaintedBounds, hasStroke, imageRect, isRounded, isShadow, splitEffects, withoutHidden } from './paint.ts'
-import { type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from './mask.ts'
+import { type TextLinesOf, alignFactor, blurRadius, clampedRadii, getPaintedBounds, hasStroke, imageRect, isRounded, isShadow, solidPaint, splitEffects, withoutHidden } from './paint.ts'
+import { KAPPA, type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from './mask.ts'
 import { contoursData, isLine } from './path.ts'
 import { dataUri, escapeXml, gradientDef, pathSvg } from './svgShapes.ts'
 import type {
   Asset,
   AssetId,
+  BlendMode,
   CornerRadius,
   ImageNode,
   NodeId,
@@ -124,8 +125,6 @@ export function svgFileName(name: string): string {
   return `${name}.svg`
 }
 
-const KAPPA = 0.5522847498
-
 class SvgWriter {
   readonly defs: string[] = []
   private readonly scene: Scene
@@ -170,7 +169,7 @@ class SvgWriter {
     const effects = 'effects' in node ? node.effects : []
     const blur = blurRadius(effects, 'layer-blur')
     const extra =
-      (node.blendMode !== 'normal' ? ` style="mix-blend-mode:${node.blendMode}"` : '') +
+      blendStyle(node.blendMode) +
       (blur > 0 ? this.blurFilter(node, blur) : '')
     const idAttr = this.options.ids === false ? '' : ` id="${escapeXml(this.nameId(node.name))}"`
     const attrs = `${idAttr}${transformAttr(m)}${node.opacity < 1 ? ` opacity="${tidy(node.opacity)}"` : ''}${extra}`
@@ -278,11 +277,7 @@ class SvgWriter {
         const shape = (decls: string) => boxShape(node, node.cornerRadius, decls)
         const background = this.styled({ ...node, strokes: [] }, world, shape)
         let children = this.children(node.children, world)
-        if (children !== '' && node.clipContent) {
-          const clip = this.defId('clip')
-          this.defs.push(`<clipPath id="${clip}">${boxShape(node, node.cornerRadius, '')}</clipPath>`)
-          children = `<g clip-path="url(#${clip})">${children}</g>`
-        }
+        if (children !== '' && node.clipContent) children = this.clipToBox(node, children)
         // 枠線は子より手前に描く（影は塗りに付けたので、ここでは付けない）
         const border = hasStroke(node) ? this.styled({ ...node, fills: [], effects: [] }, world, shape) : []
         return [...background, ...(children === '' ? [] : [children]), ...border]
@@ -292,7 +287,7 @@ class SvgWriter {
 
   /** 塗りの属性。グラデーションなら定義を足して url で指す */
   private paintAttr(paint: Paint, role: 'fill' | 'stroke', size: { width: number; height: number }): string {
-    const blend = paint.blendMode !== 'normal' ? ` style="mix-blend-mode:${paint.blendMode}"` : ''
+    const blend = blendStyle(paint.blendMode)
     if (paint.type === 'solid') {
       return ` ${role}="${escapeXml(paint.color)}"${paint.opacity < 1 ? ` ${role}-opacity="${tidy(paint.opacity)}"` : ''}${blend}`
     }
@@ -364,16 +359,15 @@ class SvgWriter {
     // 直線には面がないので塗らない（内側の影もない）
     const fills = isLine(node) ? [] : node.fills
     const shown = isLine(node) ? { ...node, effects: splitEffects(node.effects).drop } : node
-    const blend = (paint: Paint) => (paint.blendMode !== 'normal' ? ` style="mix-blend-mode:${paint.blendMode}"` : '')
     const blended = [...fills, ...strokes].some((paint) => paint.blendMode !== 'normal')
     if (fills.length <= 1 && strokes.length <= 1 && !effects && !blended) {
       if (fills.length === 0 && strokes.length === 0) return []
       return call(fills[0] ?? null, strokes[0] ?? null, '')
     }
     const filters = this.fillFilters(shown, world, fills.length)
-    const parts = fills.flatMap((fill, i) => call(fill, null, filters.fill(i) + blend(fill)))
-    if (filters.carrier !== '') parts.push(...call({ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' }, null, filters.carrier))
-    for (const stroke of strokes) parts.push(...call(null, stroke, filters.stroke + blend(stroke)))
+    const parts = fills.flatMap((fill, i) => call(fill, null, filters.fill(i) + blendStyle(fill.blendMode)))
+    if (filters.carrier !== '') parts.push(...call(solidPaint('#000000'), null, filters.carrier))
+    for (const stroke of strokes) parts.push(...call(null, stroke, filters.stroke + blendStyle(stroke.blendMode)))
     return parts
   }
 
@@ -443,7 +437,7 @@ class SvgWriter {
     // 1 行目の基線。フォントの高さが分からなければ、SVG の取り込み（editor/svg/convert.ts の text）と同じ見積もり
     const baseline = textBaseline(node, (this.options.textMetrics ?? estimateTextMetrics)(node))
     const anchor = { left: '', center: ' text-anchor="middle"', right: ' text-anchor="end"' }[node.textAlign]
-    const x = tidy(node.width * { left: 0, center: 0.5, right: 1 }[node.textAlign])
+    const x = tidy(node.width * alignFactor(node.textAlign))
     const spans = lines
       .map((line, i) => `<tspan x="${x}" y="${tidy(baseline + lineHeight * i)}">${escapeXml(line.text)}</tspan>`)
       .join('')
@@ -483,10 +477,20 @@ class SvgWriter {
       `width="${tidy(rect.width)}" height="${tidy(rect.height)}" preserveAspectRatio="none"/>`
     const overflows = rect.x < 0 || rect.y < 0 || rect.x + rect.width > node.width || rect.y + rect.height > node.height
     if (!overflows && !isRounded(node.cornerRadius)) return [image]
+    return [this.clipToBox(node, image)]
+  }
+
+  /** content を node の枠（角丸を含む）で切り取る g */
+  private clipToBox(node: SceneNode & { cornerRadius: CornerRadius }, content: string): string {
     const clip = this.defId('clip')
     this.defs.push(`<clipPath id="${clip}">${boxShape(node, node.cornerRadius, '')}</clipPath>`)
-    return [`<g clip-path="url(#${clip})">${image}</g>`]
+    return `<g clip-path="url(#${clip})">${content}</g>`
   }
+}
+
+/** 描画モードの style 属性（通常なら書かない） */
+function blendStyle(mode: BlendMode): string {
+  return mode !== 'normal' ? ` style="mix-blend-mode:${mode}"` : ''
 }
 
 /** 変換の属性。平行移動だけなら translate、回転を含めば translate と rotate、どちらでもなければ matrix */
@@ -503,11 +507,10 @@ function transformAttr(m: Matrix): string {
   return ` transform="matrix(${[a, b, c, d, e, f].map(n).join(' ')})"`
 }
 
-/** 枠（左上が原点）の矩形。角丸は描画（clampRadius）と同じく枠の短い辺の半分まで。4 隅が違えば path にする */
+/** 枠（左上が原点）の矩形。角丸は描画と同じく枠の短い辺の半分まで（clampedRadii）。4 隅が違えば path にする */
 function boxShape(size: { width: number; height: number }, radius: CornerRadius, decls: string): string {
   const { width, height } = size
-  const limit = Math.min(width / 2, height / 2)
-  const [tl, tr, br, bl] = cornerRadii(radius).map((r) => Math.max(0, Math.min(r, limit)))
+  const [tl, tr, br, bl] = clampedRadii(radius, width, height)
   const w = tidy(width)
   const h = tidy(height)
   if (tl === tr && tr === br && br === bl) {

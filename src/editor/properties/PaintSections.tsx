@@ -1,5 +1,5 @@
 import { normalizeAngle } from '../../document/geometry.ts'
-import { isShadow, linearAngle } from '../../document/paint.ts'
+import { isShadow, linearAngle, solid, solidPaint } from '../../document/paint.ts'
 import type { Blur, Effect, Gradient, NodeId, Paint, SceneNode, Shadow } from '../../document/types.ts'
 import { BLEND_MODE_LABELS, EFFECT_TYPE_LABELS, PAINT_TYPE_LABELS, optionsOf } from '../../ui/labels.ts'
 import { EyeIcon } from '../icons.tsx'
@@ -73,7 +73,7 @@ export function PaintListSection({
     count !== MIXED && Array.from({ length: count }, (_, i) => common(lists.map((list) => list[i].type))).every((t) => t !== MIXED)
   const update = (change: (paints: readonly Paint[]) => Paint[] | null) =>
     store.apply((base) => updatePaints(base, selection, paintKey, change))
-  const solidPaint: Paint = { type: 'solid', color: fallback, opacity: 1, visible: true, blendMode: 'normal' }
+  const added = solidPaint(fallback)
   const canAdd = lists.every((list) => list.length < MAX_PAINTS)
 
   const addButton = (
@@ -83,7 +83,7 @@ export function PaintListSection({
       aria-label={`${title}を足す`}
       title={aligned ? `${title}を上に重ねる` : `${title}を 1 つにまとめて置き換える`}
       disabled={aligned && !canAdd}
-      onClick={() => update((paints) => (aligned ? [...paints, solidPaint] : [solidPaint]))}
+      onClick={() => update((paints) => (aligned ? [...paints, added] : [added]))}
     >
       +
     </button>
@@ -102,7 +102,7 @@ export function PaintListSection({
           fallback={fallback}
           onPreview={() => {}}
           onCommit={() => {}}
-          onSet={(color) => color !== null && update(() => [{ type: 'solid', color, opacity: 1, visible: true, blendMode: 'normal' }])}
+          onSet={(color) => color !== null && update(() => solid(color))}
         />
       ) : (
         Array.from({ length: count }, (_, k) => count - 1 - k).map((index) => (
@@ -151,6 +151,8 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
   const type = paints[0].type
   const patch = (change: (paint: Paint) => Paint) => store.apply((base) => patchPaintAt(base, selection, paintKey, index, change))
   const preview = (change: (paint: Paint) => Paint) => store.preview((base) => patchPaintAt(base, selection, paintKey, index, change))
+  // 単色の色だけを替える（不透明度・表示・描画モードはそのまま）
+  const recolor = (color: string) => (paint: Paint): Paint => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible, blendMode: paint.blendMode })
   const patchGradient = (change: (gradient: Gradient, node: SceneNode) => Gradient) =>
     store.apply((base) => patchGradientAt(base, selection, paintKey, index, change))
   const previewGradient = (change: (gradient: Gradient) => Gradient) =>
@@ -215,9 +217,9 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
           value={common(paints.map((paint) => (paint.type === 'solid' ? paint.color : '')))}
           nullable={false}
           fallback="#000000"
-          onPreview={(color) => preview((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible, blendMode: paint.blendMode }))}
+          onPreview={(color) => preview(recolor(color))}
           onCommit={store.commitPreview}
-          onSet={(color) => color !== null && patch((paint) => ({ type: 'solid', color, opacity: paint.opacity, visible: paint.visible, blendMode: paint.blendMode }))}
+          onSet={(color) => color !== null && patch(recolor(color))}
         />
       )}
 

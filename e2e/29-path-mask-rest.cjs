@@ -2,32 +2,19 @@
 // 明るさのマスク（SVG の mask の取り込みと描画）
 const { chromium } = require('playwright-core')
 const path = require('path')
-const fs = require('fs')
 
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document.pages[0])
-    }
-  }))
+  const saved = async () => (await savedDocument(page)).pages[0]
   const nodes = async () => { await page.waitForTimeout(600); return Object.values((await saved()).nodes) }
   const named = async (name) => (await nodes()).filter((n) => n.name === name)
 
@@ -130,6 +117,5 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

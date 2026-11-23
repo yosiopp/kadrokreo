@@ -169,10 +169,13 @@ export function representedLink(
   const main = instance ? ctx.mains.get(instance.component.id) : undefined
   if (!instance || !main) return null
   const tree = topologyOf(ctx, main.page, main.node.id, instance.component.overrides, swapChain(scene, instance), depth + 1)
-  const sourceId = subtreeIds(tree, main.node.id).find(
-    (candidate) => candidate !== main.node.id && derivedId(instance.id, candidate) === id,
-  )
+  const sourceId = copySourceId(tree, main.node.id, instance.id, id)
   return sourceId === undefined ? null : representedLink(ctx, tree, sourceId, depth + 1)
+}
+
+/** インスタンスの中の写し copyId が、元の木（tree の mainId より下）のどのノードを写したものか。見つからなければ undefined */
+export function copySourceId(tree: Scene, mainId: NodeId, instanceId: NodeId, copyId: NodeId): NodeId | undefined {
+  return subtreeIds(tree, mainId).find((candidate) => candidate !== mainId && derivedId(instanceId, candidate) === copyId)
 }
 
 /**

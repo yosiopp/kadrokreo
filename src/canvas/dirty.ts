@@ -1,7 +1,7 @@
 import { type Bounds, type Matrix, type Size, getWorldMatrix, multiply, nodeMatrix, transformRect } from '../document/geometry.ts'
 import type { Asset, AssetId, NodeId, Scene, SceneNode } from '../document/types.ts'
-import { frameLabelPose } from './labels.ts'
-import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, paintedRect } from './render.ts'
+import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
+import { paintedRect } from './render.ts'
 import type { Viewport } from './viewport.ts'
 
 // 図形を動かしたとき（ドラッグの 1 歩など）に、描き直す範囲を決める（sceneCache.ts）。

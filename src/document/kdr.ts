@@ -237,8 +237,12 @@ export const MAX_DEPTH = 100
 const CAPS = ['none', 'round', 'square', 'arrow', 'circle', 'diamond'] as const
 const SIZINGS = ['fixed', 'hug', 'fill'] as const
 const CONSTRAINTS = ['start', 'end', 'stretch', 'center', 'scale'] as const
-const MAX_PATH_POINTS = 10_000
-const MAX_PAINTS = 16
+/** 1 つのパスに持てる頂点の数の上限 */
+export const MAX_PATH_POINTS = 10_000
+/** 塗り・線・効果の数の上限 */
+export const MAX_PAINTS = 16
+/** グラデーションの色の数の上限 */
+export const MAX_STOPS = 16
 
 /**
  * 省略できる項目と、省略したときの値。書き出しはこれと同じ値の項目を書かず、読み込みはこれで補う。
@@ -461,7 +465,8 @@ function parseConstraints(value: unknown, path: string): { horizontal: Constrain
 }
 
 const MAX_CONTOURS = 1_000
-const MAX_DASHES = 16
+/** 破線の並びの数の上限 */
+export const MAX_DASHES = 16
 
 /** 線の破線の並び。0 以上の数で、すべて 0 は受け付けない（描けない） */
 function dashes(value: unknown, path: string): number[] {
@@ -623,7 +628,7 @@ function parsePaint(value: unknown, path: string): Paint {
       color: color(rawStop.color, `${path}.stops[${i}].color`),
     }
   })
-  if (stops.length < 2 || stops.length > 16) throw new KdrError(`${path}.stops: 色の数が不正です`)
+  if (stops.length < 2 || stops.length > MAX_STOPS) throw new KdrError(`${path}.stops: 色の数が不正です`)
   if (stops.some((stop, i) => i > 0 && stop.offset < stops[i - 1].offset)) {
     throw new KdrError(`${path}.stops: offset が小さい順に並んでいません`)
   }

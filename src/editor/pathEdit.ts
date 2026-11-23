@@ -10,17 +10,12 @@ import {
   segmentAt,
   splitSegment,
 } from '../document/path.ts'
-import type { NodeId, PathNode, Scene } from '../document/types.ts'
+import type { NodeId, Scene } from '../document/types.ts'
 import { updateNode } from './operations/tree.ts'
 
 // パスの頂点と制御点の編集。頂点は親の座標系の Vertex（制御点は位置）で扱い、
 // reshapePath が形（枠と割合の頂点）を作り直す。回転は 0 に戻して頂点に織り込む（直線の端と同じ）。
 // ポインタの位置は toLocal で親の座標に直してから渡す（親が回っていても合う）
-
-/** パスの頂点と制御点（ノードの座標系）。種類を見るなど、位置の座標系を問わない所で使う */
-export function pathVertices(node: PathNode): Vertex[] {
-  return pathPoints(node)
-}
 
 /** パスの頂点と制御点（親の座標系。ノードの回転を織り込んだもの） */
 export function parentVertices(scene: Scene, id: NodeId): Vertex[] {

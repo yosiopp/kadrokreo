@@ -6,16 +6,8 @@ const path = require('path')
 // 行の多い kdr（計測用の makeKdr で作る）を editor と viewer で開き、作る行が一部だけなこと、
 // スクロールすると下の行が出てきて選べること、パン・ドラッグ・ズームで使い回して描いた絵が全部を描いたときと同じことを確かめる。
 // 画像は入れない（縮めて描いた画像の縁のにじみは、範囲を切って描くと Chrome の描き方が変わり、角の 1〜2 画素が薄く変わるため。pitfalls.md）
-const OUT = path.join(__dirname, 'out')
-require('fs').mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
+const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5173'
-
-let failures = 0
-function check(name, condition, detail = '') {
-  if (!condition) failures++
-  console.log(`${condition ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`)
-}
 
 const kdrPath = path.join(OUT, 'many-layers.kdr')
 const meta = JSON.parse(
@@ -66,8 +58,7 @@ function compare(a, b, tolerance) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
   const errors = []
   const watch = (page) => {
-    page.on('pageerror', (e) => errors.push(String(e)))
-    page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+    watchErrors(page, errors)
   }
 
   // editor
@@ -162,8 +153,7 @@ function compare(a, b, tolerance) {
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
+  finish()
 })().catch((e) => {
   console.error('CRASHED', e)
   process.exit(1)

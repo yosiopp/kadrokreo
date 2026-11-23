@@ -261,6 +261,28 @@ describe('危険なもの・表せないもの', () => {
     expect(JSON.stringify(result.fragment)).not.toMatch(/alert|example\.com|onload|onclick/)
   })
 
+  it('外部を href で参照するグラデーションは、1 つにつき 1 回だけ知らせる', () => {
+    const result = convert(`<svg width="10" height="10">
+      <defs><linearGradient id="g" href="other.svg#base"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>
+      <rect width="10" height="10" fill="url(#g)"/>
+    </svg>`)
+    expect(result.warnings.find((warning) => warning.label === '外部への参照（読まなかった）')?.count).toBe(1)
+    expect(children(result)[0]).toMatchObject({ fills: [{ type: 'linear' }] })
+  })
+
+  it('図形の数が上限（20000）に達したら、後の要素は読まない。超える分は読みかけの図形と入れ子のフレームだけ', () => {
+    const rects = Array.from({ length: 20_010 }, (_, i) => `<rect x="${i % 100}" width="1" height="1"/>`).join('')
+    const result = convert(`<svg width="100" height="100"><g opacity="0.5"><g opacity="0.5">${rects}</g></g></svg>`)
+    // 読みかけの矩形 1 つ、グループのフレーム 2 つ、根のフレーム 1 つ
+    expect(Object.keys(result.fragment.nodes).length).toBe(20_004)
+    expect(result.warnings.find((warning) => warning.label.startsWith('20000 個を超えた分'))?.count).toBe(1)
+    // 親子のつながりは切れていない
+    for (const node of Object.values(result.fragment.nodes)) {
+      if (node.parentId !== null) expect(result.fragment.nodes[node.parentId]).toBeDefined()
+      if (node.type === 'frame') for (const child of node.children) expect(result.fragment.nodes[child]?.parentId).toBe(node.id)
+    }
+  })
+
   it('ENTITY を定義した SVG は読まない', () => {
     const bomb = '<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;">]><svg><text>&b;</text></svg>'
     expect(() => parseSvgXml(bomb)).toThrow(SvgParseError)

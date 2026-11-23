@@ -3,23 +3,14 @@ const path = require('path')
 
 // editor の細かい改善: レイヤーの Shift 範囲選択、選択枠の内側をつかんで移動、複製を元の直上に置く、
 // 右クリックメニュー、選択へズーム、別のページへ移す
-const OUT = path.join(__dirname, 'out')
-require('fs').mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-
-let failures = 0
-function check(name, condition, detail = '') {
-  if (!condition) failures++
-  console.log(`${condition ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`)
-}
+const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
 
   await page.goto(EDITOR)
   await page.evaluate(() => localStorage.clear())
@@ -156,8 +147,7 @@ function check(name, condition, detail = '') {
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
+  finish()
 })().catch((e) => {
   console.error('CRASHED', e)
   process.exit(1)

@@ -38,8 +38,8 @@ import {
   selectVariant,
   setVariantValue,
 } from '../../src/editor/variants.ts'
-import { UsageError } from '../args.ts'
-import { checkNewId, renameNodeId } from '../session.ts'
+import { type Step, UsageError } from '../args.ts'
+import { type Session, checkNewId, renameNodeId } from '../session.ts'
 import { fitTextEstimated } from '../textMeasure.ts'
 import { type Command, checkStep, numberOption, option, positional } from './common.ts'
 
@@ -96,15 +96,11 @@ export const instance: Command = {
       }
       const id = wanted ?? result.id
       created = id
-      return {
-        ...result.document,
-        pages: result.document.pages.map((candidate) => {
-          if (candidate.id !== pageId) return candidate
-          const renamed = renameNodeId(candidate, result.id!, id)
-          const patch = { ...(x === undefined ? {} : { x }), ...(y === undefined ? {} : { y }), ...(name === undefined ? {} : { name }) }
-          return updateNode(renamed, id, patch)
-        }),
-      }
+      return updatePage(result.document, pageId, (candidate) => {
+        const renamed = renameNodeId(candidate, result.id!, id)
+        const patch = { ...(x === undefined ? {} : { x }), ...(y === undefined ? {} : { y }), ...(name === undefined ? {} : { name }) }
+        return updateNode(renamed, id, patch)
+      })
     })
     session.last = created === null ? [] : [created]
   },
@@ -337,8 +333,8 @@ export const propAdd: Command = {
 
 /** 元を指すセレクタを元の id にし、プロパティ key があることを確かめる */
 function resolvePropertyMain(
-  session: Parameters<Command['run']>[0]['session'],
-  step: Parameters<Command['run']>[1],
+  session: Session,
+  step: Step,
   key: string,
 ): { mainId: NodeId; property: ComponentProperty } {
   const mainId = session.resolveOne(positional(step, 0, '元'))
@@ -452,7 +448,7 @@ export const prop: Command = {
 }
 
 /** まとまりか、まとまりの中のバリアントを指すセレクタを、まとまりの id にする */
-function resolveVariantSet(session: Parameters<Command['run']>[0]['session'], selector: string, name: string): NodeId {
+function resolveVariantSet(session: Session, selector: string, name: string): NodeId {
   const id = session.resolveOne(selector)
   const page = session.page
   if (isVariantSet(page, id)) return id

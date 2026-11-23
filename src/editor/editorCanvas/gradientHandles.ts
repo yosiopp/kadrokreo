@@ -68,7 +68,7 @@ function conicHandleLength(size: Size): number {
 }
 
 /** 色の印を、色が並ぶ線からどれだけ横へ離して出すか（画面ピクセル） */
-export const STOP_MARKER_OFFSET = 18
+const STOP_MARKER_OFFSET = 18
 
 /**
  * 色の印の位置（画面座標）。線の上に置くと両端の色が始点・終点のハンドルと重なってつかみ分けられないので、

@@ -119,32 +119,17 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
 
   /** 元のすぐそばにインスタンスを置いて、それを選ぶ */
   const addInstance = (componentId: string) => {
-    let id: string | null = null
-    store.applyDocument((doc) => {
-      const result = createInstance(doc, page.id, componentId)
-      id = result.id
-      return result.document
-    })
+    const id = store.applyDocumentWith((doc) => createInstance(doc, page.id, componentId))?.id
     if (id) store.select([id])
   }
   /** バリアントを増やして、増やしたものを選ぶ */
   const addVariantOf = (mainId: string) => {
-    let id: string | null = null
-    store.applyDocument((doc) => {
-      const result = addVariant(doc, page.id, mainId)
-      id = result.id
-      return result.document
-    })
+    const id = store.applyDocumentWith((doc) => addVariant(doc, page.id, mainId))?.id
     if (id) store.select([id])
   }
   /** まとまりのプロパティに値を足して、足したバリアントを選ぶ */
   const addValueOf = (setId: string, key: string) => {
-    let id: string | null = null
-    store.applyDocument((doc) => {
-      const result = addVariantValue(doc, page.id, setId, key)
-      id = result.id
-      return result.document
-    })
+    const id = store.applyDocumentWith((doc) => addVariantValue(doc, page.id, setId, key))?.id
     if (id) store.select([id])
   }
   /** 元のあるページへ移って、元を選ぶ */

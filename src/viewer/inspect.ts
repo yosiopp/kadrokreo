@@ -1,13 +1,13 @@
 import { type InstanceNode, OVERRIDE_KEYS, derivedId, findMain, instanceOf, isMain } from '../document/component.ts'
 import { type PropertyValue, canBindProperty, instanceProperties } from '../document/componentProperties.ts'
 import { type Point, type Size, getCorners, getNodesBounds, invert, nodeMatrix, tidy } from '../document/geometry.ts'
-import { BOOLEAN_OPERATION_LABELS, drawnNode, isBooleanNode } from '../document/booleanNode.ts'
+import { BOOLEAN_OPERATION_LABELS, booleanParts, drawnNode, isBooleanNode } from '../document/booleanNode.ts'
 import { type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
 import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
-import { followsConstraints, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
+import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
 import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
@@ -23,6 +23,9 @@ export type InspectSection = { title: string; rows: InspectRow[] }
 const DIRECTIONS = { horizontal: '横', vertical: '縦' }
 const JUSTIFY = { start: '先頭', center: '中央', end: '末尾', 'space-between': '均等' }
 const TEXT_ALIGN = { left: '左', center: '中央', right: '右' }
+
+/** 自動で並べるフレームの揃え方を CSS の flex の値に */
+const FLEX_JUSTIFY = { start: 'flex-start', center: 'center', end: 'flex-end', 'space-between': 'space-between' } as const
 
 /** CSS の長さの単位 */
 export type Unit = 'px' | 'rem'
@@ -154,7 +157,7 @@ export function inspectNode(
   ])
 
   if (isBooleanNode(original)) {
-    const parts = original.children.filter((child) => scene.nodes[child]?.visible && scene.nodes[child].type !== 'text')
+    const parts = booleanParts(scene, original)
     add('ブーリアン演算', [
       { label: '演算', value: BOOLEAN_OPERATION_LABELS[original.booleanOperation] },
       { label: '元の図形', value: `${parts.length} 個` },
@@ -267,6 +270,7 @@ export function inspectNode(
   if (instance) {
     const main = findMain(doc, instance.component.id)
     const own = instance.id === id
+    const overrides = overridesOn(scene, instance, main?.node.id)
     add('コンポーネント', [
       { label: '種類', value: own ? 'インスタンス' : 'インスタンスの中身' },
       !own && { label: 'インスタンス', value: instance.name },
@@ -275,9 +279,9 @@ export function inspectNode(
       ...(main === null ? [] : variantInstanceRows(main.page, main.node)),
       own && main !== null && main.node.component.description !== '' && { label: '説明', value: main.node.component.description },
       // 中身は、そのノード自身が元と違えている項目だけを出す。インスタンス全体の分は、下の一覧で出す
-      !own && overrideRow('上書き', overridesOn(scene, instance, main?.node.id).get(id)),
+      !own && overrideRow('上書き', overrides.get(id)),
       // 入れ子のインスタンスを別のコンポーネントに差し替えていれば、差し替えた先
-      !own && swappedRow(doc, overridesOn(scene, instance, main?.node.id).get(id)),
+      !own && swappedRow(doc, overrides.get(id)),
     ])
     if (own && main !== null) {
       add(
@@ -292,7 +296,7 @@ export function inspectNode(
     if (own) {
       add(
         '上書き',
-        [...overridesOn(scene, instance, main?.node.id)].map(([target, override]) =>
+        [...overrides].map(([target, override]) =>
           overrideRow(scene.nodes[target].name, override),
         ),
       )
@@ -315,7 +319,6 @@ function overridesOn(scene: Scene, instance: InstanceNode, mainId: NodeId | unde
   return found
 }
 
-/** プロパティの値の表し方。真偽値は表示・非表示、差し替えはコンポーネントの名前 */
 /**
  * まとまりのバリアントが共有するプロパティ（プロパティはバリアントごとに持つが、editor が名前で揃えている）。
  * 名前ごとに、種類と、持っているバリアントの数（全部でなければ）を出す
@@ -336,11 +339,16 @@ function sharedPropertyRows(scene: Scene, setId: NodeId): InspectRow[] {
   }))
 }
 
+/** プロパティの値の表し方。真偽値は表示・非表示、差し替えはコンポーネントの名前 */
 function propertyText(doc: DesignDocument, type: ComponentProperty['type'], value: PropertyValue): string {
   if (type === 'boolean') return value ? '表示' : '非表示'
   if (type === 'text') return String(value)
   const main = findMain(doc, String(value))
-  if (!main) return '（なし）'
+  return main ? mainLabel(main) : '（なし）'
+}
+
+/** 元のコンポーネントの呼び名。バリアントなら「まとまりの名前（バリアントの名前）」 */
+function mainLabel(main: { page: Scene; node: SceneNode }): string {
   const set = variantSetOf(main.page, main.node.id)
   return set ? `${set.name}（${main.node.name}）` : main.node.name
 }
@@ -348,9 +356,7 @@ function propertyText(doc: DesignDocument, type: ComponentProperty['type'], valu
 /** 入れ子のインスタンスの差し替え先の行。バリアントなら「まとまりの名前（バリアントの名前）」。差し替えていなければ null */
 function swappedRow(doc: DesignDocument, override: Override | undefined): InspectRow | null {
   const swapped = override?.componentId === undefined ? null : findMain(doc, override.componentId)
-  if (!swapped) return null
-  const set = variantSetOf(swapped.page, swapped.node.id)
-  return { label: '差し替えた元', value: set ? `${set.name}（${swapped.node.name}）` : swapped.node.name }
+  return swapped ? { label: '差し替えた元', value: mainLabel(swapped) } : null
 }
 
 /** 元と違えている項目の名前を並べた行。何も違えていなければ null */
@@ -373,11 +379,8 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   const px = (value: number) => length(value, style)
 
   // 自動で並べるフレームの子は、親が位置を決める（並びから外したものを除く）。ページ直下のものは、置き場所を決めない
-  const absolute =
-    parent?.type === 'frame' && (!parent.layout || node.layoutPositioning === 'absolute')
-  const holdsAbsolute =
-    node.type === 'frame' &&
-    node.children.some((child) => !node.layout || scene.nodes[child].layoutPositioning === 'absolute')
+  const absolute = parent !== null && followsConstraints(parent, node)
+  const holdsAbsolute = node.type === 'frame' && node.children.some((child) => followsConstraints(node, scene.nodes[child]))
   // 親の辺への追従（constraints）で決めた大きさは、width / height の代わりに書く
   const sizedBy = { width: false, height: false }
   if (absolute && parent.type === 'frame') {
@@ -430,20 +433,14 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
 
   if (node.type === 'frame' && node.layout) {
     const { layout } = node
-    const flex = {
-      start: 'flex-start',
-      center: 'center',
-      end: 'flex-end',
-      'space-between': 'space-between',
-    }
     const wrapping = wraps(node)
     add('display', 'flex')
     add('flex-direction', layout.direction === 'horizontal' ? 'row' : 'column')
     if (wrapping) add('flex-wrap', 'wrap')
-    if (layout.align !== 'start') add('align-items', flex[layout.align])
+    if (layout.align !== 'start') add('align-items', FLEX_JUSTIFY[layout.align])
     // 折り返すとき、行のまとまりも揃え方に従って置く（既定の stretch だと行の間に隙間ができる）
-    if (wrapping) add('align-content', layout.alignContent === 'space-between' ? 'space-between' : flex[layout.align])
-    if (layout.justify !== 'start') add('justify-content', flex[layout.justify])
+    if (wrapping) add('align-content', layout.alignContent === 'space-between' ? 'space-between' : FLEX_JUSTIFY[layout.align])
+    if (layout.justify !== 'start') add('justify-content', FLEX_JUSTIFY[layout.justify])
     if (wrapping && layout.crossGap !== layout.gap) {
       // gap は「行の間隔 列の間隔」の順
       const [row, column] =
@@ -455,8 +452,8 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   }
 
   // 中身で決まる大きさは書かない
-  const hugWidth = (node.type === 'frame' && node.layout !== null) || node.type === 'text' ? node.sizing.width === 'hug' : false
-  const hugHeight = (node.type === 'frame' && node.layout !== null) || node.type === 'text' ? node.sizing.height === 'hug' : false
+  const hugWidth = hugs(node, 'width') || (node.type === 'text' && node.sizing.width === 'hug')
+  const hugHeight = hugs(node, 'height') || (node.type === 'text' && node.sizing.height === 'hug')
   // 親いっぱいに伸ばす向きは、大きさの代わりに伸ばし方を書く
   const stretched = stretchedAxes(scene, node)
   if (parent?.type === 'frame' && parent.layout) {
@@ -543,13 +540,12 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     const filters: string[] = []
     // レイヤーのぼかしは影も含めてぼかす（描画と同じ）。CSS の blur() の値は半径の半分（標準偏差）
     const layerBlur = blurRadius(node.effects, 'layer-blur')
+    const drops = splitEffects(node.effects).drop.toReversed()
     if (node.type === 'path') {
       // パスの影は、枠ではなく形に沿って落ちる。filter の drop-shadow には内側の影と広がりがないので、落ち影だけを広がりなしで
-      const drops = splitEffects(node.effects).drop.toReversed()
       filters.push(...drops.map((shadow) => `drop-shadow(${shadowCss({ ...shadow, spread: 0 }, style)})`))
     } else if (node.type === 'text') {
       // 文字の影は text-shadow。内側の影と広がりは表せない
-      const drops = splitEffects(node.effects).drop.toReversed()
       if (drops.length > 0) add('text-shadow', drops.map((shadow) => shadowCss({ ...shadow, spread: 0 }, style)).join(', '))
     } else {
       const shadows = node.effects.filter(isShadow).toReversed()
@@ -593,7 +589,7 @@ function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
   const stops = stopList((offset) => offset)
   if (gradient.type === 'conic') {
     // CSS の from は 0deg が真上。ドキュメントは 0° が右なので 90° ずれる
-    return `conic-gradient(from ${num((((gradient.angle + 90) % 360) + 360) % 360)}deg at ${percent(gradient.cx)} ${percent(gradient.cy)}, ${stops.join(', ')})`
+    return `conic-gradient(from ${num(cssDegrees(gradient.angle))}deg at ${percent(gradient.cx)} ${percent(gradient.cy)}, ${stops.join(', ')})`
   }
   if (gradient.type === 'radial') {
     // 楕円の大きさの % は、CSS も枠の幅・高さに対する割合。CSS は楕円を回せないので、横・縦が入れ替わる向き（90°・270°）だけ写し、
@@ -618,7 +614,7 @@ function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
   const along = (point: Point) => (length === 0 ? 0 : ((point.x - from.x) * lx + (point.y - from.y) * ly) / length)
   const t1 = along(start)
   const t2 = along(end)
-  const css = (((angle + 90) % 360) + 360) % 360
+  const css = cssDegrees(angle)
   return `linear-gradient(${num(css)}deg, ${stopList((offset) => t1 + offset * (t2 - t1)).join(', ')})`
 }
 
@@ -783,6 +779,11 @@ export function inspectSelection(scene: Scene, ids: readonly NodeId[]): InspectS
 }
 
 /** SVG を CSS の url() に入れる data URL にする。読めるように、URL で意味を持つ文字だけを % にし、二重引用符は一重に替える */
-export function svgDataUrl(svg: string): string {
-  return `data:image/svg+xml,${svg.replace(/"/g, "'").replace(/[%#<>{}\n\r"]/g, (c) => encodeURIComponent(c))}`
+function svgDataUrl(svg: string): string {
+  return `data:image/svg+xml,${svg.replace(/"/g, "'").replace(/[%#<>{}\n\r]/g, (c) => encodeURIComponent(c))}`
+}
+
+/** グラデーションの角度を CSS の角度（90° ずらす）に直し、0〜360 に収める */
+function cssDegrees(deg: number): number {
+  return (((deg + 90) % 360) + 360) % 360
 }

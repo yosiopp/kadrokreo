@@ -19,7 +19,8 @@ viewer は、デザインを実装する人のための表示（既存のデザ�
 
 ![viewer で図形を選び、隣の図形との間隔を出したところ](docs/captures/viewer-inspect.png)
 
-ほかのキャプチャは [`docs/captures/`](docs/captures/) にある（`npm run capture` で撮り直せる）。
+ほかのキャプチャは [`docs/captures/`](docs/captures/) にある。
+
 
 ## コンセプト
 
@@ -119,7 +120,7 @@ viewer として起動したコンテナからは、編集機能のコードそ�
   （横・縦の %。切り抜くときはどこを残すか、収めるときは余白の配り方）を選べる。「拡大 %」で切り抜きを拡大でき（100% 以上）、
   拡大した画像のどこを残すかも寄せる位置で決まる
 - プロパティパネルの「書き出し」で、選択中のもの（何も選んでいなければ表示中のページ全体）を PNG か SVG に書き出せる。
-  倍率は 1〜3 倍、背景は透明（書き出し欄の「背景」で色を敷ける。SVG も同じ）。範囲は影やぼかし・線の太さのはみ出しまで含む。「SVG をコピー」（右クリックメニューの「SVG としてコピー」も）で、同じ SVG をクリップボードへ入れられる。
+  倍率は 1〜3 倍、背景は透明（書き出し欄の「背景」で色を敷ける。SVG も同じ）。範囲は影やぼかし・線の太さと角のとがり・枠からはみ出した行まで含む。「SVG をコピー」（右クリックメニューの「SVG としてコピー」も）で、同じ SVG をクリップボードへ入れられる。
   SVG は書き出し欄のチェックで、レイヤー名の id を付けるか・背景の色を敷くかを選べる（ブラウザに覚える。viewer も同じ）
 - フレームは、プロパティパネルの「オートレイアウト」で中身を縦か横に自動で並べられる。間隔・余白・揃え方を指定でき、
   フレームの大きさは中身に合わせるか固定するかを選べる。中の図形はドラッグで順番を入れ替える。
@@ -254,10 +255,9 @@ viewer は、デザインを実装する人のための表示（既存のデザ�
 
 ### コマンドライン
 
-`cli/kadrokreo.ts` は、kdr ファイルを調べたり編集したりするコマンドライン（Node 24 以降。TypeScript のままビルドせずに動く）。
-コマンドの名前は **`kdr`**（長い名前の `kadrokreo` でも動く）。リポジトリで `npm install` と `npm link` をすると、`kdr` で呼べるようになる。
-`npm link` をしなくても、`./cli/kadrokreo.ts`（または `npm run --silent kdr --`）で同じように動く。
-自動化やエージェントから kdr を組み立てる・書き換えるためのもの。Docker のイメージからも使える（下の「Docker で使う」）。
+`kdr` は、kdr ファイルを調べたり編集したりするコマンドライン（長い名前の `kadrokreo` でも動く）。自動化やエージェントから kdr を組み立てる・書き換えるためのもの。
+Docker のイメージから使う（下の「Docker で使う」）か、リポジトリを手元に置いて Node 24 以降で動かす（`npm install` と `npm link` で `kdr` が PATH に入る。
+`npm link` をしなくても `./cli/kadrokreo.ts` で同じように動く）。
 
 ```sh
 npm link        # kdr と kadrokreo を PATH に置く（npm unlink -g kadrokreo で外す）
@@ -371,141 +371,32 @@ kdr() { docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" kadrokreo 
 
 - 変更のたびに editor と同じ後始末（自動で並べ直す・インスタンスを元に合わせる・インスタンスへの変更を上書きとして覚える）をし、
   kdr として読み込める形かを確かめる。壊れた値（`fill=red` など）はエラーにして、何も書き出さない
-- Node には Canvas がないので、テキストの大きさは見積もる（英数字はブラウザの sans-serif と同じ字幅の表、全角は 1 文字 1em）。editor で文字を変えれば測り直される
-- `png` は、viewer / editor と同じ描画のコードを Node 用の Canvas（[`@napi-rs/canvas`](https://www.npmjs.com/package/@napi-rs/canvas)、Skia を同梱）に描かせる。
-  `optionalDependencies` なので、入っていない環境（対応するバイナリがない、`npm install --omit=optional`）では `png` だけがエラーになり、ほかのコマンドは動く。
-  文字は手元の書体で描く（macOS は Helvetica とヒラギノ、Docker のイメージは Liberation Sans と Noto Sans CJK）。ブラウザで書き出したものと、文字の縁のにじみや書体の細部が少し違うことがある
-- `png` で描く文字は Canvas で測って折り返すが、テキストの大きさ（`ls` の幅など）は上の見積もりのまま（環境で結果が変わらないように）
+- テキストの大きさ（`ls` の幅など）は、環境で結果が変わらないよう見積もる（英数字はブラウザの sans-serif と同じ字幅の表、全角は 1 文字 1em）。editor で文字を変えれば測り直される
+- `png` は viewer / editor と同じ描画を Node 用の Canvas（[`@napi-rs/canvas`](https://www.npmjs.com/package/@napi-rs/canvas)）で行う。
+  任意の依存なので、入っていない環境（`npm install --omit=optional` など）では `png` だけがエラーになる。Docker のイメージには入っている。
+  文字は手元の書体で描く（macOS は Helvetica とヒラギノ、Docker のイメージは Liberation Sans と Noto Sans CJK）ので、ブラウザで書き出したものと文字の細部が少し違うことがある
 
 ## kdr ファイル
 
-次のファイルを tar（POSIX ustar）にまとめて gzip で圧縮したもの（version 16）。拡張子は `.kdr` のまま。
-中身は `tar -xzf design.kdr` でそのまま取り出せる。
+kadrokreo のデザインを保存するファイル（拡張子 `.kdr`）。中身はドキュメントの JSON（`document.json`）と画像の元のファイル（`assets/`）を
+tar にまとめて gzip で圧縮したもの（version 16）で、`tar -xzf design.kdr` でそのまま取り出せる。
 
-| tar の中の名前 | 中身 |
-| --- | --- |
-| `document.json` | ドキュメント（下の JSON。UTF-8） |
-| `assets/<id>.<png\|jpg\|webp\|gif>` | 画像の元のファイルそのまま。`<id>` は中身の SHA-256（16 進 64 文字） |
-
-`document.json` の中身:
-
-```json
-{
-  "format": "kadrokreo",
-  "version": 16,
-  "document": {
-    "name": "Untitled",
-    "pages": [
-      {
-        "id": "<id>",
-        "name": "Page 1",
-        "children": [
-          {
-            "type": "frame", "id": "<id>", "name": "Card", "x": 0, "y": 0, "width": 320, "height": 200,
-            "fills": [{ "type": "solid", "color": "#ffffff" }],
-            "layout": { "direction": "vertical", "gap": 8 },
-            "sizing": { "height": "hug" },
-            "children": [
-              { "type": "text", "id": "<id>", "name": "Title", "x": 0, "y": 0, "width": 80, "height": 19,
-                "text": "こんにちは", "fontSize": 16, "fontFamily": "sans-serif",
-                "fills": [{ "type": "solid", "color": "#000000" }], "sizing": { "width": "hug" } }
-            ]
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-- ノードは木のまま入れ子で持つ（フレームの `children` に子のノードそのものが入る。先頭が最背面）。親の id は書かない。
-  ノードの id はページの中で一意。
-- **既定値と同じ項目は書かない**。読むときに補う（既定値の表は `src/document/kdr.ts` の `DEFAULTS`）。
-  例: `rotation` 0、`visible` true、`locked` false、`opacity` 1、`blendMode` `normal`、`fills` / `strokes` / `effects` / `strokeDashes` は空、`strokeWidth` 1、
-  `cornerRadius` 0、大きさの下限・上限なし、テキストの `fontWeight` 400・`lineHeight` 1.2、画像の `positionX` / `positionY` 0.5（中央）・`scale` 1（切り抜きの拡大なし）、
-  塗りの `opacity` 1・`blendMode` `normal`、円形のグラデーションの `angle` 0、影の `spread` 0・`blendMode` `normal`、塗りと効果の `visible` true、フレームの `setDescription` 空・`passThrough` false。
-- 見た目は `fills`（塗り）・`strokes`（線）・`effects`（影など）の配列。塗りと線は `{ "type": "solid", "color" }` か
-  `{ "type": "linear", "x1", "y1", "x2", "y2", "stops": [{ "offset", "color" }] }` か `{ "type": "radial", "cx", "cy", "rx", "ry", "angle", "stops" }` か
-  `{ "type": "conic", "cx", "cy", "angle", "stops" }`
-  （直線の始点・終点、円形の中心と横・縦の半径、角度の中心は、枠の幅・高さに対する割合。角度の `angle` は最初の色の向きで、0 が右・時計回り。
-  円形の `angle` は楕円を回す角度（時計回り。半径をピクセルにしてから回す））、
-  効果は影 `{ "type": "drop-shadow" | "inner-shadow", "x", "y", "blur", "spread", "color", "opacity", "blendMode" }` か
-  ぼかし `{ "type": "layer-blur" | "background-blur", "blur" }`（`blur` はどれもぼかしの半径。CSS の `blur()` の値はその半分）。
-  塗り・影・ノードは `blendMode`（`normal` `multiply` `screen` `overlay` `darken` `lighten` `color-dodge` `color-burn` `hard-light` `soft-light` `difference` `exclusion` `hue` `saturation` `color` `luminosity`）を持てる。
-  配列は先頭が一番下。色は `#rrggbb` のみ。塗りと線はどれも `opacity`（0〜1、塗りごとの不透明度）を持てる。
-  塗り・線・影は `visible: false` で隠せる（消さずに残す）。
-  線の破線は `strokeDashes`（px の数の配列。引く長さ・空ける長さを交互に。空なら実線）。
-- 角丸 `cornerRadius` は数値（4 隅とも同じ）か、4 隅の配列（左上・右上・右下・左下。CSS の `border-radius` と同じ順）。
-- 大きさの決め方は `sizing: { width, height }` で、`fixed`（既定）・`hug`（中身に合わせる。自動で並べるフレームとテキストの幅だけ）・
-  `fill`（自動で並べる親いっぱいに伸ばす）。
-- 親の大きさが変わったときの追従は `constraints: { horizontal, vertical }` で、`start`（既定。左・上）・`end`・`stretch`・`center`・`scale`。
-  並べないフレームの子と、並びから外した（`layoutPositioning: "absolute"`）子にだけ効く。
-- オートレイアウトの `alignContent` は折り返した行のまとまりの置き方で、`auto`（既定。`align` に従う）か `space-between`。
-- 直線は 2 つの頂点を持つ開いたパス（`type: "path"`）。パスの頂点は枠に対する割合（0〜1）で、最初の頂点が始点。
-  曲線は頂点の省略できる項目 `in` / `out`（3 次ベジェ曲線の制御点の、頂点からのずれ。同じく枠に対する割合）で表す。
-  例: `{ "x": 0, "y": 1, "out": { "x": 0, "y": -1.33 } }`。枠は曲線そのものを囲むので、制御点は 0〜1 の外に出ることがある。
-  頂点の角の丸めは省略できる `radius`（px。割合ではない）で、制御点のない頂点の、両側の辺が直線のときだけ効く。枠は丸めた形を囲むので、丸めた頂点は 0〜1 の外に出る。
-  線の端の形は `startCap` / `endCap`（`none`（既定）・`round`・`square`・`arrow`・`circle`・`diamond`）、矢印・丸・ひし形の印の大きさは `capSize`（px。既定 0 は線の太さの 4 倍、最小 10）。
-  2 つ目以降の輪郭（穴など）は `contours: [{ "points": [頂点…], "closed": true }]`（頂点は同じく枠に対する割合で、枠は全部の輪郭を囲む）。
-  塗る範囲の決め方は `fillRule`（`nonzero`（既定）か `evenodd`。SVG の `fill-rule` と同じ）。端の形は最初の輪郭にだけ付く。
-- 長方形・楕円・パスの `isMask: true`（既定 `false`）はマスク。自分は描かず、同じ親の中で自分より後ろ（手前）の兄弟を、次のマスクまで切り取る。
-  `maskType` は `vector`（既定。形だけ）・`alpha`（塗りの不透明度で透かす）・`luminance`（塗りの明るさで透かす）。
-- フレームの `booleanOperation`（`union` `subtract` `intersect` `exclude`。既定 `null`）はブーリアン演算のノード。子を描かず、子の形に演算をかけた結果を自分の塗り・線・効果で描く。`layout` は持てない。
-- インスタンスの中身（写し）も普通のノードとして書く。表示するだけなら、コンポーネントのつながり（`component`）を読まなくてよい。
-  インスタンスの `overrides` は元の側のノードの id ごとの上書き（`text` `fills` `strokes` `visible` `fontSize` `fontFamily` `fontWeight` `assetId`、
-  元の中に置いたインスタンス（とその写しの中のインスタンス）への `componentId`（入れ子のインスタンスの差し替え先のコンポーネント））。
-  バリアントのまとまり（フレーム）は説明文 `setDescription` を持てる。元の `component` には、説明文 `description` とプロパティ `properties`（`{ name, type: "text" | "boolean" | "instance", targets: [元の中のノードの id], preferred: [コンポーネントの id] }` の配列）を持てる。
-  `targets` には元の中の入れ子のインスタンスの写しの id も入る。`preferred` は差し替えのプロパティの候補で、空なら書かない。
-  どちらも空なら書かない。インスタンスでのプロパティの値は別に持たず、結んだノードへの上書きそのもの。
-- 画像のノード（と上書き）の `assetId` は `assets/` のファイルの `<id>` を指す。画像は全ページで共有する。
-- 読み込み時には `src/document/kdr.ts` で型・木構造（id の重複、深さ 100 まで）・画像の形式を検証し、知らないフィールドは捨てる。
-  tar は決まった名前（`document.json` と `assets/<id>.<拡張子>`）の普通のファイルだけを受け付け、同じ名前・同じ id が 2 つあるもの、
-  `document.json` がないものは読まない。どこからも使われていない画像は捨てる。展開後の大きさは全体 256MB・`document.json` 64MB・画像 1 枚 32MB まで。
-- **読めるのは今の version のファイルだけ**。15 以前のファイル（gzip した 1 つの JSON で、画像を base64 で `document.assets` に入れていた形）は、
-  version 16 で tar.gz にしたときに読まないことにした（14 以前は v15 で形を組み直したときに捨てた）。既定値のある項目を足すだけなら、version を上げずに済む。
-
-## 構成
-
-| パス | 内容 | viewer | editor |
-| --- | --- | --- | --- |
-| `src/document/` | ドキュメントの型、kdr の読み込みと検証 | ○ | ○ |
-| `src/canvas/` | Canvas 2D での描画、ズーム・パン | ○ | ○ |
-| `src/ui/` | 共通の UI 部品 | ○ | ○ |
-| `src/viewer/` | viewer の画面（設定と CSS・HTML の表示、間隔の計測を含む） | ○ | |
-| `src/editor/` | 編集操作、Undo/Redo、ツール、パネル、kdr の書き出し | | ○ |
-| `cli/` | コマンドライン（Node で動かす。`src/editor/` の編集処理を使う） | | |
-| `docker/` | 配信用の nginx 設定と起動スクリプト（最初の引数が `kdr` なら kdr コマンドを実行） | | |
-| `e2e/` | ブラウザでの動作確認スクリプト | | |
-
-viewer 側のディレクトリ（`document` / `canvas` / `ui` / `viewer`）から `src/editor/` を import すると lint エラーになる。
-これにより viewer ビルドに編集機能が紛れ込まない。`src/` から `cli/` を import することもできない。
-
-## 開発
-
-```sh
-npm install
-npm run dev          # viewer モード
-npm run dev:editor   # editor モード（開発用。配布物では Docker の --editor のみ）
-npm test
-npm run lint
-npm run build        # dist/viewer と dist/editor を出力
-npm run e2e          # ブラウザでの動作確認（Google Chrome が必要）
-npm run capture      # サンプルを組み立てて画面のキャプチャを撮る（e2e/out/captures に出る）
-npm run bench        # 大きなデザインでの性能を測る（bench/out に JSON と表。数分かかる）
-./cli/kadrokreo.ts --help   # コマンドライン（npm link すれば kdr --help）
-```
-
-設計の要点、決めたことと理由、次にやることは [`docs/HANDOVER.md`](docs/HANDOVER.md)（引き継ぎ資料の入口。詳細は `docs/handover/`）、作業の経緯は [`docs/HISTORY.md`](docs/HISTORY.md) にまとめてある。
+- 読めるのは今の version（16）のファイルだけ。古い version のファイルは「古いバージョン」として開かない
+- 取り出したものを固め直すときは、`tar --format ustar` で `document.json` と `assets/` の中だけを入れる（macOS の tar が足す拡張の見出しや `._` のファイルがあると読めない）
+- `document.json` の中身は `kdr -f design.kdr json --pretty` でも見られる。形の詳しい説明は [`docs/handover/kdr-format.md`](docs/handover/kdr-format.md)
 
 ## 未対応
 
 - 線に沿う文字（`textPath`）、テキストをブーリアン演算・マスクに入れること。破線のずれ（`stroke-dashoffset`）と線の角の形（`stroke-linejoin`）
-- Dev モードの CSS は、不透明度・明るさのマスクを形の `clip-path` で代える（`mask-image` では書かない）。当たり判定は、どのマスクでも形で決める
+- マスクの当たり判定は、不透明度・明るさのマスクでも形で決める
 - SVG の取り込みで表せないもの（図形がいくつもあるグラデーションのマスク（形だけかける）、フィルタ、`textPath`（文字はまっすぐ並べる）、外部の画像、複雑な CSS のセレクタ、`stroke-linejoin`・`stroke-dashoffset`、円形のグラデーションの焦点と回した楕円の向き）
-- PNG・SVG 書き出しの範囲は落ち影・レイヤーのぼかし・線の太さのはみ出しを含むが、線の角のとがりや枠からはみ出した行は含まない
 - SVG 書き出しのフォントは埋め込まず名前だけ（開く環境に書体がなければ別の書体になる）。文字の基線の位置は見積もり
 - 回した図形への吸着（スナップ）は、囲む矩形の端と中央に対してだけ効く。影のずれは回転に従わない
-- 直線のグラデーションの始点・終点を枠の中心から外して置くこと（向きだけを持つ形）、円形のグラデーションを回すこと、塗りごとの表示の切り替え（目のアイコン）
 - viewer の CSS の切り抜きの拡大は `object-view-box` で出す（対応していないブラウザでは拡大されない）
-- テキストの禁則処理、1 つのテキストの中での部分的な装飾
+- 1 つのテキストの中での部分的な装飾
 - インスタンスごとの上書きのうち形や並びに関わるもの（大きさ、位置、行の高さ、行揃えなど）
+
+## 開発する人へ
+
+開発環境・確認（`npm run check`）・設計・作業の約束は [`docs/HANDOVER.md`](docs/HANDOVER.md)（引き継ぎ資料の入口）から辿れる。
+コマンドと確認の手順は [`docs/handover/dev.md`](docs/handover/dev.md)、ディレクトリ構成と設計は [`docs/handover/design.md`](docs/handover/design.md)、作業の経緯は [`docs/HISTORY.md`](docs/HISTORY.md)。

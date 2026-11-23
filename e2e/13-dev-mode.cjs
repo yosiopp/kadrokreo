@@ -3,12 +3,7 @@ const path = require('path')
 const fs = require('fs')
 const { execFileSync } = require('child_process')
 
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -16,8 +11,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
 
   // ── editor で確認用のデザインを作る ──
   // フレーム (100,100) 400×300 の中に、長方形 2 つ（(130,140) 60×60 と (250,140) 80×60）とテキスト
@@ -60,8 +54,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   // ── viewer ──
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -309,8 +302,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await viewer.locator('button:text-is("リンクをコピー")').click()
   check('リンクをコピーできる', (await clipboard()) === linked, await clipboard())
   const receiver = await context.newPage()
-  receiver.on('pageerror', (e) => errors.push('receiver: ' + String(e)))
-  receiver.on('console', (m) => m.type() === 'error' && errors.push('receiver: ' + m.text()))
+  watchErrors(receiver, errors, 'receiver: ')
   await receiver.goto(linked)
   await receiver.locator('input[type=file]').setInputFiles(kdrPath)
   await receiver.waitForSelector('.inspect-panel')
@@ -367,6 +359,5 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

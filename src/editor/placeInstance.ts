@@ -47,11 +47,6 @@ export function placeInstance(store: EditorStore, camera: Camera, componentId: s
   const center = worldAt(camera, screen)
   const { page } = store.getState()
   const parentId = instanceDropTarget(store, camera, componentId, screen)
-  let id: string | null = null
-  store.applyDocument((doc) => {
-    const result = createInstance(doc, page.id, componentId, { center, parentId })
-    id = result.id
-    return result.document
-  })
+  const id = store.applyDocumentWith((doc) => createInstance(doc, page.id, componentId, { center, parentId }))?.id
   if (id) store.select([id])
 }

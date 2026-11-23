@@ -1,6 +1,7 @@
+import { MAX_PAINTS, MAX_STOPS } from '../../document/kdr.ts'
 import { isLine } from '../../document/path.ts'
 import { normalizeAngle } from '../../document/geometry.ts'
-import { compactRadius, cornerRadii, linearAngle, linearFromAngle } from '../../document/paint.ts'
+import { compactRadius, cornerRadii, linearAngle, linearFromAngle, mixColor } from '../../document/paint.ts'
 import type { Blur, ColorStop, Effect, Gradient, NodeId, Paint, Scene, SceneNode, Shadow } from '../../document/types.ts'
 import { patchNodes } from './tree.ts'
 
@@ -10,12 +11,10 @@ import { patchNodes } from './tree.ts'
 export type PaintKey = 'fills' | 'strokes'
 
 /** 塗りの種類 */
-export type PaintType = Paint['type']
+type PaintType = Paint['type']
 
-/** 塗り・線・影の数の上限（kdr の読み込みと同じ） */
-export const MAX_PAINTS = 16
-/** グラデーションの色の数の上限（kdr の読み込みと同じ） */
-export const MAX_STOPS = 16
+/** 塗り・線・影の数の上限と、グラデーションの色の数の上限（kdr の読み込みと同じ） */
+export { MAX_PAINTS, MAX_STOPS }
 
 /** index 番目（負なら後ろから）の色を変えたグラデーション */
 export function withStopColor<G extends Gradient>(gradient: G, index: number, color: string): G {
@@ -71,12 +70,6 @@ export function withStopAt<G extends Gradient>(gradient: G, offset: number): { g
 export function withStopRemoved<G extends Gradient>(gradient: G, index: number): G {
   if (gradient.stops.length <= 2) return gradient
   return { ...gradient, stops: gradient.stops.toSpliced(index, 1) }
-}
-
-/** 2 つの #rrggbb を t（0 なら a、1 なら b）の割合で混ぜた色。既定は中間 */
-function mixColor(a: string, b: string, t = 0.5): string {
-  const channel = (color: string, i: number) => parseInt(color.slice(1 + i * 2, 3 + i * 2), 16)
-  return `#${[0, 1, 2].map((i) => Math.round(channel(a, i) + (channel(b, i) - channel(a, i)) * t).toString(16).padStart(2, '0')).join('')}`
 }
 
 /**
@@ -175,33 +168,35 @@ export function withLinearAngle(gradient: Gradient, node: SceneNode, angle: numb
 }
 
 /** いちばん上の塗りを paint に置き換える（null なら取り除く）。塗りがなければ足す */
-export function withTopPaint(paints: readonly Paint[], paint: Paint | null): Paint[] {
+function withTopPaint(paints: readonly Paint[], paint: Paint | null): Paint[] {
   const below = paints.slice(0, -1)
   return paint === null ? below : [...below, paint]
 }
 
 /**
- * 塗りの色を変える（null で塗りをなくす）。いちばん上の塗りがグラデーションなら始まりの色を変え、
+ * 塗りの色を変える（null で塗りをなくす）。いちばん上の塗りが単色なら不透明度・表示・描画モードを受け継いで色を変え、グラデーションなら始まりの色を変え、
  * 塗りをなくすとグラデーションもやめる。テキストは塗りを消せないので、null なら変えない
  */
 export function setFill<T extends Scene>(scene: T, ids: readonly NodeId[], fill: string | null): T {
   return updatePaints(scene, ids, 'fills', (fills) => {
     if (fill === null) return withTopPaint(fills, null)
     const top = fills.at(-1)
-    return withTopPaint(fills, top && top.type !== 'solid' ? withStopColor(top, 0, fill) : { type: 'solid', color: fill, opacity: top?.opacity ?? 1, visible: true, blendMode: 'normal' })
+    return withTopPaint(fills, top && top.type !== 'solid' ? withStopColor(top, 0, fill) : recolored(top, fill))
   })
 }
 
+/** いちばん上の塗り・線（なければ undefined）を、不透明度・表示・描画モードを受け継いだ単色 color にする */
+function recolored(top: Paint | undefined, color: string): Paint {
+  return { type: 'solid', color, opacity: top?.opacity ?? 1, visible: top?.visible ?? true, blendMode: top?.blendMode ?? 'normal' }
+}
+
 /**
- * 線の色を変える（null で線をなくす）。いちばん上の線を単色に置き換える。
- * テキストと画像は線を持たないので変えない
+ * 線の色を変える（null で線をなくす）。いちばん上の線を単色に置き換える（不透明度・表示・描画モードは受け継ぐ）。
+ * テキストと画像は線を持たないので変えない。直線の線は空にできないので、null なら変えない
  */
 export function setStroke<T extends Scene>(scene: T, ids: readonly NodeId[], stroke: string | null): T {
-  return patchNodes(scene, ids, (node) => {
-    if (!('strokes' in node)) return null
-    if (stroke === null) return node.strokes.length === 0 ? null : { strokes: withTopPaint(node.strokes, null) }
-    return { strokes: withTopPaint(node.strokes, { type: 'solid', color: stroke, opacity: node.strokes.at(-1)?.opacity ?? 1, visible: node.strokes.at(-1)?.visible ?? true, blendMode: node.strokes.at(-1)?.blendMode ?? 'normal' }) }
-  })
+  // 直線の線は空にできない（updatePaints が当てない）
+  return updatePaints(scene, ids, 'strokes', (strokes) => withTopPaint(strokes, stroke === null ? null : recolored(strokes.at(-1), stroke)))
 }
 
 /** 効果の配列を change で作り直す。効果を持たないノードと change が null を返したノードは変えない。数は上限で止める */

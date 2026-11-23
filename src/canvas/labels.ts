@@ -1,6 +1,11 @@
 import { type Point, applyMatrix, nodeMatrix, normalizeAngle } from '../document/geometry.ts'
 import { type Viewport, worldToScreen } from './viewport.ts'
 
+/** フレーム名ラベルの書体 */
+export const FRAME_LABEL_FONT = '11px system-ui, sans-serif'
+/** フレーム名ラベルの高さ（画面ピクセル）。フレームを囲む矩形の上辺のすぐ上に置く */
+export const FRAME_LABEL_HEIGHT = 18
+
 /**
  * 回した枠（幅 width・高さ height、時計回りに rotation 度）の 4 辺のうち、ラベルを沿わせる辺。
  * top は画面で上にある辺、bottom は下にある辺。from → to が文字の進む向きで、angle はその向き（度、-45 より大きく 45 以下）。

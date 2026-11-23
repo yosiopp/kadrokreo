@@ -1,5 +1,5 @@
 import { type Point, tidy } from './geometry.ts'
-import { gradientLine, paintColor, radialTransform } from './paint.ts'
+import { gradientLine, mixColor, paintColor, radialTransform } from './paint.ts'
 import { type Vertex, cappedStroke, contoursData, isLine, pathOutlines } from './path.ts'
 import type { Asset, ColorStop, ConicGradient, Paint, PathNode } from './types.ts'
 
@@ -87,17 +87,13 @@ function conicPatternDef(paint: ConicGradient, size: { width: number; height: nu
 }
 
 /** グラデーションの色の並びの、位置 t（0〜1）での色（#rrggbb。間は RGB で混ぜる） */
-export function stopColorAt(stops: readonly ColorStop[], t: number): string {
+function stopColorAt(stops: readonly ColorStop[], t: number): string {
   const next = stops.findIndex((stop) => stop.offset > t)
   if (next === -1) return stops[stops.length - 1].color
   if (next === 0) return stops[0].color
   const a = stops[next - 1]
   const b = stops[next]
-  const ratio = b.offset === a.offset ? 0 : (t - a.offset) / (b.offset - a.offset)
-  const channel = (color: string, i: number) => parseInt(color.slice(1 + i * 2, 3 + i * 2), 16)
-  return `#${[0, 1, 2]
-    .map((i) => Math.round(channel(a.color, i) + (channel(b.color, i) - channel(a.color, i)) * ratio).toString(16).padStart(2, '0'))
-    .join('')}`
+  return mixColor(a.color, b.color, b.offset === a.offset ? 0 : (t - a.offset) / (b.offset - a.offset))
 }
 
 export type PathSvgOptions = SvgPaintOptions & {
@@ -201,7 +197,7 @@ export function pathSvg(node: PathNode, options: PathSvgOptions): PathSvg {
 }
 
 /** SVG の points 属性の値 */
-export function pointList(ps: readonly Point[]): string {
+function pointList(ps: readonly Point[]): string {
   return ps.map((point) => `${tidy(point.x)},${tidy(point.y)}`).join(' ')
 }
 

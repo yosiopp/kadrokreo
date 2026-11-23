@@ -1,0 +1,54 @@
+# 基本の CI。npm run check と同じ順（test → lint → build → check:viewer → e2e）に流す。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# 同じブランチ・PR で新しい実行が始まったら、古い実行を止める
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Dockerfile（node:24-alpine）に合わせる
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # e2e は playwright-core の channel: 'chrome' でインストール済みの Google Chrome を使う。
+      # ubuntu-24.04 のランナーには Chrome の stable が入っているので、版だけ記録する。
+      # 日本語の文字（「予約する」など）を描くので、Linux の既定の書体にない CJK の書体を入れる
+      # （cli/png.ts の書体の並びにも Noto Sans CJK JP がある）
+      - name: Chrome と日本語の書体
+        run: |
+          google-chrome --version
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run check:viewer
+      - run: npm run e2e
+
+      - name: e2e の出力を残す（失敗したとき）
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-out
+          path: e2e/out/
+          retention-days: 7
+          if-no-files-found: ignore

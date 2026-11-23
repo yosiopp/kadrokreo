@@ -255,7 +255,7 @@ export type PathContour = { points: PathPoint[]; closed: boolean }
 
 export type TextNode = BaseNode & {
   type: 'text'
-  /** 効果（Style の effects と同じ）。内側の影はテキストには描かない（CSS の text-shadow でも表せない） */
+  /** 効果（Style の effects と同じ）。内側の影は文字の形の内側に描く（CSS の text-shadow では表せないので、Dev モードのコードには含めない） */
   effects: Effect[]
   text: string
   fontSize: number

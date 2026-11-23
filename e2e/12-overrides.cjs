@@ -2,23 +2,17 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const OUT = path.join(__dirname, 'out')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 const FIXTURES = path.join(__dirname, 'fixtures')
 /** いちばん下の塗りの色（e2e で作る図形は単色 1 つ） */
 const fillOf = (node) => node.fills[0] && node.fills[0].color
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
@@ -30,14 +24,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const button = (label) => page.locator(`button:text-is("${label}")`)
   const section = (title) => page.locator(`.properties-panel .section-title:text-is("${title}")`)
   const deselect = () => page.mouse.click(...at(740, 600))
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document)
-    }
-  }))
+  const saved = () => savedDocument(page)
   // 保存された 1 ページ目から、元・インスタンス・それぞれの文字を取り出す
   const read = async () => {
     await page.waitForTimeout(700)
@@ -172,8 +159,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('kdr v16 に上書きが入る。元は上書きを持たない', json.version === 16 && exported.sort().join() === '#e11d48+予約する,#e11d48+送信する' && links.filter((n) => n.component.role === 'main').every((n) => !('overrides' in n.component)), exported.join())
 
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -227,6 +213,5 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

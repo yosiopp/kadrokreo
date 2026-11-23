@@ -46,11 +46,6 @@ export function clampSize(node: SceneNode, axis: 'width' | 'height', value: numb
   return Math.max(min ?? -Infinity, Math.min(max ?? Infinity, value))
 }
 
-/** 下限か上限を 1 つでも決めているか */
-export function hasSizeLimits(node: SceneNode): boolean {
-  return node.minWidth !== null || node.maxWidth !== null || node.minHeight !== null || node.maxHeight !== null
-}
-
 /** 自動で並べるフレームが、実際に折り返すか。並べる向きを中身に合わせていれば折り返さない */
 export function wraps(frame: SceneNode): boolean {
   if (frame.type !== 'frame' || !frame.layout?.wrap) return false

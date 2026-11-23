@@ -1,11 +1,11 @@
-import { type Bounds, type Matrix, type Point, type Size, getAbsoluteBounds, getWorldMatrix, normalizeAngle, transformRect, unionBounds } from './geometry.ts'
+import { type Bounds, type Matrix, type Point, type Size, getWorldMatrix, normalizeAngle, transformRect, unionBounds } from './geometry.ts'
 import { capReach, flattenPath, pathOutlines } from './path.ts'
 import type { Blur, CornerRadius, Effect, ImageNode, LinearGradient, NodeId, Paint, PathNode, RadialGradient, Scene, Shadow, Style, TextNode } from './types.ts'
 
 // 塗り（Paint）の配列を読む関数。配列は先頭が一番下なので、いちばん上に見えるのは最後の要素
 
 /** いちばん上の塗り。なければ null */
-export function topPaint(paints: readonly Paint[]): Paint | null {
+function topPaint(paints: readonly Paint[]): Paint | null {
   return paints.length === 0 ? null : paints[paints.length - 1]
 }
 
@@ -25,9 +25,20 @@ export function paintColor(paint: Paint): string {
   return paint.type === 'solid' ? paint.color : paint.stops[0].color
 }
 
+/** 2 つの #rrggbb を t（0 なら a、1 なら b）の割合で混ぜた色（RGB で混ぜる）。既定は中間 */
+export function mixColor(a: string, b: string, t = 0.5): string {
+  const channel = (color: string, i: number) => parseInt(color.slice(1 + i * 2, 3 + i * 2), 16)
+  return `#${[0, 1, 2].map((i) => Math.round(channel(a, i) + (channel(b, i) - channel(a, i)) * t).toString(16).padStart(2, '0')).join('')}`
+}
+
+/** 単色の塗り（表示する、描画モードは通常） */
+export function solidPaint(color: string, opacity = 1): Paint {
+  return { type: 'solid', color, opacity, visible: true, blendMode: 'normal' }
+}
+
 /** 単色 1 つだけの塗り。色が null なら塗りなし */
 export function solid(color: string | null): Paint[] {
-  return color === null ? [] : [{ type: 'solid', color, opacity: 1, visible: true, blendMode: 'normal' }]
+  return color === null ? [] : [solidPaint(color)]
 }
 
 /** 線を引くか（表示している線の塗りがあり、太さが 0 でない） */
@@ -177,6 +188,17 @@ export function compactRadius(radii: readonly [number, number, number, number]):
   return radii.every((r) => r === radii[0]) ? radii[0] : [...radii]
 }
 
+/** 4 隅の半径を、枠の短い辺の半分までに収める（描画・SVG・マスクの輪郭で同じ） */
+export function clampedRadii(radius: CornerRadius, width: number, height: number): [number, number, number, number] {
+  const max = Math.min(width / 2, height / 2)
+  return cornerRadii(radius).map((r) => Math.max(0, Math.min(r, max))) as [number, number, number, number]
+}
+
+/** テキストの行揃えを、余った幅のうち行の左に置く割合に（左 0・中央 0.5・右 1） */
+export function alignFactor(align: TextNode['textAlign']): number {
+  return { left: 0, center: 0.5, right: 1 }[align]
+}
+
 /** 角丸があるか（どれかの隅が 0 より大きい） */
 export function isRounded(radius: CornerRadius): boolean {
   return cornerRadii(radius).some((r) => r > 0)
@@ -203,7 +225,7 @@ export type TextLinesOf = (node: TextNode) => readonly { text: string; width?: n
 export function textInkBox(node: TextNode, lines: readonly { text: string; width?: number }[]): Bounds {
   const height = lines.length * node.fontSize * node.lineHeight
   if (lines.some((line) => line.width === undefined)) return { x: 0, y: 0, width: node.width, height }
-  const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
+  const align = alignFactor(node.textAlign)
   let left = 0
   let right = node.width
   for (const line of lines) {
@@ -262,26 +284,26 @@ function unit(x: number, y: number): Point | null {
 
 function paintedBoundsOf(scene: Scene, id: NodeId, textLines?: TextLinesOf): Bounds | null {
   const node = scene.nodes[id]
-  let box = getAbsoluteBounds(scene, id)
+  const world = getWorldMatrix(scene, id)
+  let box = transformRect(world, { x: 0, y: 0, width: node.width, height: node.height })
   let content = box
   if (node.type === 'frame' && !node.clipContent) {
     content =
       unionBounds([box, ...node.children.flatMap((child) => (scene.nodes[child].visible ? (paintedBoundsOf(scene, child, textLines) ?? []) : []))]) ?? box
   } else if (node.type === 'text' && textLines) {
     // テキストは枠からはみ出す行も描くので、描かれる範囲を足す（影もそこから落ちる）
-    box = content = unionBounds([box, transformRect(getWorldMatrix(scene, id), textInkBox(node, textLines(node)))]) ?? box
+    box = content = unionBounds([box, transformRect(world, textInkBox(node, textLines(node)))]) ?? box
   }
-  const effects = 'effects' in node ? node.effects.filter((effect) => effect.visible) : []
+  const effects = shownPaints(node.effects)
   const parts = [content]
   const stroke = strokeOutset(node)
   if (stroke > 0) {
     const local = { x: -stroke, y: -stroke, width: node.width + stroke * 2, height: node.height + stroke * 2 }
-    parts.push(transformRect(getWorldMatrix(scene, id), local))
+    parts.push(transformRect(world, local))
     // パスの鋭い角は、線のつなぎ目（マイター）が太さの半分より遠くへとがる
     if (node.type === 'path') {
       const tips = miterTips(node)
       if (tips.length > 0) {
-        const world = getWorldMatrix(scene, id)
         parts.push(unionBounds(tips.map((tip) => transformRect(world, { ...tip, width: 0, height: 0 })))!)
       }
     }
@@ -299,7 +321,8 @@ function paintedBoundsOf(scene: Scene, id: NodeId, textLines?: TextLinesOf): Bou
     }
   }
   let bounds = unionBounds(parts)!
-  const blur = Math.max(0, ...effects.map((effect) => (effect.type === 'layer-blur' ? effect.blur * 1.5 : 0)))
+  // 描画・SVG・CSS と同じく、レイヤーのぼかしは 1 つの半径にまとめてから 1.5 倍する
+  const blur = blurRadius(effects, 'layer-blur') * 1.5
   if (blur > 0) bounds = { x: bounds.x - blur, y: bounds.y - blur, width: bounds.width + blur * 2, height: bounds.height + blur * 2 }
   return bounds
 }

@@ -2,20 +2,14 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
@@ -115,8 +109,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('kdr に全ページが入る', json.version === 16 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
 
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   check('viewer は開く前は一覧を出さない', (await viewer.locator('.viewer-sidebar').count()) === 0)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
@@ -156,9 +149,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('viewer でフレームを PNG に書き出せる', framePng.suggestedFilename() === 'Frame 1.png' && png.readUInt32BE(16) === 300 && png.readUInt32BE(20) === 200, `${framePng.suggestedFilename()} ${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`)
   await viewer.screenshot({ path: path.join(OUT, '32-viewer-export.png') })
 
-
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

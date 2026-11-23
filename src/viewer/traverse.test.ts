@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { frame, rect, sceneOf, text } from '../document/testNodes.ts'
-import { paintOrder, searchLayers, stepFrom } from './traverse.ts'
+import { searchLayers, stepFrom } from './traverse.ts'
 
 const layout = {
   direction: 'horizontal',
@@ -64,18 +64,5 @@ describe('searchLayers', () => {
 
   it('見つからなければ空', () => {
     expect(searchLayers(scene, 'zzz')).toEqual([])
-  })
-})
-
-describe('paintOrder', () => {
-  it('奥から手前の順に並べ、選んだものの中にあるものは除く', () => {
-    const scene = sceneOf(
-      frame({ children: ['a', 'b'] }),
-      rect({ id: 'a', parentId: 'frame' }),
-      rect({ id: 'b', parentId: 'frame' }),
-      rect({ id: 'c' }),
-    )
-    expect(paintOrder(scene, ['c', 'b', 'a'])).toEqual(['a', 'b', 'c'])
-    expect(paintOrder(scene, ['a', 'frame', 'c'])).toEqual(['frame', 'c'])
   })
 })

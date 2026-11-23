@@ -18,7 +18,7 @@ import type { SvgElement } from './xml.ts'
 //   - 元の絵を重ねる feBlend（in=SourceGraphic）は読み飛ばし、影の外の feGaussianBlur はレイヤーのぼかし
 // ずれとぼかしは filter をかけた要素の座標系の値のまま返す（ページの向きと大きさに直すのは呼び出し側）。
 
-export type FilterShadow = {
+type FilterShadow = {
   type: 'drop-shadow' | 'inner-shadow'
   dx: number
   dy: number
@@ -33,9 +33,9 @@ export type FilterShadow = {
 }
 
 /** レイヤーのぼかし */
-export type FilterBlur = { type: 'layer-blur'; stdDeviation: number }
+type FilterBlur = { type: 'layer-blur'; stdDeviation: number }
 
-export type FilterEffect = FilterShadow | FilterBlur
+type FilterEffect = FilterShadow | FilterBlur
 
 /** 要素の属性や CSS を重ねた値を返す関数（flood-color は CSS でも書ける） */
 type Declared = (element: SvgElement) => Record<string, string>

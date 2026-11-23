@@ -1,6 +1,7 @@
 import { isShadow, solid } from '../src/document/paint.ts'
-import type { Effect, PathPoint, SceneNode, Shadow } from '../src/document/types.ts'
+import type { Effect, PathPoint, SceneNode } from '../src/document/types.ts'
 import { parseDashes } from '../src/editor/dashes.ts'
+import { DEFAULT_SHADOW } from '../src/editor/operations/paints.ts'
 import type { NodePatch } from '../src/editor/operations/tree.ts'
 import { UsageError } from './args.ts'
 
@@ -8,12 +9,10 @@ import { UsageError } from './args.ts'
 // 値の型は、そのノードがいま持っている値の型に合わせる（text=123 は文字列のまま）。
 // 入れ子の項目は . でつなぐ（layout.gap=8、sizing.width=fill）。配列の要素は番号でつなぐ（effects.0.blur=4）。
 // よく使うものには略記がある: fill=色 / stroke=色（単色 1 つの塗り・線にする。null で外す）、
-// shadow.blur=4 など（最初の影。なければ既定の影を付けてから変える）、shadow=null（影を外す）、
+// shadow.blur=4 など（最初の影。なければ editor のパネルと同じ既定の影 DEFAULT_SHADOW を付けてから変える）、shadow=null（影を外す）、
 // blur=8 / backgroundBlur=8（レイヤーのぼかし・背景のぼかし。最初のその効果を変えるか足す。null か 0 で外す）、
 // cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、dash=4,2（破線。null で実線）、radius=8（パスの頂点の角の丸め。頂点ごとならカンマで並べる）。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
-
-const DEFAULT_SHADOW: Shadow = { type: 'drop-shadow', x: 0, y: 4, blur: 8, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.25, visible: true }
 
 /** 略記を、本来の項目の「名前=値」に直す。直せないもの（そのノードにない項目）はそのまま返す */
 function expandShorthand(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): [string, unknown] | null {

@@ -947,3 +947,19 @@ describe('不透明度・明るさのマスクの CSS', () => {
     expect(css(alpha, 'photo')).toContain('mask-mode: alpha;')
   })
 })
+
+describe('ブーリアン演算の元の図形の数', () => {
+  it('演算に入る子（見えていて、テキストでないもの。入れ子の演算も 1 個）だけを数える', () => {
+    const op = frame({ id: 'op', children: ['a', 'hidden', 'label', 'inner', 'gone'], booleanOperation: 'union' })
+    const inner = frame({ id: 'inner', parentId: 'op', children: ['b'], booleanOperation: 'subtract' })
+    const scene = sceneOf(
+      op,
+      rect({ id: 'a', parentId: 'op' }),
+      rect({ id: 'hidden', parentId: 'op', visible: false }),
+      text({ id: 'label', parentId: 'op' }),
+      inner,
+      rect({ id: 'b', parentId: 'inner' }),
+    )
+    expect(rowsOf(scene, 'op', 'ブーリアン演算')).toEqual(['演算=合体', '元の図形=2 個'])
+  })
+})

@@ -60,13 +60,8 @@ export function placeSvg(store: EditorStore, camera: Camera, imported: SvgImport
       },
     },
   }
-  let ids: string[] = []
-  store.applyDocument((doc) => {
-    const result = pasteIntoPage(doc, page.id, placed)
-    ids = result.ids
-    return result.document
-  })
-  store.select(ids)
+  const result = store.applyDocumentWith((doc) => pasteIntoPage(doc, page.id, placed))
+  store.select(result?.ids ?? [])
 }
 
 /** 落としたものの知らせ。なければ null */

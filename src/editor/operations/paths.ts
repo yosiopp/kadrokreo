@@ -1,3 +1,4 @@
+import { MAX_PATH_POINTS } from '../../document/kdr.ts'
 import { applyMatrix, getNodesBounds, getWorldMatrix, invert, multiply, nodeMatrix, toLocal } from '../../document/geometry.ts'
 import { type MaskNode, canMask, isMaskNode, maskFillRule, shapeContours } from '../../document/mask.ts'
 import { type Contour, mapVertices, pathContours, pathFromContours, pathOutlines } from '../../document/path.ts'
@@ -72,7 +73,7 @@ function pathOnBase(base: MaskNode, shape: ReturnType<typeof pathFromContours>):
 }
 
 /** 1 つのパスに持てる頂点の数の上限（kdr の読み込みの上限と同じ） */
-export const MAX_PATH_POINTS = 10_000
+export { MAX_PATH_POINTS }
 
 /** ブーリアン演算の名前（画面と CLI のメッセージ用） */
 export const BOOLEAN_LABELS: Record<BooleanOp, string> = {

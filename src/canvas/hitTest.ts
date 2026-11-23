@@ -4,8 +4,7 @@ import { type MaskNode, canMask, insideMask, insidePolygons, masksOf } from '../
 import { flattenPath, pathOutlines } from '../document/path.ts'
 import type { NodeId, PathNode, Scene } from '../document/types.ts'
 import { booleanPath, isBooleanNode } from '../document/booleanNode.ts'
-import { frameLabelPose } from './labels.ts'
-import { FRAME_LABEL_HEIGHT } from './render.ts'
+import { FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
 import type { Viewport } from './viewport.ts'
 
 // ポインタの下にあるノードを探す。editor の選択と、viewer の選択の両方が使う。

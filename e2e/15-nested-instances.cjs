@@ -3,20 +3,14 @@ const path = require('path')
 const fs = require('fs')
 
 // コンポーネントの一覧からドラッグするときの入る先の表示と、入れ子のインスタンスの差し替え
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
@@ -26,14 +20,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const button = (label) => page.locator(`button:text-is("${label}")`)
   const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`)
   const deselect = () => page.mouse.click(...at(700, 720))
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document)
-    }
-  }))
+  const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }
   const mainNamed = (nodes, name) => nodes.find((n) => n.name === name && n.component && n.component.role === 'main')
   /** 画面の (x, y) の周り 3 画素に、色 rgb の画素があるか */
@@ -125,8 +112,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('kdr に差し替えが入る', json.version === 16 && exported.component.overrides[nestedKey].componentId === icon.component.id)
 
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -147,6 +133,5 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

@@ -1,4 +1,4 @@
-import { paintColor, solidColor } from '../document/paint.ts'
+import { alignFactor, paintColor, solidColor } from '../document/paint.ts'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import type { Camera } from '../canvas/camera.ts'
 import { worldToScreen } from '../canvas/viewport.ts'
@@ -46,7 +46,7 @@ export function TextEditor({ scene, camera, id, selectAll, onInput, onDone }: Pr
   // 上限（maxWidth）に届いて折り返しているときは、幅を決めたテキストと同じに扱う
   const autoWidth = node.sizing.width === 'hug' && (node.maxWidth === null || node.width < node.maxWidth)
   const slack = autoWidth ? fontSize * 2 : 0
-  const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
+  const align = alignFactor(node.textAlign)
   return (
     <textarea
       ref={ref}

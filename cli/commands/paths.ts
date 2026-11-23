@@ -43,12 +43,7 @@ export const join: Command = {
   run({ session }, step) {
     checkStep(step, {})
     const ids = session.resolveAll(step.positionals)
-    let joined: NodeId | null = null
-    session.apply((page) => {
-      const result = joinPaths(page, ids)
-      joined = result.id
-      return result.scene
-    })
+    const joined = session.applyWith((page) => joinPaths(page, ids))?.id ?? null
     if (joined === null) throw new UsageError('join: 矩形・楕円・パスを 2 つ以上指定してください')
     session.last = [joined]
   },
@@ -62,12 +57,7 @@ export const split: Command = {
   run({ session }, step) {
     checkStep(step, {})
     const ids = session.resolveAll(step.positionals)
-    let parts: NodeId[] = []
-    session.apply((page) => {
-      const result = splitPaths(page, ids)
-      parts = result.ids
-      return result.scene
-    })
+    const parts = session.applyWith((page) => splitPaths(page, ids))?.ids ?? []
     if (parts.length === 0) throw new UsageError('split: 輪郭が 2 つ以上あるパスを指定してください')
     session.last = parts
   },
@@ -113,14 +103,7 @@ export const flatten: Command = {
   run({ session }, step) {
     checkStep(step, {})
     const ids = session.resolveAll(step.positionals)
-    let flat: NodeId[] = []
-    let error: 'empty' | 'too-many' | undefined
-    session.apply((page) => {
-      const result = flattenBooleanNodes(page, ids)
-      flat = result.ids
-      error = result.error
-      return result.scene
-    })
+    const { ids: flat = [], error } = session.applyWith((page) => flattenBooleanNodes(page, ids)) ?? {}
     if (error === 'empty') throw new UsageError('flatten: 結果が空のブーリアン演算は平らにできません')
     if (error === 'too-many') throw new UsageError(`flatten: 結果の頂点が ${MAX_PATH_POINTS} を超えます`)
     if (flat.length === 0) throw new UsageError('flatten: ブーリアン演算のノードを指定してください')
@@ -137,14 +120,7 @@ export const outlineStroke: Command = {
   run({ session }, step) {
     checkStep(step, {})
     const ids = session.resolveAll(step.positionals)
-    let outlines: NodeId[] = []
-    let error: 'too-many' | undefined
-    session.apply((page) => {
-      const result = outlineStrokes(page, ids)
-      outlines = result.ids
-      error = result.error
-      return result.scene
-    })
+    const { ids: outlines = [], error } = session.applyWith((page) => outlineStrokes(page, ids)) ?? {}
     if (error === 'too-many') throw new UsageError(`outline-stroke: 線の形の頂点が ${MAX_PATH_POINTS} を超えます`)
     if (outlines.length === 0) throw new UsageError('outline-stroke: 線のある矩形・楕円・パスを指定してください')
     session.last = outlines

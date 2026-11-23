@@ -5,12 +5,7 @@ const { execFileSync } = require('child_process')
 
 // 小さな残り: まとまりの説明文、揃っていないバリアントのプロパティを揃える操作、テキストの内側の影、影の描画モード、
 // SVG の書き出しのオプション（id・背景）と、範囲に影のはみ出しを含めること
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 
 // CLI で、名前をバリアントの形にする前にプロパティを足して、揃っていないまとまり（Set）を作る。テキスト（Title）と影のあるカード（Card）も
 const sourcePath = path.join(OUT, 'small-rest-source.kdr')
@@ -32,8 +27,7 @@ cli(
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(sourcePath)
@@ -42,14 +36,7 @@ cli(
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const button = (label) => page.locator(`.properties-panel button:text-is("${label}")`)
   const row = (name) => page.locator(`.layer-row[data-copy="false"]:has(.layer-name:text-is("${name}"))`).first()
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document)
-    }
-  }))
+  const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }
   const named = (nodes, name) => nodes.find((n) => n.name === name)
   // キャンバス全体の色の合計（描画が変わったかを見る）
@@ -129,8 +116,7 @@ cli(
   const raw = JSON.stringify(json.raw)
   check('kdr にまとまりの説明文と影の描画モードが入る', raw.includes('"setDescription":"大きさを選ぶボタン"') && raw.includes('"blendMode":"multiply"'), raw.slice(0, 300))
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -140,6 +126,5 @@ cli(
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

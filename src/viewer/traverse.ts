@@ -38,21 +38,3 @@ export function searchLayers(scene: Scene, needle: string): NodeId[] {
   visit(null)
   return found
 }
-
-/**
- * ids を、描く順（奥から手前）に並べる。ほかの ids の中にあるもの（祖先も選ばれているもの）は、祖先と一緒に描かれるので除く。
- * 複数のものをまとめて PNG に書き出すときに使う。
- */
-export function paintOrder(scene: Scene, ids: readonly NodeId[]): NodeId[] {
-  const wanted = new Set(ids)
-  const ordered: NodeId[] = []
-  function visit(children: readonly NodeId[]) {
-    for (const id of children) {
-      const node = scene.nodes[id]
-      if (wanted.has(id)) ordered.push(id)
-      else if (node.type === 'frame') visit(node.children)
-    }
-  }
-  visit(scene.rootIds)
-  return ordered
-}

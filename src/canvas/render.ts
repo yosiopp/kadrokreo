@@ -9,12 +9,11 @@ import {
   transformRect,
 } from '../document/geometry.ts'
 import { type Vertex, capMarkerSize, capReach, cappedStroke, pathOutlines, tracePath } from '../document/path.ts'
-import { blurRadius, cornerRadii, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, withoutHidden } from '../document/paint.ts'
+import { alignFactor, blurRadius, clampedRadii, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, textInkBox, withoutHidden } from '../document/paint.ts'
 import type {
   Asset,
   AssetId,
   Cap,
-  CornerRadius,
   ConicGradient,
   Effect,
   ImageNode,
@@ -32,13 +31,9 @@ import { drawnNode } from '../document/booleanNode.ts'
 import { OVERLAY_COMPONENT } from './overlay.ts'
 import { isVariantSet } from '../document/variants.ts'
 import { getImage } from './images.ts'
-import { frameLabelPose } from './labels.ts'
+import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
 import { applyFont, layoutText } from './text.ts'
 import type { Viewport } from './viewport.ts'
-
-export const FRAME_LABEL_FONT = '11px system-ui, sans-serif'
-/** フレーム名ラベルの高さ（画面ピクセル）。フレームを囲む矩形の上辺のすぐ上に置く */
-export const FRAME_LABEL_HEIGHT = 18
 
 export type RenderOptions = {
   labelColor: string
@@ -237,7 +232,7 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
   const selfContained = node.type !== 'frame' || node.clipContent
   if (selfContained && !intersects(transformRect(world, paintedRect(ctx, node)), pass.visible)) return
 
-  const effects = 'effects' in node ? shownPaints(node.effects) : []
+  const effects = shownPaints(node.effects)
   // 背景のぼかしは、ノードより先に描いてあるもの（後ろに見えているもの）をノードの形の内側でぼかす
   const backgroundBlur = blurRadius(effects, 'background-blur')
   if (backgroundBlur > 0) blurBackdrop(ctx, pass, node, local, backgroundBlur)
@@ -365,7 +360,7 @@ function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
   const lineHeight = node.fontSize * node.lineHeight
   const contentHeight = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent
   const baseline = (lineHeight - contentHeight) / 2 + metrics.fontBoundingBoxAscent
-  const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
+  const align = alignFactor(node.textAlign)
   const lines = layoutText(ctx, node)
   // 文字の影は、文字の形を別のキャンバスに描いてから影だけを落とす（行が分かれていても 1 つの形として）
   const silhouette: Silhouette = (c, spread) => {
@@ -404,7 +399,7 @@ function traceShape(ctx: CanvasRenderingContext2D, node: Exclude<SceneNode, Text
       for (const contour of pathOutlines(node)) tracePath(ctx, contour.vertices, contour.closed)
       break
     default:
-      ctx.roundRect(0, 0, node.width, node.height, clampRadius(node.cornerRadius, node))
+      ctx.roundRect(0, 0, node.width, node.height, clampedRadii(node.cornerRadius, node.width, node.height))
   }
 }
 
@@ -439,19 +434,13 @@ function drawContent(
   const { width, height } = node
   switch (node.type) {
     case 'rect': {
-      const outline = (c = ctx) => {
-        c.beginPath()
-        c.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
-      }
+      const outline = (c = ctx) => traceShape(c, node)
       outline()
       paint(ctx, pass, node, outline)
       break
     }
     case 'ellipse': {
-      const outline = (c = ctx) => {
-        c.beginPath()
-        c.ellipse(width / 2, height / 2, width / 2, height / 2, 0, 0, Math.PI * 2)
-      }
+      const outline = (c = ctx) => traceShape(c, node)
       outline()
       paint(ctx, pass, node, outline)
       break
@@ -505,10 +494,7 @@ function drawContent(
     case 'image': {
       const asset = pass.assets[node.assetId]
       const bitmap = asset ? getImage(asset) : null
-      const outline = (c = ctx) => {
-        c.beginPath()
-        c.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
-      }
+      const outline = (c = ctx) => traceShape(c, node)
       // 画像の影は枠（角丸を含む）の形に付ける。画像は角丸で切り抜くので、影は画像に付けず先に描く
       if (node.effects.some(isShadow)) {
         outline()
@@ -516,8 +502,7 @@ function drawContent(
       }
       ctx.save()
       if (isRounded(node.cornerRadius)) {
-        ctx.beginPath()
-        ctx.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
+        outline()
         ctx.clip()
       }
       if (bitmap) {
@@ -536,10 +521,7 @@ function drawContent(
       break
     }
     case 'frame': {
-      const outline = (c = ctx) => {
-        c.beginPath()
-        c.roundRect(0, 0, width, height, clampRadius(node.cornerRadius, node))
-      }
+      const outline = (c = ctx) => traceShape(c, node)
       outline()
       fillAll(ctx, pass, node, node.effects, filledSilhouette(outline, 'nonzero'))
       // 内側の影は背景の上、子の下（CSS の inset の box-shadow と同じ）
@@ -760,6 +742,7 @@ function drawDropShadows(
   silhouette: Silhouette,
   attach: boolean,
 ): void {
+  if (all.length === 0) return
   const drops = splitEffects(all).drop
   if (drops.length === 0) return
   const plain = drops.filter((shadow) => shadow.spread === 0)
@@ -833,6 +816,7 @@ function drawInnerShadows(
   effects: readonly Effect[],
   outline: Outline,
 ): void {
+  if (effects.length === 0) return
   const inner = splitEffects(effects).inner
   if (inner.length === 0) return
   const rule = fillRuleOf(node)
@@ -925,12 +909,6 @@ function strokeWithCaps(
   }
 }
 
-/** roundRect に渡す 4 隅の半径。どの隅も枠の短い辺の半分までにする */
-function clampRadius(radius: CornerRadius, size: Size): number[] {
-  const limit = Math.min(size.width / 2, size.height / 2)
-  return cornerRadii(radius).map((r) => Math.max(0, Math.min(r, limit)))
-}
-
 /** 線の太さや影も含めて、ノードが描かれうる範囲（ノードの座標系） */
 export function paintedRect(ctx: CanvasRenderingContext2D, node: SceneNode): Bounds {
   // ぼかしは指定した長さより少し外まで広がる。影のずれは回転に従わないので、どの向きにも余裕を取る
@@ -961,18 +939,10 @@ export function paintedRect(ctx: CanvasRenderingContext2D, node: SceneNode): Bou
  * 字の形は行の箱から少しはみ出しうる（斜体や大きな飾り）ので、文字の大きさの半分だけ余裕を取る
  */
 function textRect(ctx: CanvasRenderingContext2D, node: TextNode): Bounds {
-  const lines = layoutText(ctx, node)
-  const align = { left: 0, center: 0.5, right: 1 }[node.textAlign]
-  let left = 0
-  let right = node.width
-  for (const line of lines) {
-    const x = (node.width - line.width) * align
-    left = Math.min(left, x)
-    right = Math.max(right, x + line.width)
-  }
-  const bottom = Math.max(node.height, lines.length * node.fontSize * node.lineHeight)
+  const ink = textInkBox(node, layoutText(ctx, node))
+  const bottom = Math.max(node.height, ink.height)
   const margin = node.fontSize / 2
-  return { x: left - margin, y: -margin, width: right - left + margin * 2, height: bottom + margin * 2 }
+  return { x: ink.x - margin, y: -margin, width: ink.width + margin * 2, height: bottom + margin * 2 }
 }
 
 /**

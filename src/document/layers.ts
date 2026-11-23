@@ -47,3 +47,21 @@ export function layerRows(scene: Scene, folding: Folding): LayerRow[] {
   visit(null, 0, false)
   return rows
 }
+
+/**
+ * ids を、描く順（奥から手前）に並べる。ほかの ids の中にあるもの（祖先も選ばれているもの）は、祖先と一緒に描かれるので除く。
+ * 複数のものをまとめて PNG・SVG に書き出すときに使う（canvas/exportPng.ts の exportTargets）。
+ */
+export function paintOrder(scene: Scene, ids: readonly NodeId[]): NodeId[] {
+  const wanted = new Set(ids)
+  const ordered: NodeId[] = []
+  function visit(children: readonly NodeId[]) {
+    for (const id of children) {
+      const node = scene.nodes[id]
+      if (wanted.has(id)) ordered.push(id)
+      else if (node.type === 'frame') visit(node.children)
+    }
+  }
+  visit(scene.rootIds)
+  return ordered
+}

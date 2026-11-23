@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type Folding, isOpen, layerOrder, layerRows, toggleFolding } from './layers.ts'
+import { type Folding, isOpen, layerOrder, layerRows, paintOrder, toggleFolding } from './layers.ts'
 import { frame, rect, sceneOf } from './testNodes.ts'
 
 const layout = {
@@ -74,5 +74,18 @@ describe('toggleFolding', () => {
     expect([...toggleFolding(before, 'b')]).toEqual(['a', 'b'])
     expect([...toggleFolding(before, 'a')]).toEqual([])
     expect([...before]).toEqual(['a'])
+  })
+})
+
+describe('paintOrder', () => {
+  it('奥から手前の順に並べ、選んだものの中にあるものは除く', () => {
+    const scene = sceneOf(
+      frame({ children: ['a', 'b'] }),
+      rect({ id: 'a', parentId: 'frame' }),
+      rect({ id: 'b', parentId: 'frame' }),
+      rect({ id: 'c' }),
+    )
+    expect(paintOrder(scene, ['c', 'b', 'a'])).toEqual(['a', 'b', 'c'])
+    expect(paintOrder(scene, ['a', 'frame', 'c'])).toEqual(['frame', 'c'])
   })
 })

@@ -1,9 +1,8 @@
-import { type Bounds, applyMatrix, nodeMatrix } from './geometry.ts'
-import { ellipseVertices, shapeContours } from './mask.ts'
-import { cornerRadii } from './paint.ts'
-import { type Contour, type Vertex, mapVertices, pathBounds, roundCorners } from './path.ts'
+import { type Bounds, applyMatrix, nodeMatrix, unionBounds } from './geometry.ts'
+import { maskFillRule, roundedRectContour, shapeContours } from './mask.ts'
+import { type Contour, type Vertex, mapVertices, pathBounds } from './path.ts'
 import { type BooleanShape, booleanContours } from './pathBoolean.ts'
-import type { BooleanOperation, CornerRadius, FrameNode, PathNode, PathPoint, Scene, SceneNode } from './types.ts'
+import type { BooleanOperation, FrameNode, PathNode, PathPoint, Scene, SceneNode } from './types.ts'
 
 // ブーリアン演算のノード（FrameNode の booleanOperation が null でないもの）。子を描かず、子の形に演算をかけた結果を描く。
 // 描画・当たり判定・SVG の書き出し・Dev モードは、演算のノードを drawnNode で「結果の形を持つパス」に置き換えて扱う。
@@ -21,19 +20,6 @@ export function canBoolean(node: SceneNode): boolean {
   return node.type !== 'text'
 }
 
-/** 角丸の矩形の輪郭（角丸は枠の短い辺の半分まで） */
-function rectContour(width: number, height: number, radius: CornerRadius): Contour {
-  const limit = Math.min(width / 2, height / 2)
-  const [tl, tr, br, bl] = cornerRadii(radius).map((r) => Math.max(0, Math.min(r, limit)))
-  const corners: Vertex[] = [
-    { x: 0, y: 0, radius: tl },
-    { x: width, y: 0, radius: tr },
-    { x: width, y: height, radius: br },
-    { x: 0, y: height, radius: bl },
-  ]
-  return { vertices: roundCorners(corners, true), closed: true }
-}
-
 /** 子の形（子の座標系）。演算に入らないものは null */
 function ownShape(scene: Scene, node: SceneNode): BooleanShape | null {
   switch (node.type) {
@@ -41,25 +27,27 @@ function ownShape(scene: Scene, node: SceneNode): BooleanShape | null {
       return null
     case 'rect':
     case 'path':
-      return { contours: shapeContours(node), fillRule: node.type === 'path' ? node.fillRule : 'nonzero' }
     case 'ellipse':
-      return {
-        contours: [{ vertices: ellipseVertices(node.width / 2, node.height / 2, node.width / 2, node.height / 2), closed: true }],
-        fillRule: 'nonzero',
-      }
+      return { contours: shapeContours(node), fillRule: maskFillRule(node) }
     case 'image':
-      return { contours: [rectContour(node.width, node.height, node.cornerRadius)], fillRule: 'nonzero' }
+      return { contours: [roundedRectContour(node.width, node.height, node.cornerRadius)], fillRule: 'nonzero' }
     case 'frame':
       if (isBooleanNode(node)) return { contours: booleanResult(scene, node), fillRule: 'evenodd' }
-      return { contours: [rectContour(node.width, node.height, node.cornerRadius)], fillRule: 'nonzero' }
+      return { contours: [roundedRectContour(node.width, node.height, node.cornerRadius)], fillRule: 'nonzero' }
   }
 }
 
-/** 演算のノードの子の形（演算のノードの座標系）。隠した子と、入らない子は除く */
-export function booleanShapes(scene: Scene, node: BooleanNode): BooleanShape[] {
+/** 演算に入る子（見えていて、演算に入れられる種類のもの）。Dev モードの「元の図形 N 個」も、これを数える */
+export function booleanParts(scene: Scene, node: BooleanNode): SceneNode[] {
   return node.children.flatMap((id) => {
     const child = scene.nodes[id]
-    if (!child || !child.visible) return []
+    return child && child.visible && canBoolean(child) ? [child] : []
+  })
+}
+
+/** 演算のノードの子の形（演算のノードの座標系）。隠した子と、入らない子は除く */
+function booleanShapes(scene: Scene, node: BooleanNode): BooleanShape[] {
+  return booleanParts(scene, node).flatMap((child) => {
     const shape = ownShape(scene, child)
     if (!shape) return []
     const m = nodeMatrix(child)
@@ -97,13 +85,7 @@ export function booleanResult(scene: Scene, node: BooleanNode): Contour[] {
 
 /** 結果を囲む矩形（演算のノードの座標系）。何も残らなければ null */
 export function booleanBounds(scene: Scene, node: BooleanNode): Bounds | null {
-  const boxes = booleanResult(scene, node).map((contour) => pathBounds(contour.vertices, true))
-  if (boxes.length === 0) return null
-  const x = Math.min(...boxes.map((box) => box.x))
-  const y = Math.min(...boxes.map((box) => box.y))
-  const right = Math.max(...boxes.map((box) => box.x + box.width))
-  const bottom = Math.max(...boxes.map((box) => box.y + box.height))
-  return { x, y, width: right - x, height: bottom - y }
+  return unionBounds(booleanResult(scene, node).map((contour) => pathBounds(contour.vertices, true)))
 }
 
 const pathCache = new WeakMap<BooleanNode, { contours: Contour[]; path: PathNode }>()

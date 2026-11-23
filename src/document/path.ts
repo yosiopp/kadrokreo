@@ -69,11 +69,6 @@ export function pathOutlines(path: ContourSource): Contour[] {
   return pathContours(path).map((contour) => ({ vertices: roundCorners(contour.vertices, contour.closed), closed: contour.closed }))
 }
 
-/** パスの描く形の頂点（ノードの座標系）。角の丸めを曲線に直したもの。描画・当たり判定・SVG の出力が使う */
-export function pathOutline(path: Pick<PathNode, 'width' | 'height' | 'points' | 'closed'>): Vertex[] {
-  return roundCorners(pathPoints(path), path.closed)
-}
-
 /**
  * 角の丸め（radius）を持つ頂点を、丸めの始まりと終わりの 2 つの頂点と、円弧に近い 3 次ベジェ曲線に置き換える。
  * 丸めるのは、制御点を持たず、両側の辺が直線の頂点だけ（開いたパスの両端は丸めない）。
@@ -231,7 +226,7 @@ export function splitSegment(segment: Segment, t: number): [Segment, Segment] {
 }
 
 /** 1 本の辺の曲線そのものを囲む矩形。曲線の向きが軸に平行になる点（微分が 0 の点）を両端に加えて囲む */
-export function segmentBounds(segment: Segment): Bounds {
+function segmentBounds(segment: Segment): Bounds {
   const xs = [segment.from.x, segment.to.x]
   const ys = [segment.from.y, segment.to.y]
   if (segment.curved) {

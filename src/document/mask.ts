@@ -1,7 +1,7 @@
 import { type Matrix, type Point, applyMatrix, multiply, nodeMatrix } from './geometry.ts'
-import { cornerRadii } from './paint.ts'
+import { clampedRadii } from './paint.ts'
 import { type Contour, type Vertex, flattenPath, mapVertices, pathOutlines, roundCorners } from './path.ts'
-import type { EllipseNode, NodeId, PathNode, RectNode, Scene, SceneNode } from './types.ts'
+import type { CornerRadius, EllipseNode, NodeId, PathNode, RectNode, Scene, SceneNode } from './types.ts'
 
 // マスク（既存のデザインツールの「マスクとして使う」。types.ts の Maskable）を読む関数。描画・当たり判定・SVG の書き出し・Dev モードの CSS が共有する。
 // マスクは同じ親の中で、自分より手前（並びの後ろ）の兄弟を、次のマスクが現れるまで自分の形で切り取る。マスク自身は描かない。
@@ -41,7 +41,7 @@ export function hasMask(scene: Scene, ids: readonly NodeId[]): boolean {
 }
 
 /** 円を 4 つの 3 次ベジェ曲線で近似するときの制御点の長さ */
-const KAPPA = 0.5522847498
+export const KAPPA = 0.5522847498
 
 /** 楕円の輪郭（4 つの 3 次ベジェ曲線） */
 export function ellipseVertices(cx: number, cy: number, rx: number, ry: number): Vertex[] {
@@ -62,18 +62,20 @@ export function ellipseVertices(cx: number, cy: number, rx: number, ry: number):
 export function shapeContours(node: MaskNode): Contour[] {
   const { width, height } = node
   if (node.type === 'ellipse') return [{ vertices: ellipseVertices(width / 2, height / 2, width / 2, height / 2), closed: true }]
-  if (node.type === 'rect') {
-    const limit = Math.min(width / 2, height / 2)
-    const [tl, tr, br, bl] = cornerRadii(node.cornerRadius).map((r) => Math.max(0, Math.min(r, limit)))
-    const corners: Vertex[] = [
-      { x: 0, y: 0, radius: tl },
-      { x: width, y: 0, radius: tr },
-      { x: width, y: height, radius: br },
-      { x: 0, y: height, radius: bl },
-    ]
-    return [{ vertices: roundCorners(corners, true), closed: true }]
-  }
+  if (node.type === 'rect') return [roundedRectContour(width, height, node.cornerRadius)]
   return pathOutlines(node).map((contour) => ({ vertices: contour.vertices, closed: true }))
+}
+
+/** 角丸の矩形の輪郭（左上が原点。角丸は枠の短い辺の半分まで） */
+export function roundedRectContour(width: number, height: number, radius: CornerRadius): Contour {
+  const [tl, tr, br, bl] = clampedRadii(radius, width, height)
+  const corners: Vertex[] = [
+    { x: 0, y: 0, radius: tl },
+    { x: width, y: 0, radius: tr },
+    { x: width, y: height, radius: br },
+    { x: 0, y: height, radius: bl },
+  ]
+  return { vertices: roundCorners(corners, true), closed: true }
 }
 
 /** マスクの形の塗る範囲の決め方 */

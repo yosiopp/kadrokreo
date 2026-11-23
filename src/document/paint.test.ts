@@ -104,6 +104,9 @@ describe('書き出す範囲（getPaintedBounds）', () => {
     expect(getPaintedBounds(sceneOf(rect({ effects: [{ type: 'layer-blur', blur: 4, visible: true }] })), ['rect'])).toEqual({
       x: -6, y: -6, width: 112, height: 62,
     })
+    // 描画と同じく、ぼかしが 2 つ以上あれば 1 つの半径（2 乗の和の平方根）にまとめて見る（3 と 4 → 5 → 7.5）
+    const twice = [{ type: 'layer-blur' as const, blur: 3, visible: true }, { type: 'layer-blur' as const, blur: 4, visible: true }]
+    expect(getPaintedBounds(sceneOf(rect({ effects: twice })), ['rect'])).toEqual({ x: -7.5, y: -7.5, width: 115, height: 65 })
     const child = rect({ id: 'child', parentId: 'frame', x: 80, effects: [{ ...shadow, x: 0, y: 0, spread: 0 }] })
     const open = frame({ children: ['child'], clipContent: false })
     // 子の枠は (80, 0, 100, 50)、影は 6 だけ外へ

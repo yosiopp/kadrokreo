@@ -117,6 +117,15 @@ describe('塗り・グラデーション・影', () => {
     expect(setFill(faded, [rect.id], '#00ff00').nodes[rect.id]).toMatchObject({ fills: [{ color: '#00ff00', opacity: 0.5 }] })
   })
 
+  it('塗り・線の色を変えても、表示と描画モードは受け継ぐ（setFill と setStroke で同じ）', () => {
+    const hidden = { type: 'solid' as const, color: '#ff0000', opacity: 0.5, visible: false, blendMode: 'multiply' as const }
+    const { page, rect } = shapes()
+    const both = updatePaints(updatePaints(page, [rect.id], 'fills', () => [hidden]), [rect.id], 'strokes', () => [hidden])
+    const keep = { color: '#00ff00', opacity: 0.5, visible: false, blendMode: 'multiply' }
+    expect(setFill(both, [rect.id], '#00ff00').nodes[rect.id]).toMatchObject({ fills: [keep] })
+    expect(setStroke(both, [rect.id], '#00ff00').nodes[rect.id]).toMatchObject({ strokes: [keep] })
+  })
+
   it('塗りを足す・消す・並べ替える。テキストの塗りと直線の線は空にしない', () => {
     const { page, rect, text, line } = shapes()
     const two = updatePaints(page, [rect.id, text.id], 'fills', (fills) => [...fills, ...solid('#ff0000')])
@@ -179,7 +188,8 @@ describe('塗り・グラデーション・影', () => {
     expect(red.nodes[text.id]).toBe(page.nodes[text.id])
     const none = setStroke(red, [rect.id, line.id], null)
     expect(none.nodes[rect.id]).toMatchObject({ strokes: [] })
-    expect(none.nodes[line.id]).toMatchObject({ strokes: [] })
+    // 直線の線は空にできない（updatePaints と同じ）
+    expect(none.nodes[line.id]).toBe(red.nodes[line.id])
     // 線のないものから外しても変わらない
     expect(setStroke(page, [rect.id], null)).toBe(page)
   })

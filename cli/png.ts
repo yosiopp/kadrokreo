@@ -11,7 +11,7 @@ type NapiCanvas = typeof import('@napi-rs/canvas')
 
 let loaded: Promise<NapiCanvas> | null = null
 
-export class PngUnavailableError extends Error {}
+class PngUnavailableError extends Error {}
 
 /** @napi-rs/canvas を読み込み、描画のコードが使うブラウザの部品を用意する */
 function canvasModule(): Promise<NapiCanvas> {
@@ -47,7 +47,7 @@ function installBrowserShims(napi: NapiCanvas): void {
  * Helvetica と同じ字幅の書体（Arial・Liberation Sans）、日本語は macOS のヒラギノ、Linux の Noto Sans CJK、Windows の游ゴシック・メイリオ。
  * 描画のコード（canvas/text.ts の applyFont）は `太さ 大きさpx 書体` を代入するので、その書き方を前提にしている。
  */
-export const FONT_FALLBACK = 'Helvetica, Arial, "Liberation Sans", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic", Meiryo'
+const FONT_FALLBACK = 'Helvetica, Arial, "Liberation Sans", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic", Meiryo'
 
 function addFontFallback(napi: NapiCanvas): void {
   const proto = Object.getPrototypeOf(napi.createCanvas(1, 1).getContext('2d')) as object

@@ -2,20 +2,14 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
@@ -32,14 +26,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   const select = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) select`)
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const deselect = () => page.mouse.click(...at(740, 600))
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document.pages[0])
-    }
-  }))
+  const saved = async () => (await savedDocument(page)).pages[0]
   // 描画は requestAnimationFrame でまとめられるので、2 フレーム待ってから読む。y の高さで x0〜x1 を見て、印の青（#0d99ff）の画素を数える
   const bluePixels = (x0, x1, y) => page.evaluate(async ([x0, x1, y]) => {
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
@@ -285,8 +272,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   check('kdr に設定が入る', json.version === 16 && frames.filter((frame) => frame.name !== 'Frame 3').every((frame) => frame.layout) && Object.values(json.document.pages[0].nodes).some((node) => node.constraints && node.constraints.horizontal === 'end'), JSON.stringify(frames.map((f) => f.layout && f.layout.direction)))
 
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -304,6 +290,5 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

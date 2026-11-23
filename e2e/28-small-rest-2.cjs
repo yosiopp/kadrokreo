@@ -5,11 +5,7 @@ const { execFileSync } = require('child_process')
 
 // 小さな残り 2: コンポーネントの一覧のまとまりの行に説明文、フレームの通過（pass through）、テキストの背景のぼかし、
 // PNG の背景、書き出しの範囲に線の太さを含めること
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
 
 // バリアントのまとまり（Set、説明文つき）、黄色の上の半透明のフレーム（Group、中のシアンは乗算）、線の太い四角（Framed）、背景をぼかす文字（Glass）
 const sourcePath = path.join(OUT, 'small-rest-2-source.kdr')
@@ -37,8 +33,7 @@ cli(
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(sourcePath)
@@ -46,14 +41,7 @@ cli(
   const select = (label) => page.locator(`.properties-panel .field:has(.field-label:text-is("${label}")) select`).first()
   const button = (label) => page.locator(`.properties-panel button:text-is("${label}")`)
   const row = (name) => page.locator(`.layer-row[data-copy="false"]:has(.layer-name:text-is("${name}"))`).first()
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document)
-    }
-  }))
+  const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }
   const named = (nodes, name) => nodes.find((n) => n.name === name)
   // キャンバス全体の色の合計（描画が変わったかを見る）
@@ -145,6 +133,5 @@ cli(
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

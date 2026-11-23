@@ -1,12 +1,11 @@
 import { join } from 'node:path'
-import { pngBaseName, pngFileName } from '../../src/canvas/exportPng.ts'
+import { exportTargets, pngBaseName, pngFileName } from '../../src/canvas/exportPng.ts'
 import { kdrFile } from '../../src/document/kdr.ts'
 import { exportSvg, svgFileName } from '../../src/document/svgExport.ts'
 import { pruneAssets } from '../../src/editor/operations/document.ts'
 import { CODE_FORMAT_LABELS, type CodeFormat, componentName } from '../../src/viewer/codeFormat.ts'
 import { type ColorFormat } from '../../src/viewer/colors.ts'
 import { type Unit } from '../../src/viewer/inspect.ts'
-import { paintOrder } from '../../src/viewer/traverse.ts'
 import { safeFileName } from '../../src/ui/download.ts'
 import { nodeCode, nodeMarkup, slug, standaloneHtml } from '../../src/viewer/markup.ts'
 import { type Step, UsageError } from '../args.ts'
@@ -87,7 +86,7 @@ export const png: Command = {
     const background = backgroundOption('png', option(step, 'background')) ?? null
     const whole = step.positionals.length === 0
     // viewer と同じく、祖先と一緒に選んだものは除き、描く順（奥から手前）に並べる
-    const targets = whole ? page.rootIds : paintOrder(page, session.resolveAll(step.positionals))
+    const { targets } = exportTargets(session.document, page, whole ? null : session.resolveAll(step.positionals))
     if (targets.length === 0) throw new UsageError('png: 書き出すものがありません（ページが空です）')
     if (each && whole) throw new UsageError('png: --each にはノードを指定してください')
     if (each && to === '-') throw new UsageError('png: --each のときは --to に標準出力（-）を使えません')
@@ -125,7 +124,7 @@ export const svgOut: Command = {
     const each = flag(step, 'each')
     const background = backgroundOption('svg-out', option(step, 'background'))
     const whole = step.positionals.length === 0
-    const targets = whole ? page.rootIds : paintOrder(page, session.resolveAll(step.positionals))
+    const { targets } = exportTargets(session.document, page, whole ? null : session.resolveAll(step.positionals))
     if (targets.length === 0) throw new UsageError('svg-out: 書き出すものがありません（ページが空です）')
     if (each && whole) throw new UsageError('svg-out: --each にはノードを指定してください')
     if (each && to === '-') throw new UsageError('svg-out: --each のときは --to に標準出力（-）を使えません')

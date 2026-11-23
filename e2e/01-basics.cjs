@@ -2,24 +2,14 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const OUT = path.join(__dirname, 'out')
-require('fs').mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-
-let failures = 0
-function check(name, condition, detail = '') {
-  if (!condition) failures++
-  console.log(`${condition ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`)
-}
+const { OUT, EDITOR, VIEWER, check, finish, watchErrors } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
 
   await page.goto(EDITOR)
   await page.evaluate(() => localStorage.clear())
@@ -143,8 +133,7 @@ function check(name, condition, detail = '') {
 
   // viewer で読み込む
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   check('viewer に編集 UI がない', (await viewer.locator('.toolbar, .layers-panel, .properties-panel').count()) === 0)
   await viewer.screenshot({ path: path.join(OUT, '4-viewer-empty.png') })
@@ -163,8 +152,7 @@ function check(name, condition, detail = '') {
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
+  finish()
 })().catch((e) => {
   console.error('CRASHED', e)
   process.exit(1)

@@ -207,6 +207,20 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
       applyDocument((doc) => updatePage(doc, pageId, recipe))
     },
 
+    /** apply と同じ。recipe の結果（scene のほかに、作ったノードの id などを持つもの）を返す */
+    applyWith<R extends { scene: Page }>(recipe: (page: Page) => R): R | undefined {
+      let result: R | undefined
+      applyDocument((doc) => updatePage(doc, pageId, (page) => (result = recipe(page)).scene))
+      return result
+    },
+
+    /** applyDocument と同じ。recipe の結果（document のほかに、作ったノードの id などを持つもの）を返す */
+    applyDocumentWith<R extends { document: DesignDocument }>(recipe: (doc: DesignDocument) => R): R | undefined {
+      let result: R | undefined
+      applyDocument((doc) => (result = recipe(doc)).document)
+      return result
+    },
+
     /**
      * 履歴に積まずに、いまのページへの変更を見せる。recipe には毎回プレビュー開始前のページが渡るので、
      * ドラッグなら「開始位置 + 累積移動量」で書ける。

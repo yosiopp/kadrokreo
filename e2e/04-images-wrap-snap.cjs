@@ -2,12 +2,8 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const OUT = path.join(__dirname, 'out')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
 require('fs').mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -15,8 +11,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {})
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   page.on('dialog', (d) => d.accept())
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
@@ -215,8 +210,7 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   )
 
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -269,6 +263,5 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

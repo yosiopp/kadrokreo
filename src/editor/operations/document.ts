@@ -79,7 +79,7 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /** 中身（形式とバイト列）が同じアセットの id。なければ null */
-export function findSameAsset(assets: Record<AssetId, Asset>, asset: Asset): AssetId | null {
+function findSameAsset(assets: Record<AssetId, Asset>, asset: Asset): AssetId | null {
   for (const [id, existing] of Object.entries(assets)) {
     // 長さが違えば中身を比べるまでもない。同じ長さのときだけ全体を比べる
     if (existing.mime === asset.mime && sameBytes(existing.bytes, asset.bytes)) return id

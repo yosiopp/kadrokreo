@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createCamera } from '../canvas/camera.ts'
-import { pngFileName, renderPng } from '../canvas/exportPng.ts'
+import { exportTargets, pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
 import { copyText } from '../ui/clipboard.ts'
 import { getExportOptions } from '../ui/exportOptions.ts'
@@ -30,7 +30,7 @@ import { placeImage, readImageFile } from './importImage.ts'
 import { SVG_ACCEPT, convertSvgText, isSvgFile, placeSvg, readSvgFile, svgWarningMessage } from './importSvg.ts'
 import { fitTextNodes } from './measure.ts'
 import { addOrReuseAsset, createDocument, renameDocument, updatePage } from './operations/document.ts'
-import { patchNodes, sortByDocumentOrder, topLevelIds } from './operations/tree.ts'
+import { patchNodes } from './operations/tree.ts'
 import { createId } from './nodes.ts'
 import { loadSavedDocument, saveDocument } from './persistence.ts'
 import { type EditorStore, createEditorStore } from './store.ts'
@@ -223,21 +223,16 @@ function Editor({ store }: { store: EditorStore }) {
     }
   }
 
-  /** 書き出す範囲（重なり順）とファイル名（拡張子の前）。選択中のもの、何も選んでいなければ表示中のページ全体 */
-  function exportTargets() {
+  /** 書き出す範囲（描く順）とファイル名（拡張子の前）。選択中のもの、何も選んでいなければ表示中のページ全体。viewer・CLI と同じ決め方 */
+  function exportTargetsNow() {
     const { document, page, selection } = store.getState()
-    // 親子を一緒に選んでいたら親だけにして、重なり順に並べる
-    const targets =
-      selection.length > 0 ? sortByDocumentOrder(page, topLevelIds(page, selection)) : page.rootIds
-    // 1 つだけ選んでいればその名前、そうでなければ「ドキュメント名 - ページ名」をファイル名にする
-    const name =
-      selection.length === 1 ? page.nodes[selection[0]].name : `${document.name} - ${page.name}`
+    const { targets, name } = exportTargets(document, page, selection)
     return { document, page, targets, name: safeFileName(name) }
   }
 
   /** 選択中のもの（何も選んでいなければ表示中のページ全体）を PNG に書き出す */
   async function exportPng(scale: number) {
-    const { document, page, targets, name } = exportTargets()
+    const { document, page, targets, name } = exportTargetsNow()
     try {
       const png = await renderPng(page, document.assets, targets, scale, getExportOptions().background)
       downloadBlob(png, pngFileName(name, scale))
@@ -248,7 +243,7 @@ function Editor({ store }: { store: EditorStore }) {
 
   /** 選択中のもの（何も選んでいなければ表示中のページ全体）を SVG に書き出す */
   function exportSvg() {
-    const { document, page, targets, name } = exportTargets()
+    const { document, page, targets, name } = exportTargetsNow()
     try {
       downloadBlob(renderSvg(page, document.assets, targets, getExportOptions()), svgFileName(name))
     } catch (error) {
@@ -258,7 +253,7 @@ function Editor({ store }: { store: EditorStore }) {
 
   /** 選択中のもの（何も選んでいなければ表示中のページ全体）を SVG の文字にしてクリップボードへ入れる（「SVG に」と同じ中身） */
   async function copySvg(): Promise<boolean> {
-    const { document, page, targets } = exportTargets()
+    const { document, page, targets } = exportTargetsNow()
     try {
       const copied = await copyText(svgMarkup(page, document.assets, targets, getExportOptions()))
       if (!copied) setMessage('クリップボードへコピーできませんでした')

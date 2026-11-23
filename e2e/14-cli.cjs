@@ -4,13 +4,8 @@ const { execFileSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
 const CLI = path.join(__dirname, '..', 'cli', 'kadrokreo.ts')
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
 const cli = (args, input) => execFileSync(process.execPath, [CLI, ...args], { input, stdio: ['pipe', 'pipe', 'inherit'] })
 
 ;(async () => {
@@ -47,8 +42,7 @@ const cli = (args, input) => execFileSync(process.execPath, [CLI, ...args], { in
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const errors = []
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push(String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(viewer, errors)
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -100,8 +94,7 @@ const cli = (args, input) => execFileSync(process.execPath, [CLI, ...args], { in
 
   // editor でも開けて、インスタンスの上書き（Cancel）がそのまま残る
   const editor = await context.newPage()
-  editor.on('pageerror', (e) => errors.push('editor: ' + String(e)))
-  editor.on('console', (m) => m.type() === 'error' && errors.push('editor: ' + m.text()))
+  watchErrors(editor, errors, 'editor: ')
   await editor.goto(EDITOR)
   await editor.waitForSelector('.canvas-view canvas')
   await editor.locator('input[type=file][accept^=".kdr"]').setInputFiles(kdrPath)
@@ -117,6 +110,5 @@ const cli = (args, input) => execFileSync(process.execPath, [CLI, ...args], { in
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

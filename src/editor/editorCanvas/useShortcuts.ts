@@ -72,13 +72,8 @@ export function useShortcuts(options: Options) {
   /** いまのページへ貼り付けて、貼り付けたものを選択する */
   function paste(fragment: Fragment, offset: number) {
     const pageId = store.getState().page.id
-    let ids: NodeId[] = []
-    store.applyDocument((document) => {
-      const result = pasteIntoPage(document, pageId, fragment, offset)
-      ids = result.ids
-      return result.document
-    })
-    store.select(ids)
+    const result = store.applyDocumentWith((document) => pasteIntoPage(document, pageId, fragment, offset))
+    store.select(result?.ids ?? [])
   }
 
   /** 選択中のノードを、使っている画像ごと切り出す */
@@ -97,13 +92,8 @@ export function useShortcuts(options: Options) {
   function duplicate() {
     const targets = ownIds()
     if (targets.length === 0) return
-    let ids: NodeId[] = []
-    store.apply((base) => {
-      const result = duplicateNodes(base, targets, 10)
-      ids = result.ids
-      return result.scene
-    })
-    store.select(ids)
+    const result = store.applyWith((base) => duplicateNodes(base, targets, 10))
+    store.select(result?.ids ?? [])
   }
 
   /** 選んでいるフレームをコンポーネントにする */
@@ -111,62 +101,33 @@ export function useShortcuts(options: Options) {
 
   /** マスクとして使う（選んだものがどれもマスクなら、やめる）。まとめたフレームかマスクにしたものを選ぶ */
   function mask() {
-    let selected: NodeId | null = null
-    store.apply((base) => {
-      const result = applyMask(base, movableIds(), 'Mask group')
-      selected = result.id
-      return result.scene
-    })
+    const selected = store.applyWith((base) => applyMask(base, movableIds(), 'Mask group'))?.id
     if (selected) store.select([selected])
   }
 
   /** 選んだ矩形・楕円・パスを 1 つのパスにまとめる */
   function join() {
-    let joined: NodeId | null = null
-    store.apply((base) => {
-      const result = joinPaths(base, movableIds())
-      joined = result.id
-      return result.scene
-    })
+    const joined = store.applyWith((base) => joinPaths(base, movableIds()))?.id
     if (joined) store.select([joined])
   }
 
   /** 選んだ矩形・楕円・パスにブーリアン演算をかけて 1 つのパスにする。結果が空・頂点が多すぎるときは何も変えずに知らせる */
   function booleanOp(op: BooleanOp) {
-    let result: NodeId | null = null
-    let error: 'empty' | 'too-many' | undefined
-    store.apply((base) => {
-      const next = booleanPaths(base, movableIds(), op)
-      result = next.id
-      error = next.error
-      return next.scene
-    })
-    if (result) store.select([result])
+    const { id, error } = store.applyWith((base) => booleanPaths(base, movableIds(), op)) ?? {}
+    if (id) store.select([id])
     else if (error === 'empty') options.onMessage(`${BOOLEAN_LABELS[op]}の結果が空になるので、何も変えませんでした。`)
     else if (error === 'too-many') options.onMessage(`${BOOLEAN_LABELS[op]}の結果の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超えるので、何も変えませんでした。`)
   }
 
   /** 選んだもの（テキスト以外）を、元の図形を子に残すブーリアン演算のノードにまとめ、それを選ぶ */
   function booleanNode(op: BooleanOp) {
-    let created: NodeId | null = null
-    store.apply((base) => {
-      const result = createBooleanNode(base, movableIds(), op)
-      created = result.id
-      return result.scene
-    })
+    const created = store.applyWith((base) => createBooleanNode(base, movableIds(), op))?.id
     if (created) store.select([created])
   }
 
   /** 選んだブーリアン演算のノードを、結果の形のパスに焼き込む */
   function flattenBoolean() {
-    let flat: NodeId[] = []
-    let error: 'empty' | 'too-many' | undefined
-    store.apply((base) => {
-      const result = flattenBooleanNodes(base, movableIds())
-      flat = result.ids
-      error = result.error
-      return result.scene
-    })
+    const { ids: flat = [], error } = store.applyWith((base) => flattenBooleanNodes(base, movableIds())) ?? {}
     if (flat.length > 0) store.select(flat)
     if (error === 'empty') options.onMessage('結果が空のブーリアン演算は、平らにしませんでした。')
     else if (error === 'too-many') options.onMessage(`結果の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超えるブーリアン演算は、平らにしませんでした。`)
@@ -174,37 +135,20 @@ export function useShortcuts(options: Options) {
 
   /** 選んだ図形の線を、線の形のパスにする（塗りのある図形は残して、手前に置く） */
   function outlineStroke() {
-    let outlines: NodeId[] = []
-    let error: 'too-many' | undefined
-    store.apply((base) => {
-      const result = outlineStrokes(base, movableIds())
-      outlines = result.ids
-      error = result.error
-      return result.scene
-    })
+    const { ids: outlines = [], error } = store.applyWith((base) => outlineStrokes(base, movableIds())) ?? {}
     if (outlines.length > 0) store.select(outlines)
     if (error === 'too-many') options.onMessage(`線の形の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超える図形は、輪郭にしませんでした。`)
   }
 
   /** 選んだパスを輪郭ごとのパスに分ける */
   function split() {
-    let parts: NodeId[] = []
-    store.apply((base) => {
-      const result = splitPaths(base, movableIds())
-      parts = result.ids
-      return result.scene
-    })
+    const parts = store.applyWith((base) => splitPaths(base, movableIds()))?.ids ?? []
     if (parts.length > 0) store.select(parts)
   }
 
   /** 選んだものを、自動で並べるフレームにまとめる */
   function wrap() {
-    let frameId: NodeId | null = null
-    store.apply((base) => {
-      const result = wrapInAutoLayout(base, movableIds(), nextName(base, 'frame'))
-      frameId = result.id
-      return result.scene
-    })
+    const frameId = store.applyWith((base) => wrapInAutoLayout(base, movableIds(), nextName(base, 'frame')))?.id
     if (frameId) store.select([frameId])
   }
 

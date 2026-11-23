@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
-import { pngBaseName, pngFileName, renderPng } from '../canvas/exportPng.ts'
+import { exportTargets, pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
 import { svgFileName } from '../document/svgExport.ts'
 import { assetBlob } from '../canvas/images.ts'
@@ -24,7 +24,7 @@ import { imageExtension, nodeMarkup, standaloneHtml } from './markup.ts'
 import type { CodeStyle } from './inspect.ts'
 import { LayerTree } from './LayerTree.tsx'
 import { ViewerCanvas } from './ViewerCanvas.tsx'
-import { type Step, paintOrder, stepFrom } from './traverse.ts'
+import { type Step, stepFrom } from './traverse.ts'
 
 /** 選択を動かすキー。[そのまま押したとき, Shift を押しながらのとき] */
 const STEP_KEYS: Record<string, [Step, Step] | undefined> = {
@@ -145,8 +145,7 @@ export default function ViewerApp() {
   /** ノード（いくつでも）、または表示中のページ全体を PNG として保存する。ドキュメントは変更しない */
   async function exportPng(nodeIds?: readonly NodeId[]) {
     if (!doc || !page) return
-    const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
-    const name = pngBaseName(doc, page, targets, !nodeIds)
+    const { targets, name } = exportTargets(doc, page, nodeIds ?? null)
     try {
       const png = await renderPng(page, doc.assets, targets, scale, getExportOptions().background)
       downloadBlob(png, pngFileName(safeFileName(name), scale))
@@ -159,8 +158,7 @@ export default function ViewerApp() {
   /** ノード（いくつでも）、または表示中のページ全体を SVG として保存する。範囲とファイル名は PNG と同じ決め方 */
   function exportSvg(nodeIds?: readonly NodeId[]) {
     if (!doc || !page) return
-    const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
-    const name = pngBaseName(doc, page, targets, !nodeIds)
+    const { targets, name } = exportTargets(doc, page, nodeIds ?? null)
     try {
       downloadBlob(renderSvg(page, doc.assets, targets, getExportOptions()), svgFileName(safeFileName(name)))
       setMessage(null)
@@ -172,7 +170,7 @@ export default function ViewerApp() {
   /** ノード（いくつでも）、または表示中のページ全体を SVG の文字にしてクリップボードへ入れる。中身は「SVG に」と同じ */
   async function copySvg(nodeIds?: readonly NodeId[]): Promise<boolean> {
     if (!doc || !page) return false
-    const targets = nodeIds ? paintOrder(page, nodeIds) : page.rootIds
+    const { targets } = exportTargets(doc, page, nodeIds ?? null)
     try {
       const copied = await copyText(svgMarkup(page, doc.assets, targets, getExportOptions()))
       setMessage(copied ? null : 'クリップボードへコピーできませんでした')

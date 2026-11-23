@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createRect, createText } from '../src/editor/nodes.ts'
+import { DEFAULT_SHADOW } from '../src/editor/operations/paints.ts'
 import { UsageError, parseArgs } from './args.ts'
 import { readImageInfo } from '../src/document/imageInfo.ts'
 import { estimateTextSize, estimateTextWidth } from './textMeasure.ts'
@@ -50,6 +51,8 @@ describe('values', () => {
       effects: [{ type: 'drop-shadow', x: 0, y: 4, blur: 4, color: '#000000', opacity: 0.25, visible: true, spread: 0, blendMode: 'normal' }],
       sizing: { width: 'fill', height: 'fixed' },
     })
+    // 影がなければ、editor のパネルの「影を付ける」と同じ既定の影（DEFAULT_SHADOW）を付けてから変える
+    expect(buildPatch(rect, [['shadow.x', '2']])).toEqual({ effects: [{ ...DEFAULT_SHADOW, x: 2 }] })
     expect(buildPatch(rect, [['fill', '#ff0000'], ['stroke', 'null']])).toEqual({
       fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' as const }],
       strokes: [],

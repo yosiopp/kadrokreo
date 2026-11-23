@@ -5,12 +5,7 @@ const { execFileSync } = require('child_process')
 
 // コンポーネントの残り: 入れ子の中の入れ子の差し替え、説明文とプロパティ、バリアントのプロパティと値の並べ替え・値の編集、
 // 一覧のページごとの見出しとサムネイル
-const OUT = path.join(__dirname, 'out')
-fs.mkdirSync(OUT, { recursive: true })
-const EDITOR = process.env.EDITOR_URL || 'http://localhost:5180'
-const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
+const { OUT, EDITOR, VIEWER, check, finish, watchErrors, savedDocument } = require('./harness.cjs')
 
 // CLI で、ボタン ⊂ カード ⊂ パネル の元とパネルのインスタンス、アイコン、バリアントのまとまり（Chip）、2 ページ目の元を作る
 const sourcePath = path.join(OUT, 'component-rest-source.kdr')
@@ -30,8 +25,7 @@ cli(...(
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(sourcePath)
@@ -41,14 +35,7 @@ cli(...(
   const button = (label) => page.locator(`.properties-panel button:text-is("${label}")`)
   const row = (name) => page.locator(`.layer-row[data-copy="false"]:has(.layer-name:text-is("${name}"))`).first()
   const copyRow = (name) => page.locator(`.layer-row[data-copy="true"]:has(.layer-name:text-is("${name}"))`).first()
-  const saved = () => page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const request = open.result.transaction('document').objectStore('document').get('current')
-      request.onsuccess = () => resolve(request.result.document)
-    }
-  }))
+  const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }
   const named = (nodes, name) => nodes.find((n) => n.name === name && !(n.component && n.component.role === 'instance' && n.parentId === null && name !== 'Outer'))
 
@@ -157,8 +144,7 @@ cli(...(
   check('kdr に説明文とプロパティが入る', json.version === 16 && JSON.stringify(json.document.pages[0].nodes[btn.id].component.properties) === JSON.stringify(btn.component.properties))
 
   const viewer = await context.newPage()
-  viewer.on('pageerror', (e) => errors.push('viewer: ' + String(e)))
-  viewer.on('console', (m) => m.type() === 'error' && errors.push('viewer: ' + m.text()))
+  watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)
   await viewer.locator('input[type=file]').setInputFiles(kdrPath)
   await viewer.waitForSelector('.canvas-view canvas')
@@ -179,8 +165,7 @@ cli(...(
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
+  finish()
 })().catch((error) => {
   console.error(error)
   process.exit(1)

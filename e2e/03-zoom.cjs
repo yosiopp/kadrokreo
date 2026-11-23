@@ -1,16 +1,13 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
-const OUT = path.join(__dirname, 'out')
+const { OUT, check, finish, crashed, watchErrors } = require('./harness.cjs')
 require('fs').mkdirSync(OUT, { recursive: true })
-let failures = 0
-const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`) }
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', deviceScaleFactor: 2 })
   const page = await context.newPage()
   const errors = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  watchErrors(page, errors)
   await page.goto(process.env.EDITOR_URL || 'http://localhost:5180')
   await page.evaluate(() => localStorage.clear())
   await page.reload()
@@ -93,6 +90,5 @@ const check = (name, ok, detail = '') => { if (!ok) failures++; console.log(`${o
   await page.screenshot({ path: path.join(OUT, '7-dark.png') })
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
-  console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-})().catch((e) => { console.error('CRASHED', e); process.exit(1) })
+  finish()
+})().catch(crashed)

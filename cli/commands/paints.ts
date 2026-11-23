@@ -1,10 +1,10 @@
 import { type Size, normalizeAngle } from '../../src/document/geometry.ts'
-import { linearFromAngle } from '../../src/document/paint.ts'
+import { linearFromAngle, solidPaint } from '../../src/document/paint.ts'
 import { BLEND_MODES } from '../../src/document/kdr.ts'
 import type { BlendMode, ColorStop, Paint } from '../../src/document/types.ts'
 import { MAX_PAINTS, MAX_STOPS, type PaintKey, convertPaint } from '../../src/editor/operations/paints.ts'
 import { patchNodes } from '../../src/editor/operations/tree.ts'
-import { UsageError } from '../args.ts'
+import { type Step, UsageError } from '../args.ts'
 import { type Command, checkStep, flag, numberOption, option, positional } from './common.ts'
 
 // 塗りのコマンド。塗りは editor のキャンバス操作（GradientEdit）と同じく「どの配列（fills / strokes）の何番目か」で指す。
@@ -58,7 +58,7 @@ export const gradient: Command = {
     /** 元の塗り（なければ null）から、作るグラデーション */
     const build = (base: Paint | null, size: Size): Paint => {
       if (base === null && stops === undefined) throw new UsageError('gradient: 塗りがないノードには --colors を指定してください')
-      let paint = convertPaint(base ?? { type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' }, type)
+      let paint = convertPaint(base ?? solidPaint('#000000'), type)
       if (paint.type === 'solid') throw new Error('unreachable')
       if (stops) paint = { ...paint, stops }
       if (opacity !== undefined) paint = { ...paint, opacity }
@@ -99,7 +99,7 @@ export const gradient: Command = {
   },
 }
 
-function integerOption(step: Parameters<Command['run']>[1], name: string): number | undefined {
+function integerOption(step: Step, name: string): number | undefined {
   const value = numberOption(step, name)
   if (value !== undefined && !Number.isInteger(value)) throw new UsageError(`${step.name}: --${name} は整数です: ${value}`)
   return value
@@ -115,7 +115,7 @@ function fraction(raw: string, label: string): number {
 }
 
 /** --center x,y / --radius r|rx,ry（割合か %）。one が true なら 1 つで両方 */
-function pairOption(step: Parameters<Command['run']>[1], name: string, one: boolean): [number, number] | null {
+function pairOption(step: Step, name: string, one: boolean): [number, number] | null {
   const raw = option(step, name)
   if (raw === undefined) return null
   const parts = raw.split(',').map((part) => fraction(part, `${step.name}: --${name}`))
@@ -137,7 +137,7 @@ function parseColor(raw: string): string {
  * 「#f00,#0f0@30%,#00f」を色の並びにする。位置を省いた色は、最初が 0・最後が 1、
  * 間は前後の位置のあいだに等しく並べる（CSS のグラデーションと同じ）。位置が戻るとエラー
  */
-export function parseStops(raw: string): ColorStop[] {
+function parseStops(raw: string): ColorStop[] {
   const items = raw.split(',').map((item) => {
     const at = item.indexOf('@')
     const color = parseColor(at === -1 ? item : item.slice(0, at))

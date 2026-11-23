@@ -63,6 +63,13 @@ export class Session {
     this.applyDocument((doc) => updatePage(doc, this.page.id, recipe))
   }
 
+  /** apply と同じ。recipe の結果（scene のほかに、作ったノードの id などを持つもの）を返す */
+  applyWith<R extends { scene: Page }>(recipe: (page: Page) => R): R | undefined {
+    let result: R | undefined
+    this.apply((page) => (result = recipe(page)).scene)
+    return result
+  }
+
   /** セレクタ 1 つを、いまのページのノード（複数のこともある）にする */
   resolve(selector: string): NodeId[] {
     return resolveSelector(this.page, selector, this.last)
@@ -93,7 +100,7 @@ export class Session {
  *   名前         レイヤー名（同じ名前が複数あるとエラー）
  *   親/子        レイヤー名か id を / でつないだ道筋（親子が続いていること。先頭はどの深さからでもよい）
  */
-export function resolveSelector(scene: Scene, selector: string, last: readonly NodeId[] = []): NodeId[] {
+function resolveSelector(scene: Scene, selector: string, last: readonly NodeId[] = []): NodeId[] {
   if (selector === '@') {
     const alive = last.filter((id) => Object.hasOwn(scene.nodes, id))
     if (alive.length === 0) throw new UsageError('@: 直前に作ったノードがありません')
@@ -153,7 +160,7 @@ export function renameNodeId<T extends Scene>(scene: T, from: NodeId, to: NodeId
  * kdr として読み込める形かを確かめ、読み込んだときと同じ形（既知の項目だけ）に組み直す。
  * 画像は JSON に入らないので、そのまま渡す。使われなくなった画像も（取り消しに備えて）残す
  */
-export function validate(doc: DesignDocument): DesignDocument {
+function validate(doc: DesignDocument): DesignDocument {
   const json = JSON.stringify(kdrFile(doc))
   return { ...parseKdr(JSON.parse(json), doc.assets), assets: doc.assets }
 }
