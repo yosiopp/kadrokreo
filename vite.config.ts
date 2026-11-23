@@ -5,7 +5,7 @@ import { configDefaults, defineConfig } from 'vitest/config'
 export default defineConfig({
   plugins: [react()],
   test: {
-    // 別のセッションの worktree（.claude/worktrees/）がこのフォルダの中にあるので、そのテストまで走らせない
+    // git worktree を .claude/worktrees/ に置くことがあるので、その中のテストまで走らせない
     exclude: [...configDefaults.exclude, '.claude/**'],
   },
 })

@@ -5,7 +5,7 @@ const path = require('path')
 // 性能の改善の残り: レイヤーの一覧は見えている行だけを作る（仮想スクロール）。
 // 行の多い kdr（計測用の makeKdr で作る）を editor と viewer で開き、作る行が一部だけなこと、
 // スクロールすると下の行が出てきて選べること、パン・ドラッグ・ズームで使い回して描いた絵が全部を描いたときと同じことを確かめる。
-// 画像は入れない（縮めて描いた画像の縁のにじみは、範囲を切って描くと Chrome の描き方が変わり、角の 1〜2 画素が薄く変わるため。pitfalls.md）
+// 画像は入れない（縮めて描いた画像の縁のにじみは、範囲を切って描くと Chrome の描き方が変わり、角の 1〜2 画素が薄く変わるため）
 const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
 const VIEWER = process.env.VIEWER_URL || 'http://localhost:5173'
 

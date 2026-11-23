@@ -1,7 +1,7 @@
 #!/bin/sh
 # 既定は viewer。--editor を付けて起動したときだけ editor のビルドを配信する。
 # 最初の引数が kdr（または kadrokreo）なら、配信はせずに kdr コマンドを実行する。
-#   docker run --rm -i -v "$PWD:/work" kadrokreo kdr -f design.kdr ls
+#   docker run --rm -i -v "$PWD:/work" ghcr.io/yosiopp/kadrokreo kdr -f design.kdr ls
 set -eu
 
 case "${1:-}" in
@@ -20,8 +20,8 @@ for arg in "$@"; do
     --viewer) mode=viewer ;;
     *)
       echo "kadrokreo: unknown option: $arg" >&2
-      echo "usage: docker run -p 8080:80 kadrokreo [--editor]" >&2
-      echo "       docker run --rm -i -v \"\$PWD:/work\" kadrokreo kdr [kdr の引数…]" >&2
+      echo "usage: docker run -p 8080:80 ghcr.io/yosiopp/kadrokreo [--editor]" >&2
+      echo "       docker run --rm -i -v \"\$PWD:/work\" ghcr.io/yosiopp/kadrokreo kdr [kdr の引数…]" >&2
       exit 64
       ;;
   esac

@@ -24,3 +24,8 @@ e2e/out
 *.sln
 *.sw?
 bench/out
+
+# 内部の開発資料（公開しない。本体のチェックアウトにだけ置く）
+/.internal/
+/CLAUDE.md
+/.claude/

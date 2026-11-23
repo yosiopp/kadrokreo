@@ -1,7 +1,7 @@
 import type { Point } from './geometry.ts'
 import { type Contour, type Segment, type Vertex, pathSegments, segmentAt, splitSegment } from './path.ts'
 
-// パスのブーリアン演算（合体・差し引き・交差・除外）。依存を足さずに自前で書いている（決めた理由は decisions.md「パスのブーリアン演算」）。
+// パスのブーリアン演算（合体・差し引き・交差・除外）。依存を足さずに自前で書いている。
 //
 // 流れ:
 // 1. 形ごとの輪郭の辺を、曲線は細かい折れ線に直す（FLATTEN_TOLERANCE 以内のずれ）。折れ線の辺は、どの辺のどの t の範囲から来たかを覚える。

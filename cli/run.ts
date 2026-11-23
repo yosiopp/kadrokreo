@@ -3,6 +3,7 @@ import { encodeKdr } from '../src/editor/exportKdr.ts'
 import { createDocument } from '../src/editor/operations/document.ts'
 import { type Step, UsageError, parseArgs } from './args.ts'
 import { COMMANDS, type Command } from './commands.ts'
+import { docs, help } from './help.ts'
 import { Session } from './session.ts'
 
 // コマンドラインの本体。入出力は IO に任せるので、テストではメモリ上で動かせる。
@@ -52,8 +53,20 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
   }
   // コマンドなしで -f と -o だけなら、読んで書き直す（古い版の kdr を今の版にする）
   const convert = steps.length === 0 && global.file !== null && global.out !== null
-  if (global.help || (steps.length === 0 && !convert) || steps[0]?.name === 'help') {
-    io.stdout(help(steps[0]?.name === 'help' ? steps[0].positionals[0] : undefined))
+  // kdr help [コマンド]・kdr コマンド --help（-h）・kdr docs は、入力を読まずに説明を出す
+  if (steps[0]?.name === 'help') {
+    io.stdout(help(steps[0].positionals[0]))
+    return
+  }
+  if (global.help || (steps.length === 0 && !convert)) {
+    io.stdout(help(steps[0]?.name))
+    return
+  }
+  if (steps[0]?.name === 'docs') {
+    if (steps.length > 1 || steps[0].positionals.length > 0 || steps[0].options.size > 0) {
+      throw new UsageError('docs: 引数は取りません（ほかのコマンドとはつなげません）')
+    }
+    io.stdout(docs())
     return
   }
 
@@ -135,46 +148,4 @@ function checkPlan(commands: readonly Command[], steps: readonly Step[], global:
 
 async function readInput(file: string | null, io: IO): Promise<Uint8Array<ArrayBuffer>> {
   return file === null || file === '-' ? io.readStdin() : io.readFile(file)
-}
-
-export function help(name?: string): string {
-  if (name !== undefined) {
-    const command = COMMANDS.get(name)
-    if (!command) throw new UsageError(`不明なコマンドです: ${name}`)
-    return `kdr ${command.usage}\n\n${command.summary}\n`
-  }
-  const groups: [string, Command['kind'][]][] = [
-    ['作る', ['source']],
-    ['調べる（標準出力へ）', ['query']],
-    ['書き出す（ファイルへ）', ['export']],
-    ['ページ', ['nav']],
-    ['変える', ['edit']],
-  ]
-  const lines = [
-    'kdr — kadrokreo の kdr ファイルをコマンドラインで調べ、編集する（kadrokreo という名前でも動く）',
-    '',
-    '使い方:',
-    '  kdr [-f 入力.kdr] [-o 出力.kdr | -w] コマンド 引数… [+ コマンド 引数…]…',
-    '',
-    '  -f, --file   入力の kdr（- は標準入力。省略すると標準入力）',
-    '  -o, --out    出力の kdr（- は標準出力）。指定すると変えていなくても書き出す（古い版の更新に使える）',
-    '  -w, --write  入力のファイルへ上書きする',
-    '  +            コマンドの区切り。左から順に実行する',
-    '',
-    '  ドキュメントを変えたのに -o も -w もなければ、kdr を標準出力へ出すので、パイプでつなげられる:',
-    '    kdr new Demo | kdr add rect --name Box | kdr set Box fill=#ff0000 -o demo.kdr',
-    '',
-    'ノードの指定: id、レイヤー名、「親/子」の道筋、@（直前に作ったノード）',
-    '',
-  ]
-  for (const [title, kinds] of groups) {
-    lines.push(`${title}:`)
-    for (const command of COMMANDS.values()) {
-      if (!kinds.includes(command.kind)) continue
-      lines.push(`  ${command.usage}`, `      ${command.summary}`)
-    }
-    lines.push('')
-  }
-  lines.push('kdr help コマンド で、1 つのコマンドの説明を出す')
-  return lines.join('\n') + '\n'
 }

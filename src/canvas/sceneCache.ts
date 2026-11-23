@@ -82,8 +82,8 @@ export class SceneCache {
    * target（画面のキャンバス）に input のページを描く。使い回せる分は使い回す。
    * zooming なら（ホイールでズームしている途中）、ページが同じなら前の絵を拡大・縮小して写すだけにし、取っておく絵は変えない。
    * 止まったら呼ぶ側がもう一度（zooming なしで）呼んで描き直す。
-   * 図形を描くのはいつも target そのもの — DOM の外のキャンバスに描いてから写すと、Chrome の描き方が変わって文字の形が少しずれるため
-   * （pitfalls.md）。取っておくのは target に描いた絵の写しで、写すだけなら画素は変わらない
+   * 図形を描くのはいつも target そのもの — DOM の外のキャンバスに描いてから写すと、Chrome の描き方が変わって文字の形が少しずれるため。
+   * 取っておくのは target に描いた絵の写しで、写すだけなら画素は変わらない
    */
   render(target: CanvasRenderingContext2D, input: SceneInput, zooming = false): RenderKind {
     const { width, height } = target.canvas

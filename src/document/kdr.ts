@@ -29,9 +29,9 @@ import { TarError, readTar, type TarEntry } from './tar.ts'
 // 既定値（DEFAULTS）と同じ項目は書かず、読むときに補う。だから、既定値を持つ項目を足すだけなら
 // 古いファイルもそのまま読める（version を上げなくてよい）。読み込みは今の version だけに対応する。
 //   15: 形を組み直した（入れ子の木、既定値の省略、塗り・線・効果の配列、大きさの決め方 sizing、直線をパスに）。
-//       14 までのファイルは読まない（依頼主の指示で、後方互換を捨てた）
+//       14 までのファイルは読まない（後方互換は持たない）
 //   16: gzip した 1 つの JSON（画像は base64 で document.assets に入れていた）から、tar.gz に画像のファイルを切り出した形へ。
-//       15 までのファイルは読まない（依頼主の指示）
+//       15 までのファイルは読まない
 export const KDR_FORMAT = 'kadrokreo'
 export const KDR_VERSION = 16
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
