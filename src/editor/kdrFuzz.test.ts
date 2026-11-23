@@ -744,7 +744,8 @@ describe('kdr の読み込みの極端な入力', () => {
     const children = Array.from({ length: 200_000 }, (_, i) => ({ type: 'rect', id: `r${i}`, name: 'R', x: i, y: 0, width: 1, height: 1 }))
     const file = { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'p', name: 'P', children: [{ type: 'frame', id: 'f', name: 'F', x: 0, y: 0, width: 10, height: 10, children }] }] } }
     expect(parseOrReject(file)).toBe('ok')
-  })
+    // 手元でも数秒かかり、CI のランナーでは既定の 5 秒を超えるので長めにする
+  }, 30_000)
 
   it('行が非常に多いテキスト（30 万行）も大きさを測って描画できる', () => {
     const node = { type: 'text', id: 't', name: 'T', x: 0, y: 0, width: 10, height: 10, text: 'a\n'.repeat(300_000), fontSize: 12, fontFamily: 'sans-serif', sizing: { width: 'hug' } }
