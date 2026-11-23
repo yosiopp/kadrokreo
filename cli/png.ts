@@ -1,6 +1,7 @@
 import { type Asset, type AssetId, type NodeId, type Scene } from '../src/document/types.ts'
 import { drawPng, loadSceneImages, pngArea } from '../src/canvas/exportPng.ts'
-import { layoutText } from '../src/canvas/text.ts'
+import { fontMetrics, layoutText } from '../src/canvas/text.ts'
+import type { SvgTextMetrics } from '../src/document/svgExport.ts'
 
 // PNG の書き出し。描画は本体の canvas/render.ts をそのまま使い、ブラウザの代わりに @napi-rs/canvas（Skia）の Canvas に描く。
 // @napi-rs/canvas は optionalDependencies なので、入っていない環境（ネイティブのバイナリがない、--omit=optional）では png だけが使えない。
@@ -31,6 +32,23 @@ function canvasModule(): Promise<NapiCanvas> {
   return loaded
 }
 
+/**
+ * フォントの上下の高さを、PNG の描画と同じ Canvas（書体の補い方も同じ）で測る関数。SVG の書き出しの基線と、取り込みの枠の上端に使う
+ * （ブラウザの書き出し・取り込みと同じ測り方）。@napi-rs/canvas が入っていなければ undefined（呼ぶ側は見積もりに戻す）。
+ * ブラウザの部品の置き換え（installBrowserShims）はしない
+ */
+export async function canvasTextMetrics(): Promise<SvgTextMetrics | undefined> {
+  let napi: NapiCanvas
+  try {
+    napi = await import('@napi-rs/canvas')
+  } catch {
+    return undefined
+  }
+  addFontFallback(napi)
+  const ctx = napi.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+  return (node) => fontMetrics(ctx, node)
+}
+
 function installBrowserShims(napi: NapiCanvas): void {
   const g = globalThis as Record<string, unknown>
   // render.ts が合成用・パターン用のキャンバスを作るのに使う。大きさは呼ぶ側が後から決める
@@ -49,7 +67,11 @@ function installBrowserShims(napi: NapiCanvas): void {
  */
 const FONT_FALLBACK = 'Helvetica, Arial, "Liberation Sans", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic", Meiryo'
 
+let fallbackAdded = false
+
 function addFontFallback(napi: NapiCanvas): void {
+  if (fallbackAdded) return
+  fallbackAdded = true
   const proto = Object.getPrototypeOf(napi.createCanvas(1, 1).getContext('2d')) as object
   const descriptor = Object.getOwnPropertyDescriptor(proto, 'font')
   if (!descriptor?.set || !descriptor.get) return

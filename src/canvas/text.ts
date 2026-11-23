@@ -1,7 +1,7 @@
 import type { Size } from '../document/geometry.ts'
 import type { TextNode } from '../document/types.ts'
 
-type FontStyle = Pick<TextNode, 'fontSize' | 'fontFamily' | 'fontWeight'>
+export type FontStyle = Pick<TextNode, 'fontSize' | 'fontFamily' | 'fontWeight'>
 export type TextStyle = FontStyle & Pick<TextNode, 'text' | 'sizing' | 'width' | 'lineHeight' | 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight'>
 
 /**
@@ -32,6 +32,16 @@ export function applyFont(ctx: CanvasRenderingContext2D, style: FontStyle): void
   // fontFamily が不正だと代入ごと無視されるので、先にサイズと太さだけ確実に反映しておく
   ctx.font = `${style.fontWeight} ${style.fontSize}px sans-serif`
   ctx.font = `${style.fontWeight} ${style.fontSize}px ${style.fontFamily}`
+}
+
+/**
+ * フォントの上下の高さ（px）。描画（render.ts）は行の高さの中でこれを真ん中に置いて基線を決める。
+ * SVG の書き出しと取り込みも同じ値で基線と枠の上端を行き来する（書き出して取り込み直しても位置がずれない）
+ */
+export function fontMetrics(ctx: CanvasRenderingContext2D, style: FontStyle): { ascent: number; descent: number } {
+  applyFont(ctx, style)
+  const metrics = ctx.measureText('')
+  return { ascent: metrics.fontBoundingBoxAscent, descent: metrics.fontBoundingBoxDescent }
 }
 
 // ノードは不変なので、同じオブジェクトなら行分けの結果も同じ

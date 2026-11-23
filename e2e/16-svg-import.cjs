@@ -115,6 +115,49 @@ const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
   const accepts = await page.locator('input[type=file]').evaluateAll((inputs) => inputs.map((i) => i.accept))
   check('kdr を開くボタンでも SVG を選べる', accepts.some((a) => a.includes('.kdr') && a.includes('.svg')), accepts.join(' | '))
 
+  // ── 書き出した SVG を取り込み直しても、テキストが上下にずれない（基線と上端をブラウザで測った書体の高さで行き来する） ──
+  const drift = await page.evaluate(async () => {
+    const { svgMarkup } = await import('/src/canvas/exportSvg.ts')
+    const { measureTextNode } = await import('/src/canvas/measure.ts')
+    const { getAbsoluteBounds } = await import('/src/document/geometry.ts')
+    const { convertSvgText } = await import('/src/editor/importSvg.ts')
+    const { createFrame, createText } = await import('/src/editor/nodes.ts')
+    const { convertSvg } = await import('/src/editor/svg/convert.ts')
+    const { parseSvgDom } = await import('/src/editor/svg/xml.ts')
+    const cases = [
+      ['One', 'Hello', { fontSize: 16 }],
+      ['Two', 'A\nBB\nCCC', { fontSize: 20, lineHeight: 1.5 }],
+      ['Three', 'Left\nRight', { fontSize: 48, lineHeight: 1, textAlign: 'right', fontWeight: 700 }],
+      ['Four', 'x\ny', { fontSize: 11, lineHeight: 2.25, textAlign: 'center', fontFamily: 'serif' }],
+      ['Five', '日本語\nかな', { fontSize: 30, lineHeight: 1.3 }],
+    ]
+    const frame = { ...createFrame({ x: 0, y: 0, width: 400, height: 600 }), id: 'F', name: 'F', children: [] }
+    const nodes = { F: frame }
+    cases.forEach(([name, text, patch], i) => {
+      const node = { ...createText({ x: 10 + i * 3, y: 20 + i * 110, width: 0, height: 0 }, text), ...patch, id: name, name, parentId: 'F' }
+      nodes[name] = { ...node, ...measureTextNode(node) }
+      frame.children.push(name)
+    })
+    const scene = { nodes, rootIds: ['F'] }
+    const svg = svgMarkup(scene, {}, ['F'])
+    const measure = (fragment) => {
+      const back = { nodes: fragment.nodes, rootIds: fragment.rootIds }
+      return cases.map(([name]) => {
+        const node = Object.values(back.nodes).find((n) => n.type === 'text' && n.name === name)
+        return { name, dy: getAbsoluteBounds(back, node.id).y - getAbsoluteBounds(scene, name).y, lineHeight: node.lineHeight, expected: nodes[name].lineHeight }
+      })
+    }
+    return {
+      after: measure(convertSvgText(svg, 'export').fragment),
+      // 直す前の取り込み（書体の高さを見積もる）
+      before: measure(convertSvg(parseSvgDom(svg), { name: 'export', measureText: measureTextNode }).fragment),
+    }
+  })
+  const show = (rows) => rows.map((r) => `${r.name} ${r.dy.toFixed(2)}`).join(', ')
+  check('書き出した SVG を取り込み直すと、テキストの上下の位置が 0.5px 以内で揃う（複数行・行の高さ・行揃え・大きさ・書体）',
+    drift.after.every((r) => Math.abs(r.dy) <= 0.5), `直したもの: ${show(drift.after)} / 見積もり: ${show(drift.before)}`)
+  check('複数行のテキストは行の高さも読み戻す', drift.after.filter((r) => r.name !== 'One').every((r) => Math.abs(r.lineHeight - r.expected) < 0.001), JSON.stringify(drift.after.map((r) => r.lineHeight)))
+
   // ── viewer は SVG を受け付けない（kdr として開こうとしてエラー） ──
   const viewer = await context.newPage()
   watchErrors(viewer, errors)

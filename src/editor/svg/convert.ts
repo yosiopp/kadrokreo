@@ -20,6 +20,7 @@ import { angleLine, linearFromAngle, solidPaint } from '../../document/paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
 import { sha256Hex } from '../../document/sha256.ts'
+import { type SvgTextMetrics, estimateTextMetrics, textBaseline } from '../../document/svgExport.ts'
 import type {
   Asset,
   AssetId,
@@ -84,6 +85,11 @@ export type SvgImportOptions = {
   name: string
   /** テキストの大きさを測る。editor は Canvas で測り、CLI は見積もる */
   measureText: (node: TextNode) => Size
+  /**
+   * フォントの上下の高さ。SVG の (x, y) は基線なので、これで枠の上端を求める。書き出し（document/svgExport.ts）と同じ測り方にすると、
+   * 書き出して取り込み直しても上下にずれない。省略すると書き出しと同じ見積もり（文字の上 0.9・下 0.22）
+   */
+  textMetrics?: SvgTextMetrics
 }
 
 class SvgImportError extends Error {
@@ -994,8 +1000,10 @@ class Converter {
     const rotation = pose ? pose.rotation : (Math.atan2(matrix[1], matrix[0]) * 180) / Math.PI
     const anchor = inherited.textAnchor === 'middle' ? 'center' : inherited.textAnchor === 'end' ? 'right' : 'left'
     const base = createText({ x: 0, y: 0, width: 0, height: 0 }, lines.join('\n'))
+    const lineHeight = lineHeightOf(element, lines.length, inherited.fontSize)
     let node: TextNode = {
       ...base,
+      ...(lineHeight === null ? {} : { lineHeight }),
       fontSize: Math.max(1, tidy(inherited.fontSize * scale)),
       fontFamily: inherited.fontFamily,
       fontWeight: fontWeightOf(inherited.fontWeight),
@@ -1004,7 +1012,7 @@ class Converter {
     const size = this.options.measureText(node)
     node = { ...node, ...size }
     // SVG の (x, y) は 1 行目の基線の、text-anchor の側の端。kadrokreo のテキストは枠の左上で置く
-    const baseline = ((node.lineHeight - 1.12) / 2 + 0.9) * node.fontSize
+    const baseline = textBaseline(node, (this.options.textMetrics ?? estimateTextMetrics)(node))
     const offsetX = anchor === 'center' ? -size.width / 2 : anchor === 'right' ? -size.width : 0
     const origin = applyMatrix(matrix, { x, y })
     const center = rotateVector({ x: offsetX + size.width / 2, y: -baseline + size.height / 2 }, rotation)
@@ -1584,6 +1592,26 @@ function hasDescendant(element: SvgElement, name: string): boolean {
  * text の中身を行に分ける。x か dy を持つ tspan（2 つ目以降）は新しい行とみなす。
  * 空白は XML の既定（xml:space="default"）どおり 1 つにまとめる
  */
+/**
+ * 行の高さ（fontSize に対する割合）。書き出し（document/svgExport.ts）は行ごとに y を持つ tspan を書くので、2 行以上あって
+ * 間隔が揃っていればそこから読む。読めなければ null（既定の行の高さのまま）。1 行だけのときは、行の高さを変えても文字の位置は同じ
+ */
+function lineHeightOf(element: SvgElement, lineCount: number, fontSize: number): number | null {
+  if (lineCount < 2) return null
+  const ys: number[] = []
+  for (const child of element.children) {
+    if (typeof child === 'string' || child.name !== 'tspan') continue
+    const y = parseNumbers(child.attributes.y)?.[0]
+    if (y === undefined) return null
+    ys.push(y)
+  }
+  if (ys.length !== lineCount) return null
+  const step = (ys[ys.length - 1] - ys[0]) / (ys.length - 1)
+  if (ys.some((y, i) => Math.abs(y - (ys[0] + step * i)) > 0.01)) return null
+  const ratio = step / fontSize
+  return Number.isFinite(ratio) && ratio >= 0.5 && ratio <= 10 ? Math.round(ratio * 1000) / 1000 : null
+}
+
 function textLines(element: SvgElement): string[] {
   const lines: string[] = ['']
   const walk = (nodes: SvgNode[]) => {

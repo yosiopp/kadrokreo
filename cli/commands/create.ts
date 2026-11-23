@@ -18,6 +18,7 @@ import { insertNode } from '../../src/editor/operations/tree.ts'
 import { type Step, UsageError } from '../args.ts'
 import { readImageInfo } from '../../src/document/imageInfo.ts'
 import { checkNewId } from '../session.ts'
+import { canvasTextMetrics } from '../png.ts'
 import { convertSvgFile, placeSvgFragment } from '../svg.ts'
 import { estimateTextSize } from '../textMeasure.ts'
 import { buildPatch } from '../values.ts'
@@ -171,9 +172,12 @@ export const svg: Command = {
     if (id !== undefined) checkNewId(session.page, id)
     const at = { x: numberOption(step, 'x') ?? 0, y: numberOption(step, 'y') ?? 0 }
     const base = file.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') || 'SVG'
+    const bytes = await ctx.readFile(file)
+    // 基線から枠の上端を、svg-out と同じくフォントの実際の高さで求める（測れなければ見積もる）
+    const textMetrics = await canvasTextMetrics()
     let imported
     try {
-      imported = convertSvgFile(await ctx.readFile(file), base)
+      imported = convertSvgFile(bytes, base, textMetrics)
     } catch (error) {
       if (error instanceof Error && /^Svg/.test(error.name)) throw new UsageError(`${file}: ${error.message}`)
       throw error

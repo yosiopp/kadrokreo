@@ -9,7 +9,7 @@ import { type Unit } from '../../src/viewer/inspect.ts'
 import { safeFileName } from '../../src/ui/download.ts'
 import { nodeCode, nodeMarkup, slug, standaloneHtml } from '../../src/viewer/markup.ts'
 import { type Step, UsageError } from '../args.ts'
-import { encodePng } from '../png.ts'
+import { canvasTextMetrics, encodePng } from '../png.ts'
 import { estimateTextLines } from '../textMeasure.ts'
 import { type Command, checkStep, flag, numberOption, option, positional } from './common.ts'
 
@@ -114,7 +114,7 @@ export const svgOut: Command = {
     'viewer の SVG 書き出しと同じ SVG ファイルを書き出す（取り込みの svg とは逆向き）。ノードなしならページ全体、ノードならそれらを囲む範囲。' +
     '--to を省くと viewer と同じ名前で今のフォルダへ（- は標準出力）。--each はノードごとに別のファイルにする（--to はフォルダ）。' +
     '--no-ids はレイヤー名から作る id を付けない、--background は範囲全体に背景の色を敷く。' +
-    'テキストの折り返しと基線は見積もった字幅・高さで決める',
+    'テキストの折り返しは見積もった字幅で、基線は PNG と同じ Canvas で測った書体の高さで決める（測れなければ見積もる）',
   flags: ['each', 'no-ids'],
   async run(ctx, step) {
     checkStep(step, { options: ['to', 'each', 'no-ids', 'background'] })
@@ -130,10 +130,13 @@ export const svgOut: Command = {
     if (each && to === '-') throw new UsageError('svg-out: --each のときは --to に標準出力（-）を使えません')
 
     const groups = each ? targets.map((id) => [id]) : [targets]
+    // 基線はフォントの実際の高さで置く（svg の取り込みと同じ測り方。@napi-rs/canvas が無ければ見積もる）
+    const textMetrics = await canvasTextMetrics()
     for (const group of groups) {
       const svg = exportSvg(page, group, {
         assets: session.document.assets,
         textLines: estimateTextLines,
+        ...(textMetrics ? { textMetrics } : {}),
         ids: !flag(step, 'no-ids'),
         ...(background === undefined ? {} : { background }),
       })

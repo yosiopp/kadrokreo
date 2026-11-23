@@ -30,6 +30,7 @@ function harness(options: { tty?: boolean } = {}) {
     fs,
     text: (path: string) => new TextDecoder().decode(fs.get(path)),
     run: (line: string) => run(line.split(' '), io),
+    runArgv: (argv: string[]) => run(argv, io),
     get stdout() {
       return stdout
     },
@@ -81,6 +82,39 @@ describe('svg-out', () => {
     expect(await h.run('-f back.kdr ls')).toBe(0)
     expect(h.stdout).toContain('Box')
     expect(h.stdout).toContain('Label')
+  })
+
+  it('書き出して取り込み直したテキストは、上下の位置と行の高さが 0.5px 以内で揃う（基線は Canvas で測った書体の高さ）', async () => {
+    const h = harness()
+    const texts: [string, string, string[]][] = [
+      ['One', 'Hello', ['fontSize=16']],
+      ['Two', 'A\nBB\nCCC', ['fontSize=20', 'lineHeight=1.5']],
+      ['Three', 'Left\nRight', ['fontSize=48', 'lineHeight=1', 'textAlign=right', 'fontWeight=700']],
+      ['Four', 'x\ny', ['fontSize=11', 'lineHeight=2.25', 'textAlign=center', 'fontFamily=serif']],
+    ]
+    const argv = ['new', 'Demo', '+', 'add', 'frame', '--name', 'Card', '--width', '400', '--height', '400']
+    texts.forEach(([name, text, props], i) => {
+      argv.push('+', 'add', 'text', '--parent', 'Card', '--name', name, '--x', String(10 + i * 3), '--y', String(20 + i * 90), '--text', text, ...props)
+    })
+    expect(await h.runArgv([...argv, '-o', 'in.kdr'])).toBe(0)
+    await h.run('-f in.kdr svg-out Card --to card.svg')
+    expect(await h.run('new Back + svg card.svg -o back.kdr')).toBe(0)
+    // ページ上の位置（bounds）と行の高さ（get）。どちらの Card もページの左上に置いている
+    const output = async (line: string) => {
+      const start = h.stdout.length
+      expect(await h.run(line)).toBe(0)
+      return h.stdout.slice(start)
+    }
+    const read = async (file: string, name: string) => ({
+      y: Number((await output(`-f ${file} bounds ${name}`)).split(' ')[1]),
+      lineHeight: Number(await output(`-f ${file} get ${name} lineHeight`)),
+    })
+    for (const [name, text] of texts) {
+      const before = await read('in.kdr', name)
+      const after = await read('back.kdr', name)
+      expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(0.5)
+      if (text.includes('\n')) expect(after.lineHeight).toBeCloseTo(before.lineHeight, 3)
+    }
   })
 
   it('--no-ids は id を付けず、--background は範囲全体に背景の色を敷く', async () => {

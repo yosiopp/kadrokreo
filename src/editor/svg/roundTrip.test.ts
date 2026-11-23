@@ -548,6 +548,55 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect(measured).toContain('<tspan x="0" y="21">A</tspan><tspan x="0" y="51">B</tspan>')
   })
 
+  describe('テキストの上下の位置（書き出しと取り込みで同じフォントの高さを使う）', () => {
+    // 見積もり（上 0.9・下 0.22）と違う高さのフォント。ブラウザの書体はおおむねこのくらい見積もりからずれる
+    const textMetrics = (node: Pick<TextNode, 'fontSize'>) => ({ ascent: node.fontSize * 0.96, descent: node.fontSize * 0.24 })
+    const cases: { label: string; text: string; patch: Partial<TextNode> }[] = [
+      { label: '1 行・既定', text: 'Hello', patch: {} },
+      { label: '複数行・行の高さ 1.5', text: 'A\nBB\nCCC', patch: { lineHeight: 1.5, fontSize: 20 } },
+      { label: '複数行・行の高さ 1・中央揃え', text: 'One\nTwo', patch: { lineHeight: 1, fontSize: 32, textAlign: 'center' } },
+      { label: '複数行・行の高さ 2.25・右揃え・小さい字', text: 'x\ny\nz\nw', patch: { lineHeight: 2.25, fontSize: 9, textAlign: 'right' } },
+      { label: '大きい字・太字', text: 'Big\nText', patch: { fontSize: 72, fontWeight: 700, lineHeight: 1.1 } },
+    ]
+    for (const { label, text, patch } of cases) {
+      it(`${label}: 取り込み直すと位置と行の高さが 0.5px 以内で揃う`, () => {
+        const frame = named(createFrame({ x: 0, y: 0, width: 300, height: 400 }), 'Frame')
+        const node = named(createText({ x: 13, y: 27, width: 0, height: 0 }, text), 'T', { ...patch, parentId: 'Frame' })
+        const scene = sceneOf(frame, node)
+        const svg = exportSvg(scene, ['Frame'], { assets: {}, textMetrics })
+        const result = convertSvg(parseSvgXml(svg), { name: 'export', measureText, textMetrics })
+        const imported: Scene = { nodes: result.fragment.nodes, rootIds: result.fragment.rootIds }
+        const back = Object.values(imported.nodes).find((n): n is TextNode => n.type === 'text')!
+        const a = getAbsoluteBounds(scene, 'T')
+        const b = getAbsoluteBounds(imported, back.id)
+        expect(Math.abs(b.x - a.x)).toBeLessThanOrEqual(0.5)
+        expect(Math.abs(b.y - a.y)).toBeLessThanOrEqual(0.5)
+        expect(back.fontSize).toBe(scene.nodes.T.type === 'text' ? scene.nodes.T.fontSize : 0)
+        if (text.includes('\n')) expect(back.lineHeight).toBeCloseTo((scene.nodes.T as TextNode).lineHeight, 3)
+      })
+    }
+
+    it('1 行のテキストは行の高さを読めないが、基線（文字の位置）は揃う', () => {
+      const node = named(createText({ x: 0, y: 10, width: 0, height: 0 }, 'Solo'), 'T', { fontSize: 24, lineHeight: 1.8 })
+      const scene = sceneOf(node)
+      const svg = exportSvg(scene, ['T'], { assets: {}, textMetrics })
+      const back = Object.values(convertSvg(parseSvgXml(svg), { name: 'export', measureText, textMetrics }).fragment.nodes).find((n): n is TextNode => n.type === 'text')!
+      expect(back.lineHeight).toBe(1.2)
+      const original = scene.nodes.T as TextNode
+      // 書き出した範囲の左上（ここではテキストの左上）からの基線の位置
+      expect(Math.abs(back.y + textBaseline(back, textMetrics(back)) - textBaseline(original, textMetrics(original)))).toBeLessThanOrEqual(0.01)
+    })
+
+    it('取り込みでフォントの高さを測らないと、見積もりとの差だけずれる（直す前の振る舞い）', () => {
+      const node = named(createText({ x: 0, y: 0, width: 0, height: 0 }, 'A\nB'), 'T', { fontSize: 40, lineHeight: 1.2 })
+      const scene = sceneOf(node)
+      const svg = exportSvg(scene, ['T'], { assets: {}, textMetrics })
+      const back = Object.values(convertSvg(parseSvgXml(svg), { name: 'export', measureText }).fragment.nodes).find((n) => n.type === 'text')!
+      // (0.96 - 0.9) - (0.96 + 0.24 - 1.12) / 2 = 0.02 → 40px で 0.8px
+      expect(back.y).toBeCloseTo(0.8, 5)
+    })
+  })
+
   it('ids: false なら id を付けず、background を渡すと範囲全体に背景の矩形を敷く', () => {
     const rect = named(createRect({ x: 10, y: 20, width: 30, height: 40 }), 'Box')
     const scene = sceneOf(rect)

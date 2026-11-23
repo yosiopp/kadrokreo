@@ -1,5 +1,5 @@
 import type { Camera } from '../canvas/camera.ts'
-import { measureTextNode } from '../canvas/measure.ts'
+import { measureFontMetrics, measureTextNode } from '../canvas/measure.ts'
 import { screenToWorld } from '../canvas/viewport.ts'
 import { findFrameAt } from './hitTest.ts'
 import { pasteIntoPage } from './operations/document.ts'
@@ -25,7 +25,7 @@ export function looksLikeSvg(text: string): boolean {
 
 /** SVG の文字列を変換する。name は根のフレームの名前 */
 export function convertSvgText(text: string, name: string): SvgImport {
-  return convertSvg(parseSvgDom(text), { name, measureText: measureTextNode })
+  return convertSvg(parseSvgDom(text), { name, measureText: measureTextNode, textMetrics: measureFontMetrics })
 }
 
 export async function readSvgFile(file: File): Promise<SvgImport & { name: string }> {

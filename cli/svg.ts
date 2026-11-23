@@ -5,13 +5,15 @@
 import type { NodeId, Page, Scene } from '../src/document/types.ts'
 import { pasteFragment } from '../src/editor/operations/clipboard.ts'
 import { insertNode } from '../src/editor/operations/tree.ts'
+import type { SvgTextMetrics } from '../src/document/svgExport.ts'
 import { type SvgImport, convertSvg } from '../src/editor/svg/convert.ts'
 import { parseSvgXml } from '../src/editor/svg/xml.ts'
 import { estimateTextSize } from './textMeasure.ts'
 
-export function convertSvgFile(bytes: Uint8Array, name: string): SvgImport {
+/** textMetrics はフォントの上下の高さ（png.ts の canvasTextMetrics）。省略すると見積もる */
+export function convertSvgFile(bytes: Uint8Array, name: string, textMetrics?: SvgTextMetrics): SvgImport {
   const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-  return convertSvg(parseSvgXml(text), { name, measureText: estimateTextSize })
+  return convertSvg(parseSvgXml(text), { name, measureText: estimateTextSize, ...(textMetrics ? { textMetrics } : {}) })
 }
 
 /** 変換した SVG を、親（null ならページ直下）の中の (x, y) に置く。id はここで振り直す */
