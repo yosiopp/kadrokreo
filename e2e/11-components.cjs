@@ -83,9 +83,9 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   check('元を複製するとインスタンスになる', instances(nodes).length === 2 && nodes.filter((n) => n.component && n.component.role === 'main').length === 1, String(instances(nodes).length))
 
   // 別のページへ貼り付けても、元に追従する
-  await page.keyboard.press('Meta+c')
+  await page.keyboard.press('ControlOrMeta+c')
   await page.locator('[aria-label="ページを追加"]').click()
-  await page.keyboard.press('Meta+v')
+  await page.keyboard.press('ControlOrMeta+v')
   let second = await nodesOf(1)
   check('別のページへ貼り付けてもインスタンスになる', instances(second).length === 1 && textsIn(second, instances(second)[0]).join() === '保存する', JSON.stringify(instances(second).map((n) => n.name)))
   await button('元を表示').click()

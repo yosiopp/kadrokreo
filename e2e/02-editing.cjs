@@ -91,8 +91,8 @@ const { OUT, EDITOR, VIEWER, check, finish, watchErrors } = require('./harness.c
 
   // コピー & ペースト
   await page.mouse.click(...at(470, 160))
-  await page.keyboard.press('Meta+c')
-  await page.keyboard.press('Meta+v')
+  await page.keyboard.press('ControlOrMeta+c')
+  await page.keyboard.press('ControlOrMeta+v')
   check('ペーストで増える', (await layers()).filter((n) => n === 'Rectangle 1').length === 2, (await layers()).join())
   await page.keyboard.press('Meta+z')
 

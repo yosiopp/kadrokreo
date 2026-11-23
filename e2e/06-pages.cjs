@@ -73,9 +73,9 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./
   // ── ページをまたいだコピー ──
   await pageRow('ホーム').click()
   await page.locator('.layer-row:has-text("Rectangle 1")').click()
-  await page.keyboard.press('Meta+c')
+  await page.keyboard.press('ControlOrMeta+c')
   await pageRow('Page 2').click()
-  await page.keyboard.press('Meta+v')
+  await page.keyboard.press('ControlOrMeta+v')
   check('別のページへ貼り付けられる', (await layers()).join() === 'Rectangle 1,Ellipse 1', (await layers()).join())
 
   // ── 複製・並べ替え・削除 ──

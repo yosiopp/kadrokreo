@@ -72,9 +72,9 @@ require('fs').mkdirSync(OUT, { recursive: true })
   check('Shift で縦横比を保つ', Math.abs(w2 / h2 - 2) < 0.05 && w2 > box2.w, `${w2}x${h2}`)
 
   // 切り取りと貼り付け
-  await page.keyboard.press('Meta+x')
+  await page.keyboard.press('ControlOrMeta+x')
   check('切り取りで消える', (await page.locator('.layer-row').count()) === 0)
-  await page.keyboard.press('Meta+v')
+  await page.keyboard.press('ControlOrMeta+v')
   check('貼り付けで戻る', (await page.locator('.layer-row').count()) === 1)
 
   // 新規テキストを打っている途中で別の場所をクリックしても、元のテキストは残る
