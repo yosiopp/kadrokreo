@@ -11,6 +11,8 @@ import { updatePage } from '../../src/editor/operations/document.ts'
 import { setFill } from '../../src/editor/operations/paints.ts'
 import { translateNodes } from '../../src/editor/operations/transform.ts'
 import { createEditorStore } from '../../src/editor/store.ts'
+import { createBooleanNode } from '../../src/editor/operations/booleanNodes.ts'
+import { path, sceneOf } from '../../src/document/testNodes.ts'
 import { inspectPage, summarizePage } from '../../src/viewer/summary.ts'
 import { fitTextEstimated } from '../textMeasure.ts'
 import { makeBenchDocument, parseOptions } from './makeKdr.ts'
@@ -29,6 +31,56 @@ export async function time(fn: () => unknown, runs = 30, warmup = 5): Promise<Ti
   samples.sort((a, b) => a - b)
   const pick = (ratio: number) => Number(samples[Math.min(samples.length - 1, Math.floor(samples.length * ratio))].toFixed(3))
   return { median: pick(0.5), p90: pick(0.9), runs }
+}
+
+/** 頂点の多いぎざぎざの円（直線だけのパス）。2,000 頂点 2 つの合体で数十 ms かかる */
+function jagged(id: string, x: number, n = 2000) {
+  return path({
+    id,
+    name: id,
+    x,
+    width: 216,
+    height: 216,
+    closed: true,
+    fills: [{ type: 'solid', color: '#64748b', opacity: 1, visible: true, blendMode: 'normal' }],
+    strokes: [],
+    points: Array.from({ length: n }, (_, i) => {
+      const a = (i / n) * Math.PI * 2
+      const r = i % 2 ? 108 : 100
+      return { x: (108 + r * Math.cos(a)) / 216, y: (108 + r * Math.sin(a)) / 216 }
+    }),
+  })
+}
+
+/** 頂点の多い形 2 つのドキュメント。boolean なら合体の演算のノードにまとめる */
+function jaggedDocument(boolean: boolean): DesignDocument {
+  const scene = sceneOf(jagged('a', 0), jagged('b', 80))
+  const page = boolean ? createBooleanNode(scene, ['a', 'b'], 'union').scene : scene
+  return { name: 'boolean', pages: [{ ...page, id: 'p', name: 'P' }], assets: {} }
+}
+
+/** ブーリアン演算のノードの子のドラッグ（ストアの preview 1 回）と、離したとき（preview と確定）。比べるために演算のない同じ形も */
+export async function runBooleanBench() {
+  const booleanStore = createEditorStore(jaggedDocument(true))
+  const plainStore = createEditorStore(jaggedDocument(false))
+  const releaseStore = createEditorStore(jaggedDocument(true))
+  let x = 0
+  const step = () => (++x % 2 === 0 ? 3 : -3)
+  const dx = { boolean: 0, plain: 0 }
+  return {
+    storePreviewPlainShape: await time(() => {
+      dx.plain += step()
+      plainStore.preview((base) => translateNodes(base, ['b'], dx.plain, 0))
+    }),
+    storePreviewBooleanChild: await time(() => {
+      dx.boolean += step()
+      booleanStore.preview((base) => translateNodes(base, ['b'], dx.boolean, 0))
+    }),
+    storeReleaseBooleanChild: await time(() => {
+      releaseStore.preview((base) => translateNodes(base, ['b'], step(), 0))
+      releaseStore.commitPreview()
+    }, 10, 2),
+  }
 }
 
 export async function runPureBench(document: DesignDocument, meta: ReturnType<typeof makeBenchDocument>['meta']) {
@@ -81,6 +133,7 @@ export async function runPureBench(document: DesignDocument, meta: ReturnType<ty
     // viewer の一覧（色・文字・影）の集計と、パネルに出す形にするまで
     summarizePage: await time(() => summarizePage(page)),
     inspectPage: await time(() => inspectPage(page)),
+    ...(await runBooleanBench()),
   }
 }
 

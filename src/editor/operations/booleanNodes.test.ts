@@ -7,6 +7,7 @@ import type { FrameNode, PathNode } from '../../document/types.ts'
 import { createEditorStore } from '../store.ts'
 import { canCreateBooleanNode, canFlattenBoolean, createBooleanNode, fitBooleanNodes, flattenBooleanNodes, setBooleanOperation } from './booleanNodes.ts'
 import { canOutlineStroke, outlineStrokes } from './outline.ts'
+import { translateNodes } from './transform.ts'
 import { updateNode } from './tree.ts'
 
 const two = () =>
@@ -162,6 +163,71 @@ describe('ブーリアン演算のノード', () => {
     const area = contoursArea(booleanResult(included, included.nodes[id!] as never))
     expect(area - plainArea).toBeGreaterThan(110 * 110 - 10000 + 300)
     expect(area - plainArea).toBeLessThan(110 * 110 - 10000 + 310)
+  })
+})
+
+/** 頂点の多いぎざぎざの円（n 頂点、直線だけのパス）。2,000 頂点 2 つの合体で数十 ms かかる */
+const jagged = (id: string, x: number, n = 2000) =>
+  path({
+    id,
+    x,
+    y: 0,
+    width: 216,
+    height: 216,
+    closed: true,
+    fills: [{ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' }],
+    strokes: [],
+    points: Array.from({ length: n }, (_, i) => {
+      const a = (i / n) * Math.PI * 2
+      const r = i % 2 ? 108 : 100
+      return { x: (108 + r * Math.cos(a)) / 216, y: (108 + r * Math.sin(a)) / 216 }
+    }),
+  })
+
+describe('ブーリアン演算のノードを動かす・ドラッグする', () => {
+  it('ノードごと動かしても、子がそろって平行移動しても、計算し直さず前の結果を使う（ずらした結果は計算し直したものと同じ）', () => {
+    const { scene, id } = createBooleanNode(two(), ['a', 'b'], 'union')
+    const node = scene.nodes[id!] as FrameNode
+    const first = booleanResult(scene, node as never)
+    const moved = updateNode(scene, id!, { x: 300 })
+    expect(booleanResult(moved, moved.nodes[id!] as never)).toBe(first)
+    const shifted = translateNodes(scene, ['a', 'b'], 7, -3)
+    const reused = booleanResult(shifted, shifted.nodes[id!] as never)
+    expect(reused).not.toBe(first)
+    expect(reused[0].vertices[0]).toEqual({ x: first[0].vertices[0].x + 7, y: first[0].vertices[0].y - 3 })
+    // 片方だけ動かせば、計算し直す
+    const one = translateNodes(scene, ['b'], 200, 0)
+    expect(contoursArea(booleanResult(one, one.nodes[id!] as never))).toBeCloseTo(20000, 3)
+  })
+
+  it('ドラッグ中（プレビュー）は重い演算を計算し直さず前の結果を見せ、離したときに計算して枠を合わせる', () => {
+    const { scene, id } = createBooleanNode(sceneOf(jagged('a', 0), jagged('b', 80)), ['a', 'b'], 'union')
+    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P' }], assets: {} })
+    const before = store.getState().page
+    const result = booleanResult(before, before.nodes[id!] as never)
+    const width = before.nodes[id!].width
+    for (const dx of [100, 200, 300]) store.preview((base) => translateNodes(base, ['b'], dx, 0))
+    const dragging = store.getState().page
+    expect(booleanResult(dragging, dragging.nodes[id!] as never)).toBe(result)
+    expect(dragging.nodes[id!].width).toBe(width)
+    store.commitPreview()
+    const page = store.getState().page
+    const node = page.nodes[id!] as FrameNode
+    // 離れた 2 つの形になり、枠も 2 つを囲む
+    expect(booleanResult(page, node as never)).toHaveLength(2)
+    expect(node.width).toBeCloseTo(216 + 380, 1)
+    expect(store.getState().canUndo).toBe(true)
+  })
+
+  it('軽い演算はドラッグ中も毎回計算し、取り消すと元に戻る', () => {
+    const { scene, id } = createBooleanNode(two(), ['a', 'b'], 'union')
+    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P' }], assets: {} })
+    store.preview((base) => translateNodes(base, ['b'], 200, 0))
+    const dragging = store.getState().page
+    expect(contoursArea(booleanResult(dragging, dragging.nodes[id!] as never))).toBeCloseTo(20000, 3)
+    expect(dragging.nodes[id!].width).toBeCloseTo(350, 3)
+    store.cancelPreview()
+    expect(store.getState().page.nodes[id!].width).toBe(150)
   })
 })
 

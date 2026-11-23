@@ -8,6 +8,7 @@ import { updatePage } from './operations/document.ts'
 import { fitBooleanNodes } from './operations/booleanNodes.ts'
 import { type GradientEdit, editedGradient } from './editorCanvas/gradientHandles.ts'
 import { pathContours } from '../document/path.ts'
+import { deferSlowBooleans, takeDeferredBooleans } from '../document/booleanNode.ts'
 import { contourSegment, flatVertices } from './pathEdit.ts'
 
 export type EditorState = {
@@ -40,6 +41,8 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   let history = createHistory(initial)
   // ドラッグ中などの未確定の変更。履歴には commitPreview で 1 件としてまとめて積む
   let preview: DesignDocument | null = null
+  // 今のプレビューを作った変更。重いブーリアン演算をドラッグ中に後回しにしたら、確定するときにこれでもう一度後始末する
+  let previewRecipe: DocumentRecipe | null = null
   let pageId = initial.pages[0].id
   let selection: NodeId[] = []
   let vertexEdit: VertexEdit | null = null
@@ -96,14 +99,27 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     for (const listener of listeners) listener()
   }
 
+  /** プレビューを終える（ブーリアン演算の後回しをやめる）。後回しにした演算があったか */
+  function endPreview(): boolean {
+    deferSlowBooleans(false)
+    const recipe = previewRecipe
+    previewRecipe = null
+    return takeDeferredBooleans() && recipe !== null
+  }
+
   function commitPreview() {
+    const recipe = previewRecipe
+    const redo = endPreview()
     if (preview === null) return
+    // ドラッグ中に計算し直さなかった演算を計算し、枠を結果に合わせる（recipe はプレビュー前のドキュメントからの変更なので、同じ結果になる）
+    if (redo) preview = settle(history.present, recipe!(history.present))
     history = pushHistory(history, preview)
     preview = null
     emit()
   }
 
   function cancelPreview() {
+    endPreview()
     if (preview === null) return
     preview = null
     emit()
@@ -163,6 +179,9 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   }
 
   function previewDocument(recipe: DocumentRecipe) {
+    // ドラッグ中は、重いブーリアン演算を計算し直さずに前の結果を見せる（離したときに commitPreview が計算する）
+    deferSlowBooleans(true)
+    previewRecipe = recipe
     const next = settle(history.present, recipe(history.present))
     if (next === (preview ?? history.present)) return
     preview = next
@@ -269,6 +288,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     /** 別のドキュメントに差し替える。履歴と選択は捨てる */
     load(document: DesignDocument) {
       history = createHistory(document)
+      endPreview()
       preview = null
       pageId = document.pages[0].id
       selection = []
