@@ -63,7 +63,7 @@ export function pasteFragment<T extends Scene>(
       clone.children = clone.children.map((child) => newIds.get(child)!)
       // コンポーネントの元は 1 つだけ。元を複製したものは、そのインスタンスになる
       if (clone.component?.role === 'main') {
-        clone.component = { id: clone.component.id, role: 'instance', overrides: {} }
+        clone.component = { id: clone.component.id, role: 'instance', overrides: {}, flipX: false, flipY: false }
       }
     }
     clones[clone.id] = clone

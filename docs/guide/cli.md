@@ -77,7 +77,7 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | `boolean union\|subtract\|intersect\|exclude ノード… [--keep [--strokes]]` / `flatten ノード…` | ブーリアン演算（合体・差し引き・交差・除外）。矩形・楕円・パスの塗りの形にかけ、最も背面のものを引き継いだ 1 つのパス（`fillRule=evenodd`）にする。差し引きは最も背面のものから残りを引く。`--keep` なら元の図形を子に残すブーリアン演算のノードにまとめる（演算は `set ノード booleanOperation=intersect` で変えられる）。`--strokes` を付けると元の図形の線の外形も演算に含める（`set ノード booleanIncludeStrokes=true` でも変えられる）。`flatten` はそのノードを結果のパスに焼き込む |
 | `outline-stroke ノード…` | 線の輪郭化（線の形を線の色で塗るパスにする。塗りのある図形は残して手前に置く） |
 | `join ノード…` / `split パス…` / `mask ノード… [--name 名前] [--type vector\|alpha\|luminance]` | パスの結合（矩形・楕円・パスを 1 つのパスの輪郭に）と分割（輪郭ごとのパスに）、マスクとして使う（矩形・楕円・パス・テキスト・画像・フレーム。いくつもならフレームにまとめる。どれもマスクならやめる。`--type` は形・不透明度・明るさのマスク。`set ノード isMask=true maskType=luminance` でも変えられる） |
-| `align left\|center\|right\|top\|middle\|bottom ノード…` / `distribute horizontal\|vertical ノード…` / `rotate 度 ノード… [--each \| --pivot x,y]` / `flip horizontal\|vertical ノード…` | 整列（1 つなら親に揃える）、等間隔、回転（いまの角度に足す。軸はふつう全体の中心）、反転（全体の中心で裏返す） |
+| `align left\|center\|right\|top\|middle\|bottom ノード…` / `distribute horizontal\|vertical ノード…` / `rotate 度 ノード… [--each \| --pivot x,y]` / `flip horizontal\|vertical ノード…` | 整列（1 つなら親に揃える）、等間隔、回転（いまの角度に足す。軸はふつう全体の中心）、反転（全体の中心で裏返す。インスタンスは中身の配置も映す） |
 | `auto-layout フレーム [--off] [direction=… gap=… padding=… wrap=true crossGap=… alignContent=space-between sizing.width=fixed]` / `wrap ノード…` / `layout-fill width\|height ノード…` | オートレイアウト（`wrap=true` は折り返し。`wrap` コマンドはまとめる操作で別物） |
 | `component フレーム` / `detach フレーム` / `instance 元 [--parent フレーム]` / `swap インスタンス 元` | コンポーネント（`swap` は元の差し替え。インスタンスの中の入れ子のインスタンスも） |
 | `override-push ノード…` / `override-reset ノード…` | インスタンスの上書きを元に反映する・捨てて元に戻す |

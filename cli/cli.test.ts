@@ -531,6 +531,20 @@ describe('kadrokreo CLI', () => {
     expect(await bad.run(argv('-f a.kdr set t flipX=yes'))).not.toBe(0)
   })
 
+  it('インスタンスの flip は中身の配置も鏡に映し、元を変えても映ったまま追う', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add frame --name Button --id btn --width 120 --height 40 + add text --parent btn --name Label --id label --x 10 --text OK + component btn' +
+        ' + instance Button --id i1 --y 200 + flip horizontal i1 + set label x=20 -o a.kdr',
+    ))
+    expect(h.stderr).toBe('')
+    const { nodes } = (await h.doc('a.kdr')).pages[0]
+    const copy = nodes[(nodes.i1 as FrameNode).children[0]] as TextNode
+    expect((nodes.i1 as FrameNode).component).toMatchObject({ flipX: true, flipY: false, overrides: {} })
+    expect(copy).toMatchObject({ x: 120 - 20 - copy.width, flipX: true })
+    expect(nodes.label).toMatchObject({ x: 20, flipX: false })
+  })
+
   it('上書きを元に反映・元に戻す、インスタンスの元の差し替え', async () => {
     const h = harness()
     await h.run(argv(

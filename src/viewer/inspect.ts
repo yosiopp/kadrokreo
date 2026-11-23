@@ -75,7 +75,7 @@ export function inspectNode(
     ...constraintRows(scene, node),
     node.rotation !== 0 && { label: '回転', value: `${num(node.rotation)}°` },
     (node.type === 'text' || node.type === 'image') && (node.flipX || node.flipY) &&
-      { label: '裏返し', value: node.flipX && node.flipY ? '左右と上下' : node.flipX ? '左右' : '上下' },
+      { label: '裏返し', value: flipText(node) },
     'cornerRadius' in node && isRounded(node.cornerRadius) && { label: '角丸', value: radiusText(node.cornerRadius, num) },
     node.opacity < 1 && { label: '不透明度', value: percent(node.opacity) },
     node.blendMode !== 'normal' && { label: '描画モード', value: BLEND_MODE_LABELS[node.blendMode] },
@@ -296,6 +296,8 @@ export function inspectNode(
       // バリアントのインスタンスは、まとまりの名前と、選んでいるプロパティの値
       ...(main === null ? [] : variantInstanceRows(main.page, main.node)),
       own && main !== null && main.node.component.description !== '' && { label: '説明', value: main.node.component.description },
+      // 中身を元から鏡に映していれば（写しの位置や向きは映した値で出る）
+      own && (instance.component.flipX || instance.component.flipY) && { label: '中身の裏返し', value: flipText(instance.component) },
       // 中身は、そのノード自身が元と違えている項目だけを出す。インスタンス全体の分は、下の一覧で出す
       !own && overrideRow('上書き', overrides.get(id)),
       // 入れ子のインスタンスを別のコンポーネントに差し替えていれば、差し替えた先
@@ -322,6 +324,11 @@ export function inspectNode(
   }
 
   return sections
+}
+
+/** 裏返しの向きの呼び名 */
+function flipText({ flipX, flipY }: { flipX: boolean; flipY: boolean }): string {
+  return flipX && flipY ? '左右と上下' : flipX ? '左右' : '上下'
 }
 
 /**

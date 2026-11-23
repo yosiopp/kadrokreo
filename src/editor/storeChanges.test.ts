@@ -79,7 +79,7 @@ function fixture() {
   const cardId = componentIdOf(doc.pages[0], card.id)
   const instance = (componentId: string, x: number, y: number): FrameNode => ({
     ...createFrame({ x, y, width: 120, height: 40 }),
-    component: { id: componentId, role: 'instance', overrides: {} },
+    component: { id: componentId, role: 'instance', overrides: {}, flipX: false, flipY: false },
   })
   doc = updatePage(doc, pageId, (page) => {
     let next = insertNode(page, instance(buttonId, 20, 40), card.id)

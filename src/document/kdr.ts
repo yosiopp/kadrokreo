@@ -545,7 +545,9 @@ function parseComponent(value: unknown, path: string, assets: AssetContext): Com
     return { id, role, description, properties }
   }
   const overrides = link.overrides === undefined ? {} : parseOverrides(link.overrides, `${path}.overrides`, assets)
-  return { id, role, overrides }
+  const flipX = link.flipX === undefined ? false : boolean(link.flipX, `${path}.flipX`)
+  const flipY = link.flipY === undefined ? false : boolean(link.flipY, `${path}.flipY`)
+  return { id, role, overrides, flipX, flipY }
 }
 
 /** コンポーネントのプロパティ。結んだノードがあるかは確かめない（ないノードは使うときに無視する） */
@@ -806,7 +808,7 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
   if (Object.keys(constraints).length > 0) out.constraints = constraints
   if (node.type === 'frame') {
     if (out.component && (out.component as ComponentLink).role === 'instance') {
-      const { overrides, ...link } = out.component as { overrides: Record<NodeId, Override> }
+      const { overrides, flipX, flipY, ...link } = out.component as Extract<ComponentLink, { role: 'instance' }>
       // 上書きの塗りも、不透明度が 1 なら省く
       const written = Object.fromEntries(
         Object.entries(overrides).map(([id, override]) => [
@@ -816,7 +818,13 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
           ),
         ]),
       )
-      out.component = Object.keys(written).length === 0 ? link : { ...link, overrides: written }
+      // 中身の裏返しも、していない向きは書かない
+      out.component = {
+        ...link,
+        ...(Object.keys(written).length === 0 ? {} : { overrides: written }),
+        ...(flipX ? { flipX } : {}),
+        ...(flipY ? { flipY } : {}),
+      }
     }
     // 元の説明文とプロパティは、空なら書かない
     if (out.component && (out.component as ComponentLink).role === 'main') {

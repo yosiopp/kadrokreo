@@ -23,7 +23,7 @@ const scene = sceneOf(
   frame({ id: 'row', parentId: 'card', children: ['x', 'y'], layout }),
   rect({ id: 'x', parentId: 'row' }),
   rect({ id: 'y', parentId: 'row' }),
-  frame({ id: 'button', children: ['label'], component: { id: 'c1', role: 'instance', overrides: {} } }),
+  frame({ id: 'button', children: ['label'], component: { id: 'c1', role: 'instance', overrides: {}, flipX: false, flipY: false } }),
   rect({ id: 'label', parentId: 'button' }),
 )
 const folding = (toggled: string[] = [], held: string[] = []): Folding => ({

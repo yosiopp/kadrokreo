@@ -181,7 +181,7 @@ export type FlipDirection = 'horizontal' | 'vertical'
  * kdr は裏返しを持たないので、形に焼き込む: 位置を鏡に映し、角度の符号を変え、
  * 中身（パスの頂点（輪郭すべて）・フレームの子・角丸の 4 隅・グラデーション・影のずれ・親の辺への固定）を鏡に映す。
  * テキストと画像は裏返しの項目（flipX / flipY）を切り替えて字や絵そのものを映す。
- * インスタンスは中身が元の写しで配置を上書きできないので、位置と向きだけを映す。
+ * インスタンスは中身の裏返し（component.flipX / flipY）を切り替え、写しも同じように映す（同期で作り直しても同じ姿になる）。
  * 自動で並べるフレームの並びの順は入れ替えない（並びの順は中身の順（コードの要素の順）なので。並びから外した子は映す）。
  */
 export function flipNodes<T extends Scene>(scene: T, ids: readonly NodeId[], direction: FlipDirection): T {
@@ -215,8 +215,11 @@ type Axis = 'x' | 'y'
 
 /** node の座標系で axis の向きに中身を鏡に映すパッチを add へ積む。子孫もたどる */
 function mirrorContent(scene: Scene, node: SceneNode, axis: Axis, add: (id: NodeId, patch: NodePatch) => void) {
-  // インスタンスの中身（元の写し）は映せない
-  if (isInstance(node)) return
+  // インスタンスは裏返しを切り替える。写しは同期で元から作り直されるが、裏返しを当てた姿はここで映したものと同じになる
+  if (isInstance(node)) {
+    const key = axis === 'x' ? 'flipX' : 'flipY'
+    add(node.id, { component: { ...node.component, [key]: !node.component[key] } })
+  }
   // 影のずれはページの向きで持つが、裏返す向きはどの深さでもページの同じ向きになる（回転の符号が変わるだけ）
   const effects = node.effects.map((effect) => ('x' in effect ? { ...effect, [axis]: -effect[axis] || 0 } : effect))
   // 字と絵は裏返しの項目で映す。塗り・角丸・画像の寄せる位置は裏返した中身と一緒に映るので、そのままにする。
@@ -303,4 +306,48 @@ function swapConstraint(
   const value = constraints[key]
   const swapped = value === 'start' ? 'end' : value === 'end' ? 'start' : value
   return swapped === value ? constraints : { ...constraints, [key]: swapped }
+}
+
+/**
+ * インスタンスの中身の裏返し（component.flipX / flipY）を、元から作り直した写しに当てる。
+ * nodes は rootId（インスタンス）とその写しを含む表。映したノードだけ差し替えた新しい表を返す（nodes は書き換えない）。
+ * 映し方は反転（flipNodes）で中身を映すのと同じ。根の位置・角度・親の辺への固定は、置いた先の設定なので映さない
+ */
+export function mirrorCopies(
+  nodes: Record<NodeId, SceneNode>,
+  rootId: NodeId,
+  flips: { flipX: boolean; flipY: boolean },
+): Record<NodeId, SceneNode> {
+  let current = nodes
+  for (const axis of ['x', 'y'] as const) {
+    if (!(axis === 'x' ? flips.flipX : flips.flipY)) continue
+    const patches = new Map<NodeId, NodePatch>()
+    const add = (id: NodeId, patch: NodePatch) => patches.set(id, { ...patches.get(id), ...patch })
+    const root = current[rootId]
+    // 根のつながりはそのまま（裏返しの切り替えは反転の操作だけがする）。写しの中にインスタンスはない
+    mirrorContent({ nodes: current, rootIds: [rootId] }, root.type === 'frame' ? { ...root, component: null } : root, axis, add)
+    current = { ...current }
+    for (const [id, patch] of patches) current[id] = { ...current[id], ...patch } as SceneNode
+  }
+  return current
+}
+
+/**
+ * 裏返したインスタンスの写しに見えている上書きできる項目の値を、映す前の（元の向きの）値に直す。上書きはこの向きで持つ。
+ * 映すと変わる上書きの項目は、テキスト・画像の裏返しと、そのほかのノードの塗り・線（グラデーション）。どれも 2 回映すと元に戻る
+ */
+export function unmirrorValue(node: SceneNode, key: string, value: unknown, flips: { flipX: boolean; flipY: boolean }): unknown {
+  if (!flips.flipX && !flips.flipY) return value
+  if (node.type === 'text' || node.type === 'image') {
+    if (key === 'flipX' && flips.flipX) return !value
+    if (key === 'flipY' && flips.flipY) return !value
+    return value
+  }
+  if ((key === 'fills' || key === 'strokes') && Array.isArray(value)) {
+    let paints = value as Paint[]
+    if (flips.flipX) paints = paints.map((paint) => mirrorPaint(paint, 'x'))
+    if (flips.flipY) paints = paints.map((paint) => mirrorPaint(paint, 'y'))
+    return paints
+  }
+  return value
 }

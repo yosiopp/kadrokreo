@@ -45,6 +45,7 @@ import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createId } from './nodes.ts'
 import { updatePage } from './operations/document.ts'
+import { mirrorCopies, unmirrorValue } from './operations/transform.ts'
 import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
 
 // コンポーネント。フレームを「元（main）」として登録し、その写しである「インスタンス」を置ける。
@@ -108,7 +109,7 @@ export function createInstance(
   const instance: FrameNode = {
     ...createFrame({ ...position, ...size }),
     name: componentName(main),
-    component: { id: componentId, role: 'instance', overrides: {} },
+    component: { id: componentId, role: 'instance', overrides: {}, flipX: false, flipY: false },
   }
   return {
     document: updatePage(doc, pageId, (base) => insertNode(base, instance, parentId)),
@@ -151,9 +152,26 @@ export function swapComponent(doc: DesignDocument, pageId: PageId, instanceId: N
         previous && (instance.name === previous.node.name || instance.name === componentName(previous))
           ? componentName(next)
           : instance.name,
-      component: { id: componentId, role: 'instance', overrides },
+      // 中身の裏返しは差し替えても引き継ぐ（置いた向きはインスタンスごとの設定）
+      component: { ...instance.component, id: componentId, overrides },
     }),
   )
+}
+
+/**
+ * 元の木（source）の中の id のノードを入れ子のインスタンス（つながりは link）として作り直すときの、中身の裏返し。
+ * id が入れ子のインスタンスの写しの中にあれば、写しはそのインスタンスの裏返しでも映っているので重ねる（同じ向きに 2 回なら元に戻る）
+ */
+function flipsAt(scene: Scene, id: NodeId, mainId: NodeId, link: InstanceNode['component']): { flipX: boolean; flipY: boolean } {
+  let { flipX, flipY } = link
+  for (let current = scene.nodes[id].parentId; current !== null && current !== mainId; current = scene.nodes[current].parentId) {
+    const node = scene.nodes[current]
+    if (isInstance(node)) {
+      flipX = flipX !== node.component.flipX
+      flipY = flipY !== node.component.flipY
+    }
+  }
+  return { flipX, flipY }
 }
 
 /** 入れ子のインスタンスを差し替えたときの名前。元の名前のままだったときだけ、新しい元の名前にする */
@@ -259,6 +277,7 @@ function swappedSource(
           id: componentId,
           role: 'instance',
           overrides: previous ? moveOverrides(previous, next, link.overrides) : {},
+          ...flipsAt(scene, sourceId, mainId, link),
         },
       }
       scene = rebuild(
@@ -395,8 +414,10 @@ export function captureOverrides(before: DesignDocument, after: DesignDocument):
       for (const key of keys) {
         // 根の表示・非表示は、インスタンス自身の設定
         if (key === 'visible' && node.id === instance.id) continue
-        if (sameValue(valueOf(node, key), valueOf(source, key))) delete entry[key]
-        else entry[key] = valueOf(node, key)
+        // 裏返したインスタンスの写しは映した値を持つが、上書きは映す前の（元の向きの）値で覚える
+        const value = unmirrorValue(node, key, valueOf(node, key), instance.component)
+        if (sameValue(value, valueOf(source, key))) delete entry[key]
+        else entry[key] = value
       }
       const overrides = { ...instance.component.overrides }
       delete overrides[source.id]
@@ -840,14 +861,15 @@ function expectedCopies(
     expected[copy.id] = copy
   }
   const resized = stretched.width || stretched.height
-  if (Object.keys(overrides).length === 0 && !resized) return expected
+  if (Object.keys(overrides).length === 0 && !resized) return mirrorCopies(expected, instance.id, instance.component)
   // 上書きで大きさや表示が変わったり、伸ばして大きさが元と違ったりすると、自動で並べるフレームの並びも元とは変わる。
   // ここでは親がいないので、伸ばしている向き（fill）は固定の大きさとして並ぶ
   // 伸ばして元と大きさが違えば、親の辺に固定した中身は、元の大きさからの変化に追従させる
   const scene: Scene = { nodes: expected, rootIds: [instance.id] }
   const asMain: Scene = { nodes: { ...expected, [instance.id]: { ...expected[instance.id], width: main.width, height: main.height } }, rootIds: [instance.id] }
   const followed = resized ? applyConstraints(asMain, scene, stale) : scene
-  return relayout(fitText ? fitText(followed, stale) : followed, fitText).nodes
+  // 中身の裏返しは、上書きと並べ直しのあとに当てる（上書きは元の向きの値。並びの順は映しても変わらない）
+  return mirrorCopies(relayout(fitText ? fitText(followed, stale) : followed, fitText).nodes, instance.id, instance.component)
 }
 
 /** 上書きのうち、このノードに当てられるものを当てる。root はインスタンスの根 */

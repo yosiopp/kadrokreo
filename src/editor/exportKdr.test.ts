@@ -205,9 +205,17 @@ describe('kdrFile（書き出す形）', () => {
   })
 
   it('上書きのないインスタンスは overrides を書かない', () => {
-    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'instance', overrides: {} } } as const
+    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'instance', overrides: {}, flipX: false, flipY: false } } as const
     expect(fileNode(insertNode(createPage(), frame)).component).toEqual({ id: 'c1', role: 'instance' })
     expect(parseOne(fileNode(insertNode(createPage(), frame)))).toEqual(frame)
+  })
+
+  it('インスタンスの中身の裏返しは、した向きだけ書き、省けば裏返していないとして読む', () => {
+    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'instance', overrides: {}, flipX: true, flipY: false } } as const
+    expect(fileNode(insertNode(createPage(), frame)).component).toEqual({ id: 'c1', role: 'instance', flipX: true })
+    expect(parseOne(fileNode(insertNode(createPage(), frame)))).toEqual(frame)
+    expect(parseOne(rawNode({ type: 'frame', component: { id: 'c1', role: 'instance', flipY: true } }))).toMatchObject({ component: { flipX: false, flipY: true } })
+    expect(() => parseOne(rawNode({ type: 'frame', component: { id: 'c1', role: 'instance', flipX: 1 } }))).toThrow('component.flipX')
   })
 })
 

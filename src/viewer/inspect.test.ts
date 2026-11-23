@@ -702,9 +702,10 @@ describe('inspectNode', () => {
         crossGap: 0, alignContent: 'auto' as const,
       },
     })
-    const instance = frame({ id: 'instance', component: { id: 'c1', role: 'instance', overrides: {} } })
-    const orphan = frame({ id: 'orphan', component: { id: 'gone', role: 'instance', overrides: {} } })
-    const scene = sceneOf(main, instance, orphan)
+    const instance = frame({ id: 'instance', component: { id: 'c1', role: 'instance', overrides: {}, flipX: false, flipY: false } })
+    const orphan = frame({ id: 'orphan', component: { id: 'gone', role: 'instance', overrides: {}, flipX: false, flipY: false } })
+    const mirrored = frame({ id: 'mirrored', component: { id: 'c1', role: 'instance', overrides: {}, flipX: true, flipY: false } })
+    const scene = sceneOf(main, instance, orphan, mirrored)
     expect(rowsOf(scene, 'main', 'オートレイアウト')).toEqual([
       '向き=横',
       '間隔=8',
@@ -717,6 +718,7 @@ describe('inspectNode', () => {
     expect(rowsOf(scene, 'main', 'コンポーネント')).toEqual(['種類=元'])
     expect(rowsOf(scene, 'instance', 'コンポーネント')).toEqual(['種類=インスタンス', '元の名前=ボタン'])
     expect(rowsOf(scene, 'orphan', 'コンポーネント')).toEqual(['種類=インスタンス'])
+    expect(rowsOf(scene, 'mirrored', 'コンポーネント')).toEqual(['種類=インスタンス', '元の名前=ボタン', '中身の裏返し=左右'])
   })
 
   it('コンポーネントの説明文とプロパティを、元とインスタンスに出す', () => {
@@ -738,7 +740,7 @@ describe('inspectNode', () => {
         },
       }),
       text({ id: 'label', parentId: 'main', text: 'OK' }),
-      frame({ id: 'instance', children: [copy], component: { id: 'c1', role: 'instance', overrides: { label: { text: '送信' } } } }),
+      frame({ id: 'instance', children: [copy], component: { id: 'c1', role: 'instance', overrides: { label: { text: '送信' } }, flipX: false, flipY: false } }),
       text({ id: copy, parentId: 'instance', text: '送信' }),
     )
     expect(rowsOf(scene, 'main', 'コンポーネント')).toContain('説明=主な操作に使う')
@@ -752,7 +754,7 @@ describe('inspectNode', () => {
       frame({ id: 'set', name: 'ボタン', children: ['small', 'large'] }),
       frame({ id: 'small', name: 'サイズ=小, 状態=標準', parentId: 'set', component: { id: 'c1', role: 'main', description: '', properties: [] } }),
       frame({ id: 'large', name: 'サイズ=大, 状態=標準', parentId: 'set', component: { id: 'c2', role: 'main', description: '', properties: [] } }),
-      frame({ id: 'instance', name: 'ボタン', component: { id: 'c2', role: 'instance', overrides: {} } }),
+      frame({ id: 'instance', name: 'ボタン', component: { id: 'c2', role: 'instance', overrides: {}, flipX: false, flipY: false } }),
     )
     expect(rowsOf(scene, 'set', 'コンポーネント')).toEqual(['種類=バリアントのまとまり', 'サイズ=小 / 大', '状態=標準'])
     expect(rowsOf(scene, 'large', 'コンポーネント')).toEqual(['種類=バリアント', 'まとまり=ボタン', 'サイズ=大', '状態=標準'])
@@ -783,16 +785,16 @@ describe('inspectNode', () => {
       frame({ id: 'circle', name: '丸', component: { id: 'cCircle', role: 'main', description: '', properties: [] } }),
       frame({ id: 'square', name: '四角', component: { id: 'cSquare', role: 'main', description: '', properties: [] } }),
       frame({ id: 'button', name: 'ボタン', children: ['icon'], component: { id: 'cButton', role: 'main', description: '', properties: [] } }),
-      frame({ id: 'icon', name: '丸', parentId: 'button', component: { id: 'cCircle', role: 'instance', overrides: {} } }),
+      frame({ id: 'icon', name: '丸', parentId: 'button', component: { id: 'cCircle', role: 'instance', overrides: {}, flipX: false, flipY: false } }),
       frame({
         id: 'card',
         name: 'カード',
         children: ['nested'],
         component: { id: 'cCard', role: 'main', description: '', properties: [{ name: 'アイコン', type: 'instance', targets: [iconInButton], preferred: [] }] },
       }),
-      frame({ id: 'nested', name: 'ボタン', parentId: 'card', children: [iconInButton], component: { id: 'cButton', role: 'instance', overrides: {} } }),
+      frame({ id: 'nested', name: 'ボタン', parentId: 'card', children: [iconInButton], component: { id: 'cButton', role: 'instance', overrides: {}, flipX: false, flipY: false } }),
       frame({ id: iconInButton, name: '丸', parentId: 'nested' }),
-      frame({ id: 'cardInstance', name: 'カード', children: [cardCopy], component: { id: 'cCard', role: 'instance', overrides: {} } }),
+      frame({ id: 'cardInstance', name: 'カード', children: [cardCopy], component: { id: 'cCard', role: 'instance', overrides: {}, flipX: false, flipY: false } }),
       frame({ id: cardCopy, name: 'ボタン', parentId: 'cardInstance', children: [iconInCard] }),
       frame({ id: iconInCard, name: '丸', parentId: cardCopy }),
     )
@@ -819,6 +821,8 @@ describe('inspectNode', () => {
           // 元から消えたノードへの上書きは出さない
           gone: { visible: false },
         },
+        flipX: false,
+        flipY: false,
       },
     })
     const scene = sceneOf(
@@ -849,13 +853,13 @@ describe('inspectNode', () => {
   it('入れ子のインスタンスを差し替えた写しには、差し替えた元を出す', () => {
     const icon = frame({ id: 'icon', name: 'Icon', component: { id: 'c2', role: 'main', description: '', properties: [] } })
     const card = frame({ id: 'card', name: 'Card', component: { id: 'c1', role: 'main', description: '', properties: [] }, children: ['nested'] })
-    const nested = frame({ id: 'nested', name: 'Button', parentId: 'card', component: { id: 'c3', role: 'instance', overrides: {} } })
+    const nested = frame({ id: 'nested', name: 'Button', parentId: 'card', component: { id: 'c3', role: 'instance', overrides: {}, flipX: false, flipY: false } })
     const copy = derivedId('instance', 'nested')
     const instance = frame({
       id: 'instance',
       name: 'Card',
       children: [copy],
-      component: { id: 'c1', role: 'instance', overrides: { nested: { componentId: 'c2' } } },
+      component: { id: 'c1', role: 'instance', overrides: { nested: { componentId: 'c2' } }, flipX: false, flipY: false },
     })
     const scene = sceneOf(icon, card, nested, instance, frame({ id: copy, name: 'Icon', parentId: 'instance' }))
     expect(rowsOf(scene, copy, 'コンポーネント')).toEqual([

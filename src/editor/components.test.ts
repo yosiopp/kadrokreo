@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { hitTest } from '../canvas/hitTest.ts'
 import { type InstanceNode, derivedId, findMain, owningInstance } from '../document/component.ts'
 import { isComponentPart } from '../document/variants.ts'
-import type { AutoLayout, DesignDocument, FrameNode, Page, Scene } from '../document/types.ts'
+import type { AutoLayout, DesignDocument, FrameNode, Paint, Page, Scene } from '../document/types.ts'
 import { solid } from '../document/paint.ts'
 import {
   type FitText,
@@ -24,6 +24,7 @@ import {
 import { nodesInMarquee } from './hitTest.ts'
 import { createFrame, createImage, createRect, createText } from './nodes.ts'
 import { copyFragment } from './operations/clipboard.ts'
+import { flipNodes } from './operations/transform.ts'
 import { addPage, createDocument, createPage, pasteIntoPage, updatePage } from './operations/document.ts'
 import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
 import { setLayoutFill } from './layout.ts'
@@ -465,6 +466,60 @@ describe('インスタンスごとの上書き', () => {
     expect(overridesOf(shaped, instanceId)).toEqual({})
   })
 
+  it('インスタンスを反転すると、中身の配置も鏡に映り、上書きにはならない。元を変えても映ったまま追う', () => {
+    const { doc, background, label, instanceId } = withInstance()
+    const [backgroundCopy, labelCopy] = frameOf(doc.pages[0], instanceId).children
+    const flipped = edit(doc, (page) => flipNodes(page, [instanceId], 'horizontal'))
+    let page = flipped.pages[0]
+    expect(frameOf(page, instanceId)).toMatchObject({ x: 120, component: { flipX: true, flipY: false, overrides: {} } })
+    // ラベル（x 20・幅 40）は枠（幅 120）の右寄りへ移り、字も裏返る
+    expect(page.nodes[labelCopy]).toMatchObject({ x: 60, y: 10, flipX: true, flipY: false })
+    expect(syncComponents(flipped)).toBe(flipped)
+    // 当たり判定も映った位置で当たる（インスタンスは x 120・y 120 に置いてある）
+    expect(hitTest(page, { x: 120 + 90, y: 135 }, { deep: true })).toBe(labelCopy)
+    expect(hitTest(page, { x: 120 + 30, y: 135 }, { deep: true })).toBe(backgroundCopy)
+
+    // 元のラベルを動かし、背景にグラデーションを付けても、映った姿のまま追う
+    const gradient: Paint = { type: 'linear', x1: 0, y1: 0, x2: 1, y2: 0, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' }
+    const edited = edit(flipped, (next) => updateNode(updateNode(next, label.id, { x: 30 }), background.id, { fills: [gradient] }))
+    page = edited.pages[0]
+    expect(page.nodes[labelCopy]).toMatchObject({ x: 50, flipX: true })
+    expect(page.nodes[backgroundCopy]).toMatchObject({ fills: [{ x1: 1, x2: 0 }] })
+    expect(overridesOf(edited, instanceId)).toEqual({})
+
+    // もう一度反転すると元の姿に戻る
+    const back = edit(edited, (next) => flipNodes(next, [instanceId], 'horizontal'))
+    expect(frameOf(back.pages[0], instanceId).component).toMatchObject({ flipX: false, overrides: {} })
+    expect(back.pages[0].nodes[labelCopy]).toMatchObject({ x: 30, flipX: false })
+    expect(back.pages[0].nodes[backgroundCopy]).toMatchObject({ fills: [{ x1: 0, x2: 1 }] })
+
+    // 上下の反転は flipY を切り替える
+    const vertical = edit(doc, (next) => flipNodes(next, [instanceId], 'vertical'))
+    expect(frameOf(vertical.pages[0], instanceId).component).toMatchObject({ flipX: false, flipY: true })
+    expect(vertical.pages[0].nodes[labelCopy]).toMatchObject({ x: 20, y: 10, flipX: false, flipY: true })
+  })
+
+  it('反転したインスタンスの写しで変えた値は、元の向きの値で上書きに覚える', () => {
+    const { doc, background, label, instanceId } = withInstance()
+    const [backgroundCopy, labelCopy] = frameOf(doc.pages[0], instanceId).children
+    const flipped = edit(doc, (page) => flipNodes(page, [instanceId], 'horizontal'))
+    // 見えている字を裏返し直す（映したので flipX は true に見えている）と、元の向きでは裏返した字になる
+    const unflipped = edit(flipped, (page) => updateNode(page, labelCopy, { flipX: false }))
+    expect(overridesOf(unflipped, instanceId)).toEqual({ [label.id]: { flipX: true } })
+    expect(unflipped.pages[0].nodes[labelCopy]).toMatchObject({ flipX: false })
+    expect(syncComponents(unflipped)).toBe(unflipped)
+    // グラデーションは映す前の向きで覚え、写しには映して当てる
+    const gradient: Paint = { type: 'linear', x1: 0.2, y1: 0, x2: 1, y2: 0, stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }], opacity: 1, visible: true, blendMode: 'normal' }
+    const filled = edit(flipped, (page) => updateNode(page, backgroundCopy, { fills: [gradient] }))
+    expect(overridesOf(filled, instanceId)).toEqual({ [background.id]: { fills: [{ ...gradient, x1: 0.8, x2: 0 }] } })
+    expect(filled.pages[0].nodes[backgroundCopy]).toMatchObject({ fills: [gradient] })
+    expect(syncComponents(filled)).toBe(filled)
+    // 反転を戻すと、上書きした値がそのまま見える
+    const back = edit(filled, (page) => flipNodes(page, [instanceId], 'horizontal'))
+    expect(overridesOf(back, instanceId)).toEqual({ [background.id]: { fills: [{ ...gradient, x1: 0.8, x2: 0 }] } })
+    expect(back.pages[0].nodes[backgroundCopy]).toMatchObject({ fills: [{ x1: 0.8, x2: 0 }] })
+  })
+
   it('上書きできない項目を変えても覚えず、元に戻る', () => {
     const { doc, instanceId } = withInstance()
     const labelCopy = frameOf(doc.pages[0], instanceId).children[1]
@@ -596,8 +651,10 @@ describe('インスタンスごとの上書き', () => {
     const forged = updatePage(doc, pageId, (page) =>
       updateNode(page, instanceId, {
         component: {
-          ...frameOf(page, instanceId).component!,
+          id: frameOf(page, instanceId).component!.id,
           role: 'instance',
+          flipX: false,
+          flipY: false,
           overrides: {
             // テキストの塗りは消せない。テキストに線はない
             [label.id]: { fills: [], strokes: solid('#ff0000'), text: '送信' },
@@ -774,6 +831,27 @@ describe('入れ子のインスタンスの差し替え', () => {
     expect(frameOf(page, copyId).name).toBe(frameOf(page, innerId).name)
   })
 
+  it('元の中で反転したインスタンスの写しは映ったまま。外側も反転すると重なり、差し替えても向きを引き継ぐ', () => {
+    const { doc, pageId, iconComponent, iconLabel, label, innerId, outerId, copyId } = nestedFixture()
+    const labelOf = (next: DesignDocument, id: string) => childrenOf(next.pages[0], id).find((node) => node.name === label.name)!
+    // 元のカードの中のボタン（幅 120）を反転すると、外側のインスタンスの写しも映る
+    const inner = edit(doc, (page) => flipNodes(page, [innerId], 'horizontal'))
+    expect(labelOf(inner, copyId)).toMatchObject({ x: 60, flipX: true })
+    // 外側（幅 300）も反転すると、ボタンの写しは右へ移り、中身は 2 回映って元の向きに戻る
+    const both = edit(inner, (page) => flipNodes(page, [outerId], 'horizontal'))
+    expect(frameOf(both.pages[0], copyId)).toMatchObject({ x: 180, component: null })
+    expect(labelOf(both, copyId)).toMatchObject({ x: 20, flipX: false })
+    expect(overridesOf(both, outerId)).toEqual({})
+    expect(syncComponents(both)).toBe(both)
+
+    // 差し替えた中身（アイコン、幅 24 に幅 20 の字）も、置いたボタンの向きで映る
+    const swapped = syncComponents(swapNestedInstance(inner, pageId, copyId, iconComponent))
+    expect(childrenOf(swapped.pages[0], copyId)[0]).toMatchObject({ name: iconLabel.name, x: 4, flipX: true })
+    const swappedBoth = syncComponents(swapNestedInstance(both, pageId, copyId, iconComponent))
+    expect(childrenOf(swappedBoth.pages[0], copyId)[0]).toMatchObject({ x: 0, flipX: false })
+    expect(syncComponents(swappedBoth)).toBe(swappedBoth)
+  })
+
   it('差し替えた中身も上書きでき、差し替え直すと名前のたどり方が同じノードへ移る', () => {
     const { doc, pageId, componentId, iconComponent, innerId, outerId, copyId, label } = nestedFixture()
     let next = syncComponents(swapNestedInstance(doc, pageId, copyId, iconComponent))
@@ -806,7 +884,7 @@ describe('入れ子のインスタンスの差し替え', () => {
       syncComponents(
         updatePage(doc, pageId, (page) =>
           updateNode(page, outerId, {
-            component: { id: cardComponent, role: 'instance', overrides: { [innerId]: { componentId } } },
+            component: { id: cardComponent, role: 'instance', overrides: { [innerId]: { componentId } }, flipX: false, flipY: false },
           }),
         ),
       )

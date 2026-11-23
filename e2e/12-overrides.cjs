@@ -211,6 +211,19 @@ const fillOf = (node) => node.fills[0] && node.fills[0].color
   s = await read()
   check('undo で元に戻る', s.mainText.text === 'はい' && s.mainText.fontSize !== 24)
 
+  // ── 複製したインスタンスを左右に反転すると、中身の配置も鏡に映る（上書きにはならない） ──
+  await page.keyboard.press('Escape')
+  await page.locator('.layer-row').nth(0).click()
+  // 元に反映した後なので、写しの文字は元と同じ大きさ（上書きは文言と塗りだけ）
+  await page.keyboard.press('Shift+H')
+  s = await read()
+  const mirrored = s.copies.find((copy) => copy.x !== 400)
+  const mirroredText = s.nodes.find((n) => n.id === mirrored.children[0])
+  check('インスタンスを反転すると、中の文字も裏返って右寄りへ移り、上書きは増えない',
+    mirrored.component.flipX === true && mirroredText.flipX === true && mirroredText.x === mirrored.width - mirroredText.width - 20 &&
+      Object.values(mirrored.component.overrides).every((o) => !('flipX' in o)),
+    JSON.stringify({ link: mirrored.component, x: mirroredText.x, width: mirroredText.width, frame: mirrored.width }))
+
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
   finish()

@@ -236,7 +236,7 @@ export function makeBenchDocument(options: BenchOptions): { document: DesignDocu
     const x = (i % instanceColumns) * (card.width + GAP * 2) + GAP * 2
     const y = Math.floor(i / instanceColumns) * (card.height + GAP * 2) + GAP * 2
     add(
-      { ...createFrame({ x, y, ...card }), name: 'Card', children: [], component: { id: 'card', role: 'instance', overrides: {} } },
+      { ...createFrame({ x, y, ...card }), name: 'Card', children: [], component: { id: 'card', role: 'instance', overrides: {}, flipX: false, flipY: false } },
       holder,
     )
   }

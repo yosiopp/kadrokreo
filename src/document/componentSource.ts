@@ -214,6 +214,8 @@ function topologyOf(
           id: componentId,
           role: 'instance',
           overrides: previous ? moveOverrides(previous, next, link.overrides) : {},
+          flipX: link.flipX,
+          flipY: link.flipY,
         },
       }
       scene = copyShape(ctx, scene, swapped, next, [...chain, componentId], depth + 1)
