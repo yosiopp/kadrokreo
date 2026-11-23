@@ -8,7 +8,7 @@ import { createEllipse, createFrame, createRect, createText } from './nodes.ts'
 import { addPage, createDocument, createPage, updatePage } from './operations/document.ts'
 import { createBooleanNode } from './operations/booleanNodes.ts'
 import { setFill } from './operations/paints.ts'
-import { translateNodes } from './operations/transform.ts'
+import { flipNodes, translateNodes } from './operations/transform.ts'
 import { insertNode, isSelfOrAncestor, moveNode, removeNodes, updateNode } from './operations/tree.ts'
 import { type EditorStore, createEditorStore } from './store.ts'
 
@@ -133,7 +133,7 @@ describe('変わったノードだけを見る後始末', () => {
       const node = page.nodes[target]
       const frames = ids.filter((id) => page.nodes[id].type === 'frame')
       // インスタンスを足す・元へ入れると写しが増えていく。重くなりすぎないよう、大きくなったら足さない（代わりに消す）
-      const drawn = rng.int(13)
+      const drawn = rng.int(15)
       const kind = ids.length > 500 && (drawn === 7 || drawn === 8) ? 12 : drawn
       let step: Step
       switch (kind) {
@@ -231,6 +231,20 @@ describe('変わったノードだけを見る後始末', () => {
             )
           break
         }
+        case 13: {
+          // 裏返す（インスタンスなら中身を映して写しに書き込む）
+          const direction = rng.next() < 0.5 ? 'horizontal' : 'vertical'
+          step = (store) => store.applyDocument(onPage((scene) => (scene.nodes[target] ? flipNodes(scene, [target], direction) : scene)))
+          break
+        }
+        case 14: {
+          // 元の中の色を変える（全部のインスタンスの写しを作り直す）
+          const mains = ids.filter((id) => isMain(page.nodes[id]))
+          const inside = mains.length > 0 ? ids.filter((id) => page.nodes[id].parentId === rng.pick(mains)) : []
+          const color = rng.pick(colors)
+          step = (store) => store.applyDocument(onPage((scene) => (inside.length > 0 ? setFill(scene, inside.filter((id) => scene.nodes[id]), color) : scene)))
+          break
+        }
         default: {
           const remove = rng.next() < 0.3
           step = (store) => store.applyDocument(onPage((scene) => (remove && scene.nodes[target] ? removeNodes(scene, [target]) : scene)))
@@ -238,6 +252,10 @@ describe('変わったノードだけを見る後始末', () => {
       }
       run(step)
       expect(tracked.getState().document, `${index} 回目（種類 ${kind}）`).toEqual(plain.getState().document)
+      // ノードの表のキーの並び（書き出すときの並びなど）も同じ（同期が覚えたインスタンスの並びで作り直す順が、全部を並べたときと同じ）
+      for (const [i, page] of tracked.getState().document.pages.entries()) {
+        expect(Object.keys(page.nodes), `${index} 回目のキーの並び`).toEqual(Object.keys(plain.getState().document.pages[i].nodes))
+      }
       // 引き継いだ元の集まりが、ページを見直して集めたものと同じ
       for (const page of tracked.getState().document.pages) {
         const scanned = Object.values(page.nodes).filter(isMain)

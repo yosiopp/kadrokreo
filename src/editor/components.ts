@@ -39,7 +39,7 @@ import {
   swapChain,
 } from '../document/componentSource.ts'
 import { stretchedAxes } from '../document/autoLayout.ts'
-import { nodeChangesSince, noteNodeChanges } from '../document/nodeChanges.ts'
+import { findNodeOrigin, nodeChangesSince, nodeChangesTracked, noteNodeChanges } from '../document/nodeChanges.ts'
 import { variantSetOf } from '../document/variants.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
@@ -649,8 +649,64 @@ function syncKey(page: Scene, instance: InstanceNode, source: Scene, main: Frame
   return key
 }
 
+/**
+ * 前に合っていたときのキーといまのキーで、参照が変わった元のノードの id（元の木の形が変わっていれば空）。
+ * その写しが食い違っていることが多いので、比べるときに先に見る（比べる順が変わるだけで、答えは同じ）
+ */
+function changedSources(known: readonly unknown[], key: readonly unknown[], source: Scene, main: FrameNode): NodeId[] {
+  const ids = subtreeIds(source, main.id)
+  // キーは [fitText, 親, 元の子孫…, 境目, 中身…]
+  if (known[ids.length + 2] !== syncedInstances || key[ids.length + 2] !== syncedInstances) return []
+  const changed: NodeId[] = []
+  for (const [i, id] of ids.entries()) if (known[i + 2] !== key[i + 2]) changed.push(id)
+  return changed
+}
+
 function sameKey(a: readonly unknown[] | undefined, b: readonly unknown[]): boolean {
   return a !== undefined && a.length === b.length && a.every((value, i) => value === b[i])
+}
+
+// ノードの表ごとの、インスタンスの id（表のキーの並びの順）。同期が全部のインスタンスを見るとき、
+// 全部のノードの id を並べ直さずに済む（large で 1 回 1ms ほど）。並びを Object.keys と同じにしておくのは、
+// 作り直す順が変わると、作り直した表のキーの並び（書き出すときのノードの並びなど）が変わるため
+
+type NodeTable = Readonly<Record<NodeId, SceneNode>>
+
+const instanceOrders = new WeakMap<NodeTable, readonly NodeId[]>()
+
+/** nodes のインスタンスの id を、Object.keys(nodes) の並びの順で */
+function instanceIdsOf(nodes: NodeTable): readonly NodeId[] {
+  if (!nodeChangesTracked()) return Object.keys(nodes).filter((id) => isInstance(nodes[id]))
+  const known = instanceOrders.get(nodes)
+  if (known) return known
+  // 写しの元の表で集めたものが使えれば、それ。変わったノードが（変わる前も後も）インスタンスでなければ、
+  // インスタンスの集まりも、キーの並びの中の順も同じ（インスタンスでないノードの出し入れは順を変えない）
+  const origin = findNodeOrigin(nodes, (table) => instanceOrders.get(table))
+  if (origin && ![...origin.ids].some((id) => isInstance(nodes[id]) || isInstance(origin.table[id]))) {
+    instanceOrders.set(nodes, origin.value)
+    return origin.value
+  }
+  const ids = Object.keys(nodes).filter((id) => isInstance(nodes[id]))
+  // 数の形の id（配列の添字になる文字列）は、キーの並びで入れた順によらず先頭に来るので、並びをたどれない。覚えない
+  if (!ids.some(isIndexKey)) instanceOrders.set(nodes, ids)
+  return ids
+}
+
+/**
+ * 同期で base を写して作った next に、インスタンスの並びを引き継ぐ。rebuilt は作り直した（消して入れ直した）インスタンスで、
+ * キーの並びでは後ろへ作り直した順に回る。ほかのインスタンスはそのままの順（インスタンスでなくしたものは抜ける）
+ */
+function inheritInstanceOrder(next: NodeTable, base: NodeTable, rebuilt: readonly NodeId[]): void {
+  const order = instanceOrders.get(base)
+  if (!order || instanceOrders.has(next) || !nodeChangesTracked()) return
+  const moved = new Set(rebuilt)
+  const kept = order.filter((id) => !moved.has(id) && isInstance(next[id]))
+  instanceOrders.set(next, [...kept, ...rebuilt.filter((id) => isInstance(next[id]))])
+}
+
+/** 配列の添字になる文字列か（オブジェクトのキーの並びで先頭に来る） */
+function isIndexKey(key: string): boolean {
+  return /^(0|[1-9]\d{0,9})$/.test(key) && Number(key) < 4294967295
 }
 
 /** 入れ子の深さの上限を兼ねる。これより深い入れ子は、次の変更のときに続きが直る */
@@ -677,7 +733,9 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined, scope: Sync
     }
     // 書き換えた id（あとでノードの表に覚えておく。null は分からなくなった）
     let touched: Set<NodeId> | null = new Set()
-    const ids = scope ? (scope.get(page.id) ?? []) : Object.keys(page.nodes)
+    // 作り直したインスタンス（作り直した順）。表のキーの並びでは、消して入れ直したので後ろへ回る
+    let rebuiltIds: NodeId[] | null = []
+    const ids = scope ? (scope.get(page.id) ?? []) : instanceIdsOf(page.nodes)
     for (const id of ids) {
       // 作り直しの途中で消えたノードは飛ばす
       const instance = next.nodes[id]
@@ -691,14 +749,16 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined, scope: Sync
         continue
       }
       const key = syncKey(next, instance, main.page, main.node, fitText)
-      if (key && sameKey(syncedInstances.get(instance), key)) continue
-      const plan = planRebuild(next, instance, main.page, main.node, fitText, ctx, swapChain(next, instance))
+      const known = syncedInstances.get(instance)
+      if (key && sameKey(known, key)) continue
+      const plan = planRebuild(next, instance, main.page, main.node, fitText, ctx, swapChain(next, instance), key && known && nodeChangesTracked() ? changedSources(known, key, main.page, main.node) : [])
       if (!plan) {
         if (key) syncedInstances.set(instance, key)
         continue
       }
       if (plan.strays.length > 0) {
         // 写しを外へ出してしまったときだけ。めったにないので、ふつうに消して新しい表を持ち直す
+        rebuiltIds = null
         const kept = next.nodes
         next = removeNodes(next, plan.strays)
         const removed = nodeChangesSince(kept, next.nodes)
@@ -714,6 +774,7 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined, scope: Sync
         touched?.add(id)
       }
       Object.assign(nodes, plan.expected)
+      rebuiltIds?.push(instance.id)
       if (touched) for (const id of Object.keys(plan.expected)) touched.add(id)
       // 作り直した姿は、いまの元に合っている。覚えておけば、次の回（変化がないことを確かめる回）で比べ直さずに済む。
       // 同じ回のうちに親や元が変われば、次の回のキーが合わなくなって、今までどおり比べ直す
@@ -727,6 +788,7 @@ function syncOnce(doc: DesignDocument, fitText: FitText | undefined, scope: Sync
       changed = true
       if (touched) noteNodeChanges(next.nodes, page.nodes, touched)
       if (keepsMains) inheritMains(next, page)
+      if (rebuiltIds) inheritInstanceOrder(next.nodes, page.nodes, rebuiltIds)
     }
     return next
   })
@@ -764,12 +826,20 @@ function planRebuild(
   fitText: FitText | undefined,
   ctx: SyncContext,
   chain: readonly string[],
+  likelyChanged: readonly NodeId[] = [],
 ): { currentIds: NodeId[]; expected: Record<NodeId, SceneNode>; strays: NodeId[] } | null {
   const expected = expectedCopies(page, instance, swappedSource(source, main.id, instance.component.overrides, ctx, chain, fitText), main, fitText)
   const currentIds = subtreeIds(page, instance.id)
+  const differs = (id: NodeId) => !Object.hasOwn(expected, id) || !sameNode(page.nodes[id], expected[id])
   const same =
     currentIds.length === Object.keys(expected).length &&
-    currentIds.every((id) => sameNode(page.nodes[id], expected[id]))
+    // 元で変わったノードの写しから比べる（食い違いが見つかれば、残りは比べずに済む）。
+    // 同じなら currentIds と expected の id は一致するので、expected にある id を先に比べても答えは変わらない
+    !likelyChanged.some((sourceId) => {
+      const id = sourceId === main.id ? instance.id : derivedId(instance.id, sourceId)
+      return Object.hasOwn(expected, id) && Object.hasOwn(page.nodes, id) && differs(id)
+    }) &&
+    !currentIds.some(differs)
   if (same) return null
 
   // 写しと同じ id のノードがインスタンスの外にあれば（写しを外へ出してしまったとき）、二重にならないよう消す
@@ -918,7 +988,45 @@ function valueOf(node: SceneNode, key: string): unknown {
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
-  return Object.is(a, b) || JSON.stringify(a) === JSON.stringify(b)
+  return Object.is(a, b) || sameJson(a, b)
+}
+
+/**
+ * JSON.stringify(a) === JSON.stringify(b) と同じ答えを、文字列を作らずに出す（ノードの値は JSON にできるものだけ）。
+ * 同期は元を変えるたびに全部の写しを比べるので、文字列にすると large で 1 回 4ms ほどかかっていた。
+ * JSON と同じく、オブジェクトの項目の並びは見る・undefined の項目はないものとみなす・配列の undefined と NaN・Infinity は null とみなす
+ */
+export function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  const left = jsonScalar(a)
+  const right = jsonScalar(b)
+  if (left !== NOT_SCALAR || right !== NOT_SCALAR) return left === right
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!sameJson(a[i] ?? null, b[i] ?? null)) return false
+    return true
+  }
+  if (Array.isArray(b)) return false
+  const x = a as Record<string, unknown>
+  const y = b as Record<string, unknown>
+  const xKeys = Object.keys(x).filter((key) => x[key] !== undefined && typeof x[key] !== 'function')
+  const yKeys = Object.keys(y).filter((key) => y[key] !== undefined && typeof y[key] !== 'function')
+  if (xKeys.length !== yKeys.length) return false
+  for (let i = 0; i < xKeys.length; i++) {
+    if (xKeys[i] !== yKeys[i] || !sameJson(x[xKeys[i]], y[yKeys[i]])) return false
+  }
+  return true
+}
+
+const NOT_SCALAR = Symbol('not scalar')
+
+/** JSON にしたときの値（数・文字列・真偽・null）。オブジェクトと配列は NOT_SCALAR */
+function jsonScalar(value: unknown): unknown {
+  if (value === null || value === undefined) return value === null ? null : undefined
+  if (typeof value === 'number') return Number.isFinite(value) ? (value === 0 ? 0 : value) : null
+  if (typeof value === 'object') return NOT_SCALAR
+  if (typeof value === 'function') return undefined
+  return value
 }
 
 /** 項目の並び順が違っていても（ファイルから読んだノードと、編集中に作ったノードなど）同じとみなす */

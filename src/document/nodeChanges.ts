@@ -21,6 +21,11 @@ export function trackNodeChanges(on: boolean): void {
   enabled = on
 }
 
+/** 覚えているか（止めている間は、覚え書きから引き継ぐ近道も使わず、全部を見る） */
+export function nodeChangesTracked(): boolean {
+  return enabled
+}
+
 /**
  * next は base を写して ids のノードだけを書き換えた（足した・消した・置き換えた）表。
  * 覚えたあとに next を書き換えないこと（覚えた id と食い違う）
