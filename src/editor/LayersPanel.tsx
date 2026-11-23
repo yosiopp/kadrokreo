@@ -2,6 +2,7 @@ import { type DragEvent, type MouseEvent, memo, useLayoutEffect, useMemo, useRef
 import { isInstance, owningInstance } from '../document/component.ts'
 import { isComponentPart } from '../document/variants.ts'
 import { isOpen, layerRows, toggleFolding } from '../document/layers.ts'
+import type { Point } from '../document/geometry.ts'
 import type { NodeId, Scene, SceneNode } from '../document/types.ts'
 import { LayerCaret, LayerIcon } from '../ui/LayerParts.tsx'
 import { useVirtualRows } from '../ui/virtualRows.ts'
@@ -15,6 +16,8 @@ import type { EditorState, EditorStore } from './store.ts'
 type Props = {
   store: EditorStore
   state: EditorState
+  /** 行を右クリックした。選択を決めたあとで、画面座標（clientX / clientY）にメニューを出す */
+  onContextMenu: (at: Point) => void
 }
 
 type Drop = { id: NodeId; placement: Placement }
@@ -29,6 +32,7 @@ function isInLayout(scene: Scene, id: NodeId): boolean {
 /** 行から呼ぶ操作。描き直しても同じ参照のままなので、変わっていない行は描き直さずに済む */
 type RowActions = {
   click: (event: MouseEvent, id: NodeId) => void
+  contextMenu: (event: MouseEvent, id: NodeId) => void
   toggleOpen: (id: NodeId) => void
   startRename: (id: NodeId) => void
   commitRename: (id: NodeId, name: string) => void
@@ -40,7 +44,7 @@ type RowActions = {
   toggleVisible: (node: SceneNode) => void
 }
 
-export function LayersPanel({ store, state }: Props) {
+export function LayersPanel({ store, state, onContextMenu }: Props) {
   const { page, selection } = state
   const [toggled, setToggled] = useState<ReadonlySet<NodeId>>(new Set())
   const [renaming, setRenaming] = useState<NodeId | null>(null)
@@ -62,9 +66,9 @@ export function LayersPanel({ store, state }: Props) {
   const anchorRef = useRef<{ id: NodeId; selection: readonly NodeId[] } | null>(null)
 
   // 操作は、いつも最新の値を見る（行に渡す関数の参照は変えない）。値は描き終えたあとに入れ替える
-  const latest = useRef({ store, selection, toggled, drop, folding, rows })
+  const latest = useRef({ store, selection, toggled, drop, folding, rows, onContextMenu })
   useLayoutEffect(() => {
-    latest.current = { store, selection, toggled, drop, folding, rows }
+    latest.current = { store, selection, toggled, drop, folding, rows, onContextMenu }
   })
 
   const actions = useMemo<RowActions>(() => {
@@ -99,6 +103,16 @@ export function LayersPanel({ store, state }: Props) {
           store.select([id])
           setAnchor()
         }
+      },
+      contextMenu(event, id) {
+        // 選んでいない行ならその行だけを選ぶ。選んでいる行なら、いくつ選んでいてもそのまま（キャンバスと同じ）
+        event.preventDefault()
+        const { store, onContextMenu } = now()
+        if (!store.getState().selection.includes(id)) {
+          store.select([id])
+          anchorRef.current = { id, selection: store.getState().selection }
+        }
+        onContextMenu({ x: event.clientX, y: event.clientY })
       },
       toggleOpen,
       startRename: (id) => setRenaming(id),
@@ -200,6 +214,7 @@ const LayerItem = memo(function LayerItem({ node, depth, copy, selected, open, c
       style={{ paddingLeft: 8 + depth * 16 }}
       draggable={!copy && !renaming}
       onClick={(event) => actions.click(event, node.id)}
+      onContextMenu={(event) => !renaming && actions.contextMenu(event, node.id)}
       onDragStart={(event) => actions.dragStart(event, node.id)}
       onDragOver={(event) => actions.dragOver(event, node, copy)}
       onDrop={actions.drop}

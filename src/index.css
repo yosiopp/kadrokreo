@@ -239,9 +239,9 @@ input.document-name:focus {
   height: 100%;
 }
 
-/* キャンバスの右クリックメニュー */
+/* キャンバスとレイヤーパネルの右クリックメニュー（ウィンドウを基準に置く） */
 .context-menu {
-  position: absolute;
+  position: fixed;
   z-index: 20;
   min-width: 200px;
   padding: 4px;
@@ -252,6 +252,7 @@ input.document-name:focus {
 }
 
 .context-menu-nested {
+  position: absolute;
   top: -5px;
   left: 100%;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { type CanvasPointer, CanvasView } from '../canvas/CanvasView.tsx'
 import type { Camera } from '../canvas/camera.ts'
 import { hitTest } from '../canvas/hitTest.ts'
@@ -48,7 +48,7 @@ import { useTextEditing } from './editorCanvas/useTextEditing.ts'
 import { findFrameAt } from './hitTest.ts'
 import { isSelfOrAncestor } from './operations/tree.ts'
 import { createPath } from './nodes.ts'
-import { insertNode } from './operations/tree.ts'
+import { insertNode, updateNodes } from './operations/tree.ts'
 import {
   deleteContourVertices,
   editByContour,
@@ -96,9 +96,26 @@ type Props = {
   onCopySvg: () => void
   /** コンポーネントの一覧からドラッグしているインスタンスが入るフレーム（ページ直下なら null） */
   dropTarget?: NodeId | null
+  /** ほかの場所（レイヤーパネル）から右クリックメニューを出すための口。ここに出す関数を入れる */
+  menuOpenerRef?: RefObject<MenuOpener | null>
 }
 
-export function EditorCanvas({ store, camera, state, tool, onToolChange, onPasteImages, onPasteSvg, onCopySvg, onMessage, dropTarget = null }: Props) {
+/** 選択中のものについての右クリックメニューを、画面座標（clientX / clientY）に出す */
+export type MenuOpener = (at: Point) => void
+
+export function EditorCanvas({
+  store,
+  camera,
+  state,
+  tool,
+  onToolChange,
+  onPasteImages,
+  onPasteSvg,
+  onCopySvg,
+  onMessage,
+  dropTarget = null,
+  menuOpenerRef,
+}: Props) {
   const gestureRef = useRef<Gesture | null>(null)
   // ペンツールで描いている途中の頂点（ページ座標、制御点を含む）。cursor はポインタの位置
   const penRef = useRef<{ points: Vertex[]; cursor: Point | null } | null>(null)
@@ -106,7 +123,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
   const penPressRef = useRef<Point | null>(null)
   const [hover, setHover] = useState<NodeId | null>(null)
   const [cursor, setCursor] = useState('default')
-  // 右クリックメニューを出している位置（キャンバスの画面座標）
+  // 右クリックメニューを出している位置（ウィンドウの画面座標）
   const [menuAt, setMenuAt] = useState<Point | null>(null)
   const closeMenu = useCallback(() => setMenuAt(null), [])
   const [, redraw] = useReducer((n: number) => n + 1, 0)
@@ -718,19 +735,62 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
     onMessage,
   })
 
-  /** 右クリック。押した所のものを選んで（選択枠の内側なら選択はそのまま）、メニューを出す */
-  function onContextMenu(pointer: CanvasPointer) {
-    if (gestureRef.current) return
+  /** メニューを出す前に、途中の操作（文字の編集・ペン・ほかのツール）を終える */
+  function prepareMenu() {
     if (editingRef.current) finishEditing()
     if (penRef.current) finishPen(false)
     if (tool !== 'select') onToolChange('select')
+    setHover(null)
+  }
+
+  /** 右クリック。押した所のものを選んで（選択枠の内側なら選択はそのまま）、メニューを出す */
+  function onContextMenu(pointer: CanvasPointer) {
+    if (gestureRef.current) return
+    prepareMenu()
     const { selection } = store.getState()
     const hit = pick(pointer)
     if (hit ? !selection.includes(hit) && !insideSelection(pointer, hit) : !insideSelection(pointer, null)) {
       store.select(hit ? [hit] : [])
     }
-    setHover(null)
-    setMenuAt(pointer.screen)
+    setMenuAt(pointer.client)
+  }
+
+  // レイヤーパネルの右クリックからも、同じメニューを出せるようにする（選ぶのはパネルの側）
+  // 出す関数はいつも最新の値（ツールなど）を見る。入れ替えるのは描き終えたあと
+  const openFromOutside = useRef<MenuOpener>(() => {})
+  useLayoutEffect(() => {
+    openFromOutside.current = (at) => {
+      if (gestureRef.current) return
+      prepareMenu()
+      setMenuAt(at)
+    }
+  })
+  useEffect(() => {
+    if (!menuOpenerRef) return
+    menuOpenerRef.current = (at) => openFromOutside.current(at)
+    return () => {
+      menuOpenerRef.current = null
+    }
+  }, [menuOpenerRef])
+
+  /** 表示・ロックの切り替え。選んだもののうち 1 つでも見えている（ロックしていない）なら全部を隠す（ロックする） */
+  function visibilityItems(): MenuItem[] {
+    const { page, selection } = store.getState()
+    // 写し（インスタンスの中身）は、表示の切り替えだけできる（レイヤーパネルの行と同じ）
+    const shown = selection.some((id) => page.nodes[id]?.visible)
+    const own = ownIds()
+    const unlocked = own.some((id) => !page.nodes[id]?.locked)
+    return [
+      {
+        label: shown ? '非表示にする' : '表示する',
+        onSelect: () => store.apply((base) => updateNodes(base, selection, { visible: !shown })),
+      },
+      {
+        label: unlocked ? 'ロックする' : 'ロックを解除',
+        disabled: own.length === 0,
+        onSelect: () => store.apply((base) => updateNodes(base, own, { locked: unlocked })),
+      },
+    ]
   }
 
   function menuItems(): MenuItem[] {
@@ -752,6 +812,8 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       { label: '貼り付け', shortcut: `${MOD}V`, disabled: !canPaste, onSelect: commands.paste },
       { label: '複製', shortcut: `${MOD}D`, disabled: none, onSelect: commands.duplicate },
       { label: '削除', shortcut: 'Delete', disabled: movableIds().length === 0, onSelect: commands.remove },
+      'separator',
+      ...visibilityItems(),
       'separator',
       { label: '最前面へ', shortcut: ']', disabled: none, onSelect: () => commands.reorder('front') },
       { label: '前面へ', shortcut: `${MOD}]`, disabled: none, onSelect: () => commands.reorder('forward') },
@@ -850,7 +912,7 @@ export function EditorCanvas({ store, camera, state, tool, onToolChange, onPaste
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
-      {menuAt && <ContextMenu at={menuAt} area={camera.getSize()} items={menuItems()} onClose={closeMenu} />}
+      {menuAt && <ContextMenu at={menuAt} items={menuItems()} onClose={closeMenu} />}
       {editing && (
         <TextEditor
           key={editing.id}

@@ -1,7 +1,7 @@
 import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Point, Size } from '../document/geometry.ts'
+import type { Point } from '../document/geometry.ts'
 
-// キャンバスの右クリックメニュー。中身（どの操作を出すか）は EditorCanvas が決める
+// キャンバスとレイヤーパネルの右クリックメニュー。中身（どの操作を出すか）は EditorCanvas が決める
 
 export type MenuItem =
   | {
@@ -16,29 +16,28 @@ export type MenuItem =
   | 'separator'
 
 type Props = {
-  /** 出す位置（キャンバスの左上を原点とする画面座標） */
+  /** 出す位置（ウィンドウの左上を原点とする画面座標）。はみ出す向きには反対側へ出す */
   at: Point
-  /** キャンバスの大きさ。はみ出す向きには反対側へ出す */
-  area: Size
   items: MenuItem[]
   onClose: () => void
 }
 
-export function ContextMenu({ at, area, items, onClose }: Props) {
+export function ContextMenu({ at, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState(at)
 
-  // 大きさが分かってから、キャンバスの中に収まる位置へ寄せる
+  // 大きさが分かってから、ウィンドウの中に収まる位置へ寄せる
   useLayoutEffect(() => {
     const menu = ref.current
     if (!menu) return
     const { offsetWidth: width, offsetHeight: height } = menu
+    const { innerWidth, innerHeight } = window
     setPosition({
-      x: at.x + width > area.width ? Math.max(0, at.x - width) : at.x,
-      y: at.y + height > area.height ? Math.max(0, area.height - height) : at.y,
+      x: at.x + width > innerWidth ? Math.max(0, at.x - width) : at.x,
+      y: at.y + height > innerHeight ? Math.max(0, innerHeight - height) : at.y,
     })
     menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
-  }, [at, area])
+  }, [at])
 
   // メニューの外を押す・Esc・ウィンドウの大きさが変わる、で閉じる。
   // Esc はキャンバスのショートカット（選択の解除）より先に受けて、そちらへは流さない

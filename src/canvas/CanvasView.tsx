@@ -17,6 +17,8 @@ import { type Viewport, screenToWorld } from './viewport.ts'
 export type CanvasPointer = {
   /** キャンバス左上を原点とする画面座標 */
   screen: Point
+  /** ウィンドウ左上を原点とする画面座標（clientX / clientY） */
+  client: Point
   /** ページ座標 */
   world: Point
   shiftKey: boolean
@@ -196,6 +198,7 @@ export function CanvasView(props: Props) {
     const screen = { x: event.clientX - rect.left, y: event.clientY - rect.top }
     return {
       screen,
+      client: { x: event.clientX, y: event.clientY },
       world: screenToWorld(camera.getViewport(), screen),
       shiftKey: event.shiftKey,
       altKey: event.altKey,

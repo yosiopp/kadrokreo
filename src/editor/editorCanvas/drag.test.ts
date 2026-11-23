@@ -6,7 +6,7 @@ import { insertNode } from '../operations/tree.ts'
 import { createEditorStore } from '../store.ts'
 import { dragGesture, moveGesture } from './drag.ts'
 
-const pointer = (world: { x: number; y: number }, modKey = false) => ({ screen: world, world, shiftKey: false, altKey: false, modKey })
+const pointer = (world: { x: number; y: number }, modKey = false) => ({ screen: world, client: world, world, shiftKey: false, altKey: false, modKey })
 
 /** 30° 回した 2 つの矩形。b は a の右に、回した向きに沿って 3 だけ離して置く */
 function setup() {

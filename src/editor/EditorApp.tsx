@@ -16,7 +16,7 @@ import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { TypeIcon } from '../ui/icons.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
 import { useFileDrop } from '../ui/useFileDrop.ts'
-import { EditorCanvas } from './EditorCanvas.tsx'
+import { EditorCanvas, type MenuOpener } from './EditorCanvas.tsx'
 import type { Tool } from './tools.ts'
 import { ComponentsPanel } from './ComponentsPanel.tsx'
 import { LayersPanel } from './LayersPanel.tsx'
@@ -63,6 +63,8 @@ function Editor({ store }: { store: EditorStore }) {
   // ページごとに、最後に見ていた位置を覚えておく
   const viewportsRef = useRef(new Map<PageId, Viewport>())
   const shownPageRef = useRef(state.page.id)
+  // レイヤーパネルの右クリックから、キャンバスと同じメニューを出す（出す関数はキャンバスが入れる）
+  const menuOpenerRef = useRef<MenuOpener | null>(null)
 
   useEffect(() => {
     camera.fit(getContentBounds(store.getState().page))
@@ -327,7 +329,7 @@ function Editor({ store }: { store: EditorStore }) {
         <aside className="panel layers-panel">
           <PagesPanel store={store} state={state} />
           <ComponentsPanel store={store} state={state} camera={camera} />
-          <LayersPanel store={store} state={state} />
+          <LayersPanel store={store} state={state} onContextMenu={(at) => menuOpenerRef.current?.(at)} />
         </aside>
         <main
           className="app-main"
@@ -364,6 +366,7 @@ function Editor({ store }: { store: EditorStore }) {
             onCopySvg={copySvg}
             onMessage={setMessage}
             dropTarget={dropTarget}
+            menuOpenerRef={menuOpenerRef}
           />
           {dragging && <div className="drop-overlay">画像・SVG または kdr ファイルをドロップ</div>}
         </main>
