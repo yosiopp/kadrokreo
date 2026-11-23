@@ -1,15 +1,17 @@
 import type { Point } from './geometry.ts'
-import type { StrokeJoin } from './types.ts'
+import type { Cap, StrokeJoin } from './types.ts'
 import { ellipseVertices, type MaskNode, shapeContours } from './mask.ts'
-import { type Contour, cappedStroke, flattenPath, pathOutlines } from './path.ts'
+import { type Contour, cappedStroke, dashCap, flattenPath, pathOutlines } from './path.ts'
+import { fitContour } from './fitCurve.ts'
 import { booleanContours } from './pathBoolean.ts'
 
 // 線の輪郭化（既存のデザインツールの Outline stroke）。線の太さの形を、塗る輪郭（閉じた形）にする。
 //
 // 線を細かい折れ線に直し（曲線は flattenPath と同じ細かさ）、辺ごとの長方形・頂点ごとのつなぎ目（線の角の形 strokeJoin。マイターは
 // 長さが太さの 10 倍を超えればベベル。Canvas の既定。丸は円）・端の形（cappedStroke の図形）を並べ、それらをブーリアン演算の合体でまとめる。
-// 破線は、線と空きの長さ（とずれ strokeDashOffset）で折れ線を切り分けてから同じことをする（破線の切れ目の端は切りっぱなし）。
-// 結果は折れ線（曲線には戻さない）。線は輪郭の上に内と外へ半分ずつ引く（描画と同じ）。
+// 破線は、線と空きの長さ（とずれ strokeDashOffset）で折れ線を切り分けてから同じことをする。開いたパスの両端が同じ丸・四角なら、
+// 破線の 1 本ごとの両端にその形を付ける（dashCap。描画の lineCap と同じ）。そうでなければ切れ目の端は切りっぱなし。
+// 合体の結果は折れ線なので、角で区切って曲線に当てはめ直す（fitContour）。線は輪郭の上に内と外へ半分ずつ引く（描画と同じ）。
 
 /** マイターのつなぎ目の長さの上限（線の太さに対する倍率。Canvas の miterLimit の既定） */
 const MITER_LIMIT = 10
@@ -26,25 +28,35 @@ export function strokeOutline(node: Stroked): Contour[] {
   if (half <= 0) return []
   const pieces: Point[][] = []
   const contours = node.type === 'path' ? pathOutlines(node) : shapeContours(node)
+  // 破線の切れ目の端の形（あれば、線の両端の形もこれで付く）
+  const cap = node.type === 'path' ? dashCap(node) : null
+  const addCaps = (vertices: readonly Point[], startCap: Cap, endCap: Cap) => {
+    for (const shape of cappedStroke(vertices, { strokeWidth: node.strokeWidth, startCap, endCap, capSize: 0 }).caps) {
+      pieces.push(shape.kind === 'circle' ? flattenPath(ellipseVertices(shape.center.x, shape.center.y, shape.radius, shape.radius), true) : shape.points)
+    }
+  }
   contours.forEach((contour, index) => {
     let vertices = contour.vertices
     // 端の形は、パスの最初の輪郭の開いた端にだけ付く（描画と同じ）
-    if (node.type === 'path' && index === 0 && !contour.closed && (node.startCap !== 'none' || node.endCap !== 'none')) {
+    if (node.type === 'path' && cap === null && index === 0 && !contour.closed && (node.startCap !== 'none' || node.endCap !== 'none')) {
       const capped = cappedStroke(vertices, node)
       vertices = capped.line
-      for (const cap of capped.caps) {
-        pieces.push(cap.kind === 'circle' ? flattenPath(ellipseVertices(cap.center.x, cap.center.y, cap.radius, cap.radius), true) : cap.points)
+      for (const shape of capped.caps) {
+        pieces.push(shape.kind === 'circle' ? flattenPath(ellipseVertices(shape.center.x, shape.center.y, shape.radius, shape.radius), true) : shape.points)
       }
     }
     const points = withoutRepeats(flattenPath(vertices, contour.closed), contour.closed)
     const runs = node.strokeDashes.some((d) => d > 0)
       ? dashRuns(points, contour.closed, node.strokeDashes, node.strokeDashOffset)
       : [{ points, closed: contour.closed }]
-    for (const run of runs) pieces.push(...strokePieces(run.points, run.closed, half, node.strokeJoin))
+    for (const run of runs) {
+      pieces.push(...strokePieces(run.points, run.closed, half, node.strokeJoin))
+      if (cap !== null && !run.closed) addCaps(run.points, cap, cap)
+    }
   })
   const shapes = pieces.filter((piece) => piece.length >= 3).map(oriented)
   if (shapes.length === 0) return []
-  return booleanContours([{ contours: shapes.map((points) => ({ vertices: points, closed: true })), fillRule: 'nonzero' }], 'union')
+  return booleanContours([{ contours: shapes.map((points) => ({ vertices: points, closed: true })), fillRule: 'nonzero' }], 'union').map((c) => fitContour(c))
 }
 
 /** 続けて同じ位置にある点を除く（閉じた形は最後と最初も） */

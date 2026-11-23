@@ -1,6 +1,6 @@
 import { type Point, tidy } from './geometry.ts'
 import { gradientLine, mixColor, paintColor, radialTransform } from './paint.ts'
-import { type Vertex, cappedStroke, contoursData, isLine, pathOutlines } from './path.ts'
+import { type Vertex, cappedStroke, contoursData, isLine, pathOutlines, strokeLineCap } from './path.ts'
 import type { Asset, ColorStop, ConicGradient, Paint, PathNode, Style } from './types.ts'
 
 // SVG の図形を書く処理。viewer の Dev モードの HTML（パス・直線の <svg>）と、SVG ファイルの書き出し（svgExport.ts）で共有する。
@@ -141,7 +141,7 @@ export type PathSvg = { defs: string[]; elements: string[] }
 /**
  * 直線とパスの SVG の要素。直線は line、それ以外は path の d（曲線は C）で書く。角の丸めは曲線に直して書く（pathOutlines）。
  * 端の形があれば、描画と同じく線を矢印の分だけ短くし（cappedStroke）、端の図形は線の色で塗った多角形・円にする。
- * ただし standalone で両端が同じ丸・四角の端（か端なし）なら、stroke-linecap で書く（取り込みで端の形に戻る）。
+ * ただし両端が同じ丸・四角の端（か端なし）なら、stroke-linecap で書く（取り込みで端の形に戻る。破線の切れ目の端にも同じ形が付く）。
  * 2 つ目以降の輪郭（穴など）は、塗りでは全部の輪郭を 1 つの d にまとめ、端の形は最初の輪郭にだけ付ける
  */
 export function pathSvg(node: PathNode, options: PathSvgOptions): PathSvg {
@@ -183,12 +183,11 @@ export function pathSvg(node: PathNode, options: PathSvgOptions): PathSvg {
 
   const parts: string[] = []
   const hasCaps = !node.closed && stroke !== null && (node.startCap !== 'none' || node.endCap !== 'none')
-  // 両端が同じ丸・四角なら、SVG の stroke-linecap がそのまま同じ形になる
-  const lineCap = standalone && hasCaps && node.startCap === node.endCap && (node.startCap === 'round' || node.startCap === 'square')
-    ? node.startCap
-    : null
+  // 両端が同じ丸・四角なら、SVG の stroke-linecap がそのまま同じ形になる（破線なら切れ目の端にも付く。描画と同じ）。
+  // HTML の出力では stroke-linecap を CSS に書く（viewer/inspect.ts）
+  const lineCap = hasCaps ? strokeLineCap(node) : null
   if (!hasCaps || lineCap) {
-    const capDecl = lineCap ? [`stroke-linecap="${lineCap}"`] : []
+    const capDecl = lineCap && standalone ? [`stroke-linecap="${lineCap}"`] : []
     const decls = [...fillDecls, ...fillRule, ...noFill, ...strokeDecls, ...strokeShape, ...capDecl, ...noStroke]
     parts.push(line ? lineElement(points, attrs(decls)) : pathElement(points, node.closed, attrs(decls)))
   } else {

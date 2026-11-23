@@ -12,7 +12,7 @@ import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
 import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
-import { capMarkerSize, contoursData, isLine, isMarkerCap } from '../document/path.ts'
+import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
 import { ALIGN_CONTENT_LABELS, BLEND_MODE_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, JOIN_LABELS, MASK_TYPE_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
@@ -528,6 +528,9 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     if (stroke && node.strokeDashes.length > 0) add('stroke-dasharray', node.strokeDashes.map(px).join(' '))
     if (stroke && node.strokeDashes.length > 0 && node.strokeDashOffset !== 0) add('stroke-dashoffset', px(node.strokeDashOffset))
     if (stroke && node.strokeJoin !== 'miter') add('stroke-linejoin', node.strokeJoin)
+    // 両端が同じ丸・四角なら stroke-linecap（破線なら切れ目の端にも付く。描画と同じ）。矢印などの印は SVG の図形で描く
+    const lineCap = stroke ? strokeLineCap(node) : null
+    if (lineCap !== null) add('stroke-linecap', lineCap)
     if (fill && node.fillRule === 'evenodd') add('fill-rule', 'evenodd')
   } else {
     const background = backgroundCss(node.fills, style, node)

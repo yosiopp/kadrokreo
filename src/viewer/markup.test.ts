@@ -185,6 +185,10 @@ describe('nodeMarkup', () => {
     expect(marked).toContain('<line x1="0" y1="0" x2="100" y2="0"/>')
     expect(marked).toContain('<circle cx="100" cy="0" r="8" fill="#ff0000" stroke="none"/>')
     expect(marked).toContain('<polygon points="0,1 -1,1 -1,-1 0,-1" fill="#ff0000" stroke="none"/>')
+    // 両端が同じ丸なら、端の図形は描かず CSS の stroke-linecap に任せる（破線の切れ目の端にも同じ形が付く）
+    const rounded = nodeMarkup(sceneOf({ ...line, startCap: 'round', endCap: 'round', strokeDashes: [4, 4] }), 'line')
+    expect(rounded.html).toBe('<svg class="arrow" viewBox="0 0 100 0"><line x1="0" y1="0" x2="100" y2="0"/></svg>')
+    expect(rounded.css).toContain('stroke-linecap: round;')
     const path: PathNode = {
       ...base,
       ...paint,

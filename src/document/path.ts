@@ -352,6 +352,22 @@ export function capReach(style: { strokeWidth: number; capSize: number; startCap
   return style.strokeWidth / 2
 }
 
+/**
+ * 線の端を SVG / CSS の stroke-linecap（Canvas の lineCap）で書ける形。開いたパスの両端が同じ丸・四角ならその形、ほかは null
+ */
+export function strokeLineCap(style: { closed: boolean; startCap: Cap; endCap: Cap }): 'round' | 'square' | null {
+  if (style.closed) return null
+  return style.startCap === style.endCap && (style.startCap === 'round' || style.startCap === 'square') ? style.startCap : null
+}
+
+/**
+ * 破線の切れ目の端の形。開いたパスの両端が同じ丸・四角なら、破線の 1 本ごとの両端にもその形を付ける
+ * （Canvas の lineCap・SVG / CSS の stroke-linecap と同じ形）。破線でない・閉じた形・両端が違う（矢印などを含む）なら null（切りっぱなし）
+ */
+export function dashCap(style: { strokeDashes: readonly number[]; closed: boolean; startCap: Cap; endCap: Cap }): 'round' | 'square' | null {
+  return style.strokeDashes.some((d) => d > 0) ? strokeLineCap(style) : null
+}
+
 /** 端の形として塗る図形。polygon は頂点の並び、circle は中心と半径 */
 export type CapShape = { kind: 'polygon'; points: Point[] } | { kind: 'circle'; center: Point; radius: number }
 

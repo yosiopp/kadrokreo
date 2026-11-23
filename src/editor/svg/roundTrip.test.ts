@@ -216,7 +216,9 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
       strokes: [{ type: 'solid', color: '#222222', opacity: 1, visible: true, blendMode: 'normal' as const }],
     })
     const scene = sceneOf(line)
-    const { byName, imported, origin } = roundTrip(scene)
+    const { svg, byName, imported, origin } = roundTrip(scene)
+    // 破線の切れ目の端も丸くなるよう、stroke-linecap で書く（描画と同じ）
+    expect(svg).toMatch(/<line [^>]*stroke-dasharray="8 4"[^>]*stroke-linecap="round"/)
     const back = byName('Arrow') as PathNode
     expect(back.startCap).toBe('round')
     expect(back.endCap).toBe('round')

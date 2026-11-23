@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { strokeOutline } from './outlineStroke.ts'
 import { contoursArea } from './pathBoolean.ts'
-import { pathBounds } from './path.ts'
+import { flattenPath, pathBounds } from './path.ts'
 import { ellipse, path, rect } from './testNodes.ts'
 
 const stroke = [{ type: 'solid' as const, color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }]
@@ -22,10 +22,43 @@ describe('strokeOutline', () => {
     expect(contoursArea(strokeOutline({ ...line, startCap: 'square', endCap: 'square' }))).toBeCloseTo(416, 1)
   })
 
-  it('楕円の線は輪の形になる', () => {
+  it('楕円の線は輪の形になり、曲線に戻る（頂点が少ない）', () => {
     const contours = strokeOutline(ellipse({ width: 100, height: 100, strokes: stroke, strokeWidth: 10 }))
     expect(contours).toHaveLength(2)
-    expect(contoursArea(contours)).toBeCloseTo(Math.PI * (55 * 55 - 45 * 45), -1)
+    expect(Math.abs(contoursArea(contours) - Math.PI * (55 * 55 - 45 * 45))).toBeLessThan(10)
+    // 外の輪は半径 55、内の輪は 45 の円に 0.1px 以内で沿う
+    const radii = contours.map((contour) => flattenPath(contour.vertices, true).map((p) => Math.hypot(p.x - 50, p.y - 50)))
+    const [outer, inner] = Math.max(...radii[0]) > Math.max(...radii[1]) ? radii : radii.toReversed()
+    for (const r of outer) expect(Math.abs(r - 55)).toBeLessThan(0.1)
+    for (const r of inner) expect(Math.abs(r - 45)).toBeLessThan(0.1)
+    for (const contour of contours) {
+      expect(contour.vertices.length).toBeLessThanOrEqual(8)
+      expect(contour.vertices.every((v) => v.in && v.out)).toBe(true)
+    }
+  })
+
+  it('直線の辺は直線のまま、角は角のまま残る', () => {
+    const contours = strokeOutline(rect({ width: 100, height: 50, strokes: stroke, strokeWidth: 10 }))
+    expect(contours.map((contour) => contour.vertices.length)).toEqual([4, 4])
+    expect(contours.every((contour) => contour.vertices.every((v) => !v.in && !v.out))).toBe(true)
+    // 丸い角は、直線 4 本と曲線のつながり（外の輪）。内の角はとがったまま
+    const round = strokeOutline(rect({ width: 100, height: 50, strokes: stroke, strokeWidth: 10, strokeJoin: 'round' }))
+    expect(round.map((contour) => contour.vertices.length).toSorted()).toEqual([4, 8])
+  })
+
+  it('両端が丸い破線は、破線の 1 本ごとの両端も丸くなる。両端が違えば切りっぱなし', () => {
+    const line = path({ width: 100, height: 0, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], strokeWidth: 4, strokeDashes: [10, 10] })
+    const round = strokeOutline({ ...line, startCap: 'round', endCap: 'round' })
+    expect(round).toHaveLength(5)
+    // 1 本 = 10 × 4 の長方形と、両端の半円 2 つ（半径 2）
+    expect(contoursArea(round)).toBeCloseTo(5 * (40 + Math.PI * 4), 0)
+    // 曲線に戻すときのずれ（片側 0.05px まで）を見込む
+    expect(Math.abs(pathBounds(round[1].vertices, true).width - 14)).toBeLessThan(0.15)
+    const square = strokeOutline({ ...line, startCap: 'square', endCap: 'square' })
+    expect(contoursArea(square)).toBeCloseTo(5 * (14 * 4), 1)
+    // 丸と矢印のように両端が違えば、切れ目は切りっぱなし（線の両端にだけ形が付く）
+    const mixed = strokeOutline({ ...line, startCap: 'round', endCap: 'none' })
+    expect(pathBounds(mixed[1].vertices, true).width).toBeCloseTo(10, 1)
   })
 
   it('破線は線の部分だけになる', () => {

@@ -8,7 +8,7 @@ import {
   nodeMatrix,
   transformRect,
 } from '../document/geometry.ts'
-import { type Vertex, capMarkerSize, capReach, cappedStroke, pathOutlines, tracePath } from '../document/path.ts'
+import { type Vertex, capMarkerSize, capReach, cappedStroke, dashCap, pathOutlines, tracePath } from '../document/path.ts'
 import { alignFactor, blurRadius, clampedRadii, radialFocus, radialTransform, gradientLine, hasStroke, imageRect, isRounded, isShadow, shownPaints, splitEffects, stopCssColor, textInkBox, withoutHidden } from '../document/paint.ts'
 import type {
   Asset,
@@ -452,10 +452,15 @@ function drawContent(
         c.beginPath()
         for (const contour of outlines) tracePath(c, contour.vertices, contour.closed)
       }
-      const capped = !node.closed && (node.startCap !== 'none' || node.endCap !== 'none')
+      // 両端が同じ丸・四角の破線は、Canvas の lineCap で破線の 1 本ごとに端の形を付ける（線の両端もそれで付く）
+      const cap = dashCap(node)
+      const capped = cap === null && !node.closed && (node.startCap !== 'none' || node.endCap !== 'none')
       if (!capped) {
         outline()
+        ctx.save()
+        if (cap !== null) ctx.lineCap = cap
         paint(ctx, pass, node, outline)
+        ctx.restore()
         break
       }
       // 端の形を付ける線は、線を矢印の分だけ短くし、端の図形を足すので、塗りと線を別々に描く
@@ -556,6 +561,8 @@ function paint(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Style, ou
         c.setLineDash(node.strokeDashes)
         c.lineDashOffset = node.strokeDashOffset
         c.lineJoin = node.strokeJoin
+        // 破線の端の形（呼ぶ側が ctx に付けたもの）を、影を描く別のキャンバスにも
+        c.lineCap = ctx.lineCap
         outline(c)
         c.stroke()
       }

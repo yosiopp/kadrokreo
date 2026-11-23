@@ -530,6 +530,15 @@ describe('nodeCss', () => {
       'stroke-linejoin: round;',
     ])
     expect(css(sceneOf({ ...line, strokeDashOffset: 1 }), 'line').slice(2)).toEqual(['stroke: #00ff00;', 'stroke-width: 3px;'])
+    // 両端が同じ丸・四角なら stroke-linecap（破線の切れ目の端も同じ形になる）。両端が違えば書かない
+    expect(css(sceneOf({ ...line, strokeDashes: [4, 2], startCap: 'round', endCap: 'round' }), 'line').slice(2)).toEqual([
+      'stroke: #00ff00;',
+      'stroke-width: 3px;',
+      'stroke-dasharray: 4px 2px;',
+      'stroke-linecap: round;',
+    ])
+    expect(css(sceneOf({ ...line, startCap: 'square', endCap: 'square' }), 'line')).toContain('stroke-linecap: square;')
+    expect(css(sceneOf({ ...line, startCap: 'round', endCap: 'square' }), 'line').join('')).not.toContain('stroke-linecap')
 
     const path: PathNode = {
       ...base,
