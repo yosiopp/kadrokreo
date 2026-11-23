@@ -5,7 +5,7 @@ import { type Contour, type Segment, type Vertex, pathSegments, segmentAt, split
 //
 // 流れ:
 // 1. 形ごとの輪郭の辺を、曲線は細かい折れ線に直す（FLATTEN_TOLERANCE 以内のずれ）。折れ線の辺は、どの辺のどの t の範囲から来たかを覚える。
-// 2. 全部の辺どうしの交点（触れる・重なるも含む）で辺を分け、近い点（SNAP 以内）は 1 つの頂点にまとめる。重なった辺も 1 本にまとめる。
+// 2. 全部の辺どうしの交点を求め、端の点と交点を SNAP 四方のマスごとに 1 つの頂点にまとめる。頂点のあるマスを通る辺は、そこで分ける（触れる・重なるもこれで扱う）。重なった辺も 1 本にまとめる。
 // 3. 分けた辺ごとに、その両側がそれぞれの形の内側か（巻き数・偶奇）を、辺の中点から伸ばした半直線で数えて決める。
 //    演算の結果が両側で違う辺だけが、結果の輪郭になる（結果の内側を左手に見る向きにそろえる）。
 // 4. 輪郭の辺をつないで輪にし、同じ元の曲線から続けて来た辺は、元の曲線をその t の範囲で切り出した曲線に戻す。
@@ -20,7 +20,7 @@ export type BooleanShape = { contours: readonly Contour[]; fillRule: 'nonzero' |
 export const FLATTEN_TOLERANCE = 0.01
 /** 1 本の曲線を分ける数の上限 */
 const MAX_STEPS = 256
-/** これより近い点は同じ頂点とみなす（px） */
+/** 頂点をまとめるマスの大きさ（px）。同じマスの点は同じ頂点とみなす */
 const SNAP = 1e-6
 
 /** 元の辺（曲線か直線）と、それを持つ形 */
@@ -58,11 +58,10 @@ export function booleanContours(shapes: readonly BooleanShape[], op: BooleanOp):
       }
     }
   })
-  const pool = new VertexPool()
-  const edges = splitEdges(flat, pool, shapes.length)
+  const { edges, points, exact } = splitEdges(flat, shapes.length)
   const inside = (sides: boolean[]) => evaluate(op, sides)
-  const out = classify(edges, pool.points, shapes, inside)
-  return buildRings(out, pool.points, sources)
+  const out = classify(edges, points, shapes, inside)
+  return buildRings(out, points, exact, sources)
 }
 
 function evaluate(op: BooleanOp, sides: boolean[]): boolean {
@@ -93,38 +92,53 @@ export function flattenParams(segment: Segment, tolerance = FLATTEN_TOLERANCE): 
   return Array.from({ length: n + 1 }, (_, k) => k / n)
 }
 
-/** 近い点を 1 つの頂点にまとめる表（格子で引く） */
+/**
+ * 頂点の表。平面を SNAP 四方のマス（SNAP の整数倍の点を中心にする）に分け、同じマスに入った点は 1 つの頂点にまとめる。
+ * マスの中心を切りのいい座標に置くのは、整数や 0.5 のような座標の辺がマスの境目に乗らないようにするため
+ * （境目の上を走る辺は両側のマスを同時に通り、通る順が決まらない）。
+ * 交わり方と内外はマスの中心（points）で決め、結果の輪郭にはマスに最初に入った点の位置（exact）を使う
+ * （入力の頂点は動かさない。ずれはマスの対角線以内）。
+ * 近さで 1 点ずつまとめたり、マスの中心以外を通したりすると、まとめた後の辺どうしが頂点を共有せずに交わりうる
+ */
 class VertexPool {
+  /** マスの中心 */
   points: Point[] = []
-  private grid = new Map<string, number[]>()
+  /** マスに最初に入った点 */
+  exact: Point[] = []
+  cellX: number[] = []
+  cellY: number[] = []
+  private byCell = new Map<string, number>()
 
   id(p: Point): number {
-    const cx = Math.floor(p.x / SNAP)
-    const cy = Math.floor(p.y / SNAP)
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (const id of this.grid.get(`${cx + dx},${cy + dy}`) ?? []) {
-          const q = this.points[id]
-          if (Math.abs(q.x - p.x) <= SNAP && Math.abs(q.y - p.y) <= SNAP) return id
-        }
-      }
-    }
-    const id = this.points.push({ x: p.x, y: p.y }) - 1
+    const cx = Math.round(p.x / SNAP)
+    const cy = Math.round(p.y / SNAP)
     const key = `${cx},${cy}`
-    const list = this.grid.get(key)
-    if (list) list.push(id)
-    else this.grid.set(key, [id])
+    const found = this.byCell.get(key)
+    if (found !== undefined) return found
+    const id = this.points.push({ x: cx * SNAP, y: cy * SNAP }) - 1
+    this.exact.push({ x: p.x, y: p.y })
+    this.cellX.push(cx)
+    this.cellY.push(cy)
+    this.byCell.set(key, id)
     return id
   }
 }
 
-type Split = { t: number; p: Point }
+/** 辺を分ける位置。t は辺の上の位置（0〜1）、id は頂点 */
+type Split = { t: number; id: number }
 
-/** 全部の辺を交点・触れる点で分け、重なった辺を 1 本にまとめる */
-function splitEdges(flat: readonly FlatEdge[], pool: VertexPool, shapeCount: number): Edge[] {
+/**
+ * 全部の辺を交点・触れる点で分け、重なった辺を 1 本にまとめる。
+ * 端の点と交点のあるマスを、そのマスを通る辺はすべて、そのマスの頂点を通るように分ける（スナップ丸め）。
+ * こうすると、交点が密集したり辺がほとんど重なったりしても、まとめた後の辺どうしが頂点を共有せずに重なる・交わることがない。
+ * 2 本ずつの交点だけで分けると、ほとんど重なる 3 本目の辺がその交点のそばを分けられずに通り、半直線で数える内外が食い違って輪が閉じなくなる
+ */
+function splitEdges(flat: readonly FlatEdge[], shapeCount: number): { edges: Edge[]; points: Point[]; exact: Point[] } {
+  const pool = new VertexPool()
+  // 入力の頂点の位置をそのまま残すため、端の点を交点より先に入れる
   const splits: Split[][] = flat.map((edge) => [
-    { t: 0, p: edge.a },
-    { t: 1, p: edge.b },
+    { t: 0, id: pool.id(edge.a) },
+    { t: 1, id: pool.id(edge.b) },
   ])
   const minX = flat.map((edge) => Math.min(edge.a.x, edge.b.x))
   const maxX = flat.map((edge) => Math.max(edge.a.x, edge.b.x))
@@ -136,22 +150,54 @@ function splitEdges(flat: readonly FlatEdge[], pool: VertexPool, shapeCount: num
     const i = order[oi]
     for (let oj = oi + 1; oj < order.length; oj++) {
       const j = order[oj]
-      if (minX[j] > maxX[i] + SNAP) break
-      if (minY[j] > maxY[i] + SNAP || maxY[j] < minY[i] - SNAP) continue
-      intersect(flat[i], flat[j], splits[i], splits[j])
+      if (minX[j] > maxX[i]) break
+      if (minY[j] > maxY[i] || maxY[j] < minY[i]) continue
+      const hit = crossing(flat[i], flat[j])
+      if (!hit) continue
+      // 交点は、丸め誤差で片方の辺がそのマスを外れても、作った 2 本には必ず通す
+      const id = pool.id(hit.point)
+      splits[i].push({ t: hit.t, id })
+      splits[j].push({ t: hit.u, id })
     }
   }
 
+  const cells = new CellIndex(pool)
+  // 頂点の番号は、辺に使った順に振り直す（交点は総当たりの順にできるので、そのままだと近い頂点が配列の離れた所に並び、
+  // 内外を数えるときに読む位置が飛んで遅くなる）
+  const renumber = new Array<number>(pool.points.length).fill(-1)
+  const points: Point[] = []
+  const exact: Point[] = []
+  const vertex = (id: number) => {
+    if (renumber[id] < 0) {
+      renumber[id] = points.length
+      points.push(pool.points[id])
+      exact.push(pool.exact[id])
+    }
+    return renumber[id]
+  }
   const edges: Edge[] = []
   const byKey = new Map<string, number>()
   flat.forEach((edge, index) => {
-    const list = splits[index].sort((p, q) => p.t - q.t)
-    let prevId = pool.id(list[0].p)
-    let prevT = list[0].t
+    const list = splits[index]
+    const startId = list[0].id
+    const endId = list[1].id
+    if (startId === endId) return
+    // 両端のマスを通る区間より外（端の点で隣のマスに触れるだけの所）は数えない。数えると、端の手前で隣のマスへ回り込む
+    const first = cellHit(edge, pool.cellX[startId], pool.cellY[startId]) ?? 0
+    const last = cellHit(edge, pool.cellX[endId], pool.cellY[endId]) ?? 1
+    cells.near(edge, (id) => {
+      if (id === startId || id === endId) return
+      const t = cellHit(edge, pool.cellX[id], pool.cellY[id])
+      if (t !== null && t > first && t < last) list.push({ t, id })
+    })
+    list.sort((p, q) => p.t - q.t)
+    let prev = list[0]
     for (let k = 1; k < list.length; k++) {
-      const id = pool.id(list[k].p)
-      if (id === prevId) continue
-      const key = prevId < id ? `${prevId},${id}` : `${id},${prevId}`
+      const next = list[k]
+      if (next.id === prev.id) continue
+      const a = vertex(prev.id)
+      const b = vertex(next.id)
+      const key = a < b ? `${a},${b}` : `${b},${a}`
       const found = byKey.get(key)
       if (found === undefined) {
         byKey.set(key, edges.length)
@@ -160,49 +206,140 @@ function splitEdges(flat: readonly FlatEdge[], pool: VertexPool, shapeCount: num
         wind[edge.shape] = 1
         count[edge.shape] = 1
         const span = edge.t1 - edge.t0
-        edges.push({ a: prevId, b: id, wind, count, src: edge.src, ta: edge.t0 + span * prevT, tb: edge.t0 + span * list[k].t })
+        edges.push({ a, b, wind, count, src: edge.src, ta: edge.t0 + span * prev.t, tb: edge.t0 + span * next.t })
       } else {
         const existing = edges[found]
-        existing.wind[edge.shape] += existing.a === prevId ? 1 : -1
+        existing.wind[edge.shape] += existing.a === a ? 1 : -1
         existing.count[edge.shape] += 1
       }
-      prevId = id
-      prevT = list[k].t
+      prev = next
     }
   })
-  return edges
+  return { edges, points, exact }
 }
 
-/** 2 本の辺の交わる点・触れる点を、それぞれの分ける位置に足す */
-function intersect(p: FlatEdge, q: FlatEdge, splitsP: Split[], splitsQ: Split[]): void {
-  // 端が相手の辺の上にある（触れる・重なる）
-  touch(p, q.a, splitsP)
-  touch(p, q.b, splitsP)
-  touch(q, p.a, splitsQ)
-  touch(q, p.b, splitsQ)
+/** 小さい順に並んだ values のうち、value 以上の最初の位置 */
+function lowerBound(values: readonly number[], value: number): number {
+  let lo = 0
+  let hi = values.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (values[mid] < value) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/**
+ * 頂点のあるマスを、辺の近くだけ引く索引。マスを x で縦の帯に分け、帯の中は y の順に並べる。
+ * 辺ごとに、重なる帯のそれぞれで辺の y の範囲だけを二分探索で引く（長い辺でも、遠いマスは見ない）
+ */
+class CellIndex {
+  private origin: number
+  private width: number
+  /** 帯ごとの頂点（y の順）と、そのマスの y */
+  private ids: number[][]
+  private ys: number[][]
+  private pool: VertexPool
+
+  constructor(pool: VertexPool) {
+    this.pool = pool
+    const count = pool.points.length
+    let lo = Infinity
+    let hi = -Infinity
+    for (const cx of pool.cellX) {
+      if (cx < lo) lo = cx
+      if (cx > hi) hi = cx
+    }
+    const bands = Math.max(1, Math.min(4096, Math.ceil(Math.sqrt(count))))
+    this.origin = lo
+    this.width = Math.max(1, Math.ceil((hi - lo + 1) / bands))
+    this.ids = Array.from({ length: bands }, () => [])
+    for (let id = 0; id < count; id++) this.ids[this.band(pool.cellX[id])].push(id)
+    for (const list of this.ids) list.sort((p, q) => pool.cellY[p] - pool.cellY[q])
+    this.ys = this.ids.map((list) => list.map((id) => pool.cellY[id]))
+  }
+
+  private band(cx: number): number {
+    return Math.max(0, Math.min(this.ids.length - 1, Math.floor((cx - this.origin) / this.width)))
+  }
+
+  /** 辺の通りうるマスの頂点を visit に渡す（多めに渡す。通るかどうかは cellHit で確かめる） */
+  near(edge: FlatEdge, visit: (id: number) => void): void {
+    const { pool } = this
+    // マスの大きさを 1 にした座標
+    const ax = edge.a.x / SNAP
+    const ay = edge.a.y / SNAP
+    const dx = edge.b.x / SNAP - ax
+    const dy = edge.b.y / SNAP - ay
+    const x0 = Math.round(Math.min(ax, ax + dx)) - 1
+    const x1 = Math.round(Math.max(ax, ax + dx)) + 1
+    // マスの中心が辺の直線からマスの半分の対角線（≒ 0.71）より遠ければ通らない
+    const reach = 0.75 * Math.hypot(dx, dy)
+    for (let band = this.band(x0), end = this.band(x1); band <= end; band++) {
+      // この帯（と隣のマスの分）の x の範囲で、辺がとる y の範囲
+      const from = Math.max(x0, this.origin + band * this.width - 1)
+      const to = Math.min(x1, this.origin + (band + 1) * this.width)
+      let yLo = Math.min(ay, ay + dy)
+      let yHi = Math.max(ay, ay + dy)
+      if (dx !== 0) {
+        const ta = Math.max(0, Math.min(1, (from - 0.5 - ax) / dx))
+        const tb = Math.max(0, Math.min(1, (to + 0.5 - ax) / dx))
+        yLo = Math.min(ay + dy * ta, ay + dy * tb)
+        yHi = Math.max(ay + dy * ta, ay + dy * tb)
+      }
+      const ids = this.ids[band]
+      const ys = this.ys[band]
+      const yMax = Math.round(yHi) + 1
+      for (let k = lowerBound(ys, Math.round(yLo) - 1); k < ids.length && ys[k] <= yMax; k++) {
+        const id = ids[k]
+        const cx = pool.cellX[id]
+        if (cx < x0 || cx > x1) continue
+        if (Math.abs((cx - ax) * dy - (ys[k] - ay) * dx) > reach) continue
+        visit(id)
+      }
+    }
+  }
+}
+
+/**
+ * 辺がマス (cx, cy) を通れば、通る区間の真ん中の t。通らなければ null。
+ * マスはごくわずかに広げて比べる（ほとんど水平・垂直な辺がマスの境目すれすれを通ると、どちらのマスを通るかが丸め誤差で
+ * 交点の計算と食い違うので、境目の上は両側のマスを通るとみなす）。広げた分だけ隣のマスと重なるが、真ん中の t の順は通る順のまま
+ */
+function cellHit(edge: FlatEdge, cx: number, cy: number): number | null {
+  // マスの大きさを 1 にした座標で比べる（VertexPool.id の round と同じ尺度）。half はマスの半分の幅に、ごくわずかな余白を足したもの
+  const half = 0.5 + 1e-6
+  const ax = edge.a.x / SNAP
+  const ay = edge.a.y / SNAP
+  const dx = edge.b.x / SNAP - ax
+  const dy = edge.b.y / SNAP - ay
+  let lo = 0
+  let hi = 1
+  const clip = (start: number, delta: number, min: number, max: number) => {
+    if (delta === 0) return start >= min && start <= max
+    let t0 = (min - start) / delta
+    let t1 = (max - start) / delta
+    if (t0 > t1) [t0, t1] = [t1, t0]
+    lo = Math.max(lo, t0)
+    hi = Math.min(hi, t1)
+    return lo <= hi
+  }
+  if (!clip(ax, dx, cx - half, cx + half) || !clip(ay, dy, cy - half, cy + half)) return null
+  return (lo + hi) / 2
+}
+
+/** 2 本の辺が途中（端を除く）で交われば、その点と、それぞれの辺の上の位置 */
+function crossing(p: FlatEdge, q: FlatEdge): { point: Point; t: number; u: number } | null {
   const r = { x: p.b.x - p.a.x, y: p.b.y - p.a.y }
   const s = { x: q.b.x - q.a.x, y: q.b.y - q.a.y }
   const denom = r.x * s.y - r.y * s.x
-  if (Math.abs(denom) <= 1e-12 * Math.hypot(r.x, r.y) * Math.hypot(s.x, s.y)) return
+  if (Math.abs(denom) <= 1e-12 * Math.hypot(r.x, r.y) * Math.hypot(s.x, s.y)) return null
   const w = { x: q.a.x - p.a.x, y: q.a.y - p.a.y }
   const t = (w.x * s.y - w.y * s.x) / denom
   const u = (w.x * r.y - w.y * r.x) / denom
-  if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return
-  const point = { x: p.a.x + r.x * t, y: p.a.y + r.y * t }
-  splitsP.push({ t, p: point })
-  splitsQ.push({ t: u, p: point })
-}
-
-/** 点が辺の途中（端を除く）の SNAP 以内にあれば、そこで分ける */
-function touch(edge: FlatEdge, point: Point, splits: Split[]): void {
-  const r = { x: edge.b.x - edge.a.x, y: edge.b.y - edge.a.y }
-  const length2 = r.x * r.x + r.y * r.y
-  if (length2 === 0) return
-  const t = ((point.x - edge.a.x) * r.x + (point.y - edge.a.y) * r.y) / length2
-  if (t <= 0 || t >= 1) return
-  const dx = edge.a.x + r.x * t - point.x
-  const dy = edge.a.y + r.y * t - point.y
-  if (dx * dx + dy * dy <= SNAP * SNAP) splits.push({ t, p: point })
+  if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return null
+  return { point: { x: p.a.x + r.x * t, y: p.a.y + r.y * t }, t, u }
 }
 
 /** 半直線を引くときの、辺を探す帯（行または列）の索引 */
@@ -212,8 +349,13 @@ class BandIndex {
   private size: number
 
   constructor(ranges: readonly [number, number][]) {
-    const lo = Math.min(...ranges.map((range) => range[0]))
-    const hi = Math.max(...ranges.map((range) => range[1]))
+    // 辺が数万本になる（交点の多い自分と交わる形）と、Math.min(...配列) は引数が多すぎてスタックがあふれるのでループで求める
+    let lo = Infinity
+    let hi = -Infinity
+    for (const [from, to] of ranges) {
+      if (from < lo) lo = from
+      if (to > hi) hi = to
+    }
     const count = Math.max(1, Math.min(1024, Math.ceil(Math.sqrt(ranges.length))))
     this.origin = lo
     this.size = (hi - lo) / count || 1
@@ -295,8 +437,8 @@ function minMax(p: number, q: number): [number, number] {
 /** 結果の辺の 1 区間。curved なら元の曲線 src の tFrom〜tTo を切り出したもの */
 type Piece = { from: number; to: number; src: number; tFrom: number; tTo: number; curved: boolean }
 
-/** 結果の辺をつないで輪にし、元の曲線から来た辺を曲線に戻した輪郭にする */
-function buildRings(out: readonly OutEdge[], points: readonly Point[], sources: readonly Source[]): Contour[] {
+/** 結果の辺をつないで輪にし、元の曲線から来た辺を曲線に戻した輪郭にする。つなぎ方は points（マスの中心）で決め、輪郭は exact の位置で作る */
+function buildRings(out: readonly OutEdge[], points: readonly Point[], exact: readonly Point[], sources: readonly Source[]): Contour[] {
   const outgoing = new Map<number, number[]>()
   out.forEach((edge, index) => {
     const list = outgoing.get(edge.from)
@@ -317,7 +459,7 @@ function buildRings(out: readonly OutEdge[], points: readonly Point[], sources: 
       if (next === null) break
       current = next
     }
-    const contour = ringContour(ring, points, sources)
+    const contour = ringContour(ring, exact, sources)
     if (contour) contours.push(contour)
   }
   return contours

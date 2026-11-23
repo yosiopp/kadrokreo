@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { Point } from './geometry.ts'
 import { ellipseVertices } from './mask.ts'
 import { type Contour, type Vertex, pathSegments, segmentAt } from './path.ts'
 import { type BooleanShape, FLATTEN_TOLERANCE, booleanContours, contoursArea, flattenParams, subSegment } from './pathBoolean.ts'
@@ -163,6 +164,178 @@ describe('booleanContours（自分と交わる輪郭）', () => {
     const inner = 100 * Math.cos((2 * Math.PI) / 5) / Math.cos(Math.PI / 5)
     const pentagon = (5 / 2) * inner * inner * Math.sin((2 * Math.PI) / 5)
     expect(nonzero - evenodd).toBeCloseTo(pentagon, 6)
+  })
+})
+
+describe('booleanContours（交点が密集する形・ほとんど重なる辺）', () => {
+  // 交点が頂点をまとめるマス（1e-6px）より近く集まる形。結果を、元の形の巻き数・偶奇から求めた内外と、
+  // 輪郭から離れた点で比べる（頂点のまとめ方を誤ると輪が閉じず、離れた所の内外まで食い違う）
+  type Op = Parameters<typeof booleanContours>[1]
+  const ops: Op[] = ['union', 'subtract', 'intersect', 'exclude']
+
+  /** 決まった列を返す乱数（テストを毎回同じにする） */
+  const random = (seed: number) => {
+    let state = seed >>> 0
+    return () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 2 ** 32
+    }
+  }
+  const polygon = (vertices: readonly Point[], fillRule: BooleanShape['fillRule'] = 'nonzero'): BooleanShape => ({
+    contours: [{ vertices: vertices.map(({ x, y }) => ({ x, y })), closed: true }],
+    fillRule,
+  })
+  /** 輪郭を細かい折れ線にする（曲線は 64 等分） */
+  const polylines = (contours: readonly Contour[]) =>
+    contours.map((contour) => {
+      const points: Point[] = []
+      for (const segment of pathSegments(contour.vertices, true)) {
+        const n = segment.curved ? 64 : 1
+        for (let k = 0; k < n; k++) points.push(segmentAt(segment, k / n))
+      }
+      return points
+    })
+  const winding = (points: readonly Point[], p: Point) => {
+    let total = 0
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const a = points[j]
+      const b = points[i]
+      const side = (b.x - a.x) * (p.y - a.y) - (p.x - a.x) * (b.y - a.y)
+      if (a.y <= p.y && b.y > p.y && side > 0) total++
+      else if (a.y > p.y && b.y <= p.y && side < 0) total--
+    }
+    return total
+  }
+  const distanceToOutline = (lines: readonly Point[][], p: Point) => {
+    let best = Infinity
+    for (const points of lines) {
+      for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+        const a = points[j]
+        const b = points[i]
+        const rx = b.x - a.x
+        const ry = b.y - a.y
+        const t = Math.max(0, Math.min(1, ((p.x - a.x) * rx + (p.y - a.y) * ry) / (rx * rx + ry * ry || 1)))
+        best = Math.min(best, Math.hypot(a.x + rx * t - p.x, a.y + ry * t - p.y))
+      }
+    }
+    return best
+  }
+  const expected = (op: Op, sides: boolean[]) =>
+    op === 'union'
+      ? sides.some(Boolean)
+      : op === 'intersect'
+        ? sides.every(Boolean)
+        : op === 'subtract'
+          ? sides[0] && !sides.slice(1).some(Boolean)
+          : sides.filter(Boolean).length % 2 === 1
+
+  /** 輪郭から margin より離れた点で、結果の内外（evenodd）が元の形から求めた内外と合わない点の数 */
+  function mismatches(shapes: readonly BooleanShape[], op: Op, scale: number, margin: number, seed = 1) {
+    const inputs = shapes.map((shape) => polylines(shape.contours))
+    const output = polylines(booleanContours(shapes, op))
+    const next = random(seed)
+    let wrong = 0
+    for (let k = 0; k < 300; k++) {
+      const p = { x: (next() * 2 - 1) * scale, y: (next() * 2 - 1) * scale }
+      if (inputs.some((lines) => distanceToOutline(lines, p) < margin)) continue
+      const sides = shapes.map((shape, s) => {
+        const w = inputs[s].reduce((sum, points) => sum + winding(points, p), 0)
+        return shape.fillRule === 'evenodd' ? w % 2 !== 0 : w !== 0
+      })
+      const inside = output.reduce((sum, points) => sum + winding(points, p), 0) % 2 !== 0
+      if (inside !== expected(op, sides)) wrong++
+    }
+    return wrong
+  }
+
+  /** 中心のごく近く（jitter 以内）を通る直径を n 本、1 本の輪郭でつないだ形（自分と何度も交わる） */
+  const sunburst = (next: () => number, n: number, jitter: number, r = 100) => {
+    const points: Point[] = []
+    for (let i = 0; i < n; i++) {
+      const angle = (i * Math.PI * (2 * Math.floor(n / 2) + 1)) / n + next() * 0.01
+      const ox = (next() - 0.5) * jitter
+      const oy = (next() - 0.5) * jitter
+      points.push({ x: ox + r * Math.cos(angle), y: oy + r * Math.sin(angle) })
+      points.push({ x: ox - r * Math.cos(angle) * (0.5 + next()), y: oy - r * Math.sin(angle) * (0.5 + next()) })
+    }
+    return points
+  }
+  /** 中心 (dx, 0)、半辺 50 の正方形を angle だけ回したもの */
+  const square = (angle: number, dx: number) =>
+    [
+      [-50, -50],
+      [50, -50],
+      [50, 50],
+      [-50, 50],
+    ].map(([x, y]) => ({ x: dx + x * Math.cos(angle) - y * Math.sin(angle), y: x * Math.sin(angle) + y * Math.cos(angle) }))
+
+  it('中心の 1e-7px 以内に交点が集まる、自分と交わる輪郭（nonzero・evenodd）', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const next = random(seed)
+      const fillRule = seed % 2 ? 'nonzero' : 'evenodd'
+      const shapes = [polygon(sunburst(next, 5 + (seed % 9), 1e-7), fillRule)]
+      if (seed % 3 === 0) shapes.push(polygon(sunburst(next, 3 + (seed % 4), 1e-7, 60)))
+      for (const op of shapes.length > 1 ? ops : (['union'] as Op[])) {
+        // 遠くの点と、交点の集まる中心のそば（1e-4px 四方）の点の両方で比べる
+        expect(mismatches(shapes, op, 120, 0.1, seed)).toBe(0)
+        expect(mismatches(shapes, op, 1e-4, 3e-6, seed)).toBe(0)
+      }
+    }
+  })
+
+  it('ほとんど重なる正方形（わずかに回してずらす）の演算が、輪の切れた形にならない', () => {
+    // 3 本の辺がほとんど重なると、2 本ずつの交点が別々の所にでき、3 本目はそのそばを分けられずに通っていた
+    for (const angle of [1e-7, 1e-8, 1e-9, 1e-10, 0]) {
+      for (let seed = 1; seed <= 6; seed++) {
+        const next = random(seed)
+        const shapes = [polygon(square(0, 0)), polygon(square(angle * (next() - 0.5), (next() - 0.5) * 1e-6), seed % 2 ? 'nonzero' : 'evenodd')]
+        if (seed % 3 !== 0) shapes.push(polygon(square(-angle, (next() - 0.5) * 1e-6)))
+        expect(contoursArea(booleanContours(shapes, 'union'))).toBeCloseTo(10000, 3)
+        expect(contoursArea(booleanContours(shapes, 'intersect'))).toBeCloseTo(10000, 3)
+        expect(contoursArea(booleanContours(shapes, 'subtract'))).toBeCloseTo(0, 3)
+        for (const op of ops) expect(mismatches(shapes, op, 60, 0.01, seed)).toBe(0)
+      }
+    }
+  })
+
+  it('ほとんど重なる円・楕円（1e-6px 未満ずらして複製した形）の合体・交差は、元の円と同じ面積', () => {
+    for (let seed = 1; seed <= 12; seed++) {
+      const next = random(seed)
+      const jitter = [1e-6, 3e-7, 1e-7, 1e-8][seed % 4]
+      const ellipse = (): BooleanShape => ({
+        contours: [{ vertices: ellipseVertices((next() - 0.5) * jitter, (next() - 0.5) * jitter, 50 + (next() - 0.5) * jitter, 50 + (next() - 0.5) * jitter), closed: true }],
+        fillRule: next() < 0.5 ? 'nonzero' : 'evenodd',
+      })
+      const shapes = Array.from({ length: 2 + (seed % 2) }, ellipse)
+      const area = Math.PI * 50 * 50
+      // 円は 3 次ベジェの近似なので、面積は円の式から 0.03% ほど大きい
+      expect(contoursArea(booleanContours(shapes, 'union')) / area).toBeCloseTo(1, 3)
+      expect(contoursArea(booleanContours(shapes, 'intersect')) / area).toBeCloseTo(1, 3)
+      for (const op of ops) expect(mismatches(shapes, op, 60, 0.05, seed)).toBe(0)
+    }
+  })
+
+  it('頂点が 1e-6px より細かく並んで、自分と何度も交わるジグザグ', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const next = random(seed)
+      const jitter = [1e-6, 3e-7, 1e-7][seed % 3]
+      const points: Point[] = []
+      const m = 20 + Math.floor(next() * 40)
+      for (let i = 0; i <= m; i++) points.push({ x: (i / m) * 1e-5 * (next() < 0.3 ? -1 : 1) + (next() - 0.5) * jitter, y: (next() - 0.5) * jitter * 10 })
+      points.push({ x: 1e-5, y: 50 }, { x: -50, y: 50 }, { x: -50, y: -50 }, { x: 0, y: -50 })
+      for (let i = 0; i <= m; i++) points.push({ x: (next() - 0.5) * 2e-5, y: (next() - 0.5) * jitter * 10 })
+      points.push({ x: 50, y: -50 }, { x: 50, y: 50 }, { x: 0, y: 40 })
+      const shapes = [polygon(points, seed % 2 ? 'nonzero' : 'evenodd')]
+      if (seed % 2 === 0) shapes.push(polygon(sunburst(next, 3 + (seed % 5), jitter, 30)))
+      for (const op of shapes.length > 1 ? ops : (['union'] as Op[])) expect(mismatches(shapes, op, 60, 0.01, seed)).toBe(0)
+    }
+  })
+
+  it('入力の頂点の位置は動かさない（頂点をまとめるマスの中心に寄せない）', () => {
+    const result = booleanContours([rect(0.1234567, 0, 100, 100), rect(50.7654321, 50, 100, 100)], 'union')
+    const xs = result[0].vertices.map((vertex) => vertex.x)
+    expect(xs).toContain(0.1234567)
+    expect(xs).toContain(150.7654321)
   })
 })
 
