@@ -206,7 +206,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
       strokeWidth: 2,
     })
     const { svg } = roundTrip(sceneOf(line))
-    expect(svg).toMatch(/<g id="Pointer"><line [^>]*\/><polygon [^>]*fill="#000000"/)
+    expect(svg).toMatch(/<g id="Pointer" data-kdr-shape="path" data-kdr-caps="none arrow"><line [^>]*\/><polygon [^>]*fill="#000000"/)
   })
 
   it('回した入れ子のフレームの中の図形は、ページ上の同じ位置に戻る', () => {
@@ -356,9 +356,12 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
       effects: [{ type: 'drop-shadow', x: 0, y: 2, blur: 4, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.5, visible: true }, { type: 'layer-blur', blur: 4, visible: true }],
     })
     const again = roundTrip(sceneOf(both))
-    expect(again.svg).toMatch(/<g id="Both" filter="url\(#kdr-blur-?\d*\)"><rect/)
+    expect(again.svg).toMatch(/<g id="Both" filter="url\(#kdr-blur-?\d*\)" data-kdr-shape="rect"><rect/)
     expect(again.warnings).not.toContain('フィルタ')
-    expect(again.byName('Both').effects).toEqual([{ type: 'layer-blur', blur: 4, visible: true }])
+    // 1 つの矩形に戻り、影とレイヤーのぼかしの両方を持つ
+    const back = again.byName('Both')
+    expect(back.type).toBe('rect')
+    expect(back.effects).toEqual([{ ...both.effects[0] }, { type: 'layer-blur', blur: 4, visible: true }])
   })
 
   it('描画モードは style の mix-blend-mode で書き、読み戻すとノードの描画モードになる', () => {
@@ -423,7 +426,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     })
     const { svg } = roundTrip(sceneOf(rect))
     // 図形の形だけを持つ要素（影だけを出す filter で、元の黒は出さない）と、線
-    expect(svg).toMatch(/<rect [^>]*fill="#000000" filter="url\(#kdr-shadow-\d+\)"\/>/)
+    expect(svg).toMatch(/<rect [^>]*fill="#000000" filter="url\(#kdr-shadow-\d+\)" data-kdr-part="carrier"\/>/)
     expect(svg).not.toContain('SourceGraphic')
     expect(svg).toContain('stroke="#0000ff"')
   })
@@ -521,7 +524,7 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     })
     const child = named(createRect({ x: 5, y: 5, width: 10, height: 10 }), 'Child', { parentId: 'Box' })
     const { svg } = roundTrip(sceneOf(rect, frame, child))
-    expect(svg).toMatch(/<g id="Layers"><rect [^>]*fill="#ff0000"\/><rect [^>]*fill="url\(#kdr-paint-\d+\)"\/><\/g>/)
+    expect(svg).toMatch(/<g id="Layers" data-kdr-shape="rect"><rect [^>]*fill="#ff0000"\/><rect [^>]*fill="url\(#kdr-paint-\d+\)"\/><\/g>/)
     expect(svg).toContain('stop-opacity="0.5"')
     expect(svg).toMatch(/id="Child".*<rect [^>]*fill="none" stroke="#0000ff" stroke-width="2"\/><\/g>/)
   })
@@ -683,5 +686,116 @@ describe('ブーリアン演算のノード', () => {
     const back = byName('Union') as PathNode
     expect(back).toMatchObject({ type: 'path', fillRule: 'evenodd' })
     expectSameBounds(sceneOf(node, a, b), 'Union', imported, back.id, { x: 0, y: 0 })
+  })
+})
+
+describe('1 つのノードを g にまとめた書き出しを、1 つのノードに戻す', () => {
+  const solid = (color: string, opacity = 1) => ({ type: 'solid' as const, color, opacity, visible: true, blendMode: 'normal' as const })
+
+  it('塗りが 2 つの矩形は、塗り 2 つの矩形 1 つに戻る（フレームにならない）', () => {
+    const fills = [solid('#ff0000'), { type: 'linear' as const, x1: 0, y1: 0.5, x2: 1, y2: 0.5, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 0.5, visible: true, blendMode: 'normal' as const }]
+    const rect = named(createRect({ x: 10, y: 20, width: 80, height: 40 }), 'Layers', {
+      fills,
+      strokes: [solid('#0000ff')],
+      strokeWidth: 3,
+      strokeDashes: [6, 2],
+      cornerRadius: 6,
+      rotation: 20,
+      opacity: 0.8,
+    })
+    const scene = sceneOf(rect)
+    const { imported, byName, origin } = roundTrip(scene)
+    expect(Object.values(imported.nodes).filter((node) => node.type !== 'frame' || node.name !== 'export')).toHaveLength(1)
+    const back = byName('Layers') as RectNode
+    expect(back.type).toBe('rect')
+    expect(back.fills).toHaveLength(2)
+    expect(back.fills[0]).toEqual(fills[0])
+    expect(back.fills[1]).toMatchObject({ type: 'linear', opacity: 0.5 })
+    expect(back.strokes).toEqual([solid('#0000ff')])
+    expect(back.strokeWidth).toBe(3)
+    expect(back.strokeDashes).toEqual([6, 2])
+    expect(back.cornerRadius).toBeCloseTo(6)
+    expect(back.opacity).toBe(0.8)
+    close(back.rotation, 20)
+    expectSameBounds(scene, 'Layers', imported, back.id, origin)
+  })
+
+  it('両端に矢印のある線は、端の形を持つ線 1 つに戻る（長さも元のまま）', () => {
+    const line = named(createLine({ x: 10, y: 10, width: 100, height: 0, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }] }), 'Both ends', {
+      startCap: 'arrow',
+      endCap: 'diamond',
+      strokes: [solid('#333333')],
+      strokeWidth: 2,
+    })
+    const scene = sceneOf(line)
+    const { imported, byName, origin, svg } = roundTrip(scene)
+    expect(svg).toContain('data-kdr-caps="arrow diamond"')
+    const back = byName('Both_ends') as PathNode
+    expect(back.type).toBe('path')
+    expect(back).toMatchObject({ startCap: 'arrow', endCap: 'diamond', strokeWidth: 2, fills: [] })
+    expect(back.strokes).toEqual([solid('#333333')])
+    expect(Object.values(imported.nodes).filter((node) => node.type === 'path')).toHaveLength(1)
+    expectSameBounds(scene, 'Both ends', imported, back.id, origin)
+  })
+
+  it('塗り 2 つと矢印と影のある開いたパスも 1 つのパスに戻る', () => {
+    const path = named(
+      createPath({ x: 5, y: 5, width: 60, height: 40, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] }, false),
+      'Hook',
+      {
+        fills: [solid('#00ff00'), solid('#ff00ff', 0.5)],
+        strokes: [solid('#000000')],
+        strokeWidth: 2,
+        endCap: 'arrow',
+        effects: [{ type: 'drop-shadow', x: 0, y: 2, blur: 4, spread: 0, blendMode: 'normal', color: '#000000', opacity: 0.3, visible: true }],
+      },
+    )
+    const scene = sceneOf(path)
+    const { imported, byName, origin } = roundTrip(scene)
+    const back = byName('Hook') as PathNode
+    expect(back).toMatchObject({ type: 'path', endCap: 'arrow', startCap: 'none', closed: false })
+    expect(back.fills.map((fill) => fill.type === 'solid' && fill.color)).toEqual(['#00ff00', '#ff00ff'])
+    expect(back.strokes).toHaveLength(1)
+    expect(back.effects).toEqual(path.effects)
+    expect(Object.values(imported.nodes).filter((node) => node.type === 'path')).toHaveLength(1)
+    expectSameBounds(scene, 'Hook', imported, back.id, origin)
+  })
+
+  it('輪郭が 2 つある矢印の線（塗りなし）も、輪郭 2 つのパス 1 つに戻る', () => {
+    const shape = pathFromContours([
+      { vertices: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 40 }], closed: false },
+      { vertices: [{ x: 20, y: 60 }, { x: 60, y: 60 }, { x: 60, y: 80 }], closed: true },
+    ])
+    const path = named({ ...createPath(shape, false), contours: shape.contours }, 'Two', {
+      fills: [],
+      strokes: [solid('#112233')],
+      strokeWidth: 2,
+      startCap: 'circle',
+      endCap: 'arrow',
+    })
+    const scene = sceneOf(path)
+    const { byName, imported, origin, svg } = roundTrip(scene)
+    expect(svg).toContain('data-kdr-part="rest"')
+    const back = byName('Two') as PathNode
+    expect(back).toMatchObject({ type: 'path', startCap: 'circle', endCap: 'arrow', closed: false, fills: [] })
+    expect(back.contours).toHaveLength(1)
+    expect(Object.values(imported.nodes).filter((node) => node.type === 'path')).toHaveLength(1)
+    expectSameBounds(scene, 'Two', imported, back.id, origin)
+  })
+
+  it('塗りが 2 つのテキストは、塗り 2 つのテキスト 1 つに戻る', () => {
+    const text = named(createText({ x: 0, y: 0, width: 0, height: 0 }, 'Hi'), 'Duo', { fills: [solid('#ff0000'), solid('#0000ff', 0.5)] })
+    const { byName, imported } = roundTrip(sceneOf(text))
+    const back = byName('Duo') as TextNode
+    expect(back.type).toBe('text')
+    expect(back.fills).toEqual([solid('#ff0000'), solid('#0000ff', 0.5)])
+    expect(Object.values(imported.nodes).filter((node) => node.type === 'text')).toHaveLength(1)
+  })
+
+  it('印があっても中身の形が揃わなければ、ふつうのグループ（フレーム）にする', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g id="Mixed" data-kdr-shape="rect"><rect width="10" height="10"/><circle cx="50" cy="50" r="5"/></g></svg>'
+    const result = convertSvg(parseSvgXml(svg), { name: 'x', measureText })
+    const group = Object.values(result.fragment.nodes).find((node) => node.name === 'Mixed')
+    expect(group?.type).toBe('frame')
   })
 })

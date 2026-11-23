@@ -183,7 +183,7 @@ class SvgWriter {
     // 要素が 1 つなら、その要素に付ける（取り込むとフレームにならず、同じ種類のノードに戻る）。同じ属性を持っていれば g にする
     const clash = extra !== '' && / (style|filter)="/.test(parts[0].slice(0, parts[0].indexOf('>')))
     if (node.type !== 'frame' && parts.length === 1 && !parts[0].startsWith('<g') && !clash) return note + parts[0].replace(/^<(\w+)/, `<$1${attrs}`)
-    return `${note}<g${attrs}>${parts.join('')}</g>`
+    return `${note}<g${attrs}${shapeMark(node)}>${parts.join('')}</g>`
   }
 
   /** レイヤーのぼかしの filter を定義して、付ける属性を返す。範囲は枠と、影・ぼかしのはみ出し */
@@ -319,7 +319,7 @@ class SvgWriter {
     }
     const filters = this.fillFilters(node, world, node.fills.length)
     const parts = node.fills.map((fill, i) => shape(`${this.paintAttr(fill, 'fill', node)}${filters.fill(i)}`))
-    if (filters.carrier !== '') parts.push(shape(` fill="#000000"${filters.carrier}`))
+    if (filters.carrier !== '') parts.push(shape(` fill="#000000"${filters.carrier}${CARRIER}`))
     for (const stroke of strokes) parts.push(shape(` fill="none"${this.paintAttr(stroke, 'stroke', node)}${this.strokeShape(node)}${filters.stroke}`))
     return parts
   }
@@ -354,7 +354,7 @@ class SvgWriter {
       this.defs.push(...defs)
       if (extra === '' || elements.length === 0) return elements
       // 端の図形などで要素がいくつもあれば g にまとめて影を付ける
-      return elements.length > 1 ? [`<g${extra}>${elements.join('')}</g>`] : [elements[0].replace(/^<(\w+)/, `<$1${extra}`)]
+      return elements.length > 1 ? [`<g${extra}${shapeMark(node)}>${elements.join('')}</g>`] : [elements[0].replace(/^<(\w+)/, `<$1${extra}`)]
     }
     // 直線には面がないので塗らない（内側の影もない）
     const fills = isLine(node) ? [] : node.fills
@@ -366,7 +366,7 @@ class SvgWriter {
     }
     const filters = this.fillFilters(shown, world, fills.length)
     const parts = fills.flatMap((fill, i) => call(fill, null, filters.fill(i) + blendStyle(fill.blendMode)))
-    if (filters.carrier !== '') parts.push(...call(solidPaint('#000000'), null, filters.carrier))
+    if (filters.carrier !== '') parts.push(...call(solidPaint('#000000'), null, filters.carrier + CARRIER))
     for (const stroke of strokes) parts.push(...call(null, stroke, filters.stroke + blendStyle(stroke.blendMode)))
     return parts
   }
@@ -486,6 +486,22 @@ class SvgWriter {
     this.defs.push(`<clipPath id="${clip}">${boxShape(node, node.cornerRadius, '')}</clipPath>`)
     return `<g clip-path="url(#${clip})">${content}</g>`
   }
+}
+
+/** 影だけを出すために図形の形を持つ要素（塗りではない）の印。取り込みで 1 つのノードに戻すときに、効果だけを読む */
+const CARRIER = ' data-kdr-part="carrier"'
+
+/**
+ * 1 つのノードを要素いくつかの g にまとめたときの印（data-kdr-shape）。取り込み（editor/svg/convert.ts の kdrShape）は、
+ * この印があれば g をフレームにせず 1 つのノードに戻す。描画で付けた端の形（矢印など）は data-kdr-caps に残す
+ * （端の図形は data-kdr-part="cap"、短くした線の元の形は data-kdr-d。svgShapes.ts の pathSvg）。フレームと画像には付けない
+ */
+function shapeMark(node: SceneNode): string {
+  if (node.type === 'frame' || node.type === 'image') return ''
+  const caps = node.type === 'path' && !node.closed && (node.startCap !== 'none' || node.endCap !== 'none')
+    ? ` data-kdr-caps="${node.startCap} ${node.endCap}"`
+    : ''
+  return ` data-kdr-shape="${node.type}"${caps}`
 }
 
 /** 描画モードの style 属性（通常なら書かない） */

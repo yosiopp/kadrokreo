@@ -15,7 +15,7 @@ import {
 } from '../../document/geometry.ts'
 import { isImageTooLarge, readImageInfo } from '../../document/imageInfo.ts'
 import { KAPPA, ellipseVertices } from '../../document/mask.ts'
-import { BLEND_MODES, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES, MAX_DASHES, MAX_PAINTS, MAX_PATH_POINTS, MAX_STOPS } from '../../document/kdr.ts'
+import { BLEND_MODES, CAPS, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES, MAX_DASHES, MAX_PAINTS, MAX_PATH_POINTS, MAX_STOPS } from '../../document/kdr.ts'
 import { angleLine, linearFromAngle, solidPaint } from '../../document/paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
@@ -463,6 +463,8 @@ class Converter {
     if (effects !== null && !SHAPE_ELEMENTS.has(name)) {
       const node = ids.length === 1 ? this.nodes[ids[0]] : undefined
       if (node && 'effects' in node && node.effects.length === 0) this.nodes[ids[0]] = { ...node, effects }
+      // kadrokreo の書き出しが 1 つのノードを g にまとめたもの（kdrShape）は、g の filter（レイヤーのぼかし・線の影）を足す
+      else if (node && 'effects' in node && attributes['data-kdr-shape'] !== undefined) this.nodes[ids[0]] = { ...node, effects: [...node.effects, ...effects] }
       else if (ids.length > 0) this.warn('フィルタ')
     }
     // 描画モード（CSS の mix-blend-mode）はできたノードに付ける
@@ -480,6 +482,8 @@ class Converter {
     const { name, attributes } = element
     switch (name) {
       case 'g':
+        if (attributes['data-kdr-shape'] !== undefined) return this.kdrShape(element, matrix, inherited, depth, uses)
+        return this.group(element, this.convertChildren(element, matrix, inherited, depth + 1, uses), depth)
       case 'a':
       case 'switch':
         return this.group(element, this.convertChildren(element, matrix, inherited, depth + 1, uses), depth)
@@ -537,6 +541,67 @@ class Converter {
     }
     const box = this.boundsOf(children)!
     return [this.wrap(children, box, { name: element.attributes.id ?? 'Group', clipContent: false, opacity })]
+  }
+
+  /**
+   * kadrokreo の SVG の書き出しが、1 つのノード（塗りが 2 つ以上・矢印などの端・影と線の両方）を要素いくつかの g にまとめたもの
+   * （data-kdr-shape。document/svgExport.ts の shapeMark）を、1 つのノードに戻す。塗りと線は要素の順に重ね、
+   * 端の図形（data-kdr-part="cap"）と線の残りの輪郭（rest）は捨て、影だけの要素（carrier）からは効果だけを読む。
+   * 短くした線は元の形（data-kdr-d）で読み、端の形は data-kdr-caps から戻す。形が合わなければ（手で書き換えたなど）ふつうのグループにする
+   */
+  private kdrShape(element: SvgElement, matrix: Matrix, inherited: Inherited, depth: number, uses: number): NodeId[] {
+    const all: NodeId[] = []
+    const bases: (Extract<SceneNode, Style> | TextNode)[] = []
+    const extraEffects: Effect[] = []
+    let ok = true
+    for (const child of element.children) {
+      if (typeof child === 'string') continue
+      const part = child.attributes['data-kdr-part']
+      const d = child.attributes['data-kdr-d']
+      // 短くした線は元の形の path として読む（line なら塗らない）
+      const source: SvgElement = d === undefined
+        ? child
+        : { name: 'path', attributes: { ...child.attributes, d, ...(child.name === 'line' ? { fill: 'none' } : {}) }, children: [] }
+      const ids = this.convertElement(source, matrix, inherited, depth + 1, uses)
+      all.push(...ids)
+      if (part === 'cap' || part === 'rest') continue
+      const node = ids.length === 1 ? this.nodes[ids[0]] : undefined
+      if (!node || !('fills' in node) || !('effects' in node) || node.type === 'frame') {
+        ok = false
+        continue
+      }
+      if (part === 'carrier') extraEffects.push(...node.effects)
+      else bases.push(node)
+    }
+    const first = bases[0]
+    if (!ok || !first || bases.some((node) => node.type !== first.type)) return this.group(element, all, depth)
+    let merged = {
+      ...first,
+      name: element.attributes.id ?? first.name,
+      opacity: this.opacityOf(element),
+      fills: bases.flatMap((node) => node.fills).slice(0, MAX_PAINTS),
+      effects: [...bases.flatMap((node) => node.effects), ...extraEffects].slice(0, MAX_PAINTS),
+    } as Extract<SceneNode, Style> | TextNode
+    const styled = bases.filter((node): node is Extract<SceneNode, Style> => 'strokes' in node)
+    const stroked = styled.find((node) => node.strokes.length > 0)
+    if (merged.type !== 'text' && stroked) {
+      merged = {
+        ...merged,
+        strokes: styled.flatMap((node) => node.strokes).slice(0, MAX_PAINTS),
+        strokeWidth: stroked.strokeWidth,
+        strokeDashes: stroked.strokeDashes,
+      }
+    }
+    if (merged.type === 'path' && stroked?.type === 'path') {
+      const caps = element.attributes['data-kdr-caps']?.trim().split(/\s+/)
+      const valid = caps?.length === 2 && caps.every((cap) => (CAPS as readonly string[]).includes(cap))
+      merged = valid && !merged.closed
+        ? { ...merged, startCap: caps[0] as Cap, endCap: caps[1] as Cap }
+        : { ...merged, startCap: stroked.startCap, endCap: stroked.endCap }
+    }
+    for (const id of all) if (id !== first.id) this.remove(id)
+    this.nodes[first.id] = merged
+    return [first.id]
   }
 
   /** children を box の位置のフレームにまとめる */

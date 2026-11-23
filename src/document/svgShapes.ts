@@ -177,8 +177,16 @@ export function pathSvg(node: PathNode, options: PathSvgOptions): PathSvg {
     // 塗りは短くしない元の形で
     if (fill !== null) parts.push(pathElement(points, false, attrs(['stroke="none"', ...fillDecls, ...fillRule])))
     const strokeOnly = attrs(['fill="none"', ...strokeDecls, ...strokeShape])
-    parts.push(line ? lineElement(shortened.line, attrs([...strokeDecls, ...strokeShape])) : pathElement(shortened.line, false, strokeOnly, []))
-    if (others.length > 0) parts.push(`<path d="${contoursData(others)}"${strokeOnly}/>`)
+    // standalone では、短くした線に元の形（全部の輪郭）を残し、端の図形と残りの輪郭に印を付ける。
+    // 取り込み（editor/svg/convert.ts の kdrShape）が、端の形を持つ 1 つのパスに戻すため
+    const original = standalone ? ` data-kdr-d="${contoursData([{ vertices: [...points], closed: false }, ...others])}"` : ''
+    const mark = (part: string) => (standalone ? ` data-kdr-part="${part}"` : '')
+    parts.push(
+      line
+        ? lineElement(shortened.line, attrs([...strokeDecls, ...strokeShape]) + original)
+        : pathElement(shortened.line, false, strokeOnly + original, []),
+    )
+    if (others.length > 0) parts.push(`<path d="${contoursData(others)}"${strokeOnly}${mark('rest')}/>`)
     // 端の図形は線の色で塗る。グラデーションなら同じグラデーションで
     const strokeColor = stroke!
     const color = strokeColor.type === 'solid' || strokeDecls.length === 0
@@ -188,8 +196,8 @@ export function pathSvg(node: PathNode, options: PathSvgOptions): PathSvg {
     for (const cap of shortened.caps) {
       parts.push(
         cap.kind === 'circle'
-          ? `<circle cx="${tidy(cap.center.x)}" cy="${tidy(cap.center.y)}" r="${tidy(cap.radius)}" fill="${color}"${capOpacity} stroke="none"/>`
-          : `<polygon points="${pointList(cap.points)}" fill="${color}"${capOpacity} stroke="none"/>`,
+          ? `<circle cx="${tidy(cap.center.x)}" cy="${tidy(cap.center.y)}" r="${tidy(cap.radius)}" fill="${color}"${capOpacity} stroke="none"${mark('cap')}/>`
+          : `<polygon points="${pointList(cap.points)}" fill="${color}"${capOpacity} stroke="none"${mark('cap')}/>`,
       )
     }
   }

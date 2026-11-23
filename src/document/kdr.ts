@@ -238,7 +238,7 @@ const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 export const MAX_DEPTH = 100
 
-const CAPS = ['none', 'round', 'square', 'arrow', 'circle', 'diamond'] as const
+export const CAPS = ['none', 'round', 'square', 'arrow', 'circle', 'diamond'] as const
 const SIZINGS = ['fixed', 'hug', 'fill'] as const
 const CONSTRAINTS = ['start', 'end', 'stretch', 'center', 'scale'] as const
 /** 1 つのパスに持てる頂点の数の上限 */
