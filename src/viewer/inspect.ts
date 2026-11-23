@@ -11,6 +11,7 @@ import { cssFontFamily } from './fontFamily.ts'
 import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
 import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
+import { isPassThroughFrame, passThroughFade } from '../document/passThrough.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
 import { ALIGN_CONTENT_LABELS, BLEND_MODE_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, JOIN_LABELS, MASK_TYPE_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
@@ -79,8 +80,12 @@ export function inspectNode(
     node.opacity < 1 && { label: '不透明度', value: percent(node.opacity) },
     node.blendMode !== 'normal' && { label: '描画モード', value: BLEND_MODE_LABELS[node.blendMode] },
     node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && { label: '描画モード', value: '通過' },
-    node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && node.opacity < 1 &&
-      { label: 'CSS', value: 'opacity は中身をまとめてから混ぜるので、通過（子が後ろと直接混ざる）は表せない' },
+    isPassThroughFrame(node) && {
+      label: 'CSS',
+      value: passThroughFade(scene, node) !== null
+        ? '子が重ならないので、opacity を子に配って書いている（子の描画モードも後ろに効く）'
+        : 'opacity は中身をまとめてから混ぜるので、子が重なる通過（子が後ろと直接混ざる）は表せない',
+    },
   ])
 
   if (node.type === 'frame' && node.layout) {
@@ -489,7 +494,9 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   const flip = flipOf(node)
   const transforms = [node.rotation !== 0 && `rotate(${num(node.rotation)}deg)`, flip && `scale(${flip.x}, ${flip.y})`].filter((t) => typeof t === 'string')
   if (transforms.length > 0) add('transform', transforms.join(' '))
-  if (node.opacity < 1) add('opacity', num(node.opacity))
+  // 子に配れる通過のフレームは、自分の opacity を書かずに子に掛ける（passThrough.ts）
+  const opacity = (passThroughFade(scene, scene.nodes[id]) === null ? node.opacity : 1) * inheritedFade(scene, node)
+  if (opacity < 1) add('opacity', num(opacity))
   // 塗りが 1 つだけなら、塗りの描画モードは要素ごと後ろに混ぜるのと同じ（ノードの描画モードが normal のとき）
   const fills = 'fills' in node ? node.fills : []
   const blend = node.blendMode !== 'normal' ? node.blendMode : fills.length === 1 && node.type !== 'path' ? fills[0].blendMode : 'normal'
@@ -740,6 +747,14 @@ function paddingCss(layout: AutoLayout, px: (value: number) => string): string |
 function flipOf(node: SceneNode): { x: 1 | -1; y: 1 | -1 } | null {
   if ((node.type !== 'text' && node.type !== 'image') || (!node.flipX && !node.flipY)) return null
   return { x: node.flipX ? -1 : 1, y: node.flipY ? -1 : 1 }
+}
+
+/** 親から配られた不透明度。親が子に不透明度を配る通過のフレームなら、その不透明度（親も配られていれば掛ける） */
+function inheritedFade(scene: Scene, node: SceneNode): number {
+  const parent = node.parentId === null ? undefined : scene.nodes[node.parentId]
+  if (!parent) return 1
+  const fade = passThroughFade(scene, parent)
+  return fade === null ? 1 : fade * inheritedFade(scene, parent)
 }
 
 /** CSS の box-shadow の値。内側の影は inset を付け、広がりは 0 でなければ書く */

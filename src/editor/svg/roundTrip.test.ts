@@ -383,13 +383,84 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect(back.map((effect) => [effect.type, effect.spread])).toEqual([['drop-shadow', 3], ['inner-shadow', -2]])
   })
 
-  it('半透明の通過のフレームは、まとめて半透明にしてコメントを残す', () => {
+  it('半透明の通過のフレームは、子に配れなければまとめて半透明にしてコメントを残す', () => {
+    // フレームの背景が子と重なるので、配れない
     const group = named(createFrame({ x: 0, y: 0, width: 40, height: 20 }), 'Group', { passThrough: true, opacity: 0.5 })
     const child = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Child', { parentId: 'Group' })
     const result = roundTrip(sceneOf(group, child))
-    expect(result.svg).toContain('<!-- Group: 通過は SVG で表せないので、中身をまとめてから半透明にしている -->')
-    expect(result.svg).toContain('opacity="0.5"')
+    expect(result.svg).toContain('<!-- Group: 通過は子が重なるなどで SVG で表せないので、中身をまとめてから半透明にしている -->')
+    expect(result.svg).toContain('<g id="Group" opacity="0.5">')
     expect(roundTrip(sceneOf({ ...group, opacity: 1 }, child)).svg).not.toContain('通過')
+    // 子どうしが重なっても配れない
+    const bare = { ...group, fills: [] }
+    const other = named(createRect({ x: 5, y: 5, width: 10, height: 10 }), 'Other', { parentId: 'Group' })
+    expect(roundTrip(sceneOf(bare, child, other)).svg).toContain('<!-- Group: 通過は')
+  })
+
+  it('半透明の通過のフレームは、子が重ならなければ不透明度を子に配る（子の描画モードが後ろに効く）', () => {
+    const group = named(createFrame({ x: 0, y: 0, width: 40, height: 20 }), 'Group', { passThrough: true, opacity: 0.5, fills: [] })
+    const left = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'Left', { parentId: 'Group', blendMode: 'multiply' })
+    const right = named(createRect({ x: 20, y: 0, width: 10, height: 10 }), 'Right', { parentId: 'Group', opacity: 0.5 })
+    const result = roundTrip(sceneOf(group, left, right))
+    expect(result.svg).not.toContain('<!--')
+    expect(result.svg).toMatch(/<g id="Group">/)
+    expect(result.svg).toContain('<rect id="Left" opacity="0.5" style="mix-blend-mode:multiply"')
+    expect(result.svg).toContain('<rect id="Right" transform="translate(20 0)" opacity="0.25"')
+    expect(result.byName('Left')).toMatchObject({ opacity: 0.5, blendMode: 'multiply' })
+    expect(result.byName('Right')).toMatchObject({ opacity: 0.25 })
+    // 切り取るフレームから子がはみ出せば、clip-path の g が中身を後ろから切り離すので配れない。切り取らないなら配る
+    const outside = { ...right, x: 35 }
+    expect(roundTrip(sceneOf({ ...group, clipContent: true }, left, outside)).svg).toContain('<!-- Group: 通過は')
+    expect(roundTrip(sceneOf({ ...group, clipContent: false }, left, outside)).svg).not.toContain('<!--')
+    expect(result.svg).not.toContain('clip-path')
+    // レイヤーのぼかしがあれば描画も 1 枚の絵にまとめるので、配らずコメントも付けない
+    const blurred = roundTrip(sceneOf({ ...group, effects: [{ type: 'layer-blur', blur: 4, visible: true }] }, left, right))
+    expect(blurred.svg).not.toContain('通過')
+    expect(blurred.svg).toMatch(/<g id="Group" opacity="0.5"/)
+  })
+
+  it('描画モードのある影は、影だけの要素に分けて mix-blend-mode を付け、読み戻すと影の描画モードに戻る', () => {
+    const shadow = (type: Shadow['type'], blendMode: Shadow['blendMode'], x = 0): Shadow =>
+      ({ type, x, y: 2, blur: 4, spread: 0, blendMode, color: '#ff0000', opacity: 0.5, visible: true })
+    const rect = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Box', {
+      effects: [shadow('drop-shadow', 'normal'), shadow('drop-shadow', 'multiply', 3), shadow('inner-shadow', 'screen')],
+    })
+    const result = roundTrip(sceneOf(rect))
+    // 落ち影は全部が図形の下（normal の影と multiply の影の 2 つ）、内側の影は塗りの上
+    const elements = [...result.svg.matchAll(/<rect [^>]*\/>/g)].map((m) => m[0])
+    expect(elements).toHaveLength(4)
+    expect(elements[0]).toMatch(/fill="#000000" filter="url\(#kdr-shadow-\d+\)" data-kdr-part="carrier"/)
+    expect(elements[0]).not.toContain('mix-blend-mode')
+    expect(elements[1]).toMatch(/fill="#000000" filter="url\(#kdr-shadow-\d+\)" style="mix-blend-mode:multiply" data-kdr-part="carrier"/)
+    expect(elements[2]).toMatch(/fill="#d9d9d9"\/>/)
+    expect(elements[3]).toContain('style="mix-blend-mode:screen" data-kdr-part="carrier"')
+    // carrier の filter は影だけを出す（SourceGraphic を重ねない）
+    expect(result.svg).not.toContain('SourceGraphic')
+    expect(result.svg).not.toContain('<!--')
+    const back = (result.byName('Box') as RectNode).effects as Shadow[]
+    expect(back.map((effect) => [effect.type, effect.blendMode, effect.x])).toEqual([
+      ['drop-shadow', 'normal', 0],
+      ['drop-shadow', 'multiply', 3],
+      ['inner-shadow', 'screen', 0],
+    ])
+    expect((result.byName('Box') as RectNode).fills).toHaveLength(1)
+    // 半透明の図形では、g の中だけで混ざるのでコメントを残す
+    expect(roundTrip(sceneOf({ ...rect, opacity: 0.5 })).svg).toContain('<!-- Box: 半透明か描画モードを持つ図形の影の描画モードは SVG で表せない')
+  })
+
+  it('テキスト・パス・画像の描画モードのある影も、影だけの要素に分ける', () => {
+    const shadow: Shadow = { type: 'drop-shadow', x: 0, y: 2, blur: 4, spread: 0, blendMode: 'multiply', color: '#ff0000', opacity: 0.5, visible: true }
+    const text = named(createText({ x: 0, y: 0, width: 0, height: 0 }, 'Hi'), 'Label', { effects: [shadow] })
+    const line = named(createLine({ x: 0, y: 40, width: 40, height: 20 }), 'Line', { effects: [shadow] })
+    const result = roundTrip(sceneOf(text, line))
+    expect(result.svg).toMatch(/<text [^>]*fill="#000000" filter="url\(#kdr-shadow-\d+\)" style="mix-blend-mode:multiply" data-kdr-part="carrier"/)
+    // 直線は線の形で影を落とす
+    expect(result.svg).toMatch(/<line filter="url\(#kdr-shadow-\d+\)" style="mix-blend-mode:multiply" data-kdr-part="carrier"[^>]* stroke="#000000"/)
+    expect(((result.byName('Label') as TextNode).effects as Shadow[])[0].blendMode).toBe('multiply')
+    expect(((result.byName('Line') as PathNode).effects as Shadow[])[0].blendMode).toBe('multiply')
+    const image = named(createImage({ x: 0, y: 0, width: 40, height: 20 }, 'missing'), 'Photo', { effects: [shadow] }) as ImageNode
+    const svg = exportSvg(sceneOf(image), ['Photo'], { assets: {} })
+    expect(svg).toMatch(/<rect [^>]*fill="#000000" filter="url\(#kdr-shadow-\d+\)" style="mix-blend-mode:multiply"\/>/)
   })
 
   it('レイヤーのぼかしは feGaussianBlur の filter。背景のぼかしは書かずにコメントを残す', () => {

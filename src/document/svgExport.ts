@@ -2,11 +2,13 @@ import { IDENTITY, type Matrix, contentMatrix, flipMatrix, getWorldMatrix, inver
 import { drawnNode } from './booleanNode.ts'
 import { readImageInfo } from './imageInfo.ts'
 import { type TextLinesOf, alignFactor, blurRadius, clampedRadii, getPaintedBounds, hasStroke, imageRect, isRounded, isShadow, solidPaint, splitEffects, withoutHidden } from './paint.ts'
+import { isPassThroughFrame, passThroughFade } from './passThrough.ts'
 import { KAPPA, type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from './mask.ts'
 import { contoursData, isLine } from './path.ts'
 import { dataUri, escapeXml, gradientDef, pathSvg, strokeShapeAttrs } from './svgShapes.ts'
 import type {
   Asset,
+  Effect,
   AssetId,
   BlendMode,
   CornerRadius,
@@ -30,6 +32,10 @@ import type {
 // - 影は filter。落ち影は一番下の塗りに付け（塗りがなければ線に）、内側の影は一番上の塗りに付ける。ずれは回転に従わない（ノードの向きに直して書く）。
 // - 影の広がりは feMorphology（四角く太らせる・細らせるので、角は描画より角張る）。
 // - 描画モードは style の mix-blend-mode（ノードは要素か g に、塗りは塗りの要素に）。
+// - 描画モードのある影は、filter の中では後ろと混ぜられないので、影だけを出す要素（carrier）に分けて mix-blend-mode を付ける
+//   （落ち影は図形の下、内側の影は塗りの上・線の下。落ち影のどれかが描画モードを持てば、落ち影は全部を描画と同じ順の carrier にする。内側の影も同じ）。
+// - 半透明の通過のフレームは、子が重ならず 1 枚の絵ならフレームの不透明度を子に配る（passThrough.ts）。配れなければ g の opacity でまとめ、コメントを残す。
+//   clip-path の g も中身を後ろから切り離すので、配るときは切り取りを書かない（子が枠からはみ出して切り取りが要るなら配らない）。
 // - レイヤーのぼかしは feGaussianBlur の filter を g に付ける。背景のぼかしは SVG で表せないので書かない（コメントを残す）。
 // - テキストの影は text に filter で付ける（落ち影は一番下の塗り、内側の影は一番上の塗り）。画像の影は、枠の形の黒い要素に影だけを出す filter を付けて、画像の下（内側の影は上）に置く。
 // - 角度のグラデーションは SVG にないので、扇形を並べた pattern で近似する（svgShapes.ts の gradientDef）。
@@ -157,17 +163,23 @@ class SvgWriter {
    * 1 つのノード。m はノードの座標系から、書き込む先（親の要素）の座標系への変換。
    * world は親の座標系からページへの変換（影のずれを回転に従わせないために、向きを知る）
    */
-  node(id: NodeId, m: Matrix, parentWorld: Matrix, source: SceneNode = this.scene.nodes[id]): string {
+  node(id: NodeId, m: Matrix, parentWorld: Matrix, source: SceneNode = this.scene.nodes[id], fade = 1): string {
     // 隠した塗り・線・効果は書かない。ブーリアン演算のノードは、結果の形のパスとして書く
     const node = withoutHidden(drawnNode(this.scene, source))
     if (!node.visible || node.opacity === 0) return ''
+    // 通過のフレームの不透明度を子に配れるなら、フレームは不透明に書き、子に掛ける（fade は親から配られた不透明度）
+    // clip-path をかけた g の中は後ろから切り離される（ブラウザで確かめた）ので、切り取りが要る（子が枠からはみ出す）なら配れない。
+    // 子が枠に収まれば、切り取りは何もしないので書かない
+    let passFade = passThroughFade(this.scene, source, this.options.textLines)
+    if (passFade !== null && source.type === 'frame' && source.clipContent && !this.childrenInside(source)) passFade = null
+    const opacity = (passFade === null ? node.opacity : 1) * fade
     // マスクは描かない（兄弟を切り取る clipPath / mask になる。children）
     if (isMaskNode(node)) return ''
     // テキスト・画像の裏返しは、要素の transform に含める（枠の中心で鏡に映す）
     const flip = flipMatrix(node)
     if (flip) m = multiply(m, flip)
     const world = multiply(parentWorld, contentMatrix(node))
-    const parts = this.content(node, world)
+    const parts = this.content(node, world, passFade ?? 1, passFade === null)
     if (parts.length === 0) return ''
     const effects = 'effects' in node ? node.effects : []
     const blur = blurRadius(effects, 'layer-blur')
@@ -175,18 +187,35 @@ class SvgWriter {
       blendStyle(node.blendMode) +
       (blur > 0 ? this.blurFilter(node, blur) : '')
     const idAttr = this.options.ids === false ? '' : ` id="${escapeXml(this.nameId(node.name))}"`
-    const attrs = `${idAttr}${transformAttr(m)}${node.opacity < 1 ? ` opacity="${tidy(node.opacity)}"` : ''}${extra}`
+    const attrs = `${idAttr}${transformAttr(m)}${opacity < 1 ? ` opacity="${tidy(opacity)}"` : ''}${extra}`
     // 背景のぼかしは SVG にないので、書かなかったことをコメントで残す
     const note =
       (blurRadius(effects, 'background-blur') > 0 ? `<!-- ${escapeXml(node.name)}: 背景のぼかしは SVG で表せないので書いていない -->` : '') +
-      // 通過は SVG で表せない（g の opacity は中身をまとめてから混ぜる）
-      (node.type === 'frame' && node.passThrough && node.blendMode === 'normal' && node.opacity < 1
-        ? `<!-- ${escapeXml(node.name)}: 通過は SVG で表せないので、中身をまとめてから半透明にしている -->`
+      // 子に不透明度を配れない通過は SVG で表せない（g の opacity は中身をまとめてから混ぜる）
+      (isPassThroughFrame(source) && passFade === null
+        ? `<!-- ${escapeXml(node.name)}: 通過は子が重なるなどで SVG で表せないので、中身をまとめてから半透明にしている -->`
+        : '') +
+      // 半透明・描画モードの g の中は後ろから切り離されるので、影の描画モードは後ろに届かない
+      ((opacity < 1 || node.blendMode !== 'normal') && node.type !== 'frame' && 'effects' in node &&
+      node.effects.some((effect) => isShadow(effect) && effect.blendMode !== 'normal')
+        ? `<!-- ${escapeXml(node.name)}: 半透明か描画モードを持つ図形の影の描画モードは SVG で表せないので、図形の中だけで混ぜている -->`
         : '')
     // 要素が 1 つなら、その要素に付ける（取り込むとフレームにならず、同じ種類のノードに戻る）。同じ属性を持っていれば g にする
     const clash = extra !== '' && / (style|filter)="/.test(parts[0].slice(0, parts[0].indexOf('>')))
     if (node.type !== 'frame' && parts.length === 1 && !parts[0].startsWith('<g') && !clash) return note + parts[0].replace(/^<(\w+)/, `<$1${attrs}`)
     return `${note}<g${attrs}${shapeMark(node)}>${parts.join('')}</g>`
+  }
+
+  /** フレームの子の描かれる範囲が、どれもフレームの枠に収まるか（切り取りが何もしないか） */
+  private childrenInside(frame: SceneNode & { children: readonly NodeId[] }): boolean {
+    const toFrame = invert(multiply(getWorldMatrix(this.scene, frame.parentId), nodeMatrix(frame)))
+    const eps = 1e-6
+    return frame.children.every((id) => {
+      const bounds = getPaintedBounds(this.scene, [id], this.options.textLines)
+      if (!bounds || !this.scene.nodes[id].visible) return true
+      const box = transformRect(toFrame, bounds)
+      return box.x >= -eps && box.y >= -eps && box.x + box.width <= frame.width + eps && box.y + box.height <= frame.height + eps
+    })
   }
 
   /** レイヤーのぼかしの filter を定義して、付ける属性を返す。範囲は枠と、影・ぼかしのはみ出し */
@@ -209,11 +238,11 @@ class SvgWriter {
    * 兄弟の並び（親の座標系に書く）。マスクから次のマスクまでの兄弟は、マスクの形の clipPath をかけた g にまとめる。
    * parentWorld は親の座標系からページへの変換
    */
-  private children(ids: readonly NodeId[], parentWorld: Matrix): string {
+  private children(ids: readonly NodeId[], parentWorld: Matrix, fade: number): string {
     const masks = masksOf(this.scene, ids)
     const runs: { mask: NodeId | null; parts: string[] }[] = []
     ids.forEach((id, i) => {
-      const element = this.node(id, nodeMatrix(this.scene.nodes[id]), parentWorld)
+      const element = this.node(id, nodeMatrix(this.scene.nodes[id]), parentWorld, this.scene.nodes[id], fade)
       const last = runs[runs.length - 1]
       if (last && last.mask === masks[i]) last.parts.push(element)
       else runs.push({ mask: masks[i], parts: [element] })
@@ -261,7 +290,7 @@ class SvgWriter {
   }
 
   /** ノードの中身の要素（ノードの座標系） */
-  private content(node: SceneNode, world: Matrix): string[] {
+  private content(node: SceneNode, world: Matrix, fade: number, clip: boolean): string[] {
     switch (node.type) {
       case 'rect':
         return this.styled(node, world, (decls) => boxShape(node, node.cornerRadius, decls))
@@ -279,8 +308,8 @@ class SvgWriter {
       case 'frame': {
         const shape = (decls: string) => boxShape(node, node.cornerRadius, decls)
         const background = this.styled({ ...node, strokes: [] }, world, shape)
-        let children = this.children(node.children, world)
-        if (children !== '' && node.clipContent) children = this.clipToBox(node, children)
+        let children = this.children(node.children, world, fade)
+        if (children !== '' && node.clipContent && clip) children = this.clipToBox(node, children)
         // 枠線は子より手前に描く（影は塗りに付けたので、ここでは付けない）
         const border = hasStroke(node) ? this.styled({ ...node, fills: [], effects: [] }, world, shape) : []
         return [...background, ...(children === '' ? [] : [children]), ...border]
@@ -319,11 +348,22 @@ class SvgWriter {
       const stroke = strokes.length > 0 ? this.paintAttr(strokes[0], 'stroke', node) + this.strokeShape(node) : ''
       return [shape(fill + stroke)]
     }
-    const filters = this.fillFilters(node, world, node.fills.length)
-    const parts = node.fills.map((fill, i) => shape(`${this.paintAttr(fill, 'fill', node)}${filters.fill(i)}`))
+    const plan = planShadows(node.effects)
+    const filters = this.fillFilters({ ...node, effects: [...plan.drop, ...plan.inner] }, world, node.fills.length)
+    // 描画モードのある落ち影は、図形の下に影だけの要素で（塗りがなければ線の形で落とす）
+    const dropShape = (decls: string) =>
+      node.fills.length > 0 ? shape(` fill="#000000"${decls}${CARRIER}`) : shape(` fill="none" stroke="#000000"${this.strokeShape(node)}${decls}${CARRIER}`)
+    const parts = this.carriers(node, world, plan.dropRuns, false).map(dropShape)
+    parts.push(...node.fills.map((fill, i) => shape(`${this.paintAttr(fill, 'fill', node)}${filters.fill(i)}`)))
     if (filters.carrier !== '') parts.push(shape(` fill="#000000"${filters.carrier}${CARRIER}`))
+    parts.push(...this.carriers(node, world, plan.innerRuns, true).map((decls) => shape(` fill="#000000"${decls}${CARRIER}`)))
     for (const stroke of strokes) parts.push(shape(` fill="none"${this.paintAttr(stroke, 'stroke', node)}${this.strokeShape(node)}${filters.stroke}`))
     return parts
+  }
+
+  /** 描画モードのある影を分けた carrier ごとの属性（影だけを出す filter と mix-blend-mode）。inner なら内側の影 */
+  private carriers(node: SceneNode & Pick<Style, 'effects'>, world: Matrix, runs: readonly Shadow[][], inner: boolean): string[] {
+    return runs.map((run) => (inner ? this.shadow(node, world, [], run, false) : this.shadow(node, world, run, [], false)) + blendStyle(run[0].blendMode))
   }
 
   /**
@@ -366,9 +406,16 @@ class SvgWriter {
       if (fills.length === 0 && strokes.length === 0) return []
       return call(fills[0] ?? null, strokes[0] ?? null, '')
     }
-    const filters = this.fillFilters(shown, world, fills.length)
-    const parts = fills.flatMap((fill, i) => call(fill, null, filters.fill(i) + blendStyle(fill.blendMode)))
-    if (filters.carrier !== '') parts.push(...call(solidPaint('#000000'), null, filters.carrier + CARRIER))
+    const plan = planShadows(shown.effects)
+    const filters = this.fillFilters({ ...shown, effects: [...plan.drop, ...plan.inner] }, world, fills.length)
+    // 描画モードのある落ち影は、図形の下に影だけの要素で（塗りがなければ線の形で落とす）
+    const black = solidPaint('#000000')
+    const parts = this.carriers(node, world, plan.dropRuns, false).flatMap((decls) =>
+      fills.length > 0 ? call(black, null, decls + CARRIER) : call(null, black, decls + CARRIER),
+    )
+    parts.push(...fills.flatMap((fill, i) => call(fill, null, filters.fill(i) + blendStyle(fill.blendMode))))
+    if (filters.carrier !== '') parts.push(...call(black, null, filters.carrier + CARRIER))
+    parts.push(...this.carriers(node, world, plan.innerRuns, true).flatMap((decls) => call(black, null, decls + CARRIER)))
     for (const stroke of strokes) parts.push(...call(null, stroke, filters.stroke + blendStyle(stroke.blendMode)))
     return parts
   }
@@ -446,26 +493,35 @@ class SvgWriter {
     const font =
       ` font-family="${escapeXml(node.fontFamily)}" font-size="${tidy(node.fontSize)}"` +
       `${node.fontWeight === 400 ? '' : ` font-weight="${node.fontWeight}"`}${anchor}`
-    // 文字の落ち影は一番下の塗りに、内側の影は一番上の塗りに付ける（塗りが 1 つなら両方を 1 つの filter に）
-    const { drop, inner } = splitEffects(node.effects)
+    // 文字の落ち影は一番下の塗りに、内側の影は一番上の塗りに付ける（塗りが 1 つなら両方を 1 つの filter に）。
+    // 描画モードのある影は、黒い文字に影だけを出す filter を付けた要素（carrier）に分ける
+    const { drop, inner, dropRuns, innerRuns } = planShadows(node.effects)
     const last = node.fills.length - 1
     const filterOf = (i: number) => {
       const drops = i === 0 ? drop : []
       const inners = i === last ? inner : []
       return drops.length + inners.length > 0 ? this.shadow(node, world, drops, inners, true) : ''
     }
-    return node.fills.map(
-      (fill, i) =>
-        `<text x="${x}" y="${tidy(baseline)}"${font}${this.paintAttr(fill, 'fill', node)}${filterOf(i)} xml:space="preserve">${spans}</text>`,
-    )
+    const element = (attrs: string) => `<text x="${x}" y="${tidy(baseline)}"${font}${attrs} xml:space="preserve">${spans}</text>`
+    return [
+      ...this.carriers(node, world, dropRuns, false).map((decls) => element(` fill="#000000"${decls}${CARRIER}`)),
+      ...node.fills.map((fill, i) => element(`${this.paintAttr(fill, 'fill', node)}${filterOf(i)}`)),
+      ...this.carriers(node, world, innerRuns, true).map((decls) => element(` fill="#000000"${decls}${CARRIER}`)),
+    ]
   }
 
   private image(node: ImageNode, world: Matrix): string[] {
     // 影は枠の形に付ける（描画と同じ）。枠の形の黒い要素に、影だけを出す filter を付ける
-    const { drop, inner } = splitEffects(node.effects)
-    const below = drop.length > 0 ? [boxShape(node, node.cornerRadius, ` fill="#000000"${this.shadow(node, world, drop, [], false)}`)] : []
-    const above = inner.length > 0 ? [boxShape(node, node.cornerRadius, ` fill="#000000"${this.shadow(node, world, [], inner, false)}`)] : []
-    return [...below, ...this.imageContent(node), ...above]
+    // 描画モードのある影は、描画モードごとに別の要素にして mix-blend-mode を付ける
+    const { drop, inner, dropRuns, innerRuns } = planShadows(node.effects)
+    const box = (decls: string) => boxShape(node, node.cornerRadius, ` fill="#000000"${decls}`)
+    const below = [...(drop.length > 0 ? [drop] : []), ...dropRuns]
+    const above = [...(inner.length > 0 ? [inner] : []), ...innerRuns]
+    return [
+      ...this.carriers(node, world, below, false).map(box),
+      ...this.imageContent(node),
+      ...this.carriers(node, world, above, true).map(box),
+    ]
   }
 
   private imageContent(node: ImageNode): string[] {
@@ -504,6 +560,35 @@ function shapeMark(node: SceneNode): string {
     ? ` data-kdr-caps="${node.startCap} ${node.endCap}"`
     : ''
   return ` data-kdr-shape="${node.type}"${caps}`
+}
+
+/**
+ * 影の分け方。描画モードのある影は filter の中では後ろと混ぜられないので、影だけを出す要素（carrier）に分ける。
+ * drop / inner は塗りなどの filter に入れるもの、dropRuns / innerRuns は carrier にするもの（1 つが 1 要素。同じ要素の影は描画モードが同じ）。
+ * 落ち影のどれかが描画モードを持てば、落ち影は全部を carrier にする（描画と同じく、広がりのある影が先、ほかは効果の順）。
+ * 描画モードが normal の影の続きは 1 つの carrier にまとめ（順に重ねるのと同じ）、描画モードのある影は 1 つずつにする（まとめてから混ぜると違う色になる）
+ */
+function planShadows(effects: readonly Effect[]): { drop: Shadow[]; inner: Shadow[]; dropRuns: Shadow[][]; innerRuns: Shadow[][] } {
+  const { drop, inner } = splitEffects(effects)
+  const blended = (list: readonly Shadow[]) => list.some((shadow) => shadow.blendMode !== 'normal')
+  const runs = (list: readonly Shadow[]) => {
+    const out: Shadow[][] = []
+    for (const shadow of list) {
+      const last = out.at(-1)
+      if (last && shadow.blendMode === 'normal' && last[0].blendMode === 'normal') last.push(shadow)
+      else out.push([shadow])
+    }
+    return out
+  }
+  const dropBlended = blended(drop)
+  const innerBlended = blended(inner)
+  const ordered = [...drop.filter((shadow) => shadow.spread !== 0), ...drop.filter((shadow) => shadow.spread === 0)]
+  return {
+    drop: dropBlended ? [] : drop,
+    inner: innerBlended ? [] : inner,
+    dropRuns: dropBlended ? runs(ordered) : [],
+    innerRuns: innerBlended ? runs(inner) : [],
+  }
 }
 
 /** 描画モードの style 属性（通常なら書かない） */

@@ -16,7 +16,7 @@ import {
 import { isImageTooLarge, readImageInfo } from '../../document/imageInfo.ts'
 import { KAPPA, ellipseVertices } from '../../document/mask.ts'
 import { BLEND_MODES, CAPS, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES, MAX_DASHES, MAX_PAINTS, MAX_PATH_POINTS, MAX_STOPS } from '../../document/kdr.ts'
-import { angleLine, fitFocus, linearFromAngle, solidPaint } from '../../document/paint.ts'
+import { angleLine, fitFocus, isShadow, linearFromAngle, solidPaint } from '../../document/paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
 import { sha256Hex } from '../../document/sha256.ts'
@@ -576,7 +576,11 @@ class Converter {
         ok = false
         continue
       }
-      if (part === 'carrier') extraEffects.push(...node.effects)
+      // carrier の描画モードは、その影の描画モード（書き出しは描画モードのある影を carrier に分けて mix-blend-mode を付ける）
+      if (part === 'carrier') {
+        const mode = 'blendMode' in node ? node.blendMode : 'normal'
+        extraEffects.push(...node.effects.map((effect) => (mode !== 'normal' && isShadow(effect) ? { ...effect, blendMode: mode } : effect)))
+      }
       else bases.push(node)
     }
     const first = bases[0]

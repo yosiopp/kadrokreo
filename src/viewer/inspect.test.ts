@@ -345,16 +345,34 @@ describe('nodeCss', () => {
     expect(rowsOf(scene, 'rect', '効果')).toContain('CSS=影ごとの描画モードは CSS で表せないので、ふつうに重ねて書いている')
   })
 
-  it('通過のフレームは描画モードに出し、半透明なら CSS で表せないと知らせる', () => {
+  it('通過のフレームは描画モードに出し、半透明で子に配れなければ CSS で表せないと知らせる', () => {
     const child = rect({ parentId: 'frame' })
     const opaque = sceneOf(frame({ passThrough: true, children: ['rect'] }), child)
     expect(rowsOf(opaque, 'frame', '位置とサイズ')).toContain('描画モード=通過')
     expect(rowsOf(opaque, 'frame', '位置とサイズ')?.some((row) => row.startsWith('CSS='))).toBe(false)
+    // フレームの背景が子と重なるので配れない
     const faded = sceneOf(frame({ passThrough: true, opacity: 0.5, children: ['rect'] }), child)
-    expect(rowsOf(faded, 'frame', '位置とサイズ')).toContain('CSS=opacity は中身をまとめてから混ぜるので、通過（子が後ろと直接混ざる）は表せない')
+    expect(rowsOf(faded, 'frame', '位置とサイズ')).toContain('CSS=opacity は中身をまとめてから混ぜるので、子が重なる通過（子が後ろと直接混ざる）は表せない')
+    expect(css(faded, 'frame')).toContain('opacity: 0.5;')
+    expect(css(faded, 'rect').some((line) => line.startsWith('opacity'))).toBe(false)
     // 描画モードがあれば通過は意味がない
     const blended = sceneOf(frame({ passThrough: true, blendMode: 'multiply', children: ['rect'] }), child)
     expect(rowsOf(blended, 'frame', '位置とサイズ')).not.toContain('描画モード=通過')
+  })
+
+  it('半透明の通過のフレームは、子が重ならなければ opacity を子に配る', () => {
+    const left = rect({ id: 'left', parentId: 'frame', x: 0, width: 40, blendMode: 'multiply' })
+    const right = rect({ id: 'right', parentId: 'frame', x: 50, width: 40, opacity: 0.5 })
+    const scene = sceneOf(frame({ passThrough: true, opacity: 0.5, fills: [], children: ['left', 'right'] }), left, right)
+    expect(css(scene, 'frame').some((line) => line.startsWith('opacity'))).toBe(false)
+    expect(css(scene, 'left')).toContain('opacity: 0.5;')
+    expect(css(scene, 'left')).toContain('mix-blend-mode: multiply;')
+    expect(css(scene, 'right')).toContain('opacity: 0.25;')
+    expect(rowsOf(scene, 'frame', '位置とサイズ')).toContain('CSS=子が重ならないので、opacity を子に配って書いている（子の描画モードも後ろに効く）')
+    // 子が重なれば配らない
+    const overlapped = sceneOf(frame({ passThrough: true, opacity: 0.5, fills: [], children: ['left', 'right'] }), left, { ...right, x: 20 })
+    expect(css(overlapped, 'frame')).toContain('opacity: 0.5;')
+    expect(css(overlapped, 'right')).toContain('opacity: 0.5;')
   })
 
   it('レイヤーのぼかしは filter の blur（半径の半分）、背景のぼかしは backdrop-filter', () => {

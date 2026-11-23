@@ -748,8 +748,8 @@ function drawFitted(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, node: Im
 
 /**
  * 落ち影を描く。影のずれは回転に従わない（図形を回しても、影は同じ向きに落ちる）。attach なら最後の影は次に描くものに付ける。
- * Canvas は 1 回の描画に影を 1 つしか付けられないので、ほかは図形を画面外へずらして影だけを先に描く。
- * 広がりのある影は、太らせた形を別のキャンバスに描いてから影だけを落とす（drawMaskedShadow）
+ * Canvas は 1 回の描画に影を 1 つしか付けられないので、ほかは形を別のキャンバスに描いてから影だけを先に落とす（drawMaskedShadow。
+ * 広がりのある影は太らせた形で）。組んであるパスは座標を変えても動かないので、パスを画面外へずらして影だけを描くことはできない
  */
 function drawDropShadows(
   ctx: CanvasRenderingContext2D,
@@ -765,7 +765,7 @@ function drawDropShadows(
   for (const shadow of drops) if (shadow.spread !== 0) drawMaskedShadow(ctx, pass, shadow, silhouette, false)
   // 描画モードのある影は、図形と一緒に描くと図形にも描画モードがかかるので、付けずに先に描く
   const last = attach && plain.at(-1)?.blendMode === 'normal' ? plain.pop() : undefined
-  for (const shadow of plain) drawShadowOnly(ctx, pass, shadow)
+  for (const shadow of plain) drawMaskedShadow(ctx, pass, shadow, silhouette, false)
   if (last) setShadow(ctx, pass, last)
 }
 
@@ -870,21 +870,6 @@ function setShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow): v
   ctx.shadowBlur = shadow.blur * pass.scale
   ctx.shadowOffsetX = shadow.x * pass.scale
   ctx.shadowOffsetY = shadow.y * pass.scale
-}
-
-/** いま組んであるパスの影だけを描く。パスを画面の外へずらして塗り、影のずれで元の位置へ戻す */
-function drawShadowOnly(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow): void {
-  const far = 100_000
-  const inverse = ctx.getTransform().inverse()
-  ctx.save()
-  setShadow(ctx, pass, shadow)
-  blendShadow(ctx, shadow)
-  ctx.shadowOffsetX += far
-  // 画面の座標で far だけ左へずらす量を、いまの座標系に直す
-  ctx.translate(-far * inverse.a, -far * inverse.b)
-  ctx.fillStyle = '#000000'
-  ctx.fill()
-  ctx.restore()
 }
 
 /** 頂点を順につないだ線（曲線を含む）を引き、両端に端の形を描く */
