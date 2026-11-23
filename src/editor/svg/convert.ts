@@ -41,7 +41,7 @@ import { createEllipse, createFrame, createImage, createPath, createRect, create
 import type { Fragment } from '../operations/clipboard.ts'
 import { type StyleSheet, matchedDeclarations, parseStyleSheet } from './css.ts'
 import { readShadowFilter } from './filters.ts'
-import type { SvgElement, SvgNode } from './xml.ts'
+import { MAX_SVG_LENGTH, type SvgElement, type SvgNode, parseSvgXml } from './xml.ts'
 import {
   type Rgba,
   clamp01,
@@ -63,10 +63,10 @@ import {
 //   歪めたり裏返したりしていればパスにする。line / polyline / polygon / path はパス。path の輪郭が複数あれば、
 //   1 つのパスの輪郭（contours）にし、fill-rule を写す（穴が開く）。stroke-dasharray は線の破線にする。
 // - 塗りは単色と linearGradient・radialGradient。fill-opacity・stroke-opacity・色の alpha・揃った stop-opacity は塗りの不透明度（Paint.opacity）に写す。
-// - <style> の CSS は単純なセレクタ（要素名・#id・.class）だけ読み、属性 < CSS < style 属性 < CSS の !important の順に重ねる。
+// - <style> の CSS はセレクタ（要素名・#id・.class・属性・結合子・静的に決まる疑似クラス。css.ts）を読み、属性 < CSS < style 属性 < CSS の !important の順に重ねる。
 // - clip-path / mask は、中身が矩形・円 1 つで、軸に沿って置かれているときは、切り取るフレーム（角丸）にする。
 //   ほかの形（パス・多角形・回った矩形・いくつもの形・objectBoundingBox）は、形をマスク（isMask）のパスにして中身と一緒にフレームにまとめる（maskShape）。
-// - <image> は data URI の PNG / JPEG / WebP / GIF だけを画像のノードにする（外部の URL は読まない）。
+// - <image> は data URI の PNG / JPEG / WebP / GIF を画像のノードに、SVG（data:image/svg+xml）を別の文書として変換したフレームにする（外部の URL は読まない）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
 // - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターン・textPath など）は
 //   近い形に置き換えるか読み飛ばし、warnings で知らせる。
@@ -101,6 +101,10 @@ const MAX_NODES = 20_000
 /** g のフレームの入れ子の上限（kdr の MAX_DEPTH 100 より余裕をもって小さく）。深い分はフレームを作らずに中身を親へ出す */
 const MAX_FRAME_DEPTH = 64
 const MAX_USE_DEPTH = 16
+/** SVG の画像（data:image/svg+xml の <image>）の入れ子の深さ・変換する回数・変換する要素の数の合計の上限 */
+const MAX_SVG_IMAGE_DEPTH = 4
+const MAX_SVG_IMAGES = 64
+const MAX_SVG_IMAGE_ELEMENTS = 100_000
 /** 塗りと線を持つ図形の要素（影の filter を効果として読む） */
 const SHAPE_ELEMENTS = new Set(['rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path'])
 /** 影とぼかしの filter を効果として読む要素（グループはフレームになるので効果を持てる） */
@@ -200,16 +204,52 @@ export function convertSvg(root: SvgElement, options: SvgImportOptions): SvgImpo
   return new Converter(root, options).run()
 }
 
+/**
+ * 1 回の取り込みで共有するもの。SVG の画像（data:image/svg+xml の <image>）は別の文書として別の Converter で変換するが、
+ * ノード・知らせ・画像・id の番号・上限は外側と分け合う
+ */
+type Shared = {
+  nodes: Record<NodeId, SceneNode>
+  warnings: Map<string, number>
+  /** data URI の <image> から作った画像。id は中身の SHA-256 */
+  assets: Record<AssetId, Asset>
+  nextId: number
+  /** 上限に達して、それより後の要素を読まない */
+  stopped: boolean
+  /** nodes の数（add で増やし、取り消して delete したら減らす。毎回 Object.keys で数えると 2 乗になる） */
+  nodeCount: number
+  /** SVG の画像の data URI ごとの解析した木（読めなければ null）。use で同じ画像を何度も指されても解析は 1 回 */
+  svgImages: Map<string, SvgElement | null>
+  /** SVG の画像を変換した回数と、変換した要素の数の合計（細工で何度も変換させられないように） */
+  svgImageCount: number
+  svgImageElements: number
+}
+
+function newShared(): Shared {
+  return {
+    nodes: {},
+    warnings: new Map(),
+    assets: {},
+    nextId: 0,
+    stopped: false,
+    nodeCount: 0,
+    svgImages: new Map(),
+    svgImageCount: 0,
+    svgImageElements: 0,
+  }
+}
+
 class Converter {
-  private readonly nodes: Record<NodeId, SceneNode> = {}
+  private readonly shared: Shared
+  private readonly nodes: Record<NodeId, SceneNode>
   private readonly definitions = new Map<string, SvgElement>()
-  private readonly warnings = new Map<string, number>()
+  private readonly warnings: Map<string, number>
   private readonly root: SvgElement
   private readonly options: SvgImportOptions
-  private nextId = 0
-  private stopped = false
-  /** nodes の数（add で増やし、取り消して delete したら減らす。毎回 Object.keys で数えると 2 乗になる） */
-  private nodeCount = 0
+  /** SVG の画像の入れ子の深さ（いちばん外の SVG は 0） */
+  private readonly imageDepth: number
+  /** 要素の親（CSS の子孫・兄弟のセレクタの照合に使う） */
+  private readonly parents = new Map<SvgElement, SvgElement>()
   /** ビューポートの大きさ（% の長さの基準） */
   private viewport: Size = { width: 300, height: 150 }
   /** たどっている use の参照先（循環を止める） */
@@ -217,24 +257,24 @@ class Converter {
   /** グラデーションごとの href でたどった並び（何度も使うので覚え、外部への参照も 1 つにつき 1 回だけ知らせる） */
   private readonly chainCache = new Map<SvgElement, SvgElement[]>()
   /** <style> の CSS をまとめたもの */
-  private sheet: StyleSheet = { rules: [], skippedSelectors: 0, skippedAtRules: 0 }
+  private sheet: StyleSheet = parseStyleSheet('')
   /** 要素ごとの、属性・CSS・style 属性を重ねた値（declared） */
   private readonly declaredCache = new Map<SvgElement, Record<string, string>>()
-  /** data URI の <image> から作った画像。id は中身の SHA-256 */
-  private readonly assets: Record<AssetId, Asset> = {}
+  private readonly assets: Record<AssetId, Asset>
 
-  constructor(root: SvgElement, options: SvgImportOptions) {
+  constructor(root: SvgElement, options: SvgImportOptions, shared: Shared = newShared(), imageDepth = 0) {
     this.root = root
     this.options = options
+    this.shared = shared
+    this.nodes = shared.nodes
+    this.warnings = shared.warnings
+    this.assets = shared.assets
+    this.imageDepth = imageDepth
   }
 
   run(): SvgImport {
-    this.collectDefinitions(this.root)
-    this.collectStyles()
-    const { size, matrix } = this.rootViewport(this.root)
-    this.viewport = viewBoxSize(this.root) ?? size
-    const inherited = this.inherit(this.root, ROOT_INHERITED)
-    const children = this.convertChildren(this.root, matrix, inherited, 1, 0)
+    const size = this.prepare()
+    const children = this.convertRoot(IDENTITY, 1)
     const frame: FrameNode = {
       ...createFrame({ x: 0, y: 0, width: size.width, height: size.height }),
       id: this.id(),
@@ -253,8 +293,27 @@ class Converter {
     }
   }
 
+  /** 定義・CSS・親を集め、ビューポートを決める。根の大きさ（width / height か viewBox）を返す */
+  private prepare(): Size {
+    this.collectDefinitions(this.root)
+    this.collectParents(this.root)
+    this.collectStyles()
+    const { size } = this.rootViewport(this.root)
+    this.viewport = viewBoxSize(this.root) ?? size
+    return size
+  }
+
+  /** 根の中身を変換する。outer は根のビューポート（0, 0 から根の大きさ）を外側の座標に写す変換 */
+  private convertRoot(outer: Matrix, depth: number): NodeId[] {
+    const { matrix } = this.rootViewport(this.root)
+    const inherited = this.inherit(this.root, ROOT_INHERITED)
+    const ids = this.convertChildren(this.root, multiply(outer, matrix), inherited, depth, 0)
+    if (this.sheet.exhausted) this.warn('CSS のセレクタの照合が多すぎる（途中から結合子つきのセレクタを当てなかった）')
+    return ids
+  }
+
   private id(): NodeId {
-    return `svg${++this.nextId}`
+    return `svg${++this.shared.nextId}`
   }
 
   private warn(label: string): void {
@@ -268,6 +327,14 @@ class Converter {
     const id = element.attributes.id
     if (id !== undefined && !this.definitions.has(id)) this.definitions.set(id, element)
     for (const child of element.children) if (typeof child !== 'string') this.collectDefinitions(child)
+  }
+
+  private collectParents(element: SvgElement): void {
+    for (const child of element.children) {
+      if (typeof child === 'string') continue
+      this.parents.set(child, element)
+      this.collectParents(child)
+    }
   }
 
   /** <style> の中身を読む。読めないセレクタや @ の規則は数えて知らせる */
@@ -297,7 +364,7 @@ class Converter {
   private declared(element: SvgElement): Record<string, string> {
     const cached = this.declaredCache.get(element)
     if (cached) return cached
-    const { normal, important } = matchedDeclarations(this.sheet, element)
+    const { normal, important } = matchedDeclarations(this.sheet, element, this.parents)
     const result = { ...element.attributes, ...normal, ...parseStyle(element.attributes.style), ...important }
     this.declaredCache.set(element, result)
     return result
@@ -370,7 +437,7 @@ class Converter {
   }
 
   private convertElement(element: SvgElement, parentMatrix: Matrix, parentInherited: Inherited, depth: number, uses: number): NodeId[] {
-    if (this.stopped) return []
+    if (this.shared.stopped) return []
     const { name, attributes } = element
     if (DEFINITIONS.has(name)) return []
     const skipped = SKIPPED_ELEMENTS[name]
@@ -452,7 +519,7 @@ class Converter {
       case 'text':
         return this.text(element, matrix, inherited)
       case 'image':
-        return this.image(element, matrix, inherited)
+        return this.image(element, matrix, inherited, depth)
       default:
         this.warn(`対応していない要素（<${name}>）`)
         return []
@@ -940,10 +1007,10 @@ class Converter {
   }
 
   /**
-   * data URI（PNG・JPEG・WebP・GIF）の <image> を画像のノードにする。外部の URL や、SVG の画像は読まない。
+   * data URI（PNG・JPEG・WebP・GIF）の <image> を画像のノードにする。SVG の画像は別の文書として変換する（svgImage）。外部の URL は読まない。
    * preserveAspectRatio は収め方（meet → contain、slice → cover、none → stretch）と寄せる位置にする
    */
-  private image(element: SvgElement, matrix: Matrix, inherited: Inherited): NodeId[] {
+  private image(element: SvgElement, matrix: Matrix, inherited: Inherited, depth: number): NodeId[] {
     const a = element.attributes
     const href = hrefOf(element)
     if (href === undefined || href === '') return []
@@ -951,6 +1018,7 @@ class Converter {
       this.warn('外部の画像（<image>。読まなかった）')
       return []
     }
+    if (/^data:image\/svg\+xml[;,]/i.test(href.trim())) return this.svgImage(element, href.trim(), matrix, inherited, depth)
     const bytes = decodeDataUri(href)
     const info = bytes ? readImageInfo(bytes) : null
     if (!bytes || !info || !IMAGE_MIME_TYPES.includes(info.mime)) {
@@ -985,6 +1053,77 @@ class Converter {
       opacity: this.opacityOf(element),
     }
     return [this.add(node)]
+  }
+
+  /**
+   * SVG の画像（data:image/svg+xml の <image>）を、別の文書として変換してフレームにまとめる。
+   * 中の id・CSS・受け継ぐ値は外側と分ける（ブラウザも別の文書として描く）。外部の参照を読まないことや上限は外側と同じで、
+   * 入れ子の深さ・変換する回数・要素の数の合計にも上限を置く（use でくり返し指したり、入れ子にしたりして膨らませる細工を止める）。
+   * 収め方は <image> の preserveAspectRatio（中の svg の preserveAspectRatio は使わない）。はみ出しは、軸に沿って置かれていれば切り取る
+   */
+  private svgImage(element: SvgElement, href: string, matrix: Matrix, inherited: Inherited, depth: number): NodeId[] {
+    if (this.imageDepth >= MAX_SVG_IMAGE_DEPTH) {
+      this.warn('入れ子が深すぎる SVG の画像（<image>。読み飛ばした）')
+      return []
+    }
+    if (this.shared.svgImageCount >= MAX_SVG_IMAGES) {
+      this.warn(`${MAX_SVG_IMAGES} 個を超えた SVG の画像（<image>。読み飛ばした）`)
+      return []
+    }
+    let tree = this.shared.svgImages.get(href)
+    if (tree === undefined) {
+      tree = null
+      const bytes = decodeDataUri(href)
+      if (bytes && bytes.byteLength <= MAX_SVG_LENGTH) {
+        try {
+          const parsed = parseSvgXml(new TextDecoder('utf-8', { fatal: false }).decode(bytes))
+          if (parsed.name === 'svg') tree = parsed
+        } catch {
+          // 読めない SVG。下で知らせる
+        }
+      }
+      this.shared.svgImages.set(href, tree)
+    }
+    if (!tree) {
+      this.warn('読めない SVG の画像（<image>。読み飛ばした）')
+      return []
+    }
+    const elements = countElements(tree)
+    if (this.shared.svgImageElements + elements > MAX_SVG_IMAGE_ELEMENTS) {
+      this.warn('要素が多すぎる SVG の画像（<image>。読み飛ばした）')
+      return []
+    }
+    this.shared.svgImageCount++
+    this.shared.svgImageElements += elements
+    const inner = new Converter(tree, this.options, this.shared, this.imageDepth + 1)
+    const size = inner.prepare()
+    const a = element.attributes
+    // 大きさの指定がなければ、画像（中の svg）の大きさ
+    const width = this.length(a.width, 'width') ?? size.width
+    const height = this.length(a.height, 'height') ?? size.height
+    if (!(width > 0 && height > 0)) return []
+    const box = { x: this.length(a.x, 'width') ?? 0, y: this.length(a.y, 'height') ?? 0, width, height }
+    const fit = viewBoxMatrix([0, 0, size.width, size.height], { width, height }, a.preserveAspectRatio)
+    const outer = multiply(multiply(matrix, [1, 0, 0, 1, box.x, box.y]), fit)
+    const children = inner.convertRoot(outer, depth + 1)
+    if (children.length === 0) return []
+    const props = {
+      name: a.id ?? 'Image',
+      opacity: round4(this.opacityOf(element) * inner.opacityOf(tree)),
+      visible: inherited.visible,
+    }
+    if (depth > MAX_FRAME_DEPTH) {
+      this.warn('深すぎるグループの入れ子（フレームにせずにまとめた）')
+      for (const id of children) this.nodes[id] = { ...this.nodes[id], opacity: this.nodes[id].opacity * props.opacity }
+      return children
+    }
+    // 軸に沿っていれば、画像の枠で切り取るフレームにする。回っていれば中身を囲むフレーム（切り取らない）
+    const eps = 1e-9 * (Math.abs(matrix[0]) + Math.abs(matrix[1]) + Math.abs(matrix[2]) + Math.abs(matrix[3]))
+    if (Math.abs(matrix[1]) <= eps && Math.abs(matrix[2]) <= eps) {
+      return [this.wrap(children, transformRect(matrix, box), { ...props, clipContent: true })]
+    }
+    this.warn('回した SVG の画像（はみ出しを切り取らなかった）')
+    return [this.wrap(children, this.boundsOf(children)!, { ...props, clipContent: false })]
   }
 
   private text(element: SvgElement, matrix: Matrix, inherited: Inherited): NodeId[] {
@@ -1130,11 +1269,11 @@ class Converter {
    * 上限を超える分は、入れ子の深さ（上限あり）とマスクの分だけに収まる
    */
   private add(node: SceneNode): NodeId {
-    if (this.nodeCount >= MAX_NODES) {
-      if (!this.stopped) this.warn(`${MAX_NODES} 個を超えた分の図形（読み飛ばした）`)
-      this.stopped = true
+    if (this.shared.nodeCount >= MAX_NODES) {
+      if (!this.shared.stopped) this.warn(`${MAX_NODES} 個を超えた分の図形（読み飛ばした）`)
+      this.shared.stopped = true
     }
-    if (!Object.hasOwn(this.nodes, node.id)) this.nodeCount++
+    if (!Object.hasOwn(this.nodes, node.id)) this.shared.nodeCount++
     this.nodes[node.id] = node
     return node.id
   }
@@ -1143,7 +1282,7 @@ class Converter {
   private remove(id: NodeId): void {
     if (!Object.hasOwn(this.nodes, id)) return
     delete this.nodes[id]
-    this.nodeCount--
+    this.shared.nodeCount--
   }
 
   // ── 塗り ──
@@ -1466,7 +1605,9 @@ function decodeDataUri(uri: string): Uint8Array<ArrayBuffer> | null {
   const comma = uri.indexOf(',')
   if (comma < 0) return null
   const meta = uri.slice(5, comma)
-  const data = uri.slice(comma + 1)
+  // # から後は URL の断片（ブラウザも中身に含めない。SVG の中の色の # は %23 と書く）
+  const hash = uri.indexOf('#', comma)
+  const data = uri.slice(comma + 1, hash < 0 ? uri.length : hash)
   try {
     if (/;base64$/i.test(meta)) {
       const binary = atob(data.replace(/\s+/g, ''))
@@ -1474,13 +1615,20 @@ function decodeDataUri(uri: string): Uint8Array<ArrayBuffer> | null {
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
       return bytes
     }
-    // %xx はそのバイト、それ以外の文字はその文字コードの下位 8 ビット
+    // %xx はそのバイト、それ以外の文字は UTF-8 のバイト列（符号化せずに書いた SVG の日本語など）
     const out: number[] = []
+    const encoder = new TextEncoder()
     for (let i = 0; i < data.length; i++) {
+      const code = data.charCodeAt(i)
       if (data[i] === '%' && /^[0-9a-fA-F]{2}$/.test(data.slice(i + 1, i + 3))) {
         out.push(parseInt(data.slice(i + 1, i + 3), 16))
         i += 2
-      } else out.push(data.charCodeAt(i) & 0xff)
+      } else if (code < 0x80) out.push(code)
+      else {
+        const char = String.fromCodePoint(data.codePointAt(i)!)
+        for (const byte of encoder.encode(char)) out.push(byte)
+        i += char.length - 1
+      }
     }
     return new Uint8Array(out)
   } catch {
@@ -1499,6 +1647,13 @@ function round4(value: number): number {
 function rotationOf(degrees: number): number {
   const value = tidy(degrees)
   return value === 0 || Object.is(value, -0) ? 0 : value
+}
+
+/** 木の要素の数（自分を含む） */
+function countElements(element: SvgElement): number {
+  let count = 1
+  for (const child of element.children) if (typeof child !== 'string') count += countElements(child)
+  return count
 }
 
 function viewBoxOf(element: SvgElement): [number, number, number, number] | null {

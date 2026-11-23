@@ -363,7 +363,100 @@ describe('CSS（<style>）', () => {
     // style 属性は CSS より強く、!important は style 属性より強い
     expect(styled.fills).toEqual([{ type: 'solid', color: '#fedcba', opacity: 1, visible: true, blendMode: 'normal' as const }])
     expect(strong.fills).toEqual([{ type: 'solid', color: '#123456', opacity: 1, visible: true, blendMode: 'normal' as const }])
-    expect(labels(result)).toEqual(['CSS の複雑なセレクタ（読み飛ばした）', 'CSS の @ で始まる規則（読み飛ばした）'])
+    expect(labels(result)).toEqual(['CSS の @ で始まる規則（読み飛ばした）'])
+  })
+
+  it('子孫・子・隣・兄弟の結合子と、属性のセレクタを読む', () => {
+    const result = convert(`<svg>
+      <style>
+        g rect { fill: #110000 }
+        #outer > rect { fill: #220000 }
+        .first + rect { fill: #330000 }
+        .first ~ circle { fill: #440000 }
+        [data-kind] { stroke: #000000 }
+        [data-kind="b" i] { stroke-width: 3 }
+        [class~="tag"] { fill: #550000 }
+        [id^="pre"][id$="post"] { fill: #660000 }
+        [lang|="ja"] { fill: #770000 }
+        [data-kind*="xx"] { opacity: 0.5 }
+      </style>
+      <g id="outer">
+        <rect width="1" height="1"/>
+        <g><rect width="1" height="1"/></g>
+      </g>
+      <rect class="first" width="1" height="1"/>
+      <rect width="1" height="1"/>
+      <circle r="1"/>
+      <rect data-kind="a" width="1" height="1"/>
+      <rect data-kind="B" width="1" height="1"/>
+      <rect class="one tag" width="1" height="1"/>
+      <rect id="pre-mid-post" width="1" height="1"/>
+      <rect lang="ja-JP" width="1" height="1"/>
+      <rect data-kind="axxb" width="1" height="1"/>
+    </svg>`)
+    const [outer, first, adjacent, sibling, kindA, kindB, tag, affix, lang, contains] = children(result) as PathNode[]
+    const color = (node: SceneNode) => ('fills' in node ? node.fills[0] : undefined)
+    const [direct, group] = children(result, outer as unknown as FrameNode)
+    // 子の結合子（#outer > rect）は子孫（g rect）より詳細度が高い
+    expect(color(direct)).toMatchObject({ color: '#220000' })
+    expect(color(children(result, group as FrameNode)[0])).toMatchObject({ color: '#110000' })
+    expect(color(first)).toMatchObject({ color: '#000000' })
+    expect(color(adjacent)).toMatchObject({ color: '#330000' })
+    expect(color(sibling)).toMatchObject({ color: '#440000' })
+    expect(kindA).toMatchObject({ strokes: [{ color: '#000000' }], strokeWidth: 1 })
+    expect(kindB).toMatchObject({ strokes: [{ color: '#000000' }], strokeWidth: 3 })
+    expect(color(tag)).toMatchObject({ color: '#550000' })
+    expect(color(affix)).toMatchObject({ color: '#660000' })
+    expect(color(lang)).toMatchObject({ color: '#770000' })
+    expect(contains.opacity).toBe(0.5)
+    expect(result.warnings).toEqual([])
+  })
+
+  it('静的に決まる疑似クラスを読み、:hover の規則は当てず、読めないセレクタだけを数える', () => {
+    const result = convert(`<svg>
+      <style>
+        rect:first-child { fill: #010000 }
+        rect:nth-child(2n+4) { fill: #020000 }
+        rect:nth-last-child(1) { fill: #030000 }
+        circle:first-of-type { fill: #040000 }
+        circle:only-of-type { stroke: #050000 }
+        rect:not(.keep, #keep2) { opacity: 0.5 }
+        :is(.x, .y) { stroke: #070000 }
+        :root { fill: #060000 }
+        rect:hover { fill: #ff0000 }
+        rect::before { fill: #ff0000 }
+        g:has(rect) { fill: #ff0000 }
+      </style>
+      <g>
+        <rect class="keep" width="1" height="1"/>
+        <rect id="keep2" width="1" height="1"/>
+        <circle r="1"/>
+        <rect class="x" width="1" height="1"/>
+        <path class="y" d="M0 0 L1 1"/>
+        <rect width="1" height="1"/>
+      </g>
+    </svg>`)
+    // <style> も兄弟に数えるので、図形は g の中に置く
+    const [group] = children(result) as FrameNode[]
+    const [first, second, circle, fourth, path, last] = children(result, group) as PathNode[]
+    expect(first).toMatchObject({ fills: [{ color: '#010000' }], opacity: 1 })
+    // 根の :root の塗りを受け継ぐ
+    expect(second).toMatchObject({ fills: [{ color: '#060000' }], opacity: 1 })
+    expect(circle).toMatchObject({ fills: [{ color: '#040000' }], strokes: [{ color: '#050000' }] })
+    expect(fourth).toMatchObject({ fills: [{ color: '#020000' }], strokes: [{ color: '#070000' }], opacity: 0.5 })
+    expect(path.strokes).toMatchObject([{ color: '#070000' }])
+    expect(last).toMatchObject({ fills: [{ color: '#030000' }], opacity: 0.5 })
+    expect(result.warnings).toEqual([{ label: 'CSS の複雑なセレクタ（読み飛ばした）', count: 2 }])
+  })
+
+  it('子孫の結合子が続く長いセレクタも、深い入れ子ですぐに照合できる', () => {
+    const depth = 40
+    const source = `<svg><style>${'g '.repeat(30)}rect { fill: #123456 } ${'g '.repeat(depth + 1)}rect { fill: #ff0000 }</style>${'<g>'.repeat(depth)}<rect width="1" height="1"/>${'</g>'.repeat(depth)}</svg>`
+    const started = performance.now()
+    const result = convert(source)
+    expect(performance.now() - started).toBeLessThan(2000)
+    const rect = Object.values(result.fragment.nodes).find((node) => node.type === 'rect') as RectNode
+    expect(rect.fills).toMatchObject([{ color: '#123456' }])
   })
 
   it('CSS の値は受け継がれ、グラデーションの色や不透明度・表示にも効く', () => {
@@ -520,17 +613,72 @@ describe('画像（<image>）', () => {
     expect(result.fragment.assets[ids[0]].mime).toBe('image/png')
   })
 
-  it('外部の URL・SVG の画像・壊れた画像は読まずに知らせる', () => {
+  it('外部の URL・読めない SVG の画像・壊れた画像は読まずに知らせる', () => {
     const result = convert(`<svg>
       <image href="https://example.com/a.png" width="10" height="10"/>
-      <image href="data:image/svg+xml;utf8,%3Csvg%2F%3E" width="10" height="10"/>
+      <image href="data:image/svg+xml;utf8,not%20svg" width="10" height="10"/>
+      <image href="data:image/svg+xml,%3Cg%2F%3E" width="10" height="10"/>
       <image href="data:image/png;base64,AAAA" width="10" height="10"/>
+      <image href="data:text/plain,hello" width="10" height="10"/>
     </svg>`)
     expect(children(result)).toHaveLength(0)
     expect(result.warnings).toEqual([
       { label: '外部の画像（<image>。読まなかった）', count: 1 },
+      { label: '読めない SVG の画像（<image>。読み飛ばした）', count: 2 },
       { label: 'PNG・JPEG・WebP・GIF でない画像（<image>。読み飛ばした）', count: 2 },
     ])
+  })
+
+  it('SVG の画像は別の文書として変換し、<image> の枠に preserveAspectRatio で収めて切り取るフレームにする', () => {
+    const inner = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><style>.a { fill: #00ff00 }</style>` +
+      `<linearGradient id="g"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>` +
+      `<rect class="a" width="10" height="10"/><rect id="r" x="10" width="10" height="10" fill="url(#g)"/></svg>`
+    const base64 = btoa(inner)
+    const result = convert(`<svg>
+      <style>.a { fill: #ff00ff }</style>
+      <linearGradient id="g"><stop offset="0" stop-color="#ffff00"/><stop offset="1" stop-color="#ffff00"/></linearGradient>
+      <image id="pic" x="5" y="5" width="40" height="40" opacity="0.5" href="data:image/svg+xml;base64,${base64}"/>
+      <image x="100" y="0" href="data:image/svg+xml;charset=utf-8,${encodeURIComponent(inner)}" preserveAspectRatio="xMinYMin slice" width="10" height="10"/>
+    </svg>`)
+    const [pic, sliced] = children(result) as FrameNode[]
+    // 枠は <image> の x・y・width・height。中身は 20 × 10 を 40 × 40 に収める（縦は真ん中に寄せる）
+    expect(pic).toMatchObject({ type: 'frame', name: 'pic', x: 5, y: 5, width: 40, height: 40, clipContent: true, opacity: 0.5 })
+    const [green, gradient] = children(result, pic) as RectNode[]
+    expect(green).toMatchObject({ type: 'rect', x: 0, y: 10, width: 20, height: 20, fills: [{ color: '#00ff00' }] })
+    // 中の id は中の文書でたどる（外側の同じ id のグラデーションではない）
+    expect(gradient).toMatchObject({ x: 20, y: 10, width: 20, height: 20 })
+    expect(gradient.fills[0]).toMatchObject({ type: 'linear', stops: [{ color: '#ff0000' }, { color: '#0000ff' }] })
+    // slice は枠を覆うように拡大し、はみ出しはフレームが切り取る
+    expect(sliced).toMatchObject({ x: 100, y: 0, width: 10, height: 10, clipContent: true })
+    expect(children(result, sliced)[0]).toMatchObject({ x: 0, y: 0, width: 10, height: 10 })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('SVG の画像の中の外部の参照は読まず、入れ子は深さに上限を置く', () => {
+    let source = '<svg width="10" height="10"><image href="https://example.com/x.png" width="1" height="1"/><rect width="10" height="10"/></svg>'
+    for (let i = 0; i < 5; i++) {
+      source = `<svg width="10" height="10"><image width="10" height="10" href="data:image/svg+xml;base64,${btoa(source)}"/><rect width="1" height="1"/></svg>`
+    }
+    const result = convert(source)
+    expect(labels(result)).toEqual(['入れ子が深すぎる SVG の画像（<image>。読み飛ばした）'])
+    let depth = 0
+    let node: SceneNode = rootOf(result)
+    while (node.type === 'frame' && node.children.length > 0) {
+      node = result.fragment.nodes[node.children[0]]
+      depth++
+    }
+    // 根の中に読めた 4 段の画像のフレームがあり、いちばん内側（5 段目）は読み飛ばしたので、4 段目の先頭は矩形
+    expect(depth).toBe(5)
+    expect(node.type).toBe('rect')
+    const nested = convert(`<svg><image width="10" height="10" href="data:image/svg+xml;base64,${btoa('<svg width="10" height="10"><rect width="10" height="10"/><image href="https://example.com/x.png" width="1" height="1"/></svg>')}"/></svg>`)
+    expect(labels(nested)).toEqual(['外部の画像（<image>。読まなかった）'])
+  })
+
+  it('同じ SVG の画像を何度も使っても、変換する回数に上限を置く', () => {
+    const href = `data:image/svg+xml;base64,${btoa('<svg width="1" height="1"><rect width="1" height="1"/></svg>')}`
+    const result = convert(`<svg><defs><image id="i" width="1" height="1" href="${href}"/></defs>${'<use href="#i"/>'.repeat(70)}</svg>`)
+    expect(children(result)).toHaveLength(64)
+    expect(result.warnings).toEqual([{ label: '64 個を超えた SVG の画像（<image>。読み飛ばした）', count: 6 }])
   })
 
   it('取り込んだ画像は kdr に書き出して読み直せる', () => {
