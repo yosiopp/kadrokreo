@@ -13,7 +13,7 @@ import {
   transformRect,
   unionBounds,
 } from '../../document/geometry.ts'
-import { readImageInfo } from '../../document/imageInfo.ts'
+import { isImageTooLarge, readImageInfo } from '../../document/imageInfo.ts'
 import { KAPPA, ellipseVertices } from '../../document/mask.ts'
 import { BLEND_MODES, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES, MAX_DASHES, MAX_PAINTS, MAX_PATH_POINTS, MAX_STOPS } from '../../document/kdr.ts'
 import { angleLine, linearFromAngle, solidPaint } from '../../document/paint.ts'
@@ -957,7 +957,7 @@ class Converter {
       this.warn('PNG・JPEG・WebP・GIF でない画像（<image>。読み飛ばした）')
       return []
     }
-    if (bytes.byteLength > KDR_MAX_ASSET_BYTES) {
+    if (bytes.byteLength > KDR_MAX_ASSET_BYTES || isImageTooLarge(info)) {
       this.warn('大きすぎる画像（<image>。読み飛ばした）')
       return []
     }

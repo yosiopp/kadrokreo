@@ -1,4 +1,4 @@
-import { IMAGE_MIME_TYPES } from '../../src/document/kdr.ts'
+import { IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../../src/document/kdr.ts'
 import { pathFromContours, pathFromPoints } from '../../src/document/path.ts'
 import { PathDataError, parsePathData } from '../../src/document/pathData.ts'
 import type { NodeId, SceneNode } from '../../src/document/types.ts'
@@ -16,7 +16,7 @@ import { copyFragment } from '../../src/editor/operations/clipboard.ts'
 import { addOrReuseAsset, pasteIntoPage, updatePage } from '../../src/editor/operations/document.ts'
 import { insertNode } from '../../src/editor/operations/tree.ts'
 import { type Step, UsageError } from '../args.ts'
-import { readImageInfo } from '../../src/document/imageInfo.ts'
+import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from '../../src/document/imageInfo.ts'
 import { checkNewId } from '../session.ts'
 import { canvasTextMetrics } from '../png.ts'
 import { convertSvgFile, placeSvgFragment } from '../svg.ts'
@@ -81,6 +81,11 @@ async function buildNode(ctx: Context, step: Step, type: NodeType): Promise<Scen
       if (!info || !IMAGE_MIME_TYPES.includes(info.mime)) {
         throw new UsageError(`${file}: PNG・JPEG・WebP・GIF の画像ではありません`)
       }
+      // kdr の読み込みと同じ上限（ファイルの大きさと画素数）
+      if (bytes.byteLength > KDR_MAX_ASSET_BYTES) {
+        throw new UsageError(`${file}: 画像が大きすぎます（${KDR_MAX_ASSET_BYTES / 1024 / 1024}MB まで）`)
+      }
+      if (isImageTooLarge(info)) throw new UsageError(`${file}: ${IMAGE_TOO_LARGE_MESSAGE}`)
       // 同じ画像がすでにあれば、新しいアセットを作らずにそれを使う
       let assetId = ''
       ctx.session.applyDocument((doc) => {

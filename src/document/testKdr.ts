@@ -33,3 +33,14 @@ export function fromBase64(text: string): Uint8Array<ArrayBuffer> {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
 }
+
+/** 幅と高さだけを名乗る PNG の先頭（シグネチャと IHDR）。画素の中身はない */
+export function pngHeader(width: number, height: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(33)
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+  const view = new DataView(bytes.buffer)
+  view.setUint32(16, width)
+  view.setUint32(20, height)
+  bytes.set([8, 6, 0, 0, 0], 24)
+  return bytes
+}

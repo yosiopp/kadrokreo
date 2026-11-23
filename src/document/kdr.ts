@@ -20,6 +20,7 @@ import type {
   Sizing,
   Constraint,
 } from './types.ts'
+import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from './imageInfo.ts'
 import { TarError, readTar, type TarEntry } from './tar.ts'
 
 // kdr ファイルの実体は、次のファイルを tar にまとめて gzip で圧縮した 1 つのファイル（中身は `tar xzf` で取り出せる）:
@@ -227,6 +228,9 @@ function parseAsset(value: unknown, path: string): Asset {
   if (!(raw.bytes instanceof Uint8Array) || !(raw.bytes.buffer instanceof ArrayBuffer)) {
     throw new KdrError(`${path}.bytes: バイト列ではありません`)
   }
+  // 見出しの大きさが読める画像は、デコードする前に画素数を確かめる（読めない画像はデコードしないので描かれない。canvas/images.ts）
+  const info = readImageInfo(raw.bytes)
+  if (info !== null && isImageTooLarge(info)) throw new KdrError(`${path}: ${IMAGE_TOO_LARGE_MESSAGE}`)
   return { mime, bytes: raw.bytes as Uint8Array<ArrayBuffer> }
 }
 
@@ -397,7 +401,7 @@ function parseNode(
         type,
         text: string(raw.text, at('text')),
         fontSize: size(raw.fontSize, at('fontSize')),
-        fontFamily: string(raw.fontFamily, at('fontFamily')),
+        fontFamily: fontFamily(raw.fontFamily, at('fontFamily')),
         fills: optional('fills', paints),
         effects: optional('effects', effects),
         fontWeight: optional('fontWeight', fontWeight),
@@ -554,7 +558,7 @@ function parseOverrides(value: unknown, path: string, assets: AssetContext): Rec
     if (Object.hasOwn(raw, 'strokes')) override.strokes = paints(raw.strokes, at('strokes'))
     if (Object.hasOwn(raw, 'visible')) override.visible = boolean(raw.visible, at('visible'))
     if (Object.hasOwn(raw, 'fontSize')) override.fontSize = size(raw.fontSize, at('fontSize'))
-    if (Object.hasOwn(raw, 'fontFamily')) override.fontFamily = string(raw.fontFamily, at('fontFamily'))
+    if (Object.hasOwn(raw, 'fontFamily')) override.fontFamily = fontFamily(raw.fontFamily, at('fontFamily'))
     if (Object.hasOwn(raw, 'fontWeight')) override.fontWeight = fontWeight(raw.fontWeight, at('fontWeight'))
     if (Object.hasOwn(raw, 'assetId')) {
       override.assetId = nodeId(raw.assetId, at('assetId'))
@@ -844,6 +848,18 @@ function record(value: unknown, path: string): Record<string, unknown> {
 function string(value: unknown, path: string): string {
   if (typeof value !== 'string') throw new KdrError(`${path}: 文字列ではありません`)
   return value
+}
+
+/** 書体名の長さの上限 */
+export const MAX_FONT_FAMILY_LENGTH = 200
+/** 書体名に使えない文字（制御文字と、CSS や HTML の区切りになる記号）。書体名にはふつう現れない */
+const FONT_FAMILY_FORBIDDEN = /[\u0000-\u001f\u007f;{}<>\\]/
+
+function fontFamily(value: unknown, path: string): string {
+  const text = string(value, path)
+  if (text.length > MAX_FONT_FAMILY_LENGTH) throw new KdrError(`${path}: 書体名が長すぎます（${MAX_FONT_FAMILY_LENGTH} 文字まで）`)
+  if (FONT_FAMILY_FORBIDDEN.test(text)) throw new KdrError(`${path}: 書体名に使えない文字があります`)
+  return text
 }
 
 function color(value: unknown, path: string): string {

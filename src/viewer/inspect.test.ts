@@ -419,6 +419,11 @@ describe('nodeCss', () => {
     ])
   })
 
+  it('書体名は引用符で囲み、総称名はそのまま書く', () => {
+    expect(css(sceneOf(text({ fontFamily: 'Noto Sans JP, sans-serif' })), 'text')).toContain('font-family: "Noto Sans JP", sans-serif;')
+    expect(css(sceneOf(text({ fontFamily: 'a}b' })), 'text')).toContain('font-family: "a\\7d b";')
+  })
+
   it('テキストは文字の設定を出し、中身で決まる大きさは書かない', () => {
     expect(css(sceneOf(text()), 'text')).toEqual([
       'color: #111111;',

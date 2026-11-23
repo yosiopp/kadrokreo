@@ -44,9 +44,12 @@ export function jsxStyle(declarations: readonly Declaration[], multiline = false
   return multiline ? `{\n${entries.map((entry) => `  ${entry},`).join('\n')}\n}` : `{ ${entries.join(', ')} }`
 }
 
-/** Tailwind の任意の値 [..] の中身。空白は _、もとの _ は \_ にする */
+/**
+ * Tailwind の任意の値 [..] の中身。空白は _、もとの _ は \_ にする。
+ * クラスは className="…" に入るので、" は ' にする（書体名の中の引用符は cssFontFamily がエスケープ済み）
+ */
 function arbitrary(value: string): string {
-  return value.replace(/_/g, '\\_').replace(/\s+/g, '_')
+  return value.replace(/_/g, '\\_').replace(/\s+/g, '_').replace(/"/g, "'")
 }
 
 const FLEX_ALIGN: Record<string, string> = { 'flex-start': 'start', center: 'center', 'flex-end': 'end', 'space-between': 'between' }

@@ -2,6 +2,25 @@
 
 export type ImageInfo = { mime: string; width: number; height: number }
 
+/**
+ * 画像 1 枚の画素数の上限（PNG の書き出しのキャンバスと同じ 6,400 万）。デコードで確保するメモリを抑えるため、
+ * kdr の読み込み・画像の取り込み・デコードの前に見出しの大きさで確かめる
+ */
+export const MAX_IMAGE_PIXELS = 64_000_000
+/** デコードして持っておく画像の画素数の合計の上限（RGBA で約 1GB）。超えた分はデコードせず、読み込み中の見た目のままにする */
+export const MAX_DECODED_PIXELS = 256_000_000
+
+export const IMAGE_TOO_LARGE_MESSAGE = '画像の画素数が多すぎます（6,400 万画素まで）'
+
+export function imagePixels(info: ImageInfo): number {
+  return info.width * info.height
+}
+
+/** 1 枚の画素数の上限を超えているか */
+export function isImageTooLarge(info: ImageInfo): boolean {
+  return imagePixels(info) > MAX_IMAGE_PIXELS
+}
+
 export function readImageInfo(bytes: Uint8Array): ImageInfo | null {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const ascii = (start: number, length: number) =>
@@ -44,6 +63,11 @@ function jpeg(bytes: Uint8Array, view: DataView): ImageInfo | null {
   let offset = 2
   while (offset + 9 < bytes.length) {
     if (bytes[offset] !== 0xff) return null
+    // マーカーの前の詰め物（0xff の並び）は読み飛ばす
+    if (bytes[offset + 1] === 0xff) {
+      offset++
+      continue
+    }
     const marker = bytes[offset + 1]
     // SOF0〜SOF15（DHT・JPG・DAC を除く）にフレームの大きさがある
     if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {

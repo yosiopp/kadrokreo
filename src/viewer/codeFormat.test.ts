@@ -68,6 +68,11 @@ describe('tailwindClasses', () => {
     ).toEqual(['right-[20px]', 'bottom-[0]', 'left-[calc(50%_-_20px)]', 'w-max'])
   })
 
+  it('書体名の引用符は、className の中で閉じないよう \' にする', () => {
+    expect(tailwindClasses([['font-family', '"My Font", sans-serif']])).toEqual(["[font-family:'My_Font',_sans-serif]"])
+    expect(tailwindClasses([['font-family', '"a\\22 b"']])).toEqual(["[font-family:'a\\22_b']"])
+  })
+
   it('グラデーションや決まったクラスのないものは、任意のプロパティで書く。_ は \\_ にする', () => {
     expect(
       tailwindClasses([

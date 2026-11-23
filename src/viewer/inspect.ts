@@ -7,6 +7,7 @@ import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
+import { cssFontFamily } from './fontFamily.ts'
 import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
 import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
@@ -493,7 +494,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       add('background-clip', 'text')
       add('color', 'transparent')
     } else if (top?.type === 'solid') add('color', topColorCss(top, style))
-    add('font-family', node.fontFamily)
+    add('font-family', cssFontFamily(node.fontFamily))
     add('font-size', px(node.fontSize))
     add('font-weight', String(node.fontWeight))
     add('line-height', num(node.lineHeight))

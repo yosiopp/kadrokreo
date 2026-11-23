@@ -156,6 +156,24 @@ describe('kadrokreo CLI', () => {
     expect(nodeByName(again, 'Again')).toMatchObject({ type: 'image', assetId: image.type === 'image' ? image.assetId : '' })
   })
 
+  it('add image は画像のファイルの大きさと画素数の上限を確かめる', async () => {
+    const header = (width: number, height: number) => {
+      const bytes = new Uint8Array(24)
+      bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+      new DataView(bytes.buffer).setUint32(16, width)
+      new DataView(bytes.buffer).setUint32(20, height)
+      return bytes
+    }
+    const big = new Uint8Array(32 * 1024 * 1024 + 1)
+    big.set(header(10, 10))
+    const h = harness({ 'wide.png': header(8001, 8000), 'big.png': big, 'ok.png': header(8000, 8000) })
+    expect(await h.run(['new', '+', 'add', 'image', '--src', 'wide.png', '-o', 'a.kdr'])).not.toBe(0)
+    expect(h.stderr).toContain('画素数が多すぎます')
+    expect(await h.run(['new', '+', 'add', 'image', '--src', 'big.png', '-o', 'b.kdr'])).not.toBe(0)
+    expect(h.stderr).toContain('画像が大きすぎます')
+    expect(await h.run(['new', '+', 'add', 'image', '--src', 'ok.png', '-o', 'c.kdr'])).toBe(0)
+  })
+
   it('パスの頂点の角の丸め（radius=）と端の形・印の大きさを set で変える', async () => {
     const h = harness()
     const code = await h.run([

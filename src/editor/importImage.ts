@@ -2,6 +2,7 @@ import type { Camera } from '../canvas/camera.ts'
 import { primeImage } from '../canvas/images.ts'
 import { screenToWorld } from '../canvas/viewport.ts'
 import { toLocal } from '../document/geometry.ts'
+import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from '../document/imageInfo.ts'
 import { IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../document/kdr.ts'
 import type { Asset } from '../document/types.ts'
 import { findFrameAt } from './hitTest.ts'
@@ -26,13 +27,19 @@ export async function readImageFile(file: File): Promise<ImportedImage> {
     throw new Error(`${file.name}: 画像が大きすぎます（${MAX_IMAGE_BYTES / 1024 / 1024}MB まで）`)
   }
 
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  // デコードする前に、見出しの大きさで画素数を確かめる（kdr の読み込みと同じ上限）
+  const info = readImageInfo(bytes)
+  if (info === null) throw new Error(`${file.name}: 画像として読み込めません`)
+  if (isImageTooLarge(info)) throw new Error(`${file.name}: ${IMAGE_TOO_LARGE_MESSAGE}`)
+
   let bitmap: ImageBitmap
   try {
     bitmap = await createImageBitmap(file)
   } catch {
     throw new Error(`${file.name}: 画像として読み込めません`)
   }
-  const asset = { mime: file.type, bytes: new Uint8Array(await file.arrayBuffer()) }
+  const asset = { mime: file.type, bytes }
   primeImage(asset, bitmap)
   return {
     name: file.name.replace(/\.[^.]+$/, '') || 'Image',

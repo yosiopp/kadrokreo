@@ -1,3 +1,4 @@
+import { MAX_DECODED_PIXELS, imagePixels, isImageTooLarge, readImageInfo } from '../document/imageInfo.ts'
 import type { Asset } from '../document/types.ts'
 
 // アセットは不変なので、オブジェクトをキーにデコード結果を持つ。使われなくなれば一緒に解放される
@@ -37,6 +38,8 @@ export async function loadImage(asset: Asset): Promise<ImageBitmap | null> {
 
 /** 取り込み時にデコード済みの画像を渡しておき、二度デコードしないようにする */
 export function primeImage(asset: Asset, bitmap: ImageBitmap): void {
+  if (cache.has(asset)) return
+  count(asset, bitmap.width * bitmap.height)
   cache.set(asset, { bitmap, ready: Promise.resolve() })
 }
 
@@ -53,7 +56,39 @@ export function assetBlob(asset: Asset): Blob {
   return new Blob([asset.bytes], { type: asset.mime })
 }
 
+// デコードした画像の画素数の合計。アセットが使われなくなる（デコード結果も一緒に解放される）と引く
+let decodedPixels = 0
+const released = new FinalizationRegistry<number>((pixels) => {
+  decodedPixels -= pixels
+})
+
+function count(asset: Asset, pixels: number): void {
+  decodedPixels += pixels
+  released.register(asset, pixels, asset)
+}
+
+/**
+ * デコードしてよい画像なら、その画素数。見出しの大きさが読めない画像、1 枚の画素数の上限を超える画像、
+ * 合計の上限を超える画像はデコードしない（確保するメモリを抑える）ので null
+ */
+export function decodablePixels(bytes: Uint8Array, alreadyDecoded = decodedPixels): number | null {
+  const info = readImageInfo(bytes)
+  if (info === null || isImageTooLarge(info)) return null
+  const pixels = imagePixels(info)
+  return alreadyDecoded + pixels <= MAX_DECODED_PIXELS ? pixels : null
+}
+
 // async にしてあるので、壊れた画像でも例外ではなく失敗した Promise になる
 async function decode(asset: Asset): Promise<ImageBitmap> {
-  return createImageBitmap(assetBlob(asset))
+  const pixels = decodablePixels(asset.bytes)
+  if (pixels === null) throw new Error('デコードしない画像です')
+  // 並んでデコードするものも合計に入るよう、デコードを待つ前に数える
+  count(asset, pixels)
+  try {
+    return await createImageBitmap(assetBlob(asset))
+  } catch (error) {
+    released.unregister(asset)
+    decodedPixels -= pixels
+    throw error
+  }
 }

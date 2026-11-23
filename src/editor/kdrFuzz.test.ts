@@ -614,7 +614,8 @@ describe('kdr の tar のファズテスト', () => {
         throw new Error(`種 ${seed * 31337} で失敗: ${String(error)}`, { cause: error })
       }
     }
-    expect(results.ok).toBeGreaterThan(20)
+    // 画像の見出しの大きさや書体名の文字を壊したものも KdrError になるので、読めるものは 400 のうち 20 前後
+    expect(results.ok).toBeGreaterThan(15)
     expect(results.error).toBeGreaterThan(100)
   })
 

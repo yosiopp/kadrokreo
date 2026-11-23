@@ -2,6 +2,7 @@ import { isMaskNode } from '../document/mask.ts'
 import type { Shadow, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { hasStroke, isShadow, shownPaints } from '../document/paint.ts'
 import { colorAlpha, formatColor } from './colors.ts'
+import { cssFontFamily } from './fontFamily.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, type InspectSection, shadowCss } from './inspect.ts'
 
 // ページで使われている色と文字の設定の一覧。何も選んでいないときに見せる。
@@ -130,7 +131,7 @@ export function inspectPage(scene: Scene, style: CodeStyle = DEFAULT_CODE_STYLE)
       title: 'このページの文字',
       rows: textStyles.map((text) => ({
         label: uses(text.count),
-        value: `${text.fontWeight} ${text.fontSize}px/${text.lineHeight} ${text.fontFamily}`,
+        value: `${text.fontWeight} ${text.fontSize}px/${text.lineHeight} ${cssFontFamily(text.fontFamily)}`,
         nodes: text.nodes,
       })),
     })

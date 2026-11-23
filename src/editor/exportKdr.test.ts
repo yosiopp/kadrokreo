@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { KDR_VERSION, KdrError, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
+import { KDR_VERSION, KdrError, MAX_FONT_FAMILY_LENGTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
 import { solid } from '../document/paint.ts'
 import type { DesignDocument, Page } from '../document/types.ts'
 import { encodeKdr, kdrEntries } from './exportKdr.ts'
-import { fromBase64, gzipBlob, kdrBlob, tarGz } from '../document/testKdr.ts'
+import { fromBase64, gzipBlob, kdrBlob, pngHeader, tarGz } from '../document/testKdr.ts'
 import { sha256Hex } from '../document/sha256.ts'
 import { pathFromPoints } from '../document/path.ts'
 import {
@@ -743,6 +743,29 @@ describe('parseKdr', () => {
     expect(() => parseOne(image, { a1: { mime: 'image/png', data: 'iVBORw0K' } })).toThrow('バイト列')
     expect(() => parseOne(image, { a1: { mime: 'image/png', bytes: [1, 2, 3] } })).toThrow('バイト列')
     expect(() => parseOne(image, { a1: null })).toThrow('assets.a1')
+  })
+
+  it('画像の画素数に上限を設ける（見出しの大きさで確かめる）', () => {
+    const image = rawNode({ type: 'image', assetId: 'a1' })
+    expect(parseOne(image, { a1: { mime: 'image/png', bytes: pngHeader(8000, 8000) } })).toMatchObject({ assetId: 'a1' })
+    expect(() => parseOne(image, { a1: { mime: 'image/png', bytes: pngHeader(8001, 8000) } })).toThrow('assets.a1: 画像の画素数が多すぎます')
+    // 使っていない画像も確かめる
+    expect(() => parseKdr(kdrOf([]), { a1: { mime: 'image/png', bytes: pngHeader(100_000, 1_000) } })).toThrow('画素数')
+  })
+
+  it('書体名の長さと文字を検証する', () => {
+    const text = (fontFamily: unknown) => rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily })
+    expect(parseOne(text('"Noto Sans JP", sans-serif'))).toMatchObject({ fontFamily: '"Noto Sans JP", sans-serif' })
+    expect(parseOne(text('ヒラギノ角ゴ ProN'))).toMatchObject({ fontFamily: 'ヒラギノ角ゴ ProN' })
+    expect(parseOne(text('a'.repeat(MAX_FONT_FAMILY_LENGTH)))).toMatchObject({ fontFamily: 'a'.repeat(MAX_FONT_FAMILY_LENGTH) })
+    expect(() => parseOne(text('a'.repeat(MAX_FONT_FAMILY_LENGTH + 1)))).toThrow('fontFamily: 書体名が長すぎます')
+    for (const bad of ['a;b', 'a{b', 'a}b', 'a<b', 'a>b', 'a\\b', 'a\nb', 'a\u0000b']) {
+      expect(() => parseOne(text(bad))).toThrow('fontFamily: 書体名に使えない文字があります')
+    }
+    // インスタンスの上書きも同じ
+    const withOverride = (fontFamily: string) => rawNode({ type: 'frame', component: { id: 'c1', role: 'instance', overrides: { n1: { fontFamily } } } })
+    expect(parseOne(withOverride('serif'))).toMatchObject({ component: { overrides: { n1: { fontFamily: 'serif' } } } })
+    expect(() => parseOne(withOverride('a}b'))).toThrow('overrides.n1.fontFamily')
   })
 
   it('知らないフィールドは捨てる', () => {
