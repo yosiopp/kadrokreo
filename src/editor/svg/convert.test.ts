@@ -826,3 +826,122 @@ describe('既存のデザインツールの書き出しの影', () => {
     expect(labels(result).length).toBeGreaterThan(0)
   })
 })
+
+describe('背景のぼかし（foreignObject の backdrop-filter）', () => {
+  /** 背景のぼかしを書き出したツールの形: 図形の直前に、図形の形で切り取った foreignObject を置き、中の空の要素に backdrop-filter を書く */
+  const glass = (style: string, shape = '<rect x="10" y="10" width="100" height="80" rx="8" fill="#ffffff" fill-opacity="0.4"/>') =>
+    `<foreignObject x="6" y="6" width="108" height="88"><div xmlns="http://www.w3.org/1999/xhtml" style="${style}"></div></foreignObject>` +
+    `<g data-bg-blur-radius="4">${shape}</g>`
+
+  it('backdrop-filter: blur(…) を、次の図形の背景のぼかしにする（半径は CSS の値の 2 倍）。foreignObject は知らせない', () => {
+    const result = convert(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="100">${glass('backdrop-filter:blur(2px);clip-path:url(#c);height:100%;width:100%')}` +
+        '<defs><clipPath id="c" transform="translate(-6 -6)"><rect x="10" y="10" width="100" height="80" rx="8"/></clipPath></defs></svg>',
+    )
+    const [group] = children(result)
+    const [rect] = children(result, group as FrameNode)
+    expect(rect).toMatchObject({ type: 'rect', cornerRadius: 8, effects: [{ type: 'background-blur', blur: 4, visible: true }] })
+    expect(group).toMatchObject({ type: 'frame', effects: [] })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('-webkit-backdrop-filter も読み、拡大の分だけ大きくする。g でまとめていない図形にもかける', () => {
+    const result = convert(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><g transform="scale(2)">' +
+        '<foreignObject width="50" height="50"><div xmlns="http://www.w3.org/1999/xhtml" style="-webkit-backdrop-filter: blur(3px)"/></foreignObject>' +
+        '<circle cx="25" cy="25" r="25" fill="#000" fill-opacity="0.2"/></g></svg>',
+    )
+    const ellipse = Object.values(result.fragment.nodes).find((node) => node.type === 'ellipse')
+    expect(ellipse).toMatchObject({ effects: [{ type: 'background-blur', blur: 12, visible: true }] })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('読めない値・かける図形がない・ほかの中身は知らせる。blur(0) はかけない', () => {
+    const result = convert(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="100">' +
+        glass('backdrop-filter: blur(1em)') +
+        glass('backdrop-filter: brightness(1.2)') +
+        glass('backdrop-filter: blur(0)') +
+        // 中身に文字や見た目の宣言があれば、ぼかしは読み、中身は落としたと知らせる
+        '<foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter: blur(5px); background: red">hello</div></foreignObject>' +
+        '<rect width="10" height="10" fill="#fff" fill-opacity="0.5"/>' +
+        '<foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter: blur(5px)"/></foreignObject></svg>',
+    )
+    const blurs = Object.values(result.fragment.nodes).flatMap((node) => ('effects' in node ? node.effects : []))
+    expect(blurs).toEqual([{ type: 'background-blur', blur: 10, visible: true }])
+    expect(labels(result).sort()).toEqual(['埋め込み HTML（<foreignObject>）', '背景のぼかし（かける図形がない）', '読めない背景のぼかし（backdrop-filter）'].sort())
+    expect(result.warnings.find((warning) => warning.label === '読めない背景のぼかし（backdrop-filter）')?.count).toBe(2)
+    expect(JSON.stringify(result.fragment)).not.toMatch(/hello|red/)
+  })
+
+  it('いくつものノードになる兄弟にはかけずに知らせる。中のスクリプトは読まない', () => {
+    const result = convert(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="100">' +
+        '<foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter: blur(5px)"><script>alert(1)</script></div></foreignObject>' +
+        '<g><rect width="10" height="10"/><rect x="20" width="10" height="10"/></g></svg>',
+    )
+    expect(labels(result)).toContain('背景のぼかし（かける図形が 1 つに決まらない）')
+    expect(Object.values(result.fragment.nodes).every((node) => !('effects' in node) || node.effects.length === 0)).toBe(true)
+    expect(JSON.stringify(result.fragment)).not.toContain('alert')
+  })
+})
+
+describe('扇形を並べた pattern（角度のグラデーションの近似）', () => {
+  /** 中心 (cx, cy) から、start（度）から向き direction（1 は時計回り）に count 個の扇形を並べた pattern。色は red → blue */
+  function fan(count: number, options: { cx?: number; cy?: number; start?: number; direction?: 1 | -1; overlap?: number; group?: string } = {}) {
+    const { cx = 50, cy = 50, start = -90, direction = 1, overlap = 0, group } = options
+    const step = 360 / count
+    const point = (degrees: number) => {
+      const a = (degrees * Math.PI) / 180
+      return `${(cx + Math.cos(a) * 200).toFixed(3)} ${(cy + Math.sin(a) * 200).toFixed(3)}`
+    }
+    const hex = (t: number) =>
+      `#${[Math.round(255 * (1 - t)), 0, Math.round(255 * t)].map((c) => c.toString(16).padStart(2, '0')).join('')}`
+    const wedges = Array.from({ length: count }, (_, i) => {
+      const a0 = start + direction * (i * step - overlap)
+      const a1 = start + direction * ((i + 1) * step + overlap)
+      return `<path d="M${cx} ${cy} L${point(a0)} L${point(a1)} Z" fill="${hex((i + 0.5) / count)}"/>`
+    }).join('')
+    return `<pattern id="p" patternUnits="userSpaceOnUse" x="-200" y="-200" width="500" height="500">${group ? `<g ${group}>${wedges}</g>` : wedges}</pattern>`
+  }
+  const shape = (pattern: string, rect = '<rect width="100" height="100" fill="url(#p)"/>') =>
+    convert(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs>${pattern}</defs>${rect}</svg>`)
+
+  it('時計回りに 1 周並んだ扇形を、角度のグラデーションに戻す（直線で補える色は間引く）', () => {
+    const result = shape(fan(36, { overlap: 0.3 }))
+    const [rect] = children(result)
+    expect(result.warnings).toEqual([])
+    const paint = (rect as RectNode).fills[0]
+    if (paint.type !== 'conic') throw new Error(`conic ではない: ${paint.type}`)
+    expect(paint).toMatchObject({ cx: 0.5, cy: 0.5, angle: 270, opacity: 1 })
+    expect(paint.stops).toEqual([
+      { offset: 0, color: '#ff0000', opacity: 1 },
+      { offset: 1, color: '#0000ff', opacity: 1 },
+    ])
+  })
+
+  it('反時計回りは同じ向きから時計回りに読み替え、g の opacity は塗りの不透明度、中心のずれも読む', () => {
+    const result = shape(fan(24, { direction: -1, start: 0, cx: 25, cy: 75, group: 'opacity="0.5"' }))
+    const paint = (children(result)[0] as RectNode).fills[0]
+    if (paint.type !== 'conic') throw new Error(`conic ではない: ${paint.type}`)
+    expect(paint).toMatchObject({ cx: 0.25, cy: 0.75, angle: 0, opacity: 0.5 })
+    expect(paint.stops.map((stop) => stop.color)).toEqual(['#0000ff', '#ff0000'])
+  })
+
+  it('裏返した図形では回る向きが逆になる', () => {
+    const result = shape(fan(36), '<rect width="100" height="100" fill="url(#p)" transform="matrix(-1 0 0 1 100 0)"/>')
+    const node = children(result)[0]
+    const paint = 'fills' in node ? node.fills[0] : undefined
+    expect(paint).toMatchObject({ type: 'conic', angle: 270 })
+    if (paint?.type !== 'conic') throw new Error('conic ではない')
+    expect(paint.stops.map((stop) => stop.color)).toEqual(['#0000ff', '#ff0000'])
+  })
+
+  it('中心が揃わない・1 周しない・少なすぎる並びは、今までどおりパターンとして知らせる', () => {
+    const scattered = fan(12).replace('M50 50', 'M10 10')
+    const half = fan(12).replace(/(<path[^>]*\/>){6}<\/pattern>/, '</pattern>')
+    for (const pattern of [scattered, fan(4), half]) {
+      expect(labels(shape(pattern))).toContain('パターンの塗り')
+    }
+  })
+})

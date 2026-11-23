@@ -2,6 +2,7 @@
 // ブラウザ（editor）では DOMParser で解析し（parseSvgDom）、DOMParser のない Node（CLI と単体テスト）では
 // 自前の小さな XML の読み取り（parseSvgXml）を使う。どちらも同じ形の木を返し、変換（convert.ts）はこの木だけを読む。
 // 解析した結果を DOM に挿入したり表示したりはしない。スクリプトや foreignObject の中身は木に写さない（変換で落としたと知らせるため、要素の名前だけ残す）。
+// foreignObject は、中の要素の style 属性から backdrop-filter の値だけを文字として拾う（背景のぼかしを書き出したツールがこの形を使う）。HTML は解釈しない。
 // style の中身（CSS）は文字として写し、変換が単純なセレクタだけを読む。
 
 export type SvgNode = SvgElement | string
@@ -13,7 +14,15 @@ export type SvgElement = {
   attributes: Record<string, string>
   /** 子要素と文字 */
   children: SvgNode[]
+  /** foreignObject だけ: 中身から拾ったもの（中身そのものは写さない） */
+  foreign?: ForeignContent
 }
+
+/**
+ * foreignObject の中身から拾うもの。backdropFilter は中の要素の style 属性にあった backdrop-filter の値（最初の 1 つ）、
+ * other は backdrop-filter だけの空の要素のほかに中身（文字や、ほかの宣言を持つ要素）があったか
+ */
+export type ForeignContent = { backdropFilter: string | null; other: boolean }
 
 export class SvgParseError extends Error {
   override name = 'SvgParseError'
@@ -23,9 +32,30 @@ export class SvgParseError extends Error {
 export const MAX_SVG_LENGTH = 16 * 1024 * 1024
 const MAX_ELEMENTS = 100_000
 const MAX_DEPTH = 256
+/** foreignObject の中で style 属性を見る要素の数（超えた分は見ずに「ほかの中身がある」とする） */
+const MAX_FOREIGN_ELEMENTS = 64
 
 /** 中身を写さない要素。変換では「読み飛ばした」と知らせる */
 const OPAQUE = new Set(['script', 'foreignObject'])
+
+/** style 属性の中で、背景のぼかしの書き出しに使われる宣言（大きさと切り取りは foreignObject 側で決まる） */
+const BACKDROP_SIDE = /^(?:width|height|clip-path|-webkit-clip-path)$/
+
+/** foreignObject の中の要素 1 つの style 属性を見て、拾ったものを content に足す */
+function readForeignStyle(content: ForeignContent, style: string | undefined): void {
+  for (const declaration of (style ?? '').slice(0, 10_000).split(';')) {
+    const colon = declaration.indexOf(':')
+    if (colon < 0) {
+      if (declaration.trim() !== '') content.other = true
+      continue
+    }
+    const property = declaration.slice(0, colon).trim().toLowerCase()
+    const value = declaration.slice(colon + 1).trim()
+    if (property === 'backdrop-filter' || property === '-webkit-backdrop-filter') {
+      if (content.backdropFilter === null) content.backdropFilter = value.slice(0, 200)
+    } else if (!BACKDROP_SIDE.test(property)) content.other = true
+  }
+}
 
 /**
  * 解析の前に確かめる。DOCTYPE の内部サブセット（ENTITY の定義）は、展開で大きくなる細工（billion laughs）や
@@ -59,6 +89,15 @@ export function parseSvgDom(source: string): SvgElement {
     const attributes: Record<string, string> = {}
     for (const attribute of element.attributes) attributes[attribute.name] = attribute.value
     const result: SvgElement = { name: element.localName, attributes, children: [] }
+    if (element.localName === 'foreignObject') {
+      // 中身は木に写さず、style 属性と文字だけを見る（解析した文書の中を読むだけで、画面の DOM には入れない）
+      const content: ForeignContent = { backdropFilter: null, other: false }
+      const inner = element.getElementsByTagName('*')
+      if (inner.length > MAX_FOREIGN_ELEMENTS) content.other = true
+      for (let k = 0; k < Math.min(inner.length, MAX_FOREIGN_ELEMENTS); k++) readForeignStyle(content, inner[k].getAttribute('style') ?? undefined)
+      if ((element.textContent ?? '').trim() !== '') content.other = true
+      result.foreign = content
+    }
     if (OPAQUE.has(element.localName)) return result
     for (const child of element.childNodes) {
       if (child.nodeType === 1) result.children.push(walk(child as Element, depth + 1))
@@ -96,10 +135,14 @@ export function parseSvgXml(source: string): SvgElement {
   const stack: SvgElement[] = [top]
   // 中身を写さない要素の中にいる間の深さ（0 なら写す）
   let opaque = 0
+  // 今いる foreignObject の拾い物と、中で見た要素の数
+  let foreign: ForeignContent | null = null
+  let foreignElements = 0
   let count = 0
   let i = 0
   const current = () => stack[stack.length - 1]
   const pushText = (value: string) => {
+    if (opaque > 0 && foreign && value.trim() !== '') foreign.other = true
     if (opaque === 0 && stack.length > 1 && value !== '') current().children.push(value)
   }
 
@@ -136,7 +179,10 @@ export function parseSvgXml(source: string): SvgElement {
       }
       if (opaque > 0) {
         opaque--
-        if (opaque === 0) stack.pop()
+        if (opaque === 0) {
+          stack.pop()
+          foreign = null
+        }
       } else stack.pop()
       i = end + 1
     } else {
@@ -159,6 +205,10 @@ export function parseSvgXml(source: string): SvgElement {
       const selfClosing = text.startsWith('/>', j)
       i = j + (selfClosing ? 2 : 1)
       if (opaque > 0) {
+        if (foreign) {
+          if (++foreignElements > MAX_FOREIGN_ELEMENTS) foreign.other = true
+          else readForeignStyle(foreign, attributes.style)
+        }
         if (!selfClosing) opaque++
         continue
       }
@@ -166,10 +216,15 @@ export function parseSvgXml(source: string): SvgElement {
       if (stack.length > MAX_DEPTH) throw new SvgParseError('SVG の入れ子が深すぎます')
       if (stack.length === 1 && top.children.length > 0) throw new SvgParseError('最上位の要素が 2 つあります')
       const element: SvgElement = { name: localName(rawName), attributes, children: [] }
+      if (element.name === 'foreignObject') element.foreign = { backdropFilter: null, other: false }
       current().children.push(element)
       if (!selfClosing) {
         stack.push(element)
-        if (OPAQUE.has(element.name)) opaque = 1
+        if (OPAQUE.has(element.name)) {
+          opaque = 1
+          foreign = element.foreign ?? null
+          foreignElements = 0
+        }
       }
     }
   }

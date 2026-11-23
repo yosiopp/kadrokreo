@@ -71,6 +71,7 @@ import {
 // - <image> は data URI の PNG / JPEG / WebP / GIF を画像のノードに、SVG（data:image/svg+xml）を別の文書として変換したフレームにする（外部の URL は読まない）。
 // - <text> と <image> にかかる変換が裏返していれば、左右の裏返し（flipX）と回転にする（上下の裏返しは左右の裏返し + 180° の回転）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
+// - foreignObject の中身は読まない。中の要素の style にある backdrop-filter: blur(…) の値だけを文字として拾い（xml.ts）、次の図形の背景のぼかしにする。
 // - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターン・textPath など）は
 //   近い形に置き換えるか読み飛ばし、warnings で知らせる。
 
@@ -263,6 +264,8 @@ class Converter {
   private readonly using = new Set<string>()
   /** グラデーションごとの href でたどった並び（何度も使うので覚え、外部への参照も 1 つにつき 1 回だけ知らせる） */
   private readonly chainCache = new Map<SvgElement, SvgElement[]>()
+  /** 扇形の pattern ごとに読んだ並び（読めなければ null） */
+  private readonly fanCache = new Map<SvgElement, WedgeFan | null>()
   /** <style> の CSS をまとめたもの */
   private sheet: StyleSheet = parseStyleSheet('')
   /** 要素ごとの、属性・CSS・style 属性を重ねた値（declared） */
@@ -436,11 +439,64 @@ class Converter {
   /** 子要素を順に変換し、できたノードの id を重なり順（先頭が最背面）に返す */
   private convertChildren(element: SvgElement, matrix: Matrix, inherited: Inherited, depth: number, uses: number): NodeId[] {
     const ids: NodeId[] = []
+    // backdrop-filter を持つ foreignObject の背景のぼかし。次の兄弟からできたノードにかける
+    let backdrop: number | null = null
     for (const child of element.children) {
       if (typeof child === 'string') continue
-      ids.push(...this.convertElement(child, matrix, inherited, depth, uses))
+      const made = this.convertElement(child, matrix, inherited, depth, uses)
+      if (backdrop !== null && made.length > 0) {
+        this.applyBackdrop(made, backdrop)
+        backdrop = null
+      }
+      if (child.name === 'foreignObject') {
+        const blur = this.backdropBlur(child, matrix)
+        if (blur !== null) {
+          if (backdrop !== null) this.warn('背景のぼかし（かける図形がない）')
+          backdrop = blur
+        }
+      }
+      ids.push(...made)
     }
+    if (backdrop !== null) this.warn('背景のぼかし（かける図形がない）')
     return ids
+  }
+
+  /**
+   * 背景のぼかしを書き出したツールは、図形の直前に、図形の形で切り取った foreignObject を置き、中の空の要素の style に
+   * backdrop-filter: blur(…) を書く。その値（xml.ts が文字として拾ったもの）を、kadrokreo のぼかしの半径にする（CSS の blur() の 2 倍。
+   * 拡大の分だけ大きくする）。backdrop-filter がなければ null、blur(長さ) 1 つでなければ知らせて null。0 なら 0
+   */
+  private backdropBlur(element: SvgElement, parentMatrix: Matrix): number | null {
+    const raw = element.foreign?.backdropFilter?.trim()
+    if (raw === undefined || raw === '' || raw === 'none') return null
+    if (this.declared(element).display?.trim() === 'none') return null
+    // blur() の長さは px（0 だけは単位なし）。空の blur() は 0
+    const match = /^blur\(\s*(?:((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(px)?)?\s*\)$/i.exec(raw)
+    const length = match ? Number(match[1] ?? 0) : NaN
+    if (!match || !Number.isFinite(length) || (match[2] === undefined && length !== 0)) {
+      this.warn('読めない背景のぼかし（backdrop-filter）')
+      return null
+    }
+    const transform = parseTransform(element.attributes.transform)
+    const matrix = transform ? multiply(parentMatrix, transform) : parentMatrix
+    return tidy(length * 2 * lengthScale(matrix))
+  }
+
+  /**
+   * 背景のぼかしを、foreignObject の次の兄弟からできたノードにかける。g からできた塗りのないフレームに中身が 1 つだけなら、
+   * その中身（形がぼかす範囲になる）にかける。ノードが 1 つに決まらなければ知らせる
+   */
+  private applyBackdrop(ids: NodeId[], blur: number): void {
+    if (blur === 0) return
+    let node: SceneNode | undefined = ids.length === 1 ? this.nodes[ids[0]] : undefined
+    while (node?.type === 'frame' && node.children.length === 1 && node.fills.length === 0) node = this.nodes[node.children[0]]
+    // 塗りのないフレーム（中身がいくつもの g）にかけると、中身の形ではなく枠の全体をぼかしてしまう
+    if (!node || !('effects' in node) || (node.type === 'frame' && node.fills.length === 0)) {
+      this.warn('背景のぼかし（かける図形が 1 つに決まらない）')
+      return
+    }
+    if (node.effects.some((effect) => effect.type === 'background-blur') || node.effects.length >= MAX_PAINTS) return
+    this.nodes[node.id] = { ...node, effects: [...node.effects, { type: 'background-blur', blur, visible: true }] }
   }
 
   private convertElement(element: SvgElement, parentMatrix: Matrix, parentInherited: Inherited, depth: number, uses: number): NodeId[] {
@@ -449,7 +505,9 @@ class Converter {
     if (DEFINITIONS.has(name)) return []
     const skipped = SKIPPED_ELEMENTS[name]
     if (skipped) {
-      this.warn(skipped)
+      // 背景のぼかしだけの foreignObject は知らせない（ぼかしは convertChildren が次の図形にかける）
+      const foreign = element.foreign
+      if (!(foreign && foreign.backdropFilter !== null && !foreign.other)) this.warn(skipped)
       return []
     }
     if (name === 'style') return []
@@ -1435,7 +1493,7 @@ class Converter {
       }
       if (element?.name === 'pattern') {
         // kadrokreo が書き出した角度のグラデーションなら、元の値から戻す
-        const conic = this.conicPattern(element, matrix, node)
+        const conic = this.conicPattern(element, matrix, node) ?? this.wedgePattern(element, matrix, node)
         if (conic) return { paints: [conic], alpha: opacity }
         this.warn('パターンの塗り')
       }
@@ -1482,6 +1540,108 @@ class Converter {
       visible: true,
       blendMode: 'normal',
     }
+  }
+
+  /**
+   * 扇形を並べて角度のグラデーションを近似した pattern（中心が同じ扇形の path を、向きの順に 1 周並べたもの。
+   * data 属性のない kadrokreo の書き出しや、ほかのツールの近似がこの形）を、角度のグラデーションに戻す。
+   * 扇形の並びは pattern ごとに 1 回だけ読み（wedgeFan）、ここではノードの座標系に直す。形が違えば null
+   */
+  private wedgePattern(element: SvgElement, matrix: Matrix, node: SceneNode): Paint | null {
+    if (node.width === 0 || node.height === 0) return null
+    if (!this.fanCache.has(element)) this.fanCache.set(element, this.wedgeFan(element))
+    const fan = this.fanCache.get(element)
+    if (!fan) return null
+    const whole = multiply(matrix, fan.transform)
+    const toNode = (point: Point) => toNodeSpace(node, applyMatrix(whole, point))
+    const center = toNode(fan.center)
+    const ahead = toNode({ x: fan.center.x + Math.cos(fan.start), y: fan.center.y + Math.sin(fan.start) })
+    const start = Math.atan2(ahead.y - center.y, ahead.x - center.x)
+    // 裏返す変換なら回る向きが逆になる。反時計回りは、同じ向きから時計回りに読み替える（位置を 1 から引いて逆に並べる）
+    const reflected = whole[0] * whole[3] - whole[1] * whole[2] < 0
+    const stops = fan.clockwise !== reflected ? fan.stops : fan.stops.map((stop) => ({ ...stop, offset: round4(1 - stop.offset) })).reverse()
+    return {
+      type: 'conic',
+      cx: round4(center.x / node.width),
+      cy: round4(center.y / node.height),
+      angle: round4(((((start * 180) / Math.PI) % 360) + 360) % 360),
+      stops,
+      opacity: fan.opacity,
+      visible: true,
+      blendMode: 'normal',
+    }
+  }
+
+  /**
+   * pattern の中の扇形の並びを読む（pattern の座標系）。扇形は pattern の直下か、変換のない g 1 つの中の path で、
+   * 中心が揃い、回る向きが揃い、真ん中の向きが同じ向きに 1 周だけ進み、すき間がないこと。扇形は 1 つずつ単色なので、
+   * 扇形の真ん中の向きに色を置き、直線で補える色を間引いて 16 色までにする（simplifyStops）
+   */
+  private wedgeFan(element: SvgElement): WedgeFan | null {
+    const { attributes } = element
+    if (attributes.viewBox !== undefined || attributes.patternContentUnits?.trim() === 'objectBoundingBox') return null
+    const transform = attributes.patternTransform === undefined ? IDENTITY : parseTransform(attributes.patternTransform)
+    if (!transform) return null
+    let parts = element.children.filter((child): child is SvgElement => typeof child !== 'string')
+    let opacity = 1
+    let groupStyle: Record<string, string> = {}
+    if (parts.length === 1 && parts[0].name === 'g' && parts[0].attributes.transform === undefined) {
+      groupStyle = this.declared(parts[0])
+      opacity = clamp01(parseFraction(groupStyle.opacity) ?? 1)
+      parts = parts[0].children.filter((child): child is SvgElement => typeof child !== 'string')
+    }
+    if (parts.length < MIN_WEDGES || parts.length > MAX_WEDGES) return null
+    type Wedge = { center: Point; from: number; span: number; color: string; opacity: number }
+    const wedges: Wedge[] = []
+    for (const part of parts) {
+      if (part.name !== 'path' || part.attributes.transform !== undefined) return null
+      let subpaths
+      try {
+        subpaths = parsePathData(part.attributes.d ?? '')
+      } catch (error) {
+        if (error instanceof PathDataError) return null
+        throw error
+      }
+      if (subpaths.length !== 1) return null
+      const points: Point[] = subpaths[0].vertices.map(({ x, y }) => ({ x, y }))
+      // 中心に戻る L を書いた形（M c L a L b L c Z）は、最後の点を除く
+      if (points.length > 3 && near(points[points.length - 1], points[0])) points.pop()
+      if (points.length < 3) return null
+      const [center, first, last] = [points[0], points[1], points[points.length - 1]]
+      const from = Math.atan2(first.y - center.y, first.x - center.x)
+      const span = wrapAngle(Math.atan2(last.y - center.y, last.x - center.x) - from)
+      const declared = this.declared(part)
+      const fill = this.color(declared.fill ?? groupStyle.fill ?? 'black', ROOT_INHERITED)
+      if (!fill || Math.abs(span) < 1e-6 || Math.abs(span) > Math.PI / 2) return null
+      const alpha =
+        fill.alpha *
+        clamp01(parseFraction(declared['fill-opacity'] ?? groupStyle['fill-opacity']) ?? 1) *
+        clamp01(parseFraction(declared.opacity) ?? 1)
+      wedges.push({ center, from, span, color: fill.color, opacity: alpha })
+    }
+    const center = wedges[0].center
+    const reach = Math.max(...parts.map((_, i) => Math.hypot(wedges[i].center.x - center.x, wedges[i].center.y - center.y)))
+    if (reach > 1e-3) return null
+    const direction = Math.sign(wedges[0].span)
+    if (wedges.some((wedge) => Math.sign(wedge.span) !== direction)) return null
+    const mids = wedges.map((wedge) => wedge.from + wedge.span / 2)
+    const steps = mids.map((mid, i) => positiveAngle(direction * (mids[(i + 1) % mids.length] - mid)))
+    const turn = steps.reduce((sum, step) => sum + step, 0)
+    if (Math.abs(turn - Math.PI * 2) > 1e-3 || steps.some((step) => step <= 0 || step > Math.PI / 2)) return null
+    // 扇形の間にすき間がないこと（重ねて描くものもあるので、足りないほうだけ見る）
+    if (wedges.reduce((sum, wedge) => sum + Math.abs(wedge.span), 0) < Math.PI * 2 * 0.95) return null
+    // 最初の色の向き: 最初の扇形の真ん中から、前の扇形との間の半分だけ戻った向き
+    const start = mids[0] - (direction * steps[steps.length - 1]) / 2
+    const samples = wedges.map((wedge, i) => ({
+      offset: positiveAngle(direction * (mids[i] - start)) / (Math.PI * 2),
+      rgba: [...hexRgb(wedge.color), clamp01(wedge.opacity) * 255],
+    }))
+    const stops = simplifyStops(samples).map(({ offset, rgba }) => ({
+      offset: round4(offset),
+      color: rgbHex(rgba),
+      opacity: round4(clamp01(rgba[3] / 255)),
+    }))
+    return { transform, center, start, clockwise: direction > 0, stops, opacity: round4(opacity) }
   }
 
   private color(value: string, inherited: Inherited): Rgba | null {
@@ -1768,6 +1928,83 @@ function stopPaint(stop: ColorStop): Paint {
 
 function positive(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
+}
+
+// ── 扇形の pattern ──
+
+/**
+ * 扇形の pattern から読んだ角度のグラデーション（pattern の座標系）。transform は patternTransform、start は最初の色の向き（ラジアン）、
+ * clockwise は向きが増える向き（画面では時計回り）に色が進むか。stops は clockwise の向きでの並び
+ */
+type WedgeFan = { transform: Matrix; center: Point; start: number; clockwise: boolean; stops: ColorStop[]; opacity: number }
+
+/** 扇形の pattern と見なす扇形の数 */
+const MIN_WEDGES = 8
+const MAX_WEDGES = 2048
+
+function near(a: Point, b: Point): boolean {
+  return Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6
+}
+
+/** 角度を (-π, π] にする */
+function wrapAngle(a: number): number {
+  const turned = positiveAngle(a)
+  return turned > Math.PI ? turned - Math.PI * 2 : turned
+}
+
+/** 角度を [0, 2π) にする */
+function positiveAngle(a: number): number {
+  const full = Math.PI * 2
+  return ((a % full) + full) % full
+}
+
+function hexRgb(hex: string): [number, number, number] {
+  const value = parseInt(hex.slice(1, 7), 16)
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255]
+}
+
+function rgbHex(rgba: readonly number[]): string {
+  return `#${rgba.slice(0, 3).map((c) => Math.round(Math.min(255, Math.max(0, c))).toString(16).padStart(2, '0')).join('')}`
+}
+
+type StopSample = { offset: number; rgba: number[] }
+
+/**
+ * 扇形ごとの色（真ん中の向きの位置）を、直線で補える色を間引いて MAX_STOPS 色までにする。
+ * 残した色の間で、直線で補った色からいちばん離れた色を残すことをくり返す。両端は 0 と 1 まで直線で延ばす
+ */
+function simplifyStops(samples: readonly StopSample[]): StopSample[] {
+  const mix = (a: StopSample, b: StopSample, offset: number) => {
+    const t = b.offset === a.offset ? 0 : (offset - a.offset) / (b.offset - a.offset)
+    return a.rgba.map((value, k) => value + (b.rgba[k] - value) * t)
+  }
+  // 許す差 tolerance で残す色の番号。MAX_STOPS 色に収まらなければ null
+  const pick = (tolerance: number): number[] | null => {
+    const kept = [0, samples.length - 1]
+    for (;;) {
+      let worst = { at: -1, error: tolerance }
+      for (let k = 0; k + 1 < kept.length; k++) {
+        const [a, b] = [samples[kept[k]], samples[kept[k + 1]]]
+        for (let i = kept[k] + 1; i < kept[k + 1]; i++) {
+          const guess = mix(a, b, samples[i].offset)
+          const error = Math.max(...guess.map((value, c) => Math.abs(value - samples[i].rgba[c])))
+          if (error > worst.error) worst = { at: i, error }
+        }
+      }
+      if (worst.at < 0) return kept
+      if (kept.length >= MAX_STOPS) return null
+      kept.push(worst.at)
+      kept.sort((x, y) => x - y)
+    }
+  }
+  let kept: number[] | null = null
+  // 収まらなければ許す差を広げる（255 を超えれば両端だけで必ず収まる）
+  for (let tolerance = 3; !kept; tolerance *= 1.5) kept = pick(tolerance)
+  const order = kept.map((i) => samples[i])
+  if (order.length === 1) return [{ offset: 0, rgba: order[0].rgba }, { offset: 1, rgba: order[0].rgba }]
+  const head = { offset: 0, rgba: mix(order[0], order[1], 0) }
+  const tail = { offset: 1, rgba: mix(order[order.length - 2], order[order.length - 1], 1) }
+  return [head, ...order.slice(1, -1), tail]
 }
 
 function round4(value: number): number {

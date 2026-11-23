@@ -105,6 +105,23 @@ const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
   const pasted = byName(doc, 'pasted-box')[0]
   check('貼り付けた SVG の文字も取り込む', pasted?.type === 'rect' && pasted.fills[0]?.color === '#123456' && pasted.width === 50)
 
+  // ── 背景のぼかし（foreignObject の backdrop-filter）。DOMParser で解析しても中の HTML は動かさない ──
+  await page.locator('.canvas-view canvas').click({ position: { x: 20, y: 20 } })
+  await page.evaluate(() => {
+    const transfer = new DataTransfer()
+    transfer.setData(
+      'text/plain',
+      '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="40"><foreignObject width="50" height="40"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter: blur(3px)">' +
+        '<img src="x" onerror="window.svgPwned = \'foreignObject\'"/></div></foreignObject><rect id="glass-box" width="50" height="40" fill="#ffffff" fill-opacity="0.5"/></svg>',
+    )
+    window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }))
+  })
+  await page.waitForTimeout(700)
+  doc = await saved()
+  const glass = byName(doc, 'glass-box')[0]
+  check('foreignObject の backdrop-filter は次の図形の背景のぼかしになる', glass?.effects?.[0]?.type === 'background-blur' && glass.effects[0].blur === 6, JSON.stringify(glass?.effects))
+  check('foreignObject の中の HTML は動かない', (await page.evaluate(() => window.svgPwned)) === undefined && (await page.locator('foreignObject').count()) === 0)
+
   // ── 壊れた SVG と、画像としての SVG ──
   fs.writeFileSync(path.join(OUT, 'broken.svg'), '<svg><g></svg>')
   await input.setInputFiles(path.join(OUT, 'broken.svg'))

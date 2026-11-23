@@ -723,6 +723,41 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect(plain.warnings.map((warning) => warning.label)).toContain('パターンの塗り')
   })
 
+  it('data 属性を消した角度のグラデーションの pattern も、扇形の並びから近い値に戻す', () => {
+    const fills = [
+      {
+        type: 'conic' as const,
+        cx: 0.25,
+        cy: 0.75,
+        angle: 45,
+        stops: [{ offset: 0, color: '#ff0000', opacity: 1 }, { offset: 0.4, color: '#00ff00', opacity: 1 }, { offset: 1, color: '#0000ff', opacity: 0.5 }],
+        opacity: 0.8,
+        visible: true,
+        blendMode: 'normal' as const,
+      },
+    ]
+    const turned = named(createEllipse({ x: 10, y: 20, width: 60, height: 40 }), 'Turned', { rotation: 30, fills })
+    const svg = exportSvg(sceneOf(turned), ['Turned'], { assets: {} }).replace(/ data-kdr-(conic|stops)="[^"]*"/g, '')
+    expect(svg).not.toContain('data-kdr-conic')
+    const result = convertSvg(parseSvgXml(svg), { name: 'export', measureText })
+    expect(result.warnings).toEqual([])
+    const back = Object.values(result.fragment.nodes).find((node) => node.name === 'Turned') as EllipseNode
+    const paint = back.fills[0]
+    if (paint.type !== 'conic') throw new Error(`conic ではない: ${paint.type}`)
+    close(paint.cx, 0.25, 2)
+    close(paint.cy, 0.75, 2)
+    close(paint.angle, 45, 1)
+    expect(paint.opacity).toBe(0.8)
+    // 扇形は 3° ずつの段なので、色の位置は段の幅ほどずれる。曲がり目（0.4 の緑）と両端は残る
+    expect(paint.stops.length).toBeLessThanOrEqual(16)
+    expect(paint.stops[0]).toMatchObject({ offset: 0, color: '#ff0000', opacity: 1 })
+    expect(paint.stops[paint.stops.length - 1]).toMatchObject({ offset: 1, color: '#0000ff' })
+    close(paint.stops[paint.stops.length - 1].opacity, 0.5, 1)
+    const green = paint.stops.find((stop) => stop.color === '#00ff00' || /^#0[0-9a-f]f[0-9a-f]0[0-9a-f]$/.test(stop.color))
+    expect(green).toBeDefined()
+    close(green!.offset, 0.4, 1)
+  })
+
   it('レイヤー名は要素の id になり、重なれば番号を付け、記号は _ にする', () => {
     const a = named(createRect({ x: 0, y: 0, width: 10, height: 10 }), 'a', { name: 'My Box' })
     const b = named(createRect({ x: 20, y: 0, width: 10, height: 10 }), 'b', { name: 'My Box' })
