@@ -181,6 +181,32 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expect(pathOutlines(back)[1].vertices).toHaveLength(4)
   })
 
+  it('破線のずれと線の角の形は stroke-dashoffset・stroke-linejoin で書き、読み戻すと揃う', () => {
+    const stroke = { type: 'solid' as const, color: '#222222', opacity: 1, visible: true, blendMode: 'normal' as const }
+    const rect = named(createRect({ x: 0, y: 0, width: 40, height: 20 }), 'Dashed', {
+      strokes: [stroke],
+      strokeWidth: 3,
+      strokeDashes: [6, 3],
+      strokeDashOffset: 2.5,
+      strokeJoin: 'round',
+    })
+    const path = named(createPath({ x: 50, y: 0, width: 40, height: 40, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] }, false), 'Bent', {
+      fills: [],
+      strokes: [stroke],
+      strokeJoin: 'bevel',
+      endCap: 'arrow',
+    })
+    const plain = named(createRect({ x: 0, y: 30, width: 10, height: 10 }), 'Plain', { strokes: [stroke], strokeDashOffset: 4 })
+    const { svg, byName } = roundTrip(sceneOf(rect, path, plain))
+    expect(svg).toContain('stroke-dashoffset="2.5" stroke-linejoin="round"')
+    expect(svg).toContain('stroke-linejoin="bevel"')
+    // 実線のずれ・既定の角の形は書かない
+    expect(svg.match(/stroke-dashoffset/g)).toHaveLength(1)
+    expect(byName('Dashed')).toMatchObject({ strokeDashes: [6, 3], strokeDashOffset: 2.5, strokeJoin: 'round' })
+    expect(byName('Bent')).toMatchObject({ strokeJoin: 'bevel', endCap: 'arrow' })
+    expect(byName('Plain')).toMatchObject({ strokeDashOffset: 0, strokeJoin: 'miter' })
+  })
+
   it('直線は端の形（丸）・破線・太さが揃う', () => {
     const line = named(createLine({ x: 0, y: 0, width: 80, height: 40 }), 'Arrow', {
       startCap: 'round',

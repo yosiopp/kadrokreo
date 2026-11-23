@@ -174,7 +174,7 @@ export function docs(): string {
     '- 見た目を確かめたいときは、`png … --to ファイル.png` で書き出して画像を見るか、`svg-out … --to -` の SVG を読む',
     '- 変える前に `ls` か `get` で今の値を確かめ、変えた後にもう一度 `get` で確かめると確実',
     '- 多くの変更は 1 回の実行に `+` でまとめると速い（Docker の起動が 1 回で済む）',
-    '- `set` に渡せる項目は、`get ノード` の JSON のキーと同じ。入れ子は `.` でつなぎ（`layout.gap=8`）、配列は番号でつなぐ（`fills.0.color=#ff0000`）。よく使うものには略記がある（`fill=`・`stroke=`・`shadow.blur=`・`blur=`・`dash=`・`cornerRadius=8,8,0,0`）',
+    '- `set` に渡せる項目は、`get ノード` の JSON のキーと同じ。入れ子は `.` でつなぎ（`layout.gap=8`）、配列は番号でつなぐ（`fills.0.color=#ff0000`）。よく使うものには略記がある（`fill=`・`stroke=`・`shadow.blur=`・`blur=`・`dash=`・`dashOffset=`・`join=`・`cornerRadius=8,8,0,0`）',
     '',
     '## 例が前提にするドキュメント',
     '',

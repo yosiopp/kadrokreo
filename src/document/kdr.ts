@@ -238,6 +238,7 @@ const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 export const MAX_DEPTH = 100
 
+export const STROKE_JOINS = ['miter', 'round', 'bevel'] as const
 export const CAPS = ['none', 'round', 'square', 'arrow', 'circle', 'diamond'] as const
 const SIZINGS = ['fixed', 'hug', 'fill'] as const
 const CONSTRAINTS = ['start', 'end', 'stretch', 'center', 'scale'] as const
@@ -268,6 +269,8 @@ const DEFAULTS = {
   strokes: [],
   strokeWidth: 1,
   strokeDashes: [],
+  strokeDashOffset: 0,
+  strokeJoin: 'miter',
   effects: [],
   cornerRadius: 0,
   closed: false,
@@ -359,6 +362,8 @@ function parseNode(
     strokes: optional('strokes', paints),
     strokeWidth: optional('strokeWidth', size),
     strokeDashes: optional('strokeDashes', dashes),
+    strokeDashOffset: optional('strokeDashOffset', number),
+    strokeJoin: optional('strokeJoin', (v, p) => oneOf(v, STROKE_JOINS, p)),
     effects: optional('effects', effects),
   })
   const cornerRadius = () => optional('cornerRadius', parseCornerRadius)
@@ -556,6 +561,8 @@ function parseOverrides(value: unknown, path: string, assets: AssetContext): Rec
     if (Object.hasOwn(raw, 'text')) override.text = string(raw.text, at('text'))
     if (Object.hasOwn(raw, 'fills')) override.fills = paints(raw.fills, at('fills'))
     if (Object.hasOwn(raw, 'strokes')) override.strokes = paints(raw.strokes, at('strokes'))
+    if (Object.hasOwn(raw, 'strokeDashes')) override.strokeDashes = dashes(raw.strokeDashes, at('strokeDashes'))
+    if (Object.hasOwn(raw, 'strokeDashOffset')) override.strokeDashOffset = number(raw.strokeDashOffset, at('strokeDashOffset'))
     if (Object.hasOwn(raw, 'visible')) override.visible = boolean(raw.visible, at('visible'))
     if (Object.hasOwn(raw, 'fontSize')) override.fontSize = size(raw.fontSize, at('fontSize'))
     if (Object.hasOwn(raw, 'fontFamily')) override.fontFamily = fontFamily(raw.fontFamily, at('fontFamily'))

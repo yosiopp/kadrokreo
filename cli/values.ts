@@ -37,6 +37,9 @@ function expandShorthand(node: SceneNode, path: string, raw: string, draft: Reco
     if (dashes === null) throw new UsageError(`${path}: 0 以上の数をカンマで並べてください（null で実線）`)
     return ['strokeDashes', dashes]
   }
+  // 破線のずれ・線の角の形の略記（strokeDashOffset=・strokeJoin= と同じ。読み込みの検証が値を確かめる）
+  if (head === 'dashOffset' && rest.length === 0 && Object.hasOwn(node, 'strokeDashOffset')) return ['strokeDashOffset', parseValue(raw, 0, path)]
+  if (head === 'join' && rest.length === 0 && Object.hasOwn(node, 'strokeJoin')) return ['strokeJoin', raw.trim()]
   const currentEffects = () => (Object.hasOwn(draft, 'effects') ? draft.effects : node.effects) as Effect[]
   if (head === 'shadow') {
     // 影の略記は、ぼかしを除いた最初の影に当てる

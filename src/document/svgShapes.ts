@@ -1,7 +1,7 @@
 import { type Point, tidy } from './geometry.ts'
 import { gradientLine, mixColor, paintColor, radialTransform } from './paint.ts'
 import { type Vertex, cappedStroke, contoursData, isLine, pathOutlines } from './path.ts'
-import type { Asset, ColorStop, ConicGradient, Paint, PathNode } from './types.ts'
+import type { Asset, ColorStop, ConicGradient, Paint, PathNode, Style } from './types.ts'
 
 // SVG の図形を書く処理。viewer の Dev モードの HTML（パス・直線の <svg>）と、SVG ファイルの書き出し（svgExport.ts）で共有する。
 // 座標はどれもノードの座標系（枠の左上が原点）。
@@ -111,6 +111,20 @@ export type PathSvgOptions = SvgPaintOptions & {
   standalone: boolean
 }
 
+/**
+ * 線の太さ・破線（並びとずれ）・角の形の属性（SVG ファイルの書き出し用。`名前="値"` の並び）。
+ * ずれは破線のときだけ、角の形は既定（miter）でないときだけ書く
+ */
+export function strokeShapeAttrs(style: Pick<Style, 'strokeWidth' | 'strokeDashes' | 'strokeDashOffset' | 'strokeJoin'>): string[] {
+  const dashed = style.strokeDashes.length > 0
+  return [
+    `stroke-width="${tidy(style.strokeWidth)}"`,
+    ...(dashed ? [`stroke-dasharray="${style.strokeDashes.map(tidy).join(' ')}"`] : []),
+    ...(dashed && style.strokeDashOffset !== 0 ? [`stroke-dashoffset="${tidy(style.strokeDashOffset)}"`] : []),
+    ...(style.strokeJoin !== 'miter' ? [`stroke-linejoin="${style.strokeJoin}"`] : []),
+  ]
+}
+
 /** 直線とパスの SVG の要素と、それが使うグラデーションの定義 */
 export type PathSvg = { defs: string[]; elements: string[] }
 
@@ -145,12 +159,7 @@ export function pathSvg(node: PathNode, options: PathSvgOptions): PathSvg {
   const fillDecls = paintDecls(fill, 'fill')
   const strokeDecls = paintDecls(stroke, 'stroke')
   // 線の形は standalone のときだけ属性で（HTML の出力は CSS）
-  const strokeShape = standalone && stroke !== null
-    ? [
-        `stroke-width="${tidy(node.strokeWidth)}"`,
-        ...(node.strokeDashes.length > 0 ? [`stroke-dasharray="${node.strokeDashes.map(tidy).join(' ')}"`] : []),
-      ]
-    : []
+  const strokeShape = standalone && stroke !== null ? strokeShapeAttrs(node) : []
   const fillRule = standalone && fill !== null && node.fillRule === 'evenodd' ? ['fill-rule="evenodd"'] : []
   // standalone では、書かなかった塗り・線を「なし」にする（SVG の既定は黒で塗る）
   const noFill = standalone && fill === null && !line ? ['fill="none"'] : []

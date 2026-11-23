@@ -554,6 +554,8 @@ function paint(ctx: CanvasRenderingContext2D, pass: Pass, node: Size & Style, ou
       const silhouette: Silhouette = (c, spread) => {
         c.lineWidth = Math.max(0, node.strokeWidth + spread * 2)
         c.setLineDash(node.strokeDashes)
+        c.lineDashOffset = node.strokeDashOffset
+        c.lineJoin = node.strokeJoin
         outline(c)
         c.stroke()
       }
@@ -611,9 +613,11 @@ function fillAll(
 }
 
 /** いま組んであるパスに、線を下から順に重ねて引く */
-function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'strokes' | 'strokeWidth' | 'strokeDashes'>): void {
+function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'strokes' | 'strokeWidth' | 'strokeDashes' | 'strokeDashOffset' | 'strokeJoin'>): void {
   ctx.lineWidth = node.strokeWidth
   ctx.setLineDash(node.strokeDashes)
+  ctx.lineDashOffset = node.strokeDashOffset
+  ctx.lineJoin = node.strokeJoin
   for (const stroke of node.strokes) {
     ctx.save()
     ctx.globalAlpha *= stroke.opacity
@@ -623,6 +627,8 @@ function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'stro
     ctx.restore()
   }
   ctx.setLineDash([])
+  ctx.lineDashOffset = 0
+  ctx.lineJoin = 'miter'
 }
 
 /** 塗る範囲の決め方。パスだけが持ち、ほかは nonzero */
@@ -875,7 +881,7 @@ function drawShadowOnly(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shado
 function strokeWithCaps(
   ctx: CanvasRenderingContext2D,
   points: readonly Vertex[],
-  style: Size & Pick<Style, 'strokes' | 'strokeWidth' | 'strokeDashes'> & { startCap: Cap; endCap: Cap; capSize: number },
+  style: Size & Pick<Style, 'strokes' | 'strokeWidth' | 'strokeDashes' | 'strokeDashOffset' | 'strokeJoin'> & { startCap: Cap; endCap: Cap; capSize: number },
 ): void {
   if (!hasStroke(style) || points.length < 2) return
   const { line, caps } = cappedStroke(points, style)
@@ -889,8 +895,12 @@ function strokeWithCaps(
     ctx.strokeStyle = color
     ctx.lineWidth = style.strokeWidth
     ctx.setLineDash(style.strokeDashes)
+    ctx.lineDashOffset = style.strokeDashOffset
+    ctx.lineJoin = style.strokeJoin
     ctx.stroke()
     ctx.setLineDash([])
+    ctx.lineDashOffset = 0
+    ctx.lineJoin = 'miter'
 
     // 端の図形はまとめて 1 回で塗る
     ctx.fillStyle = color

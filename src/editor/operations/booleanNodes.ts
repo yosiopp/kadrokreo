@@ -36,6 +36,8 @@ export function createBooleanNode<T extends Scene>(scene: T, ids: readonly NodeI
     strokes: styled ? base.strokes : [],
     strokeWidth: styled ? base.strokeWidth : 1,
     strokeDashes: styled ? base.strokeDashes : [],
+    strokeDashOffset: styled ? base.strokeDashOffset : 0,
+    strokeJoin: styled ? base.strokeJoin : 'miter',
     effects: base.effects,
     clipContent: false,
     booleanOperation: op,
@@ -104,6 +106,8 @@ export function flattenBooleanNodes<T extends Scene>(scene: T, ids: readonly Nod
       strokes: node.strokes,
       strokeWidth: node.strokeWidth,
       strokeDashes: node.strokeDashes,
+      strokeDashOffset: node.strokeDashOffset,
+      strokeJoin: node.strokeJoin,
       effects: node.effects,
       fillRule: 'evenodd',
     }

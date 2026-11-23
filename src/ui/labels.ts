@@ -1,5 +1,5 @@
 import type { NodeKind } from '../document/path.ts'
-import type { AutoLayout, BlendMode, Cap, ComponentProperty, Constraint, Effect, ImageNode, MaskType, Override, Paint, Sizing } from '../document/types.ts'
+import type { AutoLayout, BlendMode, Cap, ComponentProperty, Constraint, Effect, ImageNode, MaskType, Override, Paint, Sizing, StrokeJoin } from '../document/types.ts'
 
 // 設定の値の、画面での呼び名。editor のプロパティパネルと、viewer のインスペクトが同じ言葉で出す
 
@@ -70,6 +70,13 @@ export const FONT_WEIGHT_LABELS: Record<string, string> = {
   '900': '900 Black',
 }
 
+/** 線の角の形の呼び名 */
+export const JOIN_LABELS: Record<StrokeJoin, string> = {
+  miter: 'とがらせる',
+  round: '丸',
+  bevel: '切り落とす',
+}
+
 export const CAP_LABELS: Record<Cap, string> = {
   none: 'なし',
   round: '丸',
@@ -127,6 +134,8 @@ export const OVERRIDE_LABELS: Record<keyof Override, string> = {
   text: '文言',
   fills: '塗り',
   strokes: '線',
+  strokeDashes: '破線',
+  strokeDashOffset: '破線のずれ',
   visible: '表示',
   fontSize: '文字の大きさ',
   fontFamily: '書体',

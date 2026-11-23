@@ -792,6 +792,8 @@ function applyOverride<N extends SceneNode>(node: N, values: Override | undefine
   // テキストは塗りを消せない（パネルの setFill と同じ）
   if (values.fills !== undefined && 'fills' in node && (values.fills.length > 0 || node.type !== 'text')) patch.fills = values.fills
   if (values.strokes !== undefined && 'strokes' in node) patch.strokes = values.strokes
+  if (values.strokeDashes !== undefined && 'strokeDashes' in node) patch.strokeDashes = values.strokeDashes
+  if (values.strokeDashOffset !== undefined && 'strokeDashOffset' in node) patch.strokeDashOffset = values.strokeDashOffset
   // 根の表示・非表示は、インスタンス自身の設定
   if (values.visible !== undefined && !root) patch.visible = values.visible
   if (node.type === 'text') {

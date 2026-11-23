@@ -296,6 +296,8 @@ describe('parseKdr', () => {
       strokes: [],
       strokeWidth: 1,
       strokeDashes: [],
+      strokeDashOffset: 0,
+      strokeJoin: 'miter',
       effects: [],
       cornerRadius: 0,
       isMask: false,
@@ -471,6 +473,13 @@ describe('parseKdr', () => {
     expect(() => parseOne(rawNode({ strokeDashes: [-1] }))).toThrow('strokeDashes[0]')
     expect(() => parseOne(rawNode({ strokeDashes: [0, 0] }))).toThrow('strokeDashes')
     expect(() => parseOne(rawNode({ strokeDashes: Array(17).fill(1) }))).toThrow('strokeDashes')
+    // 破線のずれ（負も可）と線の角の形
+    expect(parseOne(rawNode({ strokeDashes: [4, 2], strokeDashOffset: -3, strokeJoin: 'round' }))).toMatchObject({ strokeDashOffset: -3, strokeJoin: 'round' })
+    expect(() => parseOne(rawNode({ strokeDashOffset: '1' }))).toThrow('strokeDashOffset')
+    expect(() => parseOne(rawNode({ strokeJoin: 'miter-clip' }))).toThrow('strokeJoin')
+    expect(fileNode(insertNode(createPage('p'), createRect({ x: 0, y: 0, width: 10, height: 10 })))).not.toHaveProperty('strokeJoin')
+    const joined = { ...createRect({ x: 0, y: 0, width: 10, height: 10 }), strokeDashes: [2, 1], strokeDashOffset: 1, strokeJoin: 'bevel' as const }
+    expect(fileNode(insertNode(createPage('p'), joined))).toMatchObject({ strokeDashOffset: 1, strokeJoin: 'bevel' })
     const path = (patch: RawNode = {}) =>
       rawNode({ type: 'path', points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], closed: true, ...patch })
     expect(parseOne(path())).toMatchObject({ contours: [], fillRule: 'nonzero' })
@@ -702,6 +711,8 @@ describe('parseKdr', () => {
       n2: { fills: [], strokes: [] },
       n3: { fills: [{ type: 'linear', x1: 0.5, y1: 0, x2: 0.5, y2: 1, stops: [{ offset: 0, color: '#000000' }, { offset: 1, color: '#ffffff' }], opacity: 1 }] },
       n4: { fontSize: 24, fontFamily: 'serif', fontWeight: 700 },
+      n5: { strokeDashes: [4, 2], strokeDashOffset: 1.5 },
+      n6: { strokeDashes: [] },
     }
     expect(parseOne(withOverrides(overrides))).toMatchObject({ component: { id: 'c1', role: 'instance', overrides } })
     // 知らない項目は捨てる。省けば上書きなし
@@ -716,6 +727,8 @@ describe('parseKdr', () => {
     expect(() => parseOne(withOverrides({ n1: { fontWeight: 450 } }))).toThrow('overrides.n1.fontWeight')
     expect(() => parseOne(withOverrides({ n1: { assetId: 'nothing' } }))).toThrow('上書きの画像データがありません')
     expect(() => parseOne(withOverrides({ n1: { visible: 'no' } }))).toThrow('overrides.n1.visible')
+    expect(() => parseOne(withOverrides({ n1: { strokeDashes: [-1] } }))).toThrow('overrides.n1.strokeDashes')
+    expect(() => parseOne(withOverrides({ n1: { strokeDashOffset: null } }))).toThrow('overrides.n1.strokeDashOffset')
     // 入れ子のインスタンスの差し替え。差し替え先のコンポーネントは、ファイルになくても読める（同期で無視される）
     expect(parseOne(withOverrides({ n1: { componentId: 'c9' } }))).toMatchObject({ component: { overrides: { n1: { componentId: 'c9' } } } })
     expect(() => parseOne(withOverrides({ n1: { componentId: 3 } }))).toThrow('overrides.n1.componentId')

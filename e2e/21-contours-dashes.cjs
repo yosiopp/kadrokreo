@@ -1,4 +1,4 @@
-// 穴のあるパスの 2 つ目以降の輪郭を頂点の編集で動かす・足す・消すことと、線の欄の破線
+// 穴のあるパスの 2 つ目以降の輪郭を頂点の編集で動かす・足す・消すことと、線の欄の破線（ずれ）・角の形
 const { chromium } = require('playwright-core')
 const path = require('path')
 
@@ -80,6 +80,11 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   await set('間隔', 3)
   await page.waitForTimeout(700)
   check('破線の長さ・間隔を変えられる', (await ring()).strokeDashes.join(',') === '10,3', JSON.stringify((await ring()).strokeDashes))
+  await set('破線のずれ', 2)
+  await page.locator('.field:has(.field-label:text-is("角の形")) select').selectOption('round')
+  await page.waitForTimeout(700)
+  check('破線のずれと線の角の形を変えられる', (await ring()).strokeDashOffset === 2 && (await ring()).strokeJoin === 'round',
+    JSON.stringify([(await ring()).strokeDashOffset, (await ring()).strokeJoin]))
   await page.locator('.canvas-view').screenshot({ path: path.join(OUT, 'dashes.png') })
   await dashed.uncheck()
   await page.waitForTimeout(700)

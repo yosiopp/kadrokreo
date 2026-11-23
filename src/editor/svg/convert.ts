@@ -34,6 +34,7 @@ import type {
   Paint,
   PathNode,
   SceneNode,
+  StrokeJoin,
   Style,
   TextNode,
 } from '../../document/types.ts'
@@ -128,6 +129,8 @@ type Inherited = {
   visible: boolean
   /** stroke-linecap。開いたパスの両端の形になる */
   lineCap: string
+  /** stroke-linejoin。線の角の形になる */
+  lineJoin: string
   fillRule: string
   /** stroke-dasharray（そのままの文字。読むのは shape） */
   dashArray: string
@@ -143,6 +146,7 @@ const INHERITED_TEXT = [
   ['font-weight', 'fontWeight'],
   ['text-anchor', 'textAnchor'],
   ['stroke-linecap', 'lineCap'],
+  ['stroke-linejoin', 'lineJoin'],
   ['fill-rule', 'fillRule'],
   ['stroke-dasharray', 'dashArray'],
   ['stroke-dashoffset', 'dashOffset'],
@@ -161,6 +165,7 @@ const ROOT_INHERITED: Inherited = {
   textAnchor: 'start',
   visible: true,
   lineCap: 'butt',
+  lineJoin: 'miter',
   fillRule: 'nonzero',
   dashArray: 'none',
   dashOffset: '0',
@@ -590,6 +595,8 @@ class Converter {
         strokes: styled.flatMap((node) => node.strokes).slice(0, MAX_PAINTS),
         strokeWidth: stroked.strokeWidth,
         strokeDashes: stroked.strokeDashes,
+        strokeDashOffset: stroked.strokeDashOffset,
+        strokeJoin: stroked.strokeJoin,
       }
     }
     if (merged.type === 'path' && stroked?.type === 'path') {
@@ -1254,12 +1261,16 @@ class Converter {
     const cap: Cap | null = inherited.lineCap === 'round' || inherited.lineCap === 'square' ? inherited.lineCap : null
     const caps = node.type === 'path' && !node.closed && cap && stroke.length > 0 ? { startCap: cap, endCap: cap } : {}
     const fillRule = node.type === 'path' && inherited.fillRule === 'evenodd' ? { fillRule: 'evenodd' as const } : {}
-    const strokeDashes = stroke.length > 0 ? this.dashes(inherited, lengthScale(matrix)) : []
+    const dash = stroke.length > 0 ? this.dashes(inherited, lengthScale(matrix)) : { strokeDashes: [], strokeDashOffset: 0 }
+    // miter-clip・arcs（SVG 2）は持てないので、近い miter にする
+    const join = inherited.lineJoin.trim()
+    const strokeJoin: StrokeJoin = join === 'round' || join === 'bevel' ? join : 'miter'
     const named = {
       ...node,
       ...caps,
       ...fillRule,
-      strokeDashes,
+      ...dash,
+      strokeJoin: stroke.length > 0 ? strokeJoin : 'miter',
       name: id !== undefined && id !== '' ? id : node.name,
       fills: fill,
       strokes: stroke,
@@ -1303,24 +1314,24 @@ class Converter {
 
   /**
    * stroke-dasharray を破線の並び（ページの px）にする。数が奇数なら 2 回繰り返す（SVG の決まり）。
-   * 負の数や読めない数があれば、SVG と同じく実線。すべて 0 も実線
+   * 負の数や読めない数があれば、SVG と同じく実線。すべて 0 も実線。stroke-dashoffset はずれ（同じく拡大をかける）にする
    */
-  private dashes(inherited: Inherited, scale: number): number[] {
+  private dashes(inherited: Inherited, scale: number): { strokeDashes: number[]; strokeDashOffset: number } {
+    const solid = { strokeDashes: [], strokeDashOffset: 0 }
     const raw = inherited.dashArray.trim()
-    if (raw === 'none' || raw === '') return []
+    if (raw === 'none' || raw === '') return solid
     const diagonal = Math.hypot(this.viewport.width, this.viewport.height) / Math.SQRT2
     const values = raw.split(/[\s,]+/).filter((part) => part !== '').map((part) => parseLength(part, diagonal))
-    if (values.length === 0 || values.some((value) => value === null || !Number.isFinite(value) || value < 0)) return []
+    if (values.length === 0 || values.some((value) => value === null || !Number.isFinite(value) || value < 0)) return solid
     let list = (values as number[]).map((value) => tidy(value * scale))
-    if (list.every((value) => value === 0)) return []
+    if (list.every((value) => value === 0)) return solid
     if (list.length % 2 === 1) list = [...list, ...list]
     if (list.length > MAX_DASHES) {
       this.warn(`${MAX_DASHES} を超える破線の並び（実線にした）`)
-      return []
+      return solid
     }
     const offset = parseLength(inherited.dashOffset, diagonal)
-    if (offset !== null && offset !== 0) this.warn('破線のずれ（stroke-dashoffset。0 にした）')
-    return list
+    return { strokeDashes: list, strokeDashOffset: offset !== null && Number.isFinite(offset) ? tidy(offset * scale) : 0 }
   }
 
   /** 足したノードを囲む矩形（外側のフレームの座標）。空なら null */

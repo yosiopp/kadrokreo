@@ -69,6 +69,8 @@ describe('values', () => {
     expect(buildPatch(rect, [['dash', '6']])).toEqual({ strokeDashes: [6] })
     expect(buildPatch(rect, [['dash', 'null']])).toEqual({ strokeDashes: [] })
     expect(() => buildPatch(rect, [['dash', '4,x']])).toThrow(/0 以上の数/)
+    // 破線のずれと線の角の形
+    expect(buildPatch(rect, [['dashOffset', '2.5'], ['join', 'round']])).toEqual({ strokeDashOffset: 2.5, strokeJoin: 'round' })
   })
 })
 

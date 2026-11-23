@@ -77,7 +77,7 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w set Box fill=#00ff00 cornerRadius=8',
     'kdr -f demo.kdr -w set Box Dot shadow.blur=8 shadow.y=4 opacity=0.8',
     'kdr -f demo.kdr -w set btn/Label text=送信 fontSize=16 fontWeight=700',
-    'kdr -f demo.kdr -w set Box fill=null stroke=#333333 strokeWidth=2 dash=4,2',
+    'kdr -f demo.kdr -w set Box fill=null stroke=#333333 strokeWidth=2 dash=4,2 dashOffset=2 join=round',
     'kdr -f demo.kdr -w set Card cornerRadius=16,16,0,0 blur=4',
     'kdr -f demo.kdr -w set Box fills.0.opacity=0.5 constraints.horizontal=end',
     'kdr -f demo.kdr -w set Arrow radius=6',

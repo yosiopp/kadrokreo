@@ -56,6 +56,8 @@ describe('nodeMarkup', () => {
       strokes: solid('#000000'),
       strokeWidth: 2,
       strokeDashes: [],
+      strokeDashOffset: 0,
+      strokeJoin: 'miter',
       effects: [],
       points: [
         { x: 0, y: 0 },
@@ -124,6 +126,8 @@ describe('nodeMarkup', () => {
       strokes: [],
       strokeWidth: 1,
       strokeDashes: [],
+      strokeDashOffset: 0,
+      strokeJoin: 'miter',
       effects: [],
       points: [
         { x: 0, y: 0, radius: 10 },
@@ -155,6 +159,8 @@ describe('nodeMarkup', () => {
       strokes: solid('#ff0000'),
       strokeWidth: 2,
       strokeDashes: [],
+      strokeDashOffset: 0,
+      strokeJoin: 'miter',
       effects: [],
       points: [
         { x: 0, y: 0 },

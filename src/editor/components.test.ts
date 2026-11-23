@@ -435,6 +435,21 @@ describe('インスタンスごとの上書き', () => {
     expect(syncComponents(restyled)).toBe(restyled)
   })
 
+  it('写しの破線（並びとずれ）を変えると上書きになり、元を変えても残る', () => {
+    const { doc, background, instanceId } = withInstance()
+    const backgroundCopy = frameOf(doc.pages[0], instanceId).children[0]
+    const edited = edit(doc, (page) => updateNode(page, backgroundCopy, { strokeDashes: [4, 2], strokeDashOffset: 1 }))
+    expect(overridesOf(edited, instanceId)).toEqual({ [background.id]: { strokeDashes: [4, 2], strokeDashOffset: 1 } })
+    // 元の破線や太さを変えても、上書きした破線は残り、ほかの項目は元に合わせて変わる
+    const restyled = edit(edited, (page) => updateNode(page, background.id, { strokeDashes: [8, 8], strokeDashOffset: 5, strokeWidth: 3 }))
+    expect(restyled.pages[0].nodes[backgroundCopy]).toMatchObject({ strokeDashes: [4, 2], strokeDashOffset: 1, strokeWidth: 3 })
+    expect(syncComponents(restyled)).toBe(restyled)
+    // 角の形は上書きできない（元に戻る）
+    const joined = edit(doc, (page) => updateNode(page, backgroundCopy, { strokeJoin: 'round' }))
+    expect(overridesOf(joined, instanceId)).toEqual({})
+    expect(joined.pages[0].nodes[backgroundCopy]).toMatchObject({ strokeJoin: 'miter' })
+  })
+
   it('上書きできない項目を変えても覚えず、元に戻る', () => {
     const { doc, instanceId } = withInstance()
     const labelCopy = frameOf(doc.pages[0], instanceId).children[1]

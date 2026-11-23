@@ -34,6 +34,8 @@ describe('summarizePage', () => {
       strokes: solid('#abcdef'),
       strokeWidth: 2,
       strokeDashes: [],
+      strokeDashOffset: 0,
+      strokeJoin: 'miter',
       effects: [],
       points: [
         { x: 0, y: 0 },

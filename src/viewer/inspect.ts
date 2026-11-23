@@ -13,7 +13,7 @@ import { isVariantSet, parseVariantName, variantProperties, variantSetOf, varian
 import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap } from '../document/path.ts'
-import { ALIGN_CONTENT_LABELS, BLEND_MODE_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, MASK_TYPE_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
+import { ALIGN_CONTENT_LABELS, BLEND_MODE_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, JOIN_LABELS, MASK_TYPE_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
 
@@ -172,6 +172,8 @@ export function inspectNode(
       ...paintRows(node.strokes),
       { label: '太さ', value: num(node.strokeWidth) },
       node.strokeDashes.length > 0 && { label: '破線', value: node.strokeDashes.map(num).join(', ') },
+      node.strokeDashes.length > 0 && node.strokeDashOffset !== 0 && { label: '破線のずれ', value: num(node.strokeDashOffset) },
+      node.strokeJoin !== 'miter' && { label: '角の形', value: JOIN_LABELS[node.strokeJoin] },
       'startCap' in node && node.startCap !== 'none' && { label: '始点', value: CAP_LABELS[node.startCap] },
       'endCap' in node && node.endCap !== 'none' && { label: '終点', value: CAP_LABELS[node.endCap] },
       node.type === 'path' && !node.closed && (isMarkerCap(node.startCap) || isMarkerCap(node.endCap)) && {
@@ -518,6 +520,8 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     add('stroke', stroke ? topColorCss(stroke, style) : 'none')
     if (stroke) add('stroke-width', px(node.strokeWidth))
     if (stroke && node.strokeDashes.length > 0) add('stroke-dasharray', node.strokeDashes.map(px).join(' '))
+    if (stroke && node.strokeDashes.length > 0 && node.strokeDashOffset !== 0) add('stroke-dashoffset', px(node.strokeDashOffset))
+    if (stroke && node.strokeJoin !== 'miter') add('stroke-linejoin', node.strokeJoin)
     if (fill && node.fillRule === 'evenodd') add('fill-rule', 'evenodd')
   } else {
     const background = backgroundCss(node.fills, style, node)

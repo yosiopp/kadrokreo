@@ -491,7 +491,24 @@ describe('破線', () => {
     // 負の数は SVG と同じく実線、線のない図形には付けない
     expect(invalid.strokeDashes).toEqual([])
     expect(noStroke.strokeDashes).toEqual([])
-    expect(labels(result)).toEqual(['破線のずれ（stroke-dashoffset。0 にした）'])
+    expect(circle.strokeDashOffset).toBe(2)
+    expect(line.strokeDashOffset).toBe(0)
+    expect(labels(result)).toEqual([])
+  })
+
+  it('stroke-dashoffset は拡大に合わせたずれに、stroke-linejoin は角の形にする', () => {
+    const result = convert(`<svg>
+      <rect width="10" height="10" stroke="#000" stroke-dasharray="3" stroke-dashoffset="-1.5" stroke-linejoin="round" transform="scale(2)"/>
+      <path d="M0 0 L10 0 L10 10" fill="none" stroke="#000" style="stroke-linejoin: bevel"/>
+      <g stroke-linejoin="miter-clip"><path d="M0 0 L10 10" stroke="#000"/></g>
+      <rect width="10" height="10" stroke-linejoin="round"/>
+    </svg>`)
+    const [rect, bevel, clip, noStroke] = children(result) as PathNode[]
+    expect(rect).toMatchObject({ strokeDashes: [6, 6], strokeDashOffset: -3, strokeJoin: 'round' })
+    expect(bevel.strokeJoin).toBe('bevel')
+    expect((children(result, clip as unknown as FrameNode)[0] as PathNode).strokeJoin).toBe('miter')
+    // 線のない図形には付けない
+    expect(noStroke.strokeJoin).toBe('miter')
   })
 })
 

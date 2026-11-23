@@ -4,7 +4,7 @@ import { readImageInfo } from './imageInfo.ts'
 import { type TextLinesOf, alignFactor, blurRadius, clampedRadii, getPaintedBounds, hasStroke, imageRect, isRounded, isShadow, solidPaint, splitEffects, withoutHidden } from './paint.ts'
 import { KAPPA, type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from './mask.ts'
 import { contoursData, isLine } from './path.ts'
-import { dataUri, escapeXml, gradientDef, pathSvg } from './svgShapes.ts'
+import { dataUri, escapeXml, gradientDef, pathSvg, strokeShapeAttrs } from './svgShapes.ts'
 import type {
   Asset,
   AssetId,
@@ -296,10 +296,9 @@ class SvgWriter {
     return ` ${role}="url(#${id})"${blend}`
   }
 
-  /** 線の太さと破線の属性 */
-  private strokeShape(style: Pick<Style, 'strokeWidth' | 'strokeDashes'>): string {
-    const dashes = style.strokeDashes.length > 0 ? ` stroke-dasharray="${style.strokeDashes.map(tidy).join(' ')}"` : ''
-    return ` stroke-width="${tidy(style.strokeWidth)}"${dashes}`
+  /** 線の太さ・破線・角の形の属性 */
+  private strokeShape(style: Pick<Style, 'strokeWidth' | 'strokeDashes' | 'strokeDashOffset' | 'strokeJoin'>): string {
+    return strokeShapeAttrs(style).map((decl) => ` ${decl}`).join('')
   }
 
   /**

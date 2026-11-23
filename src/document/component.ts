@@ -19,6 +19,8 @@ export const OVERRIDE_KEYS = [
   'text',
   'fills',
   'strokes',
+  'strokeDashes',
+  'strokeDashOffset',
   'visible',
   'fontSize',
   'fontFamily',

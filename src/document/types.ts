@@ -173,8 +173,15 @@ export type Style = {
    * 空なら実線。線がなければ意味はない
    */
   strokeDashes: number[]
+  /** 破線の並びを始める位置のずれ（px。CSS・SVG の stroke-dashoffset と同じで、正なら並びを線の進む向きと逆へずらす）。実線なら意味はない */
+  strokeDashOffset: number
+  /** 線の角の形（SVG の stroke-linejoin、Canvas の lineJoin と同じ）。角のない形（楕円・直線）では意味はない */
+  strokeJoin: StrokeJoin
   effects: Effect[]
 }
+
+/** 線の角の形。miter はとがらせる（長すぎれば切り落とす）、round は丸める、bevel は切り落とす */
+export type StrokeJoin = 'miter' | 'round' | 'bevel'
 
 /**
  * 角丸の半径。数値なら 4 隅とも同じ。配列なら左上・右上・右下・左下の順（CSS の border-radius と同じ）。
@@ -382,6 +389,10 @@ export type Override = {
   text?: string
   fills?: Paint[]
   strokes?: Paint[]
+  /** 破線の並び（Style の strokeDashes と同じ。空なら実線に戻す） */
+  strokeDashes?: number[]
+  /** 破線のずれ（Style の strokeDashOffset と同じ） */
+  strokeDashOffset?: number
   visible?: boolean
   /** テキストの書式。大きさは、写しを作り直すときに測り直す */
   fontSize?: number

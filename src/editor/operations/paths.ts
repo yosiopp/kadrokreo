@@ -66,6 +66,8 @@ function pathOnBase(base: MaskNode, shape: ReturnType<typeof pathFromContours>):
     strokes: base.strokes,
     strokeWidth: base.strokeWidth,
     strokeDashes: base.strokeDashes,
+    strokeDashOffset: base.strokeDashOffset,
+    strokeJoin: base.strokeJoin,
     effects: base.effects,
     isMask: base.isMask,
     maskType: base.maskType,

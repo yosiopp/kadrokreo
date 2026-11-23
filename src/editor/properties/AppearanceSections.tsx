@@ -3,7 +3,7 @@ import { isInstance } from '../../document/component.ts'
 import { IMAGE_MIME_TYPES, MAX_IMAGE_SCALE } from '../../document/kdr.ts'
 import { cornerRadii } from '../../document/paint.ts'
 import { OpenFileButton } from '../../ui/OpenFile.tsx'
-import { CAP_LABELS, FIT_LABELS, optionsOf } from '../../ui/labels.ts'
+import { CAP_LABELS, FIT_LABELS, JOIN_LABELS, optionsOf } from '../../ui/labels.ts'
 import { DEFAULT_DASHES, evenDashes, formatDashes, parseDashes, withDashAt } from '../dashes.ts'
 import { setCornerRadius } from '../operations/paints.ts'
 import type { SceneNode, Style } from '../../document/types.ts'
@@ -12,7 +12,7 @@ import { type PanelContext, linesIn, shapesIn, textsIn, MIXED, common, mapValue 
 import { CheckField, NumberField, Section, SelectField, TextField } from './fields.tsx'
 import { EffectListSection, PaintListSection } from './PaintSections.tsx'
 import { PathSection } from './PathSection.tsx'
-import { isMarkerCap } from '../../document/path.ts'
+import { isLine, isMarkerCap } from '../../document/path.ts'
 
 const CORNERS = ['左上', '右上', '右下', '左下'] as const
 
@@ -126,7 +126,16 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
               onCommit={(strokeWidth) => apply({ strokeWidth })}
             />
           )}
-          {!limited && <DashFields ctx={ctx} nodes={stroked} />}
+          {/* 破線（並びとずれ）はインスタンスでも上書きできる */}
+          <DashFields ctx={ctx} nodes={stroked} />
+          {!limited && stroked.some((node) => node.type !== 'ellipse' && !isLine(node)) && (
+            <SelectField
+              label="角の形"
+              options={optionsOf(JOIN_LABELS)}
+              value={common(stroked.map((n) => n.strokeJoin))}
+              onChange={(strokeJoin) => apply({ strokeJoin })}
+            />
+          )}
         </PaintListSection>
       )}
 
@@ -199,11 +208,12 @@ export function AppearanceSections({ ctx, onReplaceImage }: Props) {
 }
 
 /**
- * 破線にするかと、破線の線の長さ・間隔。並びが 3 つ以上（SVG から取り込んだものなど）なら、並び全体の欄も出す。
- * 並びは CSS・SVG の stroke-dasharray と同じ（dashes.ts）
+ * 破線にするかと、破線の線の長さ・間隔・ずれ。並びが 3 つ以上（SVG から取り込んだものなど）なら、並び全体の欄も出す。
+ * 並びは CSS・SVG の stroke-dasharray、ずれは stroke-dashoffset と同じ（dashes.ts）。どれもインスタンスで上書きできる
  */
 function DashFields({ ctx, nodes }: { ctx: PanelContext; nodes: (SceneNode & Style)[] }) {
-  const { store, apply } = ctx
+  const { store, apply, overridden } = ctx
+  const dashesOverridden = overridden.has('strokeDashes')
   const dashes = nodes.map((node) => node.strokeDashes)
   const style = common(dashes.map((list) => (list.length > 0 ? 'dashed' : 'solid')))
   const dashed = style === 'dashed'
@@ -220,15 +230,39 @@ function DashFields({ ctx, nodes }: { ctx: PanelContext; nodes: (SceneNode & Sty
       <CheckField
         label="破線"
         value={style === MIXED ? MIXED : dashed}
+        overridden={dashesOverridden}
         onChange={(checked) => apply({ strokeDashes: checked ? [...DEFAULT_DASHES] : [] })}
       />
       {dashed && (
-        <NumberField label="破線の長さ" value={common(even.map((list) => list[0]))} min={0} onCommit={(value) => setAt(0, value)} />
+        <NumberField
+          label="破線の長さ"
+          value={common(even.map((list) => list[0]))}
+          min={0}
+          overridden={dashesOverridden}
+          onCommit={(value) => setAt(0, value)}
+        />
       )}
-      {dashed && <NumberField label="間隔" value={common(even.map((list) => list[1]))} min={0} onCommit={(value) => setAt(1, value)} />}
+      {dashed && (
+        <NumberField
+          label="間隔"
+          value={common(even.map((list) => list[1]))}
+          min={0}
+          overridden={dashesOverridden}
+          onCommit={(value) => setAt(1, value)}
+        />
+      )}
+      {dashed && (
+        <NumberField
+          label="破線のずれ"
+          value={common(nodes.map((node) => node.strokeDashOffset))}
+          overridden={overridden.has('strokeDashOffset')}
+          onCommit={(strokeDashOffset) => apply({ strokeDashOffset })}
+        />
+      )}
       {complex && (
         <TextField
           label="破線の並び"
+          overridden={dashesOverridden}
           value={pattern === MIXED ? '' : pattern}
           onCommit={(text) => {
             const parsed = parseDashes(text)

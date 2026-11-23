@@ -35,6 +35,28 @@ describe('strokeOutline', () => {
     expect(contoursArea(contours)).toBeCloseTo(100, 1)
   })
 
+  it('破線のずれだけ並びを進めて始める（負なら戻す）', () => {
+    const line = path({ width: 100, height: 0, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], strokeWidth: 2, strokeDashes: [10, 10] })
+    // 5 進めると、最初の線は 5 だけ。線は 5 + 10 × 4 + 5（最後の空き 10 のうち 5）…で 5 本と端の 5
+    const shifted = strokeOutline({ ...line, strokeDashOffset: 5 })
+    expect(contoursArea(shifted)).toBeCloseTo(100, 1)
+    expect(pathBounds(shifted[0].vertices, true).x).toBeCloseTo(0, 5)
+    expect(shifted).toHaveLength(6)
+    // 10 進めると、空きから始まる
+    const gap = strokeOutline({ ...line, strokeDashOffset: 10 })
+    expect(Math.min(...gap.map((c) => pathBounds(c.vertices, true).x))).toBeCloseTo(10, 5)
+    // -10 は 1 周（20）足した 10 と同じ
+    expect(contoursArea(strokeOutline({ ...line, strokeDashOffset: -10 }))).toBeCloseTo(contoursArea(gap), 5)
+  })
+
+  it('角の形: 丸は角が丸く、切り落とすは角がマイターより小さい', () => {
+    const square = (strokeJoin: 'miter' | 'round' | 'bevel') => contoursArea(strokeOutline(rect({ width: 100, height: 50, strokes: stroke, strokeWidth: 10, strokeJoin })))
+    const miter = square('miter')
+    // 4 隅で、5×5 の正方形から 1/4 円・直角三角形を引いた分だけ小さい
+    expect(Math.abs(square('round') - (miter - 4 * (25 - (Math.PI * 25) / 4)))).toBeLessThan(3)
+    expect(square('bevel')).toBeCloseTo(miter - 4 * 12.5, 0)
+  })
+
   it('鋭い角はベベルになる（マイターが長すぎる）', () => {
     const v = path({ width: 100, height: 10, points: [{ x: 0, y: 0 }, { x: 1, y: 0.5 }, { x: 0, y: 1 }], strokeWidth: 2 })
     const box = strokeOutline(v).map((c) => pathBounds(c.vertices, true))

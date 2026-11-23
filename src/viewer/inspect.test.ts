@@ -485,6 +485,8 @@ describe('nodeCss', () => {
       strokes: solid('#00ff00'),
       strokeWidth: 3,
       strokeDashes: [],
+      strokeDashOffset: 0,
+      strokeJoin: 'miter',
       effects: [],
       points: [
         { x: 0, y: 0 },
@@ -500,6 +502,15 @@ describe('nodeCss', () => {
       maskType: 'vector',
     }
     expect(css(sceneOf(line), 'line').slice(2)).toEqual(['stroke: #00ff00;', 'stroke-width: 3px;'])
+    // 破線のずれ（破線のときだけ）と角の形（既定の miter 以外）
+    expect(css(sceneOf({ ...line, strokeDashes: [4, 2], strokeDashOffset: 1, strokeJoin: 'round' }), 'line').slice(2)).toEqual([
+      'stroke: #00ff00;',
+      'stroke-width: 3px;',
+      'stroke-dasharray: 4px 2px;',
+      'stroke-dashoffset: 1px;',
+      'stroke-linejoin: round;',
+    ])
+    expect(css(sceneOf({ ...line, strokeDashOffset: 1 }), 'line').slice(2)).toEqual(['stroke: #00ff00;', 'stroke-width: 3px;'])
 
     const path: PathNode = {
       ...base,
@@ -596,6 +607,8 @@ describe('inspectNode', () => {
     const shadow = { type: 'drop-shadow' as const, x: 0, y: 4, blur: 12, color: '#000000', opacity: 0.25, visible: true, spread: 0 , blendMode: 'normal' as const}
     const scene = sceneOf(rect({ strokes: solid('#0000ff'), strokeWidth: 2, effects: [shadow] }))
     expect(rowsOf(scene, 'rect', '線')).toEqual(['色=#0000FF', '太さ=2'])
+    const dashed = sceneOf(rect({ strokes: solid('#0000ff'), strokeWidth: 2, strokeDashes: [4, 2], strokeDashOffset: 3, strokeJoin: 'bevel' }))
+    expect(rowsOf(dashed, 'rect', '線')).toEqual(['色=#0000FF', '太さ=2', '破線=4, 2', '破線のずれ=3', '角の形=切り落とす'])
     expect(rowsOf(scene, 'rect', '効果')).toEqual(['種類=落ち影', '横=0', '縦=4', 'ぼかし=12', '色=#000000 25%'])
   })
 

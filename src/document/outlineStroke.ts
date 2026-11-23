@@ -1,13 +1,14 @@
 import type { Point } from './geometry.ts'
+import type { StrokeJoin } from './types.ts'
 import { ellipseVertices, type MaskNode, shapeContours } from './mask.ts'
 import { type Contour, cappedStroke, flattenPath, pathOutlines } from './path.ts'
 import { booleanContours } from './pathBoolean.ts'
 
 // 線の輪郭化（既存のデザインツールの Outline stroke）。線の太さの形を、塗る輪郭（閉じた形）にする。
 //
-// 線を細かい折れ線に直し（曲線は flattenPath と同じ細かさ）、辺ごとの長方形・頂点ごとのつなぎ目（描画と同じマイター、
-// 長さが太さの 10 倍を超えればベベル。Canvas の既定）・端の形（cappedStroke の図形）を並べ、それらをブーリアン演算の合体でまとめる。
-// 破線は、線と空きの長さで折れ線を切り分けてから同じことをする（破線の切れ目の端は切りっぱなし）。
+// 線を細かい折れ線に直し（曲線は flattenPath と同じ細かさ）、辺ごとの長方形・頂点ごとのつなぎ目（線の角の形 strokeJoin。マイターは
+// 長さが太さの 10 倍を超えればベベル。Canvas の既定。丸は円）・端の形（cappedStroke の図形）を並べ、それらをブーリアン演算の合体でまとめる。
+// 破線は、線と空きの長さ（とずれ strokeDashOffset）で折れ線を切り分けてから同じことをする（破線の切れ目の端は切りっぱなし）。
 // 結果は折れ線（曲線には戻さない）。線は輪郭の上に内と外へ半分ずつ引く（描画と同じ）。
 
 /** マイターのつなぎ目の長さの上限（線の太さに対する倍率。Canvas の miterLimit の既定） */
@@ -36,8 +37,10 @@ export function strokeOutline(node: Stroked): Contour[] {
       }
     }
     const points = withoutRepeats(flattenPath(vertices, contour.closed), contour.closed)
-    const runs = node.strokeDashes.some((d) => d > 0) ? dashRuns(points, contour.closed, node.strokeDashes) : [{ points, closed: contour.closed }]
-    for (const run of runs) pieces.push(...strokePieces(run.points, run.closed, half))
+    const runs = node.strokeDashes.some((d) => d > 0)
+      ? dashRuns(points, contour.closed, node.strokeDashes, node.strokeDashOffset)
+      : [{ points, closed: contour.closed }]
+    for (const run of runs) pieces.push(...strokePieces(run.points, run.closed, half, node.strokeJoin))
   })
   const shapes = pieces.filter((piece) => piece.length >= 3).map(oriented)
   if (shapes.length === 0) return []
@@ -62,16 +65,26 @@ function oriented(points: Point[]): Point[] {
   return area < 0 ? points.toReversed() : points
 }
 
-/** 折れ線を破線の並び（線・空きの長さを交互に。奇数なら 2 回繰り返す）で切り分けた、線を引く部分 */
-function dashRuns(points: readonly Point[], closed: boolean, dashes: readonly number[]): { points: Point[]; closed: false }[] {
+/**
+ * 折れ線を破線の並び（線・空きの長さを交互に。奇数なら 2 回繰り返す）で切り分けた、線を引く部分。
+ * offset は並びを始める位置（Canvas の lineDashOffset・SVG の stroke-dashoffset と同じ）
+ */
+export function dashRuns(points: readonly Point[], closed: boolean, dashes: readonly number[], offset = 0): { points: Point[]; closed: false }[] {
   const pattern = dashes.length % 2 === 1 ? [...dashes, ...dashes] : [...dashes]
   const total = pattern.reduce((a, b) => a + b, 0)
   if (total <= 0) return [{ points: [...points], closed: false }]
   const path = closed && points.length > 0 ? [...points, points[0]] : [...points]
   const runs: { points: Point[]; closed: false }[] = []
   let index = 0
-  let left = pattern[0]
   let on = true
+  // ずれの分だけ並びを進めてから始める（負なら 1 周分足した位置）
+  let phase = Number.isFinite(offset) ? ((offset % total) + total) % total : 0
+  while (phase >= pattern[index] && phase > 0) {
+    phase -= pattern[index]
+    index = (index + 1) % pattern.length
+    on = !on
+  }
+  let left = pattern[index] - phase
   let current: Point[] = [path[0]]
   for (let i = 1; i < path.length; i++) {
     let from = path[i - 1]
@@ -100,7 +113,7 @@ function dashRuns(points: readonly Point[], closed: boolean, dashes: readonly nu
 }
 
 /** 折れ線を太さ half × 2 で引いた形を、辺ごとの長方形とつなぎ目の図形に分けたもの */
-function strokePieces(points: readonly Point[], closed: boolean, half: number): Point[][] {
+function strokePieces(points: readonly Point[], closed: boolean, half: number, join: StrokeJoin = 'miter'): Point[][] {
   const n = points.length
   if (n < 2) return []
   const pieces: Point[][] = []
@@ -141,7 +154,9 @@ function strokePieces(points: readonly Point[], closed: boolean, half: number): 
     const sumSquared = sum.x * sum.x + sum.y * sum.y
     // マイターの先までの長さは half / cos(φ/2)（φ は 2 つの法線のなす角）。太さの MITER_LIMIT 倍を超えればベベル
     const cosHalf = Math.sqrt(sumSquared) / (2 * half)
-    if (cosHalf > 0 && 1 / cosHalf <= MITER_LIMIT) {
+    if (join === 'round') {
+      pieces.push(flattenPath(ellipseVertices(v.x, v.y, half, half), true))
+    } else if (join === 'miter' && cosHalf > 0 && 1 / cosHalf <= MITER_LIMIT) {
       const k = (2 * half * half) / sumSquared
       pieces.push([v, p1, { x: v.x + sum.x * k * s, y: v.y + sum.y * k * s }, p2])
     } else {

@@ -133,6 +133,8 @@ export function booleanPath(scene: Scene, node: BooleanNode): PathNode {
     strokes: node.strokes,
     strokeWidth: node.strokeWidth,
     strokeDashes: node.strokeDashes,
+    strokeDashOffset: node.strokeDashOffset,
+    strokeJoin: node.strokeJoin,
     effects: node.effects,
     type: 'path',
     // 何も残らなければ、何も塗らない（頂点が 1 か所に重なった）形

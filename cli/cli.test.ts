@@ -174,6 +174,17 @@ describe('kadrokreo CLI', () => {
     expect(await h.run(['new', '+', 'add', 'image', '--src', 'ok.png', '-o', 'c.kdr'])).toBe(0)
   })
 
+  it('破線のずれと線の角の形を set で変え、保存して読み直しても残る。不正な値はエラー', async () => {
+    const h = harness()
+    expect(await h.run(['new', '+', 'add', 'rect', '--name', 'Box', 'stroke=#000000', 'dash=4,2', 'dashOffset=1.5', 'join=bevel', '-o', 'a.kdr'])).toBe(0)
+    expect(h.stderr).toBe('')
+    expect(nodeByName(await h.doc('a.kdr'), 'Box')).toMatchObject({ strokeDashes: [4, 2], strokeDashOffset: 1.5, strokeJoin: 'bevel' })
+    expect(await h.run(['-f', 'a.kdr', '-w', 'set', 'Box', 'strokeJoin=round', 'strokeDashOffset=-2'])).toBe(0)
+    expect(nodeByName(await h.doc('a.kdr'), 'Box')).toMatchObject({ strokeDashOffset: -2, strokeJoin: 'round' })
+    expect(await h.run(['-f', 'a.kdr', 'set', 'Box', 'join=arcs'])).not.toBe(0)
+    expect(h.stderr).toContain('strokeJoin')
+  })
+
   it('パスの頂点の角の丸め（radius=）と端の形・印の大きさを set で変える', async () => {
     const h = harness()
     const code = await h.run([

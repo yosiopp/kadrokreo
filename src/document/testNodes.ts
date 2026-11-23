@@ -22,7 +22,7 @@ export const base = {
   minHeight: null,
   maxHeight: null,
 }
-export const paint: Style = { fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' }], strokes: [], strokeWidth: 1, strokeDashes: [], effects: [] }
+export const paint: Style = { fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' }], strokes: [], strokeWidth: 1, strokeDashes: [], strokeDashOffset: 0, strokeJoin: 'miter', effects: [] }
 
 export const rect = (patch: Partial<RectNode> = {}): RectNode => ({
   ...base,
@@ -54,6 +54,8 @@ export const path = (patch: Partial<PathNode> = {}): PathNode => ({
   strokes: [{ type: 'solid', color: '#000000', opacity: 1, visible: true, blendMode: 'normal' }],
   strokeWidth: 1,
   strokeDashes: [],
+  strokeDashOffset: 0,
+  strokeJoin: 'miter',
   effects: [],
   startCap: 'none',
   endCap: 'none',
