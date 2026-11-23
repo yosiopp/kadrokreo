@@ -1,5 +1,5 @@
 import { type Bounds, applyMatrix, nodeMatrix, unionBounds } from './geometry.ts'
-import { type MaskNode, maskFillRule, roundedRectContour, shapeContours } from './mask.ts'
+import { type ShapeNode, maskFillRule, roundedRectContour, shapeContours } from './mask.ts'
 import { strokeOutline } from './outlineStroke.ts'
 import { hasStroke } from './paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds } from './path.ts'
@@ -45,7 +45,7 @@ function ownShape(scene: Scene, node: SceneNode): BooleanShape | null {
  * 線を持たない種類（テキスト・画像）と、線のない子は null。フレームは枠の角丸の矩形、入れ子の演算のノードは結果のパスの線
  */
 function strokeShape(scene: Scene, node: SceneNode): BooleanShape | null {
-  let stroked: MaskNode
+  let stroked: ShapeNode
   switch (node.type) {
     case 'text':
     case 'image':

@@ -7,12 +7,15 @@ import { type PanelContext, common } from './context.ts'
 import { CheckField, Section, SelectField } from './fields.tsx'
 
 const MASK_HINTS: Record<MaskType, string> = {
-  vector: 'この形は描かれず、同じ親の中で手前にあるものを、次のマスクまでこの形で切り取ります。',
-  alpha: 'この形は描かれず、手前にあるものを、この形の塗りの不透明度で透かします（グラデーションの透明さも効きます）。',
-  luminance: 'この形は描かれず、手前にあるものを、この形の塗りの明るさで透かします（白は見え、黒は消えます）。',
+  vector: 'これは描かれず、同じ親の中で手前にあるものを、次のマスクまでこの形で切り取ります（テキストは文字の形、画像・フレームは枠の形）。',
+  alpha: 'これは描かれず、手前にあるものを、塗りの不透明度で透かします（グラデーションや画像の透明さも効きます。フレームは子の絵も）。',
+  luminance: 'これは描かれず、手前にあるものを、塗りの明るさで透かします（白は見え、黒は消えます。フレームは子の絵も）。',
 }
 
-/** マスクとして使うか（矩形・楕円・パスだけ）と、マスクの種類。マスクは描かれず、同じ親の中で手前にある兄弟を、次のマスクまで切り取る */
+/**
+ * マスクとして使うか（矩形・楕円・パス・テキスト・画像・フレーム）と、マスクの種類。
+ * マスクは描かれず、同じ親の中で手前にある兄弟を、次のマスクまで切り取る
+ */
 export function MaskSection({ ctx }: { ctx: PanelContext }) {
   const { nodes, apply, inner } = ctx
   if (inner || !nodes.every(canMask)) return null

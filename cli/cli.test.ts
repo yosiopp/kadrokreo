@@ -300,7 +300,11 @@ describe('kadrokreo CLI', () => {
     expect(clip.opacity).toBe(0.9)
     expect(await m.run(argv('-f m.kdr -w set Hole isMask=false'))).toBe(0)
     expect(nodeByName(await m.doc('m.kdr'), 'Hole')).toMatchObject({ isMask: false })
-    expect(await m.run(argv('-f m.kdr mask Clip'))).not.toBe(0)
+    // テキスト・画像・フレームもマスクにできる
+    expect(await m.run(argv('-f m.kdr -w mask Clip --type alpha'))).toBe(0)
+    expect(nodeByName(await m.doc('m.kdr'), 'Clip')).toMatchObject({ isMask: true, maskType: 'alpha' })
+    expect(await m.run(argv('new -o t.kdr + add text --text Hello --name Label + add rect --name Photo + mask Label Photo'))).toBe(0)
+    expect(nodeByName(await m.doc('t.kdr'), 'Label')).toMatchObject({ isMask: true, maskType: 'vector' })
   })
 
   it('boolean で合体・差し引き・交差・除外をかけ、結果を 1 つのパスにする', async () => {

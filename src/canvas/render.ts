@@ -6,7 +6,6 @@ import {
   intersects,
   multiply,
   contentMatrix,
-  nodeMatrix,
   transformRect,
 } from '../document/geometry.ts'
 import { type Vertex, capMarkerSize, capReach, cappedStroke, dashCap, pathOutlines, tracePath } from '../document/path.ts'
@@ -27,7 +26,7 @@ import type {
   Style,
   TextNode,
 } from '../document/types.ts'
-import { type MaskNode, hasMask, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from '../document/mask.ts'
+import { type MaskNode, clipsByOutline, hasMask, maskPicture, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from '../document/mask.ts'
 import { drawnNode } from '../document/booleanNode.ts'
 import { OVERLAY_COMPONENT } from './overlay.ts'
 import { isVariantSet } from '../document/variants.ts'
@@ -174,11 +173,11 @@ function drawChildren(ctx: CanvasRenderingContext2D, pass: Pass, ids: readonly N
 }
 
 /**
- * draw で描くものを、マスクで切り取って描く（ctx は親の座標系）。形だけのマスクはパスで切り取り、
- * 不透明度・明るさのマスクは、中身とマスクを別のキャンバスに描いて destination-in で重ねる（明るさは先に不透明度に直す）
+ * draw で描くものを、マスクで切り取って描く（ctx は親の座標系）。輪郭で表せる形のマスクはパスで切り取り、
+ * テキストの形のマスクと不透明度・明るさのマスクは、中身とマスクを別のキャンバスに描いて destination-in で重ねる（明るさは先に不透明度に直す）
  */
 function drawMasked(ctx: CanvasRenderingContext2D, pass: Pass, mask: MaskNode, parent: Matrix, draw: (c: CanvasRenderingContext2D) => void): void {
-  if (mask.maskType === 'vector') {
+  if (clipsByOutline(mask)) {
     ctx.save()
     clipToMask(ctx, mask)
     draw(ctx)
@@ -188,11 +187,12 @@ function drawMasked(ctx: CanvasRenderingContext2D, pass: Pass, mask: MaskNode, p
   // マスクの不透明度を先に作っておく。中身の背景のぼかしが、マスクをかけたあとの見た目を元にできるように
   const alpha = acquireLayer(ctx, pass.layerDepth)
   pass.layerDepth++
-  // マスクは塗りだけを見る（線と効果は見ない）。ノードの不透明度は効く
-  const shape = { ...mask, isMask: false, strokes: [], effects: [] }
-  const local = nodeMatrix(mask)
+  const shape = maskPicture(mask)
+  // テキスト・画像の裏返しは中身にかける（描くときと同じ）
+  const local = contentMatrix(mask)
   alpha.save()
-  alpha.globalAlpha = mask.opacity
+  // 形のマスク（テキスト）は不透明度を見ない
+  alpha.globalAlpha = mask.maskType === 'vector' ? 1 : mask.opacity
   alpha.transform(...local)
   drawContent(alpha, pass, shape, multiply(parent, local))
   alpha.restore()

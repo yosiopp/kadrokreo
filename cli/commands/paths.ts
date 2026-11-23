@@ -17,7 +17,7 @@ export const mask: Command = {
   kind: 'edit',
   usage: 'mask ノード… [--name 名前] [--type vector|alpha|luminance]',
   summary:
-    'マスクとして使う（矩形・楕円・パス）。1 つならそれをマスクにし（同じ親の中で手前のものが、次のマスクまでその形で切り取られる）、いくつもならフレームにまとめて最も背面のものをマスクにする（フレームは「@」で指せる。--name はその名前）。どれもマスクなら、やめる。--type はマスクの種類（vector は形だけ、alpha は塗りの不透明度、luminance は塗りの明るさで透かす。既定は vector）。set ノード isMask=true maskType=luminance でも変えられる',
+    'マスクとして使う（矩形・楕円・パス・テキスト・画像・フレーム）。1 つならそれをマスクにし（同じ親の中で手前のものが、次のマスクまでその形で切り取られる。テキストは文字の形、画像・フレームは枠の形）、いくつもならフレームにまとめて最も背面のものをマスクにする（フレームは「@」で指せる。--name はその名前）。どれもマスクなら、やめる。--type はマスクの種類（vector は形だけ、alpha は塗りの不透明度、luminance は塗りの明るさで透かす。フレームは子の絵も見る。既定は vector）。set ノード isMask=true maskType=luminance でも変えられる',
   run({ session }, step) {
     checkStep(step, { options: ['name', 'type'] })
     const type = option(step, 'type')
@@ -31,7 +31,7 @@ export const mask: Command = {
       result = next.id
       return next.scene
     })
-    if (!changed) throw new UsageError('mask: 最も背面のものが矩形・楕円・パスではありません')
+    if (!changed) throw new UsageError('mask: 最も背面のものはマスクにできません（ブーリアン演算のノード）')
     session.last = result === null ? [] : [result]
   },
 }

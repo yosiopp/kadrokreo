@@ -195,15 +195,18 @@ export type StrokeJoin = 'miter' | 'round' | 'bevel'
 export type CornerRadius = number | [number, number, number, number]
 
 /**
- * マスクとして使う図形（既存のデザインツールの「マスクとして使う」）。isMask が true なら、自分は描かず、同じ親の中で自分より手前（children / rootIds で後ろ）にある兄弟を、
- * 次のマスクが現れるまで自分の形で切り取る。形だけのマスクで、塗りの色・不透明度・線・効果は見ない（パスは開いていても閉じた形として切り取る）。
- * 隠したマスク（visible が false）は何も切り取らないが、手前のマスクの範囲はそこで終わる。持てるのは矩形・楕円・パスだけ
+ * マスクとして使うノード（既存のデザインツールの「マスクとして使う」）。isMask が true なら、自分は描かず、同じ親の中で自分より手前（children / rootIds で後ろ）にある兄弟を、
+ * 次のマスクが現れるまで自分の形・絵で切り取る（document/mask.ts）。
+ * 隠したマスク（visible が false）は何も切り取らないが、手前のマスクの範囲はそこで終わる。
+ * 持てるのは矩形・楕円・パス・テキスト・画像・フレーム（ブーリアン演算のノードは持てても意味はない）
  */
 export type Maskable = {
   isMask: boolean
   /**
-   * マスクの種類（既存のデザインツールの mask type）。vector は形だけ（塗りを見ない）、alpha は塗りの不透明度（グラデーションの透明さも）で透かし、
-   * luminance は塗りの明るさ（白が見え、黒が消える）に不透明度を掛けたもので透かす。alpha / luminance ではノードの opacity も効き、線と効果は見ない。
+   * マスクの種類（既存のデザインツールの mask type）。
+   * vector は形だけで、塗りの色・不透明度・線・効果は見ない（パスは開いていても閉じた形、テキストは文字の形、画像・フレームは枠（角丸を含む）の形）。
+   * alpha は塗りの不透明度（グラデーションの透明さ、画像の透明な所も）で透かし、luminance は塗りの明るさ（白が見え、黒が消える）に不透明度を掛けたもので透かす。
+   * alpha / luminance ではノードの opacity も効き、線と効果は見ない（フレームは自分の塗りと子の絵。子は線・効果も含めてふつうに描いたもの）。
    * isMask が false なら意味はない
    */
   maskType: MaskType
@@ -275,7 +278,8 @@ export type Flippable = {
   flipY: boolean
 }
 
-export type TextNode = BaseNode & {
+export type TextNode = BaseNode &
+  Maskable & {
   type: 'text'
   /** 効果（Style の effects と同じ）。内側の影は文字の形の内側に描く（CSS の text-shadow では表せないので、Dev モードのコードには含めない） */
   effects: Effect[]
@@ -295,7 +299,8 @@ export type TextNode = BaseNode & {
  * fit は、枠と画像の縦横比が違うときの収め方。
  * cover は枠を埋めてはみ出した分を切り落とし、contain は全体が入るよう余白を空け、stretch は引き伸ばす。
  */
-export type ImageNode = BaseNode & {
+export type ImageNode = BaseNode &
+  Maskable & {
   type: 'image'
   /** 効果（Style の effects と同じ）。影は枠（角丸を含む）の形に付く */
   effects: Effect[]
@@ -426,7 +431,8 @@ export type Override = {
 }
 
 export type FrameNode = BaseNode &
-  Style & {
+  Style &
+  Maskable & {
     type: 'frame'
     /** 先頭が最背面。自動で並べるときは、先頭から順に並ぶ */
     children: NodeId[]

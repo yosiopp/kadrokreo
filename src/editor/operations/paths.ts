@@ -1,6 +1,6 @@
 import { MAX_PATH_POINTS } from '../../document/kdr.ts'
 import { applyMatrix, getNodesBounds, getWorldMatrix, invert, multiply, nodeMatrix, toLocal } from '../../document/geometry.ts'
-import { type MaskNode, canMask, isMaskNode, maskFillRule, shapeContours } from '../../document/mask.ts'
+import { type ShapeNode, canMask, isMaskNode, isShape, maskFillRule, shapeContours } from '../../document/mask.ts'
 import { type Contour, mapVertices, pathContours, pathFromContours, pathOutlines } from '../../document/path.ts'
 import { type BooleanOp, booleanContours } from '../../document/pathBoolean.ts'
 import type { FrameNode, MaskType, NodeId, PathNode, Scene } from '../../document/types.ts'
@@ -11,8 +11,8 @@ import { insertNode, moveNode, patchNodes, removeNodes, sortByDocumentOrder, top
 // パスの結合・分割と、マスクとして使う操作。どれも純粋な関数で、何も変わらなければ同じ参照を返す。
 
 /** 結合できる種類（矩形・楕円・パス） */
-function joinable(scene: Scene, ids: readonly NodeId[]): MaskNode[] {
-  return sortByDocumentOrder(scene, topLevelIds(scene, ids)).map((id) => scene.nodes[id]).filter(canMask)
+function joinable(scene: Scene, ids: readonly NodeId[]): ShapeNode[] {
+  return sortByDocumentOrder(scene, topLevelIds(scene, ids)).map((id) => scene.nodes[id]).filter(isShape)
 }
 
 /** 結合できるか（矩形・楕円・パスを 2 つ以上選んでいる） */
@@ -43,7 +43,7 @@ export function joinPaths<T extends Scene>(scene: T, ids: readonly NodeId[]): { 
 }
 
 /** まとめた先（最も背面のもの）を、輪郭 shape のパスにする。矩形・楕円なら、ノードの共通の項目と見た目を引き継いだ新しいパスにする */
-function pathOnBase(base: MaskNode, shape: ReturnType<typeof pathFromContours>): PathNode {
+function pathOnBase(base: ShapeNode, shape: ReturnType<typeof pathFromContours>): PathNode {
   if (base.type === 'path') return { ...base, ...shape, rotation: 0 }
   return {
     ...createPath(shape, shape.closed),
@@ -177,7 +177,7 @@ export function maskAction(scene: Scene, ids: readonly NodeId[]): 'set' | 'clear
  * マスクとして使う（既存のデザインツールの「マスクとして使う」）。選んだものがどれもマスクなら、マスクをやめる。
  * 1 つだけ選んでいれば、それをマスクにする（同じ親の中で手前にある兄弟が切り取られる）。
  * いくつも選んでいれば、それらをフレーム（塗らず、はみ出しも隠さない）にまとめ、最も背面のものをマスクにする
- * （マスクの範囲が選んだものだけになる）。最も背面のものが矩形・楕円・パスでなければ何もしない。
+ * （マスクの範囲が選んだものだけになる）。最も背面のものがマスクにできない（ブーリアン演算のノード）なら何もしない。
  * maskType を渡すと、マスクの種類も決める（省くと今の種類のまま）。返す id は、まとめたフレーム（まとめなければマスクにしたノード）
  */
 export function applyMask<T extends Scene>(

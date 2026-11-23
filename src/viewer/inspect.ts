@@ -2,7 +2,7 @@ import { type InstanceNode, OVERRIDE_KEYS, derivedId, findMain, instanceOf, isMa
 import { type PropertyValue, canBindProperty, instanceProperties } from '../document/componentProperties.ts'
 import { type Point, type Size, getCorners, getNodesBounds, invert, nodeMatrix, tidy } from '../document/geometry.ts'
 import { BOOLEAN_OPERATION_LABELS, booleanParts, drawnNode, isBooleanNode } from '../document/booleanNode.ts'
-import { type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
+import { type MaskNode, clipsByOutline, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
 import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
 import type { CodeFormat } from './codeFormat.ts'
@@ -10,7 +10,7 @@ import { type Distance, measureCorners } from './distances.ts'
 import { cssFontFamily } from './fontFamily.ts'
 import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
-import type { AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
+import type { Asset, AssetId, AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
 import { isPassThroughFrame, passThroughFade } from '../document/passThrough.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
@@ -164,9 +164,10 @@ export function inspectNode(
     isMaskNode(node) && { label: '使い方', value: node.visible ? 'マスクとして使う（描かない）' : 'マスク（隠しているのでかけない）' },
     isMaskNode(node) && node.maskType !== 'vector' && { label: '種類', value: MASK_TYPE_LABELS[node.maskType] },
     appliedMask !== null && { label: 'かかるマスク', value: appliedMask.name },
-    appliedMask !== null && appliedMask.maskType !== 'vector' && {
+    appliedMask !== null && !clipsByOutline(appliedMask) && {
       label: 'CSS',
-      value: `${MASK_TYPE_LABELS[appliedMask.maskType]}のマスクは、マスクの絵を SVG にした mask-image で書いている`,
+      value: `${appliedMask.maskType === 'vector' ? 'テキストの形' : MASK_TYPE_LABELS[appliedMask.maskType]}のマスクは、マスクの絵を SVG にした mask-image で書いている` +
+        (appliedMask.type === 'image' || appliedMask.type === 'frame' ? '（画像は data URI で埋め込む）' : ''),
     },
   ])
 
@@ -386,7 +387,7 @@ function overrideRow(label: string, override: Override | undefined): InspectRow 
  * ノードの見た目を CSS で表す。実装するときの手がかりにするためのもので、
  * 直線とパスは CSS で形を描けないので、SVG に指定するプロパティ（stroke など）で表す。
  */
-export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = {}): string {
+export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = {}, assets: Record<AssetId, Asset> = {}): string {
   const style = { ...DEFAULT_CODE_STYLE, ...options }
   // 隠した塗り・線・効果は書かない。ブーリアン演算のノードは結果の形のパス（SVG）として書く
   const node = withoutHidden(drawnNode(scene, scene.nodes[id]))
@@ -591,13 +592,14 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   if (maskId !== null) {
     const mask = scene.nodes[maskId] as MaskNode
     const m = invert(nodeMatrix(node))
-    if (mask.maskType === 'vector') {
+    if (clipsByOutline(mask)) {
       const d = contoursData(maskContours(mask, m))
       add('clip-path', `path(${maskFillRule(mask) === 'evenodd' ? 'evenodd, ' : ''}'${d}')`)
     } else {
-      // 不透明度・明るさのマスクは、マスクの絵を自分の枠に合わせた SVG にして mask-image に書く（枠の外は透けない）
-      add('mask-image', `url("${svgDataUrl(maskImageSvg(mask, m, node))}")`)
-      add('mask-mode', mask.maskType === 'alpha' ? 'alpha' : 'luminance')
+      // 不透明度・明るさのマスクとテキストの形のマスクは、マスクの絵を自分の枠に合わせた SVG にして mask-image に書く（枠の外は透けない）。
+      // テキストの形は、不透明な色で塗った文字の不透明度で透かす
+      add('mask-image', `url("${svgDataUrl(maskImageSvg(scene, mask, m, node, { assets }))}")`)
+      add('mask-mode', mask.maskType === 'luminance' ? 'luminance' : 'alpha')
       add('mask-size', '100% 100%')
       add('mask-repeat', 'no-repeat')
     }

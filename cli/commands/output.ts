@@ -23,7 +23,7 @@ export const css: Command = {
   run({ session, print }, step) {
     checkStep(step, { options: ['format', 'unit', 'rem-base', 'color'], positionals: 1 })
     const id = session.resolveOne(positional(step, 0, 'ノード'))
-    print(nodeCode(session.page, id, codeStyle(step)).code)
+    print(nodeCode(session.page, id, codeStyle(step), session.document.assets).code)
   },
 }
 

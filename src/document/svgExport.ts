@@ -1,9 +1,9 @@
-import { IDENTITY, type Matrix, contentMatrix, flipMatrix, getWorldMatrix, invert, multiply, nodeMatrix, tidy, transformRect } from './geometry.ts'
+import { IDENTITY, type Matrix, contentMatrix, flipMatrix, getWorldMatrix, invert, multiply, nodeMatrix, tidy, transformRect, unionBounds } from './geometry.ts'
 import { drawnNode } from './booleanNode.ts'
 import { readImageInfo } from './imageInfo.ts'
 import { type TextLinesOf, alignFactor, blurRadius, clampedRadii, getPaintedBounds, hasStroke, imageRect, isRounded, isShadow, solidPaint, splitEffects, withoutHidden } from './paint.ts'
 import { isPassThroughFrame, passThroughFade } from './passThrough.ts'
-import { KAPPA, type MaskNode, isMaskNode, maskContours, maskFillRule, maskOf, masksOf } from './mask.ts'
+import { KAPPA, type MaskNode, clipsByOutline, isMaskNode, maskContours, maskFillRule, maskOf, maskPicture, masksOf } from './mask.ts'
 import { contoursData, isLine } from './path.ts'
 import { dataUri, escapeXml, gradientDef, pathSvg, strokeShapeAttrs } from './svgShapes.ts'
 import type {
@@ -46,8 +46,8 @@ import type {
 //   フォントは埋め込まず、名前だけを書く（kdr は書体のファイルを持たず、OS の書体は再配布できないものが多いため）。1 行目の基線は、呼び出し側がフォントの実際の高さ（textMetrics）を
 //   渡せば描画と同じ位置に、渡さなければ SVG の取り込みと同じ見積もり（文字の上 0.9・下 0.22）で置く。
 // - 画像は data URI の image。fit と切り抜きは imageRect で置き、枠の外は clipPath で切る。
-// - マスク（isMask）は書かず、そこから次のマスクまでの兄弟を、マスクの形の path の clipPath をかけた g にまとめる。
-//   不透明度・明るさのマスク（maskType）は、マスクの図形を塗りだけで描いた mask にする。
+// - マスク（isMask）は書かず、そこから次のマスクまでの兄弟を、マスクの形の path の clipPath をかけた g にまとめる（画像・フレームは枠の形）。
+//   不透明度・明るさのマスク（maskType）とテキストの形のマスクは、マスクのノードを塗りだけで描いた mask にする（テキストの形は不透明な色で塗った mask-type:alpha）。
 // - ブーリアン演算のノードは、結果の形の path（evenodd）として書く（子は書かない）。
 // 取り込み（editor/svg/）で読み戻すと同じ形になることを svgExport.test.ts で確かめている。
 
@@ -115,12 +115,18 @@ export function exportSvg(scene: Scene, targets: readonly NodeId[], options: Svg
 }
 
 /**
- * 不透明度・明るさのマスクの絵を、かかるノードの枠（size）に合わせた SVG の文字列にする（Dev モードの CSS の mask-image に使う）。
- * m はマスクの親の座標系から、かかるノードの座標系への変換。マスクは線と効果を見ず、塗りだけで描く（描画と同じ）
+ * 絵で透かすマスク（不透明度・明るさのマスクと、テキストの形のマスク）の絵を、かかるノードの枠（size）に合わせた SVG の文字列にする（Dev モードの CSS の mask-image に使う）。
+ * m はマスクの親の座標系から、かかるノードの座標系への変換。マスクは線と効果を見ず、塗りだけで描く（描画と同じ）。
+ * scene はマスクのあるページ（フレームのマスクは子も描く）。画像は options.assets があれば data URI で埋め込む
  */
-export function maskImageSvg(mask: MaskNode, m: Matrix, size: { width: number; height: number }): string {
-  const scene: Scene = { nodes: { [mask.id]: mask }, rootIds: [mask.id] }
-  const writer = new SvgWriter(scene, { assets: {}, ids: false })
+export function maskImageSvg(
+  scene: Scene,
+  mask: MaskNode,
+  m: Matrix,
+  size: { width: number; height: number },
+  options: Partial<SvgExportOptions> = {},
+): string {
+  const writer = new SvgWriter(scene, { assets: {}, ...options, ids: false })
   const body = writer.maskShape(mask, multiply(m, nodeMatrix(mask)))
   const defs = writer.defs.length > 0 ? `<defs>${writer.defs.join('')}</defs>` : ''
   const width = tidy(Math.max(size.width, 0))
@@ -248,7 +254,7 @@ class SvgWriter {
    * clipPath の id はマスクのレイヤー名から作る（取り込むとマスクの名前に戻る）
    */
   masked(mask: MaskNode, m: Matrix, content: string): string {
-    if (mask.maskType !== 'vector') return this.paintedMask(mask, m, content)
+    if (!clipsByOutline(mask)) return this.paintedMask(mask, m, content)
     const id = this.nameId(mask.name)
     const rule = maskFillRule(mask) === 'evenodd' ? ' clip-rule="evenodd"' : ''
     this.defs.push(`<clipPath id="${escapeXml(id)}"><path d="${contoursData(maskContours(mask, m))}"${rule}/></clipPath>`)
@@ -256,25 +262,34 @@ class SvgWriter {
   }
 
   /**
-   * 不透明度・明るさのマスク（maskType が alpha / luminance）。マスクの図形を塗りだけで描いた mask をかけた g。
-   * SVG の mask は明るさで透かすのが既定なので、不透明度なら style の mask-type:alpha を付ける。範囲はマスクの枠（外は透けない）
+   * 絵で透かすマスク（maskType が alpha / luminance と、テキストの形のマスク）。マスクのノードを塗りだけで描いた mask をかけた g。
+   * SVG の mask は明るさで透かすのが既定なので、不透明度とテキストの形なら style の mask-type:alpha を付ける
+   * （テキストの形は、取り込み直しても形のマスクに戻るよう data-kdr-mask-type="vector" も付ける）。
+   * 範囲はマスクの枠に、枠からはみ出して描かれる所（切り取らないフレームの子、テキストのはみ出す行）を足したもの（外は透けない）
    */
   private paintedMask(mask: MaskNode, m: Matrix, content: string): string {
     const id = this.nameId(mask.name)
     const local = multiply(m, nodeMatrix(mask))
-    const box = transformRect(local, { x: 0, y: 0, width: mask.width, height: mask.height })
+    let box = transformRect(local, { x: 0, y: 0, width: mask.width, height: mask.height })
+    if ((mask.type === 'frame' && !mask.clipContent) || mask.type === 'text') {
+      const painted = getPaintedBounds(this.scene, [mask.id], this.options.textLines)
+      if (painted) {
+        const toTarget = multiply(m, invert(getWorldMatrix(this.scene, mask.parentId)))
+        box = unionBounds([box, transformRect(toTarget, painted)]) ?? box
+      }
+    }
     const body = this.maskShape(mask, local)
-    const type = mask.maskType === 'alpha' ? ' style="mask-type:alpha"' : ''
+    const type =
+      mask.maskType === 'luminance' ? '' : mask.maskType === 'alpha' ? ' style="mask-type:alpha"' : ' style="mask-type:alpha" data-kdr-mask-type="vector"'
     this.defs.push(
       `<mask id="${escapeXml(id)}" maskUnits="userSpaceOnUse" x="${tidy(box.x)}" y="${tidy(box.y)}" width="${tidy(box.width)}" height="${tidy(box.height)}"${type}>${body}</mask>`,
     )
     return `<g mask="url(#${escapeXml(id)})">${content}</g>`
   }
 
-  /** マスクの図形を、線と効果を見ずに塗りだけで書く（マスクの印を外して、ふつうの図形として）。local はマスクの枠から書き込む先への変換 */
+  /** マスクのノードを、線と効果を見ずに塗りだけで書く（マスクの印を外して、ふつうのノードとして）。local はマスクの枠から書き込む先への変換 */
   maskShape(mask: MaskNode, local: Matrix): string {
-    const shape = { ...mask, isMask: false, strokes: [], effects: [], blendMode: 'normal' as const }
-    return this.node(mask.id, local, IDENTITY, shape).replace(/^<(\w+) id="[^"]*"/, '<$1')
+    return this.node(mask.id, local, IDENTITY, maskPicture(mask)).replace(/^<(\w+) id="[^"]*"/, '<$1')
   }
 
   /** ノードの中身の要素（ノードの座標系） */

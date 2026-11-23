@@ -38,6 +38,8 @@ function base(name: string, bounds: Bounds) {
     maxWidth: null,
     minHeight: null,
     maxHeight: null,
+    isMask: false,
+    maskType: 'vector' as const,
   }
 }
 

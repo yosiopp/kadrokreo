@@ -417,6 +417,8 @@ function parseNode(
         lineHeight: optional('lineHeight', size),
         flipX: optional('flipX', boolean),
         flipY: optional('flipY', boolean),
+        isMask: isMask(),
+        maskType: maskType(),
       }
     case 'image': {
       const assetId = nodeId(raw.assetId, at('assetId'))
@@ -434,6 +436,8 @@ function parseNode(
         scale: optional('scale', imageScale),
         flipX: optional('flipX', boolean),
         flipY: optional('flipY', boolean),
+        isMask: isMask(),
+        maskType: maskType(),
       }
     }
     case 'frame':
@@ -451,6 +455,8 @@ function parseNode(
         setDescription: optional('setDescription', string),
         booleanOperation: booleanOperation(),
         booleanIncludeStrokes: optional('booleanIncludeStrokes', boolean),
+        isMask: isMask(),
+        maskType: maskType(),
       }
   }
 }

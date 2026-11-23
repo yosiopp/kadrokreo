@@ -21,6 +21,8 @@ export const base = {
   maxWidth: null,
   minHeight: null,
   maxHeight: null,
+  isMask: false,
+  maskType: 'vector' as const,
 }
 export const paint: Style = { fills: [{ type: 'solid', color: '#ff0000', opacity: 1, visible: true, blendMode: 'normal' }], strokes: [], strokeWidth: 1, strokeDashes: [], strokeDashOffset: 0, strokeJoin: 'miter', effects: [] }
 

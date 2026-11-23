@@ -932,6 +932,56 @@ describe('マスク', () => {
   })
 })
 
+describe('テキスト・画像・フレームのマスク', () => {
+  const photo = () => named(createRect({ x: 0, y: 0, width: 200, height: 100 }), 'Photo')
+
+  it('テキストの形のマスクは、不透明な色の文字の mask（mask-type:alpha）に書き、読み戻すと形のマスクのテキストに戻る', () => {
+    const label = named(createText({ x: 10, y: 10, width: 80, height: 20 }, 'Hello'), 'Label', { isMask: true, fills: [] })
+    const { svg, byName, warnings } = roundTrip(sceneOf(label, photo()))
+    expect(svg).toMatch(/<mask id="Label" maskUnits="userSpaceOnUse" [^>]*style="mask-type:alpha" data-kdr-mask-type="vector"><text /)
+    expect(svg).toContain('fill="#000000"')
+    expect(svg).toContain('<g mask="url(#Label)"><rect id="Photo"')
+    expect(warnings).toEqual([])
+    expect(byName('Label')).toMatchObject({ type: 'text', isMask: true, maskType: 'vector', text: 'Hello' })
+  })
+
+  it('テキストの明るさのマスクは、塗りの色のまま mask に書き、読み戻すと明るさのマスクに戻る', () => {
+    const label = named(createText({ x: 10, y: 10, width: 80, height: 20 }, 'Hello'), 'Label', { isMask: true, maskType: 'luminance', fills: [{ type: 'solid', color: '#ffffff', opacity: 1, visible: true, blendMode: 'normal' }] })
+    const { svg, byName } = roundTrip(sceneOf(label, photo()))
+    expect(svg).not.toContain('mask-type')
+    expect(byName('Label')).toMatchObject({ type: 'text', isMask: true, maskType: 'luminance' })
+  })
+
+  it('画像・フレームの形のマスクは、枠（角丸）の clipPath に書く', () => {
+    const box = named(createFrame({ x: 10, y: 10, width: 80, height: 40 }), 'Box', { isMask: true, cornerRadius: 10 })
+    const { svg } = roundTrip(sceneOf(box, photo()))
+    expect(svg).toMatch(/<clipPath id="Box"><path d="M10 20 C/)
+    expect(svg).toContain('<g clip-path="url(#Box)"><rect id="Photo"')
+  })
+
+  it('画像の不透明度のマスクは画像を描いた mask に書き、読み戻すと画像のマスクに戻る', () => {
+    const bytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0, 0, 0, 0,
+    ])
+    const id = sha256Hex(bytes)
+    const image = named(createImage({ x: 10, y: 10, width: 40, height: 20 }, id), 'Stencil', { fit: 'stretch', isMask: true, maskType: 'alpha' }) as ImageNode
+    const { svg, byName } = roundTrip(sceneOf(image, photo()), { [id]: { mime: 'image/png', bytes } })
+    expect(svg).toMatch(/<mask id="Stencil" [^>]*style="mask-type:alpha"><image /)
+    expect(byName('Stencil')).toMatchObject({ type: 'image', isMask: true, maskType: 'alpha', assetId: id })
+  })
+
+  it('フレームの明るさのマスクは、子まで描いた mask に書き、範囲ははみ出した子も含める。読み戻すとフレームのマスクになる', () => {
+    const box = named(createFrame({ x: 10, y: 10, width: 80, height: 40 }), 'Box', { isMask: true, maskType: 'luminance', fills: [], clipContent: false })
+    const white = named(createRect({ x: 60, y: 0, width: 40, height: 40 }), 'White', { parentId: 'Box', fills: [{ type: 'solid', color: '#ffffff', opacity: 1, visible: true, blendMode: 'normal' }] })
+    const { svg, byName, imported } = roundTrip(sceneOf(box, white, photo()))
+    expect(svg).toMatch(/<mask id="Box" maskUnits="userSpaceOnUse" x="10" y="10" width="100" height="40"><g /)
+    expect(svg).toContain('fill="#ffffff"')
+    const back = byName('Box')
+    expect(back).toMatchObject({ type: 'frame', isMask: true, maskType: 'luminance' })
+    expect(back.type === 'frame' && back.children.map((child) => imported.nodes[child].name)).toContain('White')
+  })
+})
+
 describe('ブーリアン演算のノード', () => {
   it('結果の形の path（evenodd）として書き、子は書かない', () => {
     const node = named(createFrame({ x: 0, y: 0, width: 150, height: 100 }), 'Union', { booleanOperation: 'union', clipContent: false })

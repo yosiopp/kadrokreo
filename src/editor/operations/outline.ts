@@ -1,6 +1,6 @@
 import { booleanPath, isBooleanNode } from '../../document/booleanNode.ts'
 import { applyMatrix, nodeMatrix } from '../../document/geometry.ts'
-import { type MaskNode, canMask } from '../../document/mask.ts'
+import { type ShapeNode, isShape } from '../../document/mask.ts'
 import { strokeOutline } from '../../document/outlineStroke.ts'
 import { hasStroke, shownPaints } from '../../document/paint.ts'
 import { isLine, mapVertices, pathFromContours } from '../../document/path.ts'
@@ -12,10 +12,10 @@ import { insertNode, removeNodes, topLevelIds } from './tree.ts'
 // 線の輪郭化（既存のデザインツールの Outline stroke）。線の形を、線の色で塗るパスにする。純粋な関数で、何も変わらなければ同じ参照を返す。
 
 /** 輪郭化の材料になる形（矩形・楕円・パスと、ブーリアン演算のノードは結果のパス）。線がなければ null */
-function strokedShape(scene: Scene, node: SceneNode | undefined): MaskNode | null {
+function strokedShape(scene: Scene, node: SceneNode | undefined): ShapeNode | null {
   if (!node) return null
   const shape = isBooleanNode(node) ? booleanPath(scene, node) : node
-  return canMask(shape) && hasStroke(shape) ? shape : null
+  return isShape(shape) && hasStroke(shape) ? shape : null
 }
 
 /** 輪郭化できるか（線のある矩形・楕円・パス・ブーリアン演算のノードを選んでいる） */

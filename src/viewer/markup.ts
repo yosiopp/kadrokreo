@@ -29,8 +29,8 @@ export function imageExtension(mime: string): string {
 /** 1 つのノードの CSS を、出力形式に合わせて書いたもの（パネルの「CSS」の欄） */
 export type NodeCode = { title: string; copyLabel: string; code: string }
 
-export function nodeCode(scene: Scene, id: NodeId, options: Partial<CodeStyle> = {}): NodeCode {
-  const css = nodeCss(scene, id, options)
+export function nodeCode(scene: Scene, id: NodeId, options: Partial<CodeStyle> = {}, assets: Record<AssetId, Asset> = {}): NodeCode {
+  const css = nodeCss(scene, id, options, assets)
   switch (options.format ?? DEFAULT_CODE_STYLE.format) {
     case 'react':
       return { title: 'style', copyLabel: 'style をコピー', code: jsxStyle(parseDeclarations(css), true) }
@@ -97,7 +97,7 @@ export function nodeMarkup(
     const node = drawnNode(tree, source)
     const indent = '  '.repeat(depth)
     const name = className(node)
-    let css = nodeCss(tree, node.id, style)
+    let css = nodeCss(tree, node.id, style, assets)
     // SVG は枠の外に出る線の太さの分を切らない
     if (node.type === 'path') css += '\noverflow: visible;'
     if (format !== 'react' && format !== 'tailwind') rules.push(`.${name} {\n${css.replace(/^/gm, '  ')}\n}`)

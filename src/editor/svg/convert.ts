@@ -14,7 +14,7 @@ import {
   unionBounds,
 } from '../../document/geometry.ts'
 import { isImageTooLarge, readImageInfo } from '../../document/imageInfo.ts'
-import { KAPPA, ellipseVertices } from '../../document/mask.ts'
+import { KAPPA, canMask, ellipseVertices } from '../../document/mask.ts'
 import { BLEND_MODES, CAPS, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES, MAX_DASHES, MAX_PAINTS, MAX_PATH_POINTS, MAX_STOPS } from '../../document/kdr.ts'
 import { angleLine, fitFocus, isShadow, linearFromAngle, solidPaint } from '../../document/paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
@@ -68,6 +68,8 @@ import {
 // - clip-path / mask は、中身が矩形・円 1 つで、軸に沿って置かれているときは、切り取るフレーム（角丸）にする。
 //   kadrokreo の書き出しが切り取りを子の要素ごとにかけたもの（data-kdr-clip の g と data-kdr-clip-of の clipPath）は、印の g を 1 つの切り取るフレームに戻す。
 //   ほかの形（パス・多角形・回った矩形・いくつもの形・objectBoundingBox）は、形をマスク（isMask）のパスにして中身と一緒にフレームにまとめる（maskShape）。
+//   mask の中身が図形 1 つで塗りがグラデーションか mask-type: alpha なら、その図形を明るさ・不透明度のマスクに（paintedMask）、
+//   中身にテキスト・画像・グループがあれば、中身のノード（いくつもならまとめたフレーム）をその絵で透かすマスクにする（pictureMask）。
 // - <image> は data URI の PNG / JPEG / WebP / GIF を画像のノードに、SVG（data:image/svg+xml）を別の文書として変換したフレームにする（外部の URL は読まない）。
 // - <text> と <image> にかかる変換が裏返していれば、左右の裏返し（flipX）と回転にする（上下の裏返しは左右の裏返し + 180° の回転）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
@@ -118,6 +120,9 @@ const EFFECT_ELEMENTS = new Set([...SHAPE_ELEMENTS, 'g', 'text', 'image'])
 /** 親から受け継ぐ値（presentation attribute と style 属性） */
 /** 塗りで透かすマスク（paintedMask）の中身にできる図形 */
 const PAINTED_MASK_SHAPES = new Set(['rect', 'circle', 'ellipse', 'path', 'polygon'])
+
+/** mask の中身にあれば、中身をノードにしてその絵で透かすマスクにする要素（pictureMask） */
+const PICTURE_MASK_ELEMENTS = new Set(['text', 'image', 'g', 'svg', 'a', 'switch'])
 
 type Inherited = {
   fill: string
@@ -835,14 +840,16 @@ class Converter {
   /**
    * 塗りで透かす mask（中身が図形 1 つで、塗りがグラデーションか、mask-type: alpha のもの）は、その図形を塗りごとノードにして
    * 不透明度・明るさのマスク（maskType）にする。それ以外（単色・いくつもの形）は、形のマスクやフレームの不透明度で表す（clipRegion / maskShape）。
+   * 中身にテキスト・画像・グループがあれば pictureMask。
    * 当てはまらなければ null
    */
   private paintedMask(element: SvgElement, target: SvgElement, matrix: Matrix, ids: NodeId[], depth: number): NodeId | null {
     if (target.attributes.maskContentUnits?.trim() === 'objectBoundingBox') return null
     const shapes = shapeChildren(target)
+    const type = this.declared(target)['mask-type']?.trim() === 'alpha' ? 'alpha' : 'luminance'
+    if (shapes.some((shape) => PICTURE_MASK_ELEMENTS.has(shape.name))) return this.pictureMask(element, target, shapes, type, matrix, ids, depth)
     if (shapes.length !== 1 || !PAINTED_MASK_SHAPES.has(shapes[0].name)) return null
     const [shape] = shapes
-    const type = this.declared(target)['mask-type']?.trim() === 'alpha' ? 'alpha' : 'luminance'
     const fill = this.declared(shape).fill?.trim() ?? ''
     if (type === 'luminance' && !fill.startsWith('url(')) return null
     const converted = this.convertElement(shape, matrix, this.inherit(target, ROOT_INHERITED), depth, 0)
@@ -853,6 +860,11 @@ class Converter {
     }
     const name = target.attributes.id ?? 'Mask'
     const mask = { ...node, name, isMask: true, maskType: type, strokes: [], effects: [] } satisfies SceneNode
+    return this.placeMask(element, mask, ids)
+  }
+
+  /** マスクのノードを、かかる中身（ids）の最背面に置く。中身が切り取らないグループのフレーム 1 つならその中へ、そうでなければ一緒にフレームにまとめる */
+  private placeMask(element: SvgElement, mask: SceneNode, ids: NodeId[]): NodeId {
     const only = ids.length === 1 ? this.nodes[ids[0]] : null
     if (only?.type === 'frame' && GROUP_ELEMENTS.has(element.name) && !only.clipContent) {
       this.nodes[mask.id] = { ...mask, x: mask.x - only.x, y: mask.y - only.y, parentId: only.id }
@@ -861,7 +873,34 @@ class Converter {
     }
     this.nodes[mask.id] = mask
     const box = this.boundsOf(ids)!
-    return this.wrap([mask.id, ...ids], box, { name, clipContent: false })
+    return this.wrap([mask.id, ...ids], box, { name: mask.name, clipContent: false })
+  }
+
+  /**
+   * 中身にテキスト・画像・グループを含む mask は、中身をノードにして（いくつもならフレームにまとめて）、その絵で透かすマスクにする。
+   * 書き出しのテキストの形のマスク（data-kdr-mask-type="vector"）は形のマスクに戻す。変換できなければ null
+   */
+  private pictureMask(
+    element: SvgElement,
+    target: SvgElement,
+    shapes: SvgElement[],
+    type: 'alpha' | 'luminance',
+    matrix: Matrix,
+    ids: NodeId[],
+    depth: number,
+  ): NodeId | null {
+    const inherited = this.inherit(target, ROOT_INHERITED)
+    const converted = shapes.flatMap((shape) => this.convertElement(shape, matrix, inherited, depth + 1, 0))
+    if (converted.length === 0) return null
+    const name = target.attributes.id ?? 'Mask'
+    const first = this.nodes[converted[0]]
+    const picture =
+      converted.length === 1 && canMask(first)
+        ? first
+        : (this.nodes[this.wrap(converted, this.boundsOf(converted)!, { name, clipContent: false })] as FrameNode)
+    const vector = target.attributes['data-kdr-mask-type']?.trim() === 'vector' && picture.type === 'text'
+    const mask = { ...picture, name, isMask: true, maskType: vector ? 'vector' : type } as SceneNode
+    return this.placeMask(element, mask, ids)
   }
 
   /** clipPath / mask の中身が、軸に沿った矩形・円 1 つなら、その枠（外側のフレームの座標）と角の丸め */

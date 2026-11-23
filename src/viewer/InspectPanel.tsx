@@ -239,7 +239,7 @@ export function InspectPanel({
     )
   }
 
-  const code = nodeCode(page, node.id, style)
+  const code = nodeCode(page, node.id, style, document.assets)
   const cssKey = `${node.id}/css`
   // 中身のあるフレームは、子孫までまとめた HTML（形式が React なら JSX、Vue なら .vue ファイル）と CSS も出す
   const markup =

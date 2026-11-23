@@ -1,6 +1,6 @@
 import type { Point } from './geometry.ts'
 import type { Cap, StrokeJoin } from './types.ts'
-import { ellipseVertices, type MaskNode, shapeContours } from './mask.ts'
+import { ellipseVertices, type ShapeNode, shapeContours } from './mask.ts'
 import { type Contour, cappedStroke, dashCap, flattenPath, pathOutlines } from './path.ts'
 import { fitContour } from './fitCurve.ts'
 import { booleanContours } from './pathBoolean.ts'
@@ -17,7 +17,7 @@ import { booleanContours } from './pathBoolean.ts'
 const MITER_LIMIT = 10
 
 /** 輪郭化できる図形の線の設定 */
-type Stroked = MaskNode
+type Stroked = ShapeNode
 
 /**
  * 線の形の輪郭（ノードの座標系、nonzero・evenodd どちらで読んでも同じ。重なりのない閉じた形）。

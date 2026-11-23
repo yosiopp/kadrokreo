@@ -1025,6 +1025,44 @@ describe('不透明度・明るさのマスクの CSS', () => {
   })
 })
 
+describe('テキスト・画像・フレームのマスクの CSS', () => {
+  const children = ['mask', 'photo']
+  const card = frame({ id: 'frame', name: 'Card', width: 200, height: 200, children })
+  const photo = rect({ id: 'photo', name: 'Photo', parentId: 'frame', x: 0, y: 0, width: 100, height: 100 })
+  const svgOf = (lines: string[]) => {
+    const image = lines.find((line) => line.startsWith('mask-image'))!
+    return decodeURIComponent(image.slice('mask-image: url("data:image/svg+xml,'.length, -'");'.length))
+  }
+
+  it('テキストの形のマスクは、不透明な色で塗った文字の SVG を mask-mode: alpha で書く', () => {
+    const scene = sceneOf(card, text({ id: 'mask', name: 'Label', parentId: 'frame', x: 10, y: 10, isMask: true, fills: [] }), photo)
+    const lines = css(scene, 'photo')
+    expect(lines).toContain('mask-mode: alpha;')
+    expect(svgOf(lines)).toContain("fill='#000000'")
+    expect(svgOf(lines)).toContain('こんにちは')
+    expect(lines.some((line) => line.startsWith('clip-path'))).toBe(false)
+  })
+
+  it('画像・フレームの形のマスクは、枠（角丸）の clip-path にする', () => {
+    const scene = sceneOf(card, frame({ id: 'mask', name: 'Box', parentId: 'frame', x: 10, y: 10, width: 50, height: 40, cornerRadius: 8, isMask: true }), photo)
+    const lines = css(scene, 'photo')
+    expect(lines.find((line) => line.startsWith('clip-path'))).toMatch(/^clip-path: path\('M10 18 C/)
+    expect(lines.some((line) => line.startsWith('mask-image'))).toBe(false)
+  })
+
+  it('フレームの明るさのマスクは、フレームの塗りと子を描いた SVG にする', () => {
+    const scene = sceneOf(
+      card,
+      frame({ id: 'mask', name: 'Box', parentId: 'frame', x: 10, y: 10, width: 50, height: 40, isMask: true, maskType: 'luminance', fills: [], children: ['white'] }),
+      rect({ id: 'white', name: 'White', parentId: 'mask', x: 5, y: 5, width: 20, height: 20, fills: [{ type: 'solid', color: '#ffffff', opacity: 1, visible: true, blendMode: 'normal' }] }),
+      photo,
+    )
+    const lines = css(scene, 'photo')
+    expect(lines).toContain('mask-mode: luminance;')
+    expect(svgOf(lines)).toContain("fill='#ffffff'")
+  })
+})
+
 describe('ブーリアン演算の元の図形の数', () => {
   it('演算に入る子（見えていて、テキストでないもの。入れ子の演算も 1 個）だけを数える', () => {
     const op = frame({ id: 'op', children: ['a', 'hidden', 'label', 'inner', 'gone'], booleanOperation: 'union' })

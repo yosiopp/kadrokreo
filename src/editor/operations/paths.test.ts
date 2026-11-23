@@ -98,7 +98,9 @@ describe('マスクとして使う', () => {
   it('1 つならそれをマスクにし、どれもマスクならやめる', () => {
     const scene = sceneOf(rect({ id: 'm' }), rect({ id: 'a' }), text({ id: 't' }))
     expect(maskAction(scene, ['m'])).toBe('set')
-    expect(maskAction(scene, ['t'])).toBeNull()
+    expect(maskAction(scene, ['t'])).toBe('set')
+    // ブーリアン演算のノードはマスクにできない（結果のパスとして描く）
+    expect(maskAction(sceneOf(frame({ id: 'b', booleanOperation: 'union' })), ['b'])).toBeNull()
     const masked = applyMask(scene, ['m'], 'Mask group')
     expect(masked.id).toBe('m')
     expect(masked.scene.nodes.m).toMatchObject({ isMask: true })
@@ -118,9 +120,11 @@ describe('マスクとして使う', () => {
     expect(group.children).toEqual(['m', 'a'])
     expect(next.rootIds).toEqual([id, 'other'])
     expect(next.nodes.m).toMatchObject({ isMask: true, parentId: id })
-    // 背面のものが矩形・楕円・パスでなければ何もしない
+    // 背面のものがテキストでもマスクにできる。ブーリアン演算のノードなら何もしない
     const withText = sceneOf(text({ id: 't' }), rect({ id: 'a' }))
-    expect(applyMask(withText, ['t', 'a'], 'Mask group').scene).toBe(withText)
+    expect(applyMask(withText, ['t', 'a'], 'Mask group', 'luminance').scene.nodes.t).toMatchObject({ isMask: true, maskType: 'luminance' })
+    const withBoolean = sceneOf(frame({ id: 'b', booleanOperation: 'union' }), rect({ id: 'a' }))
+    expect(applyMask(withBoolean, ['b', 'a'], 'Mask group').scene).toBe(withBoolean)
   })
 })
 

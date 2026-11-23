@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hitTest, hitTestFrameLabel } from './hitTest.ts'
 import { pathFromPoints } from '../document/path.ts'
-import { ellipse, frame, path, rect, sceneOf } from '../document/testNodes.ts'
+import { ellipse, frame, path, rect, sceneOf, text } from '../document/testNodes.ts'
 import type { Scene, SceneNode } from '../document/types.ts'
 
 /** 1 つのノードを差し替えたシーン */
@@ -175,5 +175,20 @@ describe('マスク', () => {
     const withoutContent = { ...scene, rootIds: ['below', 'mask'] }
     expect(hitTest(withoutContent, { x: 50, y: 50 })).toBe('mask')
     expect(hitTest(masked(false), { x: 150, y: 150 })).toBe('content')
+  })
+
+  it('フレーム・画像のマスクは枠（角丸を含む）、テキストのマスクは枠の矩形で当たる。マスクのフレームの子には当たらない', () => {
+    const scene = sceneOf(
+      rect({ id: 'below', x: 0, y: 0, width: 300, height: 300 }),
+      frame({ id: 'mask', x: 0, y: 0, width: 100, height: 100, cornerRadius: 50, isMask: true, children: ['child'] }),
+      rect({ id: 'child', parentId: 'mask', x: 0, y: 0, width: 100, height: 100 }),
+      rect({ id: 'content', x: 0, y: 0, width: 200, height: 200 }),
+    )
+    expect(hitTest(scene, { x: 50, y: 50 })).toBe('content')
+    expect(hitTest(scene, { x: 5, y: 5 })).toBe('below')
+    expect(hitTest({ ...scene, rootIds: ['below', 'mask'] }, { x: 50, y: 50 })).toBe('mask')
+    const label = sceneOf(rect({ id: 'below', x: 0, y: 0, width: 300, height: 300 }), text({ id: 'mask', x: 0, y: 0, width: 100, height: 20, isMask: true }), rect({ id: 'content', x: 0, y: 0, width: 200, height: 200 }))
+    expect(hitTest(label, { x: 90, y: 10 })).toBe('content')
+    expect(hitTest(label, { x: 90, y: 30 })).toBe('below')
   })
 })

@@ -536,11 +536,15 @@ describe('parseKdr', () => {
     expect(fileNode(insertNode(createPage('p'), holed))).toMatchObject({ strokeDashes: [3, 1], fillRule: 'evenodd', contours })
   })
 
-  it('マスクの指定（isMask）を検証し、既定値なら書かない。テキスト・画像・フレームは持たない', () => {
+  it('マスクの指定（isMask）を検証し、既定値なら書かない。テキスト・画像・フレームも持てる', () => {
     expect(parseOne(rawNode({ isMask: true }))).toMatchObject({ isMask: true })
     expect(parseOne(rawNode({ type: 'ellipse', isMask: true }))).toMatchObject({ isMask: true })
     expect(() => parseOne(rawNode({ isMask: 'yes' }))).toThrow('isMask')
-    expect('isMask' in parseOne(rawNode({ type: 'frame', isMask: true }))).toBe(false)
+    expect(parseOne(rawNode({ type: 'frame', isMask: true }))).toMatchObject({ isMask: true })
+    expect(parseOne(rawNode({ type: 'text', text: 'A', fontSize: 16, fontFamily: 'sans-serif', isMask: true }))).toMatchObject({ isMask: true })
+    expect(parseOne(rawNode({ type: 'text', text: 'A', fontSize: 16, fontFamily: 'sans-serif' }))).toMatchObject({ isMask: false, maskType: 'vector' })
+    expect(() => parseOne(rawNode({ type: 'frame', isMask: 1 }))).toThrow('isMask')
+    expect(roundTrip(rawNode({ type: 'frame', isMask: true })).isMask).toBe(true)
     expect(roundTrip(rawNode({ isMask: true })).isMask).toBe(true)
     expect('isMask' in roundTrip(rawNode({ isMask: false }))).toBe(false)
   })
@@ -549,7 +553,8 @@ describe('parseKdr', () => {
     expect(parseOne(rawNode({ isMask: true, maskType: 'luminance' }))).toMatchObject({ maskType: 'luminance' })
     expect(parseOne(rawNode({ type: 'path', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], maskType: 'alpha' }))).toMatchObject({ maskType: 'alpha' })
     expect(() => parseOne(rawNode({ maskType: 'shape' }))).toThrow('maskType')
-    expect('maskType' in parseOne(rawNode({ type: 'frame', maskType: 'alpha' }))).toBe(false)
+    expect(parseOne(rawNode({ type: 'frame', maskType: 'alpha' }))).toMatchObject({ maskType: 'alpha' })
+    expect(() => parseOne(rawNode({ type: 'frame', maskType: 'shape' }))).toThrow('maskType')
     expect(roundTrip(rawNode({ maskType: 'luminance' })).maskType).toBe('luminance')
     expect('maskType' in roundTrip(rawNode({ maskType: 'vector' }))).toBe(false)
   })
