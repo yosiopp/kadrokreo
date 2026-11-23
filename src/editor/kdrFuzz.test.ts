@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { renderScene } from '../canvas/render.ts'
+import { setCanvasBlurWorks } from '../canvas/blur.ts'
 import { measureText } from '../canvas/text.ts'
 import { getContentBounds } from '../document/geometry.ts'
 import { KDR_VERSION, KdrError, MAX_DEPTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
@@ -130,6 +131,8 @@ function fakeContext(): CanvasRenderingContext2D {
 beforeAll(() => {
   // 半透明のフレームを合成するキャンバスを作るのに使う
   vi.stubGlobal('document', { createElement: () => ({ getContext: () => fakeContext() }) })
+  // 偽のキャンバスでは filter が効くかを確かめられないので、効くことにする（効かないときの道は canvas/blur.test.ts で確かめる）
+  setCanvasBlurWorks(true)
   // 円形のグラデーションを線や文字に使うパターンの変換
   vi.stubGlobal(
     'DOMMatrix',
@@ -143,6 +146,7 @@ beforeAll(() => {
 })
 afterAll(() => {
   vi.unstubAllGlobals()
+  setCanvasBlurWorks(undefined)
 })
 
 // ---- 読めたドキュメントを使ってみる ----

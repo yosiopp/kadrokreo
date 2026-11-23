@@ -32,6 +32,7 @@ import { drawnNode } from '../document/booleanNode.ts'
 import { OVERLAY_COMPONENT } from './overlay.ts'
 import { isVariantSet } from '../document/variants.ts'
 import { getImage } from './images.ts'
+import { drawBlurred } from './blur.ts'
 import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
 import { applyFont, layoutText } from './text.ts'
 import type { Viewport } from './viewport.ts'
@@ -277,10 +278,10 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
     ctx.save()
     ctx.globalAlpha *= node.opacity
     if (node.blendMode !== 'normal') ctx.globalCompositeOperation = node.blendMode
-    // ぼかしの半径の半分が標準偏差（CSS の blur() の値）。filter の長さは変換行列に従わないので、拡大率を掛ける
-    if (layerBlur > 0) ctx.filter = `blur(${(layerBlur / 2) * pass.scale}px)`
     ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.drawImage(layer.canvas, 0, 0)
+    // ぼかしの半径の半分が標準偏差（CSS の blur() の値）。filter の長さは変換行列に従わないので、拡大率を掛ける
+    if (layerBlur > 0) drawBlurred(ctx, layer, (layerBlur / 2) * pass.scale)
+    else ctx.drawImage(layer.canvas, 0, 0)
     ctx.restore()
     return
   }
@@ -319,8 +320,7 @@ function blurBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: SceneNode
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   ctx.globalAlpha = 1
   ctx.globalCompositeOperation = 'source-over'
-  ctx.filter = `blur(${(blur / 2) * pass.scale}px)`
-  ctx.drawImage(copy.canvas, 0, 0)
+  drawBlurred(ctx, copy, (blur / 2) * pass.scale)
   ctx.restore()
 }
 
@@ -344,8 +344,7 @@ function blurTextBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: TextN
   shape.save()
   shape.setTransform(1, 0, 0, 1, 0, 0)
   shape.globalCompositeOperation = 'source-in'
-  shape.filter = `blur(${(blur / 2) * pass.scale}px)`
-  shape.drawImage(copy.canvas, 0, 0)
+  drawBlurred(shape, copy, (blur / 2) * pass.scale)
   shape.restore()
   ctx.globalCompositeOperation = 'source-over'
   ctx.drawImage(shape.canvas, 0, 0)
