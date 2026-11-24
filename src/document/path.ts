@@ -64,9 +64,24 @@ export function pathContours(path: ContourSource): Contour[] {
   ]
 }
 
-/** すべての輪郭の描く形の頂点（角の丸めを曲線に直したもの）。先頭が最初の輪郭 */
+/** pathOutlines の覚え書き。形を決める項目がどれも同じ参照・値のときだけ使う */
+const outlineCache = new WeakMap<ContourSource, { source: ContourSource; outlines: Contour[] }>()
+
+/**
+ * すべての輪郭の描く形の頂点（角の丸めを曲線に直したもの）。先頭が最初の輪郭。
+ * 描画・当たり判定・書き出しで同じノードについて何度も呼ばれるので、ノードごとに覚えて同じ配列を返す。**返した配列と頂点は書き換えない**
+ */
 export function pathOutlines(path: ContourSource): Contour[] {
-  return pathContours(path).map((contour) => ({ vertices: roundCorners(contour.vertices, contour.closed), closed: contour.closed }))
+  const cached = outlineCache.get(path)
+  if (cached && sameContourSource(cached.source, path)) return cached.outlines
+  const outlines = pathContours(path).map((contour) => ({ vertices: roundCorners(contour.vertices, contour.closed), closed: contour.closed }))
+  const { width, height, points, closed, contours } = path
+  outlineCache.set(path, { source: { width, height, points, closed, contours }, outlines })
+  return outlines
+}
+
+function sameContourSource(a: ContourSource, b: ContourSource): boolean {
+  return a.points === b.points && a.contours === b.contours && a.width === b.width && a.height === b.height && a.closed === b.closed
 }
 
 /**

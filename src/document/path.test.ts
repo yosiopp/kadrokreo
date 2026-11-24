@@ -10,6 +10,7 @@ import {
   pathBounds,
   pathData,
   pathFromPoints,
+  pathOutlines,
   pathPoints,
   pathSegments,
   segmentAt,
@@ -249,5 +250,28 @@ describe('曲線（制御点 in / out）', () => {
     // 切り詰めた後も曲線（制御点を持つ）
     expect(line[0].out).toBeDefined()
     expect(line[1].in).toBeDefined()
+  })
+})
+
+describe('pathOutlines の覚え書き', () => {
+  const source = {
+    width: 100,
+    height: 50,
+    closed: true,
+    points: [{ x: 0, y: 0, radius: 10 }, { x: 1, y: 0 }, { x: 1, y: 1 }],
+    contours: [],
+  }
+
+  it('同じノードには同じ配列を返す', () => {
+    const first = pathOutlines(source)
+    expect(pathOutlines(source)).toBe(first)
+    expect(first[0].vertices.some((vertex) => vertex.radius)).toBe(false)
+  })
+
+  it('形を決める項目が変われば計算し直す', () => {
+    const first = pathOutlines(source)
+    const wider = { ...source, width: 200 }
+    expect(pathOutlines(wider)).not.toBe(first)
+    expect(pathOutlines(wider)[0].vertices.at(-1)).toEqual({ x: 200, y: 50 })
   })
 })
