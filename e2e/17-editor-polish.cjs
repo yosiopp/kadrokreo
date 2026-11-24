@@ -87,9 +87,10 @@ const { OUT, EDITOR, check, finish, watchErrors, savedDocument } = require('./ha
   await page.keyboard.press('Escape')
   check('Esc でメニューだけを閉じる（選択は残る）', !(await menu.isVisible()) && (await selected()).join() === 'Rectangle 2', (await selected()).join())
   await page.mouse.click(...at(610, 200), { button: 'right' })
-  await page.mouse.click(...at(680, 520))
+  // メニューは画面の下端で上に寄るので、メニューの左の何もない所を押す
+  await page.mouse.click(...at(420, 520))
   check('メニューの外を押すと閉じる', !(await menu.isVisible()))
-  await page.mouse.click(...at(680, 520), { button: 'right' })
+  await page.mouse.click(...at(420, 520), { button: 'right' })
   check('何もない所の右クリックは選択を外し、貼り付けなどを出す', (await selected()).length === 0 && (await item('貼り付け').isVisible()) && !(await item('複製').isVisible()))
   await page.keyboard.press('Escape')
   await row('Frame 1').click()

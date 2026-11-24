@@ -10,14 +10,19 @@ import { type Fragment, copyFragment, duplicateNodes } from '../operations/clipb
 import { moveNodesToPage, pasteIntoPage } from '../operations/document.ts'
 import { type FlipDirection, flipNodes, translateNodes } from '../operations/transform.ts'
 import type { BooleanOp } from '../../document/pathBoolean.ts'
+import { canBoolean } from '../../document/booleanNode.ts'
 import { BOOLEAN_LABELS, MAX_PATH_POINTS, applyMask, booleanPaths, joinPaths, splitPaths } from '../operations/paths.ts'
 import { removeNodes } from '../operations/tree.ts'
 import { createBooleanNode, flattenBooleanNodes } from '../operations/booleanNodes.ts'
-import { outlineStrokes } from '../operations/outline.ts'
+import { outlineStrokes, outlineTexts } from '../operations/outline.ts'
 import type { EditorStore } from '../store.ts'
 import { isSvgFile, looksLikeSvg } from '../importSvg.ts'
 import type { Tool } from '../tools.ts'
 import { nextName } from './handles.ts'
+
+/** 埋め込んだ書体で描かないテキストを、アウトライン化・ブーリアン演算に入れなかったときの説明 */
+const UNEMBEDDED_TEXT_OUTLINE = 'kdr に埋め込んでいない書体のテキストは、文字の形が分からないのでアウトライン化しませんでした。書体ファイルを追加して（何も選んでいないときのプロパティの「書体」）そのテキストに当ててから、もう一度試してください。'
+const UNEMBEDDED_TEXT_BOOLEAN = 'kdr に埋め込んでいない書体のテキストは、文字の形が分からないのでブーリアン演算に入れませんでした。書体ファイルを追加して（何も選んでいないときのプロパティの「書体」）そのテキストに当てると入れられます。'
 
 type Options = {
   store: EditorStore
@@ -120,12 +125,20 @@ export function useShortcuts(options: Options) {
     if (id) store.select([id])
     else if (error === 'empty') options.onMessage(`${BOOLEAN_LABELS[op]}の結果が空になるので、何も変えませんでした。`)
     else if (error === 'too-many') options.onMessage(`${BOOLEAN_LABELS[op]}の結果の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超えるので、何も変えませんでした。`)
+    else if (unembeddedTextSelected()) options.onMessage(UNEMBEDDED_TEXT_BOOLEAN)
   }
 
-  /** 選んだもの（テキスト以外）を、元の図形を子に残すブーリアン演算のノードにまとめ、それを選ぶ */
+  /** 埋め込んだ書体で描かない（演算に入らない）テキストを選んでいるか */
+  function unembeddedTextSelected(): boolean {
+    const { page } = store.getState()
+    return movableIds().some((id) => page.nodes[id]?.type === 'text' && !canBoolean(page.nodes[id]))
+  }
+
+  /** 選んだもの（埋め込んだ書体で描かないテキストを除く）を、元の図形を子に残すブーリアン演算のノードにまとめ、それを選ぶ */
   function booleanNode(op: BooleanOp) {
     const created = store.applyWith((base) => createBooleanNode(base, movableIds(), op))?.id
     if (created) store.select([created])
+    if (unembeddedTextSelected()) options.onMessage(UNEMBEDDED_TEXT_BOOLEAN)
   }
 
   /** 選んだブーリアン演算のノードを、結果の形のパスに焼き込む */
@@ -141,6 +154,18 @@ export function useShortcuts(options: Options) {
     const { ids: outlines = [], error } = store.applyWith((base) => outlineStrokes(base, movableIds())) ?? {}
     if (outlines.length > 0) store.select(outlines)
     if (error === 'too-many') options.onMessage(`線の形の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超える図形は、輪郭にしませんでした。`)
+  }
+
+  /** 選んだテキストを、文字の形のパスにする（埋め込んだ書体で描くものだけ） */
+  function outlineText() {
+    const result = store.applyWith((base) => outlineTexts(base, movableIds()))
+    if (!result) return
+    if (result.ids.length > 0) store.select(result.ids)
+    const notes: string[] = []
+    if (result.unembedded.length > 0) notes.push(UNEMBEDDED_TEXT_OUTLINE)
+    if (result.missing > 0) notes.push(`書体に無い文字（${result.missing.toLocaleString()} 字）は形にできないので除きました。`)
+    if (result.tooMany.length > 0) notes.push(`文字の形の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超えるテキストは、アウトライン化しませんでした。`)
+    if (notes.length > 0) options.onMessage(notes.join('\n'))
   }
 
   /** 選んだパスを輪郭ごとのパスに分ける */
@@ -200,6 +225,12 @@ export function useShortcuts(options: Options) {
     if ((event.metaKey || event.ctrlKey) && event.altKey && event.code === 'KeyK') {
       // 選んでいるフレームをコンポーネントにする（Alt を押すと key が記号になるので code で見る）
       componentize()
+      event.preventDefault()
+      return
+    }
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.code === 'KeyO') {
+      // テキストのアウトライン化
+      outlineText()
       event.preventDefault()
       return
     }
@@ -367,6 +398,7 @@ export function useShortcuts(options: Options) {
     booleanNode,
     flattenBoolean,
     outlineStroke,
+    outlineText,
     componentize,
     zoomToSelection,
     zoomToFit: () => camera.fit(getContentBounds(store.getState().page)),

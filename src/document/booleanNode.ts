@@ -4,6 +4,7 @@ import { strokeOutline } from './outlineStroke.ts'
 import { hasStroke } from './paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds } from './path.ts'
 import { type BooleanShape, booleanContours } from './pathBoolean.ts'
+import { outlineFontsGeneration, textOutline, textOutlineFont } from './textOutline.ts'
 import type { BooleanOperation, FrameNode, PathNode, PathPoint, RectNode, Scene, SceneNode } from './types.ts'
 
 // ブーリアン演算のノード（FrameNode の booleanOperation が null でないもの）。子を描かず、子の形に演算をかけた結果を描く。
@@ -18,16 +19,21 @@ export function isBooleanNode(node: SceneNode): node is BooleanNode {
   return node.type === 'frame' && node.booleanOperation !== null
 }
 
-/** 演算に入れられる種類か（テキストは入らない） */
+/**
+ * 演算に入れられるか。テキストは kdr に埋め込んだ書体（読めるもの）で描くものだけ入る（文字の形を書体ファイルから作る。textOutline.ts）。
+ * 埋め込んでいない書体のテキストは、文字の形が分からないので入らない
+ */
 export function canBoolean(node: SceneNode): boolean {
-  return node.type !== 'text'
+  return node.type !== 'text' || textOutlineFont(node) !== null
 }
 
 /** 子の形（子の座標系）。演算に入らないものは null */
 function ownShape(scene: Scene, node: SceneNode): BooleanShape | null {
   switch (node.type) {
-    case 'text':
-      return null
+    case 'text': {
+      const outline = textOutline(node)
+      return outline && outline.contours.length > 0 ? { contours: outline.contours, fillRule: 'nonzero' } : null
+    }
     case 'rect':
     case 'path':
     case 'ellipse':
@@ -109,6 +115,8 @@ function inputsOf(scene: Scene, node: BooleanNode): { direct: SceneNode[]; neste
 }
 
 type CachedResult = {
+  /** 計算したときの埋め込んだ書体（textOutline.ts の outlineFontsGeneration）。変わればテキストの形が変わりうる */
+  fonts: number
   op: BooleanOperation
   includeStrokes: boolean
   direct: SceneNode[]
@@ -172,7 +180,8 @@ export function booleanResult(scene: Scene, node: BooleanNode): Contour[] {
   const { direct, nested } = inputsOf(scene, node)
   const cached = resultCache.get(node.children)
   const includeStrokes = node.booleanIncludeStrokes
-  if (cached && cached.op === node.booleanOperation && cached.includeStrokes === includeStrokes) {
+  const fonts = outlineFontsGeneration()
+  if (cached && cached.fonts === fonts && cached.op === node.booleanOperation && cached.includeStrokes === includeStrokes) {
     const shift = commonShift(cached, direct, nested)
     if (shift) {
       if (shift.dx === 0 && shift.dy === 0) return cached.contours
@@ -189,7 +198,7 @@ export function booleanResult(scene: Scene, node: BooleanNode): Contour[] {
   const start = performance.now()
   const shapes = booleanShapes(scene, node)
   const contours = shapes.length === 0 ? [] : booleanContours(shapes, node.booleanOperation)
-  resultCache.set(node.children, { op: node.booleanOperation, includeStrokes, direct, nested, contours, cost: performance.now() - start })
+  resultCache.set(node.children, { fonts, op: node.booleanOperation, includeStrokes, direct, nested, contours, cost: performance.now() - start })
   return contours
 }
 

@@ -108,6 +108,7 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   ],
   flatten: ['kdr -f demo.kdr -w boolean union Box Dot --keep + flatten @'],
   'outline-stroke': ['kdr -f demo.kdr -w outline-stroke Box'],
+  'outline-text': ['kdr -f demo.kdr -w font-add font.ttf + set btn/Label fontFamily="Kdr Test" + outline-text btn/Label   # 埋め込んだ書体のテキストだけ'],
   mask: [
     'kdr -f demo.kdr -w mask Dot Box --name Masked',
     'kdr -f demo.kdr -w mask Dot Box --type luminance',

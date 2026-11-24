@@ -859,6 +859,13 @@ export function EditorCanvas({
       },
       { label: '線の輪郭化', shortcut: `${ALT}${MOD}O`, disabled: !canOutlineStroke(page, movableIds()), onSelect: commands.outlineStroke },
       {
+        // 埋め込んでいない書体のテキストでも押せる（押すと、書体ファイルを足すよう説明を出す）
+        label: 'テキストのアウトライン化',
+        shortcut: `${SHIFT}${MOD}O`,
+        disabled: !movableIds().some((id) => page.nodes[id]?.type === 'text'),
+        onSelect: commands.outlineText,
+      },
+      {
         label: 'コンポーネントにする',
         shortcut: `${ALT}${MOD}K`,
         disabled: !own.some((id) => makeComponent(page, id) !== page),

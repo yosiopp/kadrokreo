@@ -204,6 +204,22 @@ describe('kadrokreo CLI', () => {
     expect(await h.run(['new', '+', 'font-add', 'a.ttf', '--family', 'a,b'])).toBe(2)
   })
 
+  it('outline-text で埋め込んだ書体のテキストを文字の形のパスにし、boolean にテキストを入れる', async () => {
+    const h = harness({ 'a.woff': await toWoff(testFontBytes({ family: 'Kdr Test' })) })
+    const setup = 'new + font-add a.woff --family Brand + add text --name Title --text AA fontFamily=Brand fontSize=100 + add text --name Plain --text x'
+    expect(await h.run(argv(`${setup} + outline-text Title Plain -o o.kdr`))).toBe(0)
+    expect(h.stderr).toContain('outline-text: kdr に埋め込んでいない書体のテキストはそのままにしました')
+    const doc = await h.doc('o.kdr')
+    expect(nodeByName(doc, 'Title')).toMatchObject({ type: 'path', fillRule: 'nonzero' })
+    expect(nodeByName(doc, 'Plain')).toMatchObject({ type: 'text' })
+    expect(await h.run(argv(`${setup} + outline-text Plain`))).toBe(2)
+    // 元を残すブーリアン演算にテキストが入る（書き出して読み直しても子に残る）
+    expect(await h.run(argv(`${setup} + add rect --name Box --width 300 --height 200 + boolean subtract Box Title --keep -o b.kdr`))).toBe(0)
+    const kept = await h.doc('b.kdr')
+    expect(nodeByName(kept, 'Title').parentId).toBe(nodeByName(kept, '差し引き').id)
+    expect(await h.run(argv(`${setup} + add rect --name Box --width 300 --height 200 + boolean subtract Box Plain --keep`))).toBe(2)
+  })
+
   it('破線のずれと線の角の形を set で変え、保存して読み直しても残る。不正な値はエラー', async () => {
     const h = harness()
     expect(await h.run(['new', '+', 'add', 'rect', '--name', 'Box', 'stroke=#000000', 'dash=4,2', 'dashOffset=1.5', 'join=bevel', '-o', 'a.kdr'])).toBe(0)

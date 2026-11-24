@@ -3,7 +3,7 @@ import type { BooleanOp } from '../../src/document/pathBoolean.ts'
 import { BOOLEAN_LABELS, MAX_PATH_POINTS, applyMask, booleanPaths, joinPaths, splitPaths } from '../../src/editor/operations/paths.ts'
 import { createBooleanNode, fitBooleanNodes, flattenBooleanNodes } from '../../src/editor/operations/booleanNodes.ts'
 import { updateNode } from '../../src/editor/operations/tree.ts'
-import { outlineStrokes } from '../../src/editor/operations/outline.ts'
+import { outlineStrokes, outlineTexts } from '../../src/editor/operations/outline.ts'
 import type { MaskType } from '../../src/document/types.ts'
 import { UsageError } from '../args.ts'
 import { type Command, checkStep, flag, option } from './common.ts'
@@ -73,7 +73,8 @@ export const boolean: Command = {
   flags: ['keep', 'strokes'],
   summary:
     'ブーリアン演算（合体・差し引き・交差・除外）。差し引きは最も背面のものから残りを引く。既定では矩形・楕円・パスの塗りの形にかけ、結果を最も背面のものの名前・塗り・線を引き継いだ 1 つのパス（fillRule=evenodd）にして残りは消す。' +
-    '--keep なら元の図形（テキスト以外）を子に残すブーリアン演算のノード（booleanOperation を持つフレーム）にまとめ、子を変えると結果も変わる（演算は set ノード booleanOperation=… で変えられる）。--strokes を付けると、元の図形の線の外形も演算に含める（set ノード booleanIncludeStrokes=true でも変えられる）。結果は「@」で指せる',
+    'テキストは kdr に埋め込んだ書体（font-add）で描くものだけ入り、文字の形で演算する。' +
+    '--keep なら元の図形を子に残すブーリアン演算のノード（booleanOperation を持つフレーム）にまとめ、子を変えると結果も変わる（演算は set ノード booleanOperation=… で変えられる）。--strokes を付けると、元の図形の線の外形も演算に含める（set ノード booleanIncludeStrokes=true でも変えられる）。結果は「@」で指せる',
   run({ session }, step) {
     checkStep(step, { options: ['keep', 'strokes'] })
     const [op, ...names] = step.positionals
@@ -93,7 +94,7 @@ export const boolean: Command = {
     const label = BOOLEAN_LABELS[op as BooleanOp]
     if (error === 'empty') throw new UsageError(`boolean: ${label}の結果が空になります`)
     if (error === 'too-many') throw new UsageError(`boolean: ${label}の結果の頂点が ${MAX_PATH_POINTS} を超えます`)
-    if (result === null) throw new UsageError(keep ? 'boolean: テキスト以外のものを 2 つ以上指定してください' : 'boolean: 矩形・楕円・パスを 2 つ以上指定してください')
+    if (result === null) throw new UsageError(keep ? 'boolean: 演算に入れられるもの（埋め込んでいない書体のテキスト以外）を 2 つ以上指定してください' : 'boolean: 矩形・楕円・パス・埋め込んだ書体のテキストを 2 つ以上指定してください')
     session.last = [result]
   },
 }
@@ -127,5 +128,25 @@ export const outlineStroke: Command = {
     if (error === 'too-many') throw new UsageError(`outline-stroke: 線の形の頂点が ${MAX_PATH_POINTS} を超えます`)
     if (outlines.length === 0) throw new UsageError('outline-stroke: 線のある矩形・楕円・パスを指定してください')
     session.last = outlines
+  },
+}
+
+export const outlineText: Command = {
+  name: 'outline-text',
+  kind: 'edit',
+  usage: 'outline-text ノード…',
+  summary:
+    'テキストのアウトライン化。テキストを、同じ id・名前・塗り・効果のまま文字の形のパス（fillRule=nonzero、回転は形に焼き込む）に置き換える。kdr に埋め込んだ書体（font-add）で描くテキストだけが対象で、字の形は書体ファイルから読む。書体に無い文字は除く（数を知らせる）。合字などの字の置き換えはしない',
+  run(ctx, step) {
+    checkStep(step, {})
+    const { session } = ctx
+    const ids = session.resolveAll(step.positionals)
+    const result = session.applyWith((page) => outlineTexts(page, ids))
+    if (!result) return
+    if (result.missing > 0) ctx.warn(`outline-text: 書体に無い文字（${result.missing} 字）は形にできないので除きました`)
+    if (result.unembedded.length > 0) ctx.warn(`outline-text: kdr に埋め込んでいない書体のテキストはそのままにしました（font-add で書体を埋め込んでください）: ${result.unembedded.join(' ')}`)
+    if (result.tooMany.length > 0) ctx.warn(`outline-text: 文字の形の頂点が ${MAX_PATH_POINTS} を超えるテキストはそのままにしました: ${result.tooMany.join(' ')}`)
+    if (result.ids.length === 0) throw new UsageError('outline-text: kdr に埋め込んだ書体で描く（空でない）テキストを指定してください')
+    session.last = result.ids
   },
 }

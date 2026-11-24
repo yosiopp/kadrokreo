@@ -7,6 +7,11 @@ export type TestFontOptions = {
   /** OS/2 の usWeightClass */
   weight?: number
   italic?: boolean
+  /** 字の輪郭の持ち方。cff なら OpenType（CFF の表、四角はサブルーチンで描く） */
+  outline?: 'glyf' | 'cff'
+  /** 四角の字が続くときの字詰め（書体の単位）。GPOS の kern の機能（PairPos format 1）で持つ。legacyKern なら古い kern の表で持つ */
+  kerning?: number
+  legacyKern?: boolean
 }
 
 const UNITS_PER_EM = 1000
@@ -43,7 +48,7 @@ function utf16be(text: string): number[] {
   return out
 }
 
-export function testFontBytes({ family = 'Kdr Test', weight = 400, italic = false }: TestFontOptions = {}): Uint8Array<ArrayBuffer> {
+export function testFontBytes({ family = 'Kdr Test', weight = 400, italic = false, outline = 'glyf', kerning, legacyKern = false }: TestFontOptions = {}): Uint8Array<ArrayBuffer> {
   const subfamily = `${weight === 700 ? 'Bold' : weight === 400 ? 'Regular' : `W${weight}`}${italic ? ' Italic' : ''}`
   const postScript = `${family}-${subfamily}`.replace(/[^A-Za-z0-9-]/g, '')
   // 字: 0 = .notdef（空）、1 = 四角、2 = 空白
@@ -129,18 +134,94 @@ export function testFontBytes({ family = 'Kdr Test', weight = 400, italic = fals
 
   const post = new Writer().u32(0x00030000, 0).i16(-100, 50).u32(0, 0, 0, 0, 0)
 
-  return sfnt({
+  const tables: Record<string, number[]> = {
     'OS/2': os2.bytes,
     cmap: cmap.bytes,
-    glyf: glyf.bytes,
     head: head.bytes,
     hhea: hhea.bytes,
     hmtx: hmtx.bytes,
-    loca: loca.bytes,
     maxp: maxp.bytes,
     name: name.bytes,
     post: post.bytes,
-  })
+  }
+  if (outline === 'cff') {
+    tables['CFF '] = cffTable(postScript)
+    // CFF の書体の maxp は version 0.5（字の数だけ）
+    tables.maxp = new Writer().u32(0x00005000).u16(glyphCount).bytes
+  } else {
+    tables.glyf = glyf.bytes
+    tables.loca = loca.bytes
+  }
+  if (kerning !== undefined && legacyKern) {
+    tables.kern = new Writer().u16(0, 1).u16(0, 6 + 8 + 6, 0x0001).u16(1, 6, 0, 0).u16(1, 1).i16(kerning).bytes
+  } else if (kerning !== undefined) {
+    tables.GPOS = gposKern(kerning)
+  }
+  return sfnt(tables, outline === 'cff' ? 0x4f54544f : 0x00010000)
+}
+
+/** CFF の数（Type 2 の字形の命令・DICT で同じ書き方になる -107〜107 と、5 バイトの整数） */
+function cffInt(value: number, dict = true): number[] {
+  if (value >= -107 && value <= 107) return [value + 139]
+  if (dict) return [29, (value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]
+  return [28, (value >> 8) & 0xff, value & 0xff]
+}
+
+function cffIndexBytes(items: number[][]): number[] {
+  if (items.length === 0) return [0, 0]
+  const out = new Writer().u16(items.length).u8(4)
+  let offset = 1
+  out.u32(offset)
+  for (const item of items) {
+    offset += item.length
+    out.u32(offset)
+  }
+  for (const item of items) out.bytes.push(...item)
+  return out.bytes
+}
+
+/** 字 0 = 空、1 = 四角（ローカルのサブルーチン 0 を呼んで描く）、2 = 空白 */
+function cffTable(postScript: string): number[] {
+  const box = [
+    ...cffInt(BOX.xMin, false), ...cffInt(BOX.yMin, false), 21, // rmoveto
+    ...cffInt(BOX.xMax - BOX.xMin, false), 6, // hlineto
+    ...cffInt(BOX.yMax - BOX.yMin, false), 7, // vlineto
+    ...cffInt(-(BOX.xMax - BOX.xMin), false), 6, // hlineto（閉じる辺は省く）
+    11, // return
+  ]
+  const charStrings = cffIndexBytes([[14], [...cffInt(0 - 107, false), 10, 14], [14]])
+  const subrs = cffIndexBytes([box])
+  const privateDict = [...cffInt(0), 20, ...cffInt(0), 21]
+  // Private DICT の Subrs は Private DICT の先頭から数える（Private DICT は Subrs の直前に置く）
+  const privateWithSubrs = (length: number) => [...privateDict, ...cffInt(length), 19]
+  const privateLength = privateWithSubrs(0).length
+  const privateBytes = privateWithSubrs(privateLength)
+  const header = [1, 0, 4, 4]
+  const nameIndex = cffIndexBytes([[...postScript].map((c) => c.charCodeAt(0))])
+  // 位置は大きさが変わらないよう、いつも 5 バイトの整数で書く
+  const int32 = (value: number) => [29, (value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]
+  const topDict = (charStringsAt: number, privateAt: number) => [...int32(charStringsAt), 17, ...cffInt(privateBytes.length), ...int32(privateAt), 18]
+  const topLength = cffIndexBytes([topDict(0, 0)]).length
+  const strings = cffIndexBytes([])
+  const globalSubrs = cffIndexBytes([])
+  const charStringsAt = header.length + nameIndex.length + topLength + strings.length + globalSubrs.length
+  const privateAt = charStringsAt + charStrings.length
+  return [...header, ...nameIndex, ...cffIndexBytes([topDict(charStringsAt, privateAt)]), ...strings, ...globalSubrs, ...charStrings, ...privateBytes, ...subrs]
+}
+
+/** 四角の字（1）が続くときの字詰めを持つ GPOS（DFLT の kern の機能 → PairPos format 1） */
+function gposKern(value: number): number[] {
+  const out = new Writer().u32(0x00010000).u16(10, 30, 44)
+  // ScriptList（10）: DFLT → Script → 既定の LangSys（機能 0）
+  out.u16(1).tag('DFLT').u16(8).u16(4, 0).u16(0, 0xffff, 1, 0)
+  // FeatureList（30）: kern → Feature（lookup 0）
+  out.u16(1).tag('kern').u16(8).u16(0, 1, 0)
+  // LookupList（44）: Lookup（type 2）→ PairPos format 1
+  out.u16(1, 4).u16(2, 0, 1, 8)
+  out.u16(1, 12, 0x0004, 0, 1, 18) // format, coverage, valueFormat1 = XAdvance, valueFormat2, pairSetCount, pairSet
+  out.u16(1, 1, 1) // Coverage format 1: 字 1
+  out.u16(1, 1).i16(value) // PairSet: 1 組（右が字 1）
+  return out.bytes
 }
 
 function checksum(bytes: readonly number[]): number {
@@ -152,11 +233,11 @@ function checksum(bytes: readonly number[]): number {
 }
 
 /** 表を並べて TrueType のファイルにする（表は名前の順、4 バイト境界に揃える。head の checkSumAdjustment も入れる） */
-function sfnt(tables: Record<string, number[]>): Uint8Array<ArrayBuffer> {
+function sfnt(tables: Record<string, number[]>, version = 0x00010000): Uint8Array<ArrayBuffer> {
   const tags = Object.keys(tables).sort()
   const count = tags.length
   const power = 2 ** Math.floor(Math.log2(count))
-  const out = new Writer().u32(0x00010000).u16(count, power * 16, Math.log2(power), count * 16 - power * 16)
+  const out = new Writer().u32(version).u16(count, power * 16, Math.log2(power), count * 16 - power * 16)
   let offset = 12 + count * 16
   const body: number[] = []
   let headOffset = 0

@@ -1,4 +1,5 @@
 import type { Asset, AssetId, EmbeddedFont } from '../document/types.ts'
+import { outlineFontsGeneration, setOutlineFonts } from '../document/textOutline.ts'
 import { forgetTextLayout } from './text.ts'
 
 // ドキュメントに埋め込んだ書体（document.fonts）を、ブラウザの書体（document.fonts の FontFaceSet）に登録する。
@@ -24,6 +25,9 @@ function fontSet(): FontFaceSet | null {
  * 書体のファイルが壊れていれば登録しない（その書体名のテキストは OS の書体で描かれる）
  */
 export function syncEmbeddedFonts(fonts: readonly EmbeddedFont[], assets: Record<AssetId, Asset>): void {
+  // アウトライン化とテキストを入れたブーリアン演算は、書体ファイルから字の形を読む（ブラウザの書体の登録とは別）
+  const outlines = outlineFontsGeneration()
+  setOutlineFonts(fonts, assets)
   const set = fontSet()
   if (set === null) return
   const wanted = new Map(fonts.filter((font) => Object.hasOwn(assets, font.assetId)).map((font) => [keyOf(font), font]))
@@ -52,7 +56,7 @@ export function syncEmbeddedFonts(fonts: readonly EmbeddedFont[], assets: Record
     // その場で読めなかった書体は、読めたら描き直してもらう
     if (face.status !== 'loaded') loaded.then(notify)
   }
-  if (changed) notify()
+  if (changed || outlineFontsGeneration() !== outlines) notify()
 }
 
 function notify(): void {

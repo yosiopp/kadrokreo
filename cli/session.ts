@@ -1,4 +1,5 @@
 import { kdrFile, parseKdr } from '../src/document/kdr.ts'
+import { setOutlineFonts } from '../src/document/textOutline.ts'
 import type { DesignDocument, FrameNode, NodeId, Page, Scene, SceneNode } from '../src/document/types.ts'
 import { createEditorStore } from '../src/editor/store.ts'
 import { updatePage } from '../src/editor/operations/document.ts'
@@ -25,7 +26,10 @@ export class Session {
   }
 
   get document(): DesignDocument {
-    return this.#store.getState().document
+    const document = this.#store.getState().document
+    // アウトライン化とテキストを入れたブーリアン演算・その描画が、埋め込んだ書体のファイルから字の形を読めるように（同じ並びなら何もしない）
+    setOutlineFonts(document.fonts, document.assets)
+    return document
   }
 
   get page(): Page {

@@ -6,6 +6,7 @@ import { type BooleanOp, booleanContours } from '../../document/pathBoolean.ts'
 import type { FrameNode, MaskType, NodeId, PathNode, Scene } from '../../document/types.ts'
 import { createFrame, createId, createPath } from '../nodes.ts'
 import { reshapeContours } from '../pathEdit.ts'
+import { canOutlineText, textToPath } from './outline.ts'
 import { insertNode, moveNode, patchNodes, removeNodes, sortByDocumentOrder, topLevelIds } from './tree.ts'
 
 // パスの結合・分割と、マスクとして使う操作。どれも純粋な関数で、何も変わらなければ同じ参照を返す。
@@ -85,11 +86,25 @@ export const BOOLEAN_LABELS: Record<BooleanOp, string> = {
   exclude: '除外',
 }
 
-/** ブーリアン演算ができるか（矩形・楕円・パスを 2 つ以上選んでいる） */
-export const canBooleanPaths = canJoinPaths
+/** ブーリアン演算ができるか（矩形・楕円・パスと、埋め込んだ書体のテキストを合わせて 2 つ以上選んでいる） */
+export function canBooleanPaths(scene: Scene, ids: readonly NodeId[]): boolean {
+  return topLevelIds(scene, ids).filter((id) => isShape(scene.nodes[id]) || canOutlineText(scene.nodes[id])).length >= 2
+}
+
+/** 埋め込んだ書体のテキストを、文字の形のパス（同じ id）に置き換えたページ。演算に入れるため */
+function withTextsOutlined<T extends Scene>(scene: T, ids: readonly NodeId[]): T {
+  let next = scene
+  for (const id of topLevelIds(scene, ids)) {
+    const node = scene.nodes[id]
+    if (!canOutlineText(node)) continue
+    const converted = textToPath(node)
+    if (converted !== null && typeof converted === 'object') next = { ...next, nodes: { ...next.nodes, [id]: converted.path } }
+  }
+  return next
+}
 
 /**
- * 選んだ矩形・楕円・パスにブーリアン演算をかけ、結果を 1 つのパス（contours と fillRule: 'evenodd'）に焼き込む（既存のデザインツールの Boolean groups を平らにしたもの）。
+ * 選んだ矩形・楕円・パス（と埋め込んだ書体のテキスト）にブーリアン演算をかけ、結果を 1 つのパス（contours と fillRule: 'evenodd'）に焼き込む（既存のデザインツールの Boolean groups を平らにしたもの）。
  * 合体・交差・除外は全部に、差し引きは最も背面の形から残りを引く。結果は最も背面のもの（id・名前・塗り・線・効果・マスクの指定）を引き継ぎ、残りは消す。
  * 形は塗りの形だけを見る（線の太さは含めない）。パスの開いた輪郭は閉じた形として扱い、頂点の角の丸めは曲線にして演算する。
  * 結果が空なら empty、頂点が多すぎれば too-many を返し、何も変えない
@@ -99,12 +114,14 @@ export function booleanPaths<T extends Scene>(
   ids: readonly NodeId[],
   op: BooleanOp,
 ): { scene: T; id: NodeId | null; error?: 'empty' | 'too-many' } {
-  const targets = joinable(scene, ids)
+  // テキストは文字の形のパスにしてから入れる（結果の元になる最も背面のものがテキストなら、テキストの塗りと効果を引き継ぐ）
+  const source = withTextsOutlined(scene, ids)
+  const targets = joinable(source, ids)
   if (targets.length < 2) return { scene, id: null }
   const [base] = targets
-  const toParent = invert(getWorldMatrix(scene, base.parentId))
+  const toParent = invert(getWorldMatrix(source, base.parentId))
   const shapes = targets.map((node) => {
-    const m = multiply(toParent, multiply(getWorldMatrix(scene, node.parentId), nodeMatrix(node)))
+    const m = multiply(toParent, multiply(getWorldMatrix(source, node.parentId), nodeMatrix(node)))
     const own = node.type === 'path' ? pathOutlines(node) : shapeContours(node)
     return {
       contours: own.map((contour) => ({ vertices: mapVertices(contour.vertices, (p) => applyMatrix(m, p)), closed: true })),
@@ -116,7 +133,7 @@ export function booleanPaths<T extends Scene>(
   if (contours.reduce((sum, contour) => sum + contour.vertices.length, 0) > MAX_PATH_POINTS) return { scene, id: null, error: 'too-many' }
   const shape = pathFromContours(contours)
   const path: PathNode = { ...pathOnBase(base, shape), closed: true, fillRule: 'evenodd', startCap: 'none', endCap: 'none' }
-  const removed = removeNodes(scene, targets.slice(1).map((node) => node.id))
+  const removed = removeNodes(source, targets.slice(1).map((node) => node.id))
   return { scene: { ...removed, nodes: { ...removed.nodes, [base.id]: path } }, id: base.id }
 }
 

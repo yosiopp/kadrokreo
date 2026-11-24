@@ -10,7 +10,7 @@ import { nodeChangesSince, noteNodeChanges } from '../../document/nodeChanges.ts
 // ブーリアン演算のノード（元の図形を子に残し、結果を描くフレーム。document/booleanNode.ts）を作る・変える・平らにする操作と、
 // 枠を結果に合わせる後始末。どれも純粋な関数で、何も変わらなければ同じ参照を返す。
 
-/** 演算のノードにまとめられる選択か（テキスト以外を 2 つ以上選んでいる） */
+/** 演算のノードにまとめられる選択か（演算に入れられるもの＝埋め込んだ書体で描かないテキスト以外を 2 つ以上選んでいる） */
 export function canCreateBooleanNode(scene: Scene, ids: readonly NodeId[]): boolean {
   return topLevelIds(scene, ids).filter((id) => canBoolean(scene.nodes[id])).length >= 2
 }
@@ -18,7 +18,7 @@ export function canCreateBooleanNode(scene: Scene, ids: readonly NodeId[]): bool
 /**
  * 選んだもの（テキスト以外）を、演算のノードにまとめる（既存のデザインツールの Boolean groups）。元の図形は子として残り、結果はノードが描く。
  * 塗り・線・効果は最も背面の子（矩形・楕円・パス・フレームのとき）から引き継ぐ（既存のデザインツールと同じ）。ノードは最も手前のもののすぐ手前に置く。
- * テキストは演算に入らないので、選んでいてもまとめない。返す id は作ったノード
+ * テキストは埋め込んだ書体で描くものだけ入る（文字の形で演算する）。ほかのテキストは選んでいてもまとめない。返す id は作ったノード
  */
 export function createBooleanNode<T extends Scene>(scene: T, ids: readonly NodeId[], op: BooleanOperation): { scene: T; id: NodeId | null } {
   const targets = sortByDocumentOrder(scene, topLevelIds(scene, ids)).filter((id) => canBoolean(scene.nodes[id]))
@@ -33,7 +33,8 @@ export function createBooleanNode<T extends Scene>(scene: T, ids: readonly NodeI
   const frame: FrameNode = {
     ...createFrame({ x: origin.x, y: origin.y, width: Math.max(1, bounds.width), height: Math.max(1, bounds.height) }),
     name: BOOLEAN_OPERATION_LABELS[op],
-    fills: styled ? base.fills : [],
+    // 最も背面がテキストなら文字の塗りと効果を引き継ぐ（線は持たない）
+    fills: 'fills' in base ? base.fills : [],
     strokes: styled ? base.strokes : [],
     strokeWidth: styled ? base.strokeWidth : 1,
     strokeDashes: styled ? base.strokeDashes : [],
