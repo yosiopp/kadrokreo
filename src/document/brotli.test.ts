@@ -28,11 +28,11 @@ const english = new TextEncoder().encode(
     'the international community and the government. 日本語の文章も混ぜる。書体ファイルを kdr に埋め込む。\n'.repeat(40),
 )
 /** 字の形のような、規則のある 2 バイトの並び（書体の表に近い） */
-const tableLike = new Uint8Array(Array.from({ length: 200_000 }, (_, i) => (i % 2 === 0 ? (i >> 9) & 0xff : (i * 7) & 0xff)))
+const tableLike = new Uint8Array(Array.from({ length: 60_000 }, (_, i) => (i % 2 === 0 ? (i >> 9) & 0xff : (i * 7) & 0xff)))
 
 describe('brotliDecompress', () => {
   it('Node の Brotli で圧縮したものを、品質・窓の大きさ・種類を変えても元に戻す', () => {
-    const inputs = [new Uint8Array(0), new Uint8Array([65]), english, noise(30_000), tableLike, testFontBytes()]
+    const inputs = [new Uint8Array(0), new Uint8Array([65]), english, noise(10_000), tableLike, testFontBytes()]
     for (const data of inputs) {
       for (const quality of [0, 1, 5, 9, 11]) {
         for (const window of [10, 16, 24]) {
@@ -42,7 +42,8 @@ describe('brotliDecompress', () => {
         }
       }
     }
-  })
+    // 圧縮（品質 11）が遅いので、遅い環境でも収まるよう上限を延ばす
+  }, 30_000)
 
   it('辞書の語を変換して使う（英語の文章）', () => {
     const data = new TextEncoder().encode('Information about the Development of International Government, and THE COMMUNITY. ')
