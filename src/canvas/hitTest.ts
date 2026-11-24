@@ -5,6 +5,7 @@ import { flattenPath, pathOutlines } from '../document/path.ts'
 import type { NodeId, PathNode, Scene } from '../document/types.ts'
 import { booleanPath, isBooleanNode } from '../document/booleanNode.ts'
 import { FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
+import { textCovers } from './render.ts'
 import type { Viewport } from './viewport.ts'
 
 // ポインタの下にあるノードを探す。editor の選択と、viewer の選択の両方が使う。
@@ -39,9 +40,9 @@ function hitSiblings(
     const node = scene.nodes[ids[i]]
     if (!node.visible || (node.locked && !options.locked)) continue
     const mask = masks[i]
-    if (mask !== null && !insideMask(scene.nodes[mask] as MaskNode, point)) continue
+    if (mask !== null && !insideMaskShape(scene.nodes[mask] as MaskNode, point)) continue
     if (canMask(node) && node.isMask) {
-      if (insideMask(node, point)) return node.id
+      if (insideMaskShape(node, point)) return node.id
       continue
     }
 
@@ -78,6 +79,15 @@ function hitSiblings(
     }
   }
   return null
+}
+
+/**
+ * 点（親の座標系）がマスクの形の内側か。テキストは文字の形（描画・SVG・CSS と同じく、文字のすき間はマスクの外）。
+ * 文字の形を描けない環境では枠の矩形で決める
+ */
+function insideMaskShape(node: MaskNode, point: Point): boolean {
+  if (node.type !== 'text') return insideMask(node, point)
+  return textCovers(node, toNodeSpace(node, point)) ?? insideMask(node, point)
 }
 
 /** パスに当たるか（local はノードの座標系） */

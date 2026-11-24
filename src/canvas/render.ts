@@ -2,6 +2,7 @@ import {
   type Bounds,
   IDENTITY,
   type Matrix,
+  type Point,
   type Size,
   intersects,
   multiply,
@@ -211,6 +212,7 @@ function drawMasked(ctx: CanvasRenderingContext2D, pass: Pass, mask: MaskNode, p
   // 形のマスク（テキスト）は不透明度を見ない
   alpha.globalAlpha = mask.maskType === 'vector' ? 1 : mask.opacity
   alpha.transform(...local)
+  // マスクの絵のキャンバスは pass.open に載せないので、絵の中の背景のぼかしは backdropOf がこのキャンバスから始め、マスクの絵の中だけをぼかす
   drawContent(alpha, pass, shape, multiply(parent, local))
   alpha.restore()
   if (mask.maskType === 'luminance') luminanceToAlpha(alpha)
@@ -451,6 +453,37 @@ function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
     }
   }
   return { lines, align, lineHeight, baseline, silhouette }
+}
+
+/** 文字の形を調べるキャンバス（1 画素）と、ノードの座標の 1 を何画素にして描くか */
+let inkProbe: CanvasRenderingContext2D | null = null
+const INK_SCALE = 4
+
+/**
+ * テキストの文字の形が local（ノードの座標系。枠の左上が原点、回す前の向き）を覆うか。テキストのマスクの当たり判定に使う。
+ * 描画と同じ行分け・書体で、点のまわりだけを 1 画素のキャンバスに描いて不透明度を見る（塗りの色・不透明度によらず形で決める）。
+ * 画面で帯（tinyText）にしている大きさでも文字の形で決める。Canvas の無い環境（Node のテスト）では null
+ */
+export function textCovers(node: TextNode, local: Point): boolean | null {
+  if (typeof document === 'undefined') return null
+  const c = (inkProbe ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true }))
+  if (!c) return null
+  if (c.canvas.width !== 1 || c.canvas.height !== 1) {
+    c.canvas.width = 1
+    c.canvas.height = 1
+  }
+  // 裏返しは中身にかかる（描くときと同じ）。枠の中心で映すので、逆の変換も同じ形
+  const p = { x: node.flipX ? node.width - local.x : local.x, y: node.flipY ? node.height - local.y : local.y }
+  // 描かれうる範囲の外なら、描かずに外とする（はみ出す行も含む範囲）
+  const rect = textRect(c, node)
+  if (p.x < rect.x || p.y < rect.y || p.x > rect.x + rect.width || p.y > rect.y + rect.height) return false
+  c.setTransform(1, 0, 0, 1, 0, 0)
+  c.clearRect(0, 0, 1, 1)
+  // 点が画素の中央に来るように置く
+  c.setTransform(INK_SCALE, 0, 0, INK_SCALE, 0.5 - p.x * INK_SCALE, 0.5 - p.y * INK_SCALE)
+  c.fillStyle = '#000000'
+  textShape(c, node).silhouette(c, 0)
+  return c.getImageData(0, 0, 1, 1).data[3] > 0
 }
 
 /** 帯で描くほど小さい文字か（tinyText） */

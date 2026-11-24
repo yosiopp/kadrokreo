@@ -97,7 +97,7 @@ export function shapeContours(node: ShapeNode): Contour[] {
 
 /**
  * マスクの輪郭（ノードの座標系）。図形は形、画像・フレームは枠（角丸を含む）、テキストは枠の矩形
- * （テキストの形のマスクは文字の形で切り取るが、輪郭では表せないので、当たり判定はこの枠で決める）
+ * （テキストの形のマスクは文字の形で切り取るが、輪郭では表せない。当たり判定は canvas/hitTest.ts で文字の形を描いて決める）
  */
 export function maskOutline(node: MaskNode): Contour[] {
   if (isShape(node)) return shapeContours(node)
