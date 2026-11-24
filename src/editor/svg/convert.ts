@@ -526,7 +526,7 @@ class Converter {
     const matrix = transform ? multiply(parentMatrix, transform) : parentMatrix
     if (!transform) this.warn('読めない transform（無視した）')
     const inherited = this.inherit(element, parentInherited)
-    // 図形・グループ・テキスト・画像に付いた影とぼかしの filter は効果として読む（図形は shape で、ほかはここで）
+    // 図形・グループ・テキスト・画像に付いた影とぼかしの filter は効果として読む
     const effects = EFFECT_ELEMENTS.has(name) ? this.filterEffects(element, matrix) : null
     for (const [attribute, label] of SKIPPED_REFERENCES) {
       const value = declared[attribute]
@@ -536,7 +536,11 @@ class Converter {
     // 角度のグラデーションを foreignObject の conic-gradient で書いた g は、切り取りの図形 1 つにする（切り取りはもうかけない）
     const conic = name === 'g' ? this.conicForeign(element, matrix, inherited, depth, uses) : null
     const ids = conic ?? this.convertShape(element, matrix, inherited, depth, uses)
-    if (effects !== null && !SHAPE_ELEMENTS.has(name)) {
+    if (effects !== null && SHAPE_ELEMENTS.has(name)) {
+      // 図形の要素からはノードが 1 つだけできる（shape は効果を空で作る）
+      const node = ids.length === 1 ? this.nodes[ids[0]] : undefined
+      if (node && 'effects' in node) this.nodes[ids[0]] = { ...node, effects }
+    } else if (effects !== null) {
       const node = ids.length === 1 ? this.nodes[ids[0]] : undefined
       if (node && 'effects' in node && node.effects.length === 0) this.nodes[ids[0]] = { ...node, effects }
       // kadrokreo の書き出しが 1 つのノードを g にまとめたもの（kdrShape）は、g の filter（レイヤーのぼかし・線の影）を足す
@@ -1530,7 +1534,7 @@ class Converter {
       name: id !== undefined && id !== '' ? id : node.name,
       fills: fill,
       strokes: stroke,
-      effects: this.filterEffects(element, matrix) ?? [],
+      effects: [],
       strokeWidth: stroke.length > 0 ? tidy(strokeWidth) : node.strokeWidth,
       visible: inherited.visible,
       opacity: this.opacityOf(element),
