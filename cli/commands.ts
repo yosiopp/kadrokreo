@@ -26,7 +26,7 @@ import {
 } from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
-import { boolean, flatten, join, mask, outlineStroke, outlineText, split } from './commands/paths.ts'
+import { boolean, flatten, join, mask, outlineStroke, outlineText, split, textPath } from './commands/paths.ts'
 import { gradient } from './commands/paints.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
 import { fontAdd, fontRm } from './commands/fonts.ts'
@@ -78,6 +78,7 @@ const commands: Command[] = [
   flatten,
   outlineStroke,
   outlineText,
+  textPath,
   mask,
   // edit: 並べる
   align,

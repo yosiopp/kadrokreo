@@ -3,6 +3,7 @@ import { applyMatrix, flipMatrix } from './geometry.ts'
 import { type GlyphCommand, type OutlineFont, parseOutlineFont } from './openType.ts'
 import { alignFactor } from './paint.ts'
 import type { Contour, Vertex } from './path.ts'
+import { isPathText, pathTextClusters, placeOnPath } from './textPath.ts'
 import { wrapLine, wrapWidth } from './textWrap.ts'
 import type { Asset, AssetId, EmbeddedFont, TextNode } from './types.ts'
 
@@ -114,6 +115,7 @@ export function textOutline(node: TextNode): TextOutline | null {
 }
 
 function buildOutline(node: TextNode, font: OutlineFont): TextOutline {
+  if (isPathText(node)) return buildPathOutline(node, font)
   const scale = node.fontSize / font.unitsPerEm
   const measure = measureWith(font, scale)
   const wrapAt = wrapWidth(node)
@@ -149,6 +151,56 @@ function buildOutline(node: TextNode, font: OutlineFont): TextOutline {
       pen += font.advance(glyph) * scale
     }
   })
+  return { contours, missing }
+}
+
+/** 線に沿うテキストの文字の形。描画（canvas/text.ts の layoutPathText）と同じく、文字のまとまりごとに線の上へ置く */
+function buildPathOutline(node: TextNode & { textPath: NonNullable<TextNode['textPath']> }, font: OutlineFont): TextOutline {
+  const scale = node.fontSize / font.unitsPerEm
+  const clusters = pathTextClusters(node.text)
+  // まとまりの中の字の並び（字の番号と、まとまりの始まりからの位置）、まとまりの始まり（前の字との字詰めを含む）と送り幅
+  const runs: { glyph: number; char: string; offset: number }[][] = []
+  const starts: number[] = []
+  const advances: number[] = []
+  let previous = -1
+  let pen = 0
+  for (const cluster of clusters) {
+    const run: { glyph: number; char: string; offset: number }[] = []
+    let start: number | null = null
+    for (const char of cluster) {
+      const glyph = font.glyphIndex(char.codePointAt(0)!)
+      if (previous >= 0) pen += font.kerning(previous, glyph) * scale
+      previous = glyph
+      start ??= pen
+      run.push({ glyph, char, offset: pen - start })
+      pen += font.advance(glyph) * scale
+    }
+    runs.push(run)
+    starts.push(start ?? pen)
+    advances.push(pen - (start ?? pen))
+  }
+  const flip = flipMatrix(node)
+  const contours: Contour[] = []
+  let missing = 0
+  const placed = placeOnPath(node, clusters, starts, advances, pen)
+  for (const glyph of placed) {
+    const run = runs[glyph.index]
+    const cos = Math.cos(glyph.angle)
+    const sin = Math.sin(glyph.angle)
+    for (const item of run) {
+      if (item.glyph === 0 && !isSpace(item.char)) {
+        missing++
+        continue
+      }
+      const point = (x: number, y: number) => {
+        const lx = item.offset + x * scale
+        const ly = -y * scale
+        const p = { x: glyph.x + lx * cos - ly * sin, y: glyph.y + lx * sin + ly * cos }
+        return flip ? applyMatrix(flip, p) : p
+      }
+      contours.push(...glyphContours(font.glyphPath(item.glyph), point))
+    }
+  }
   return { contours, missing }
 }
 

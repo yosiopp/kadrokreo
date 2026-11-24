@@ -1,5 +1,6 @@
 import { type Bounds, type Matrix, type Point, type Size, getContentWorldMatrix, normalizeAngle, transformRect, unionBounds } from './geometry.ts'
 import { capReach, flattenPath, pathOutlines } from './path.ts'
+import { pathTextBox } from './textPath.ts'
 import type { Blur, CornerRadius, Effect, ImageNode, LinearGradient, NodeId, Paint, PathNode, RadialGradient, Scene, Shadow, Style, TextNode } from './types.ts'
 
 // 塗り（Paint）の配列を読む関数。配列は先頭が一番下なので、いちばん上に見えるのは最後の要素
@@ -253,6 +254,8 @@ export type TextLinesOf = (node: TextNode) => readonly { text: string; width?: n
  * 横は行揃えに従って置く。枠の下や横へはみ出す行も含める。行の幅が分からなければ横は枠の幅とみなす
  */
 export function textInkBox(node: TextNode, lines: readonly { text: string; width?: number }[]): Bounds {
+  // 線に沿うテキストは、線を囲む枠のまわりに字の大きさの分
+  if (node.textPath !== null) return pathTextBox(node)
   const height = lines.length * node.fontSize * node.lineHeight
   if (lines.some((line) => line.width === undefined)) return { x: 0, y: 0, width: node.width, height }
   const align = alignFactor(node.textAlign)
@@ -321,9 +324,9 @@ function paintedBoundsOf(scene: Scene, id: NodeId, textLines?: TextLinesOf): Bou
   if (node.type === 'frame' && !node.clipContent) {
     content =
       unionBounds([box, ...node.children.flatMap((child) => (scene.nodes[child].visible ? (paintedBoundsOf(scene, child, textLines) ?? []) : []))]) ?? box
-  } else if (node.type === 'text' && textLines) {
-    // テキストは枠からはみ出す行も描くので、描かれる範囲を足す（影もそこから落ちる）
-    box = content = unionBounds([box, transformRect(world, textInkBox(node, textLines(node)))]) ?? box
+  } else if (node.type === 'text' && (textLines || node.textPath !== null)) {
+    // テキストは枠からはみ出す行も描くので、描かれる範囲を足す（影もそこから落ちる）。線に沿うテキストは行分けによらない
+    box = content = unionBounds([box, transformRect(world, textInkBox(node, textLines?.(node) ?? []))]) ?? box
   }
   const effects = shownPaints(node.effects)
   const parts = [content]

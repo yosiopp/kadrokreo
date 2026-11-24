@@ -22,7 +22,9 @@ import type {
   Shadow,
   Style,
   TextNode,
+  TextPath,
 } from './types.ts'
+import { isPathText, pathTextString, textPathVertices } from './textPath.ts'
 
 // ノードを SVG ファイルにする（viewer・editor・CLI の「SVG に書き出し」）。ドキュメントは変えない。
 // 描画（canvas/render.ts）と同じ見た目になるように書く:
@@ -44,7 +46,7 @@ import type {
 // - テキストの影は text に filter で付ける（落ち影は一番下の塗り、内側の影は一番上の塗り）。画像の影は、枠の形の黒い要素に影だけを出す filter を付けて、画像の下（内側の影は上）に置く。
 // - 角度のグラデーションは SVG にないので、扇形を並べた pattern で近似する（svgShapes.ts の gradientDef）。
 // - 隠した塗り・線・効果（visible が false）は書かない。
-// - テキストは text と、行ごとの tspan。行の区切り（折り返し）は呼び出し側が渡す（ブラウザは Canvas で、CLI は見積もりで測る）。
+// - テキストは text と、行ごとの tspan。線に沿うテキストは、線を定義の path に置いて text の中の textPath で指す。行の区切り（折り返し）は呼び出し側が渡す（ブラウザは Canvas で、CLI は見積もりで測る）。
 //   kdr に埋め込んだ書体（options.fonts）を使うテキストがあれば、その書体のファイルをそのまま @font-face の data URI で style に入れる（使う書体だけ。fontFace.ts）。
 //   埋め込んでいない書体は名前だけを書く（OS の書体は再配布できないものが多いため）。1 行目の基線は、呼び出し側がフォントの実際の高さ（textMetrics）を
 //   渡せば描画と同じ位置に、渡さなければ SVG の取り込みと同じ見積もり（文字の上 0.9・下 0.22）で置く。
@@ -526,12 +528,25 @@ class SvgWriter {
       const inners = i === last ? inner : []
       return drops.length + inners.length > 0 ? this.shadow(node, world, drops, inners, true) : ''
     }
-    const element = (attrs: string) => `<text x="${x}" y="${tidy(baseline)}"${font}${attrs} xml:space="preserve">${spans}</text>`
+    // 線に沿うテキストは、線を定義に置いて <textPath> で指す（置き方はブラウザの textPath に任せる。描画も同じ決まりで置く）
+    const onPath = isPathText(node) ? this.textPathContent(node) : null
+    const element = (attrs: string) =>
+      onPath === null
+        ? `<text x="${x}" y="${tidy(baseline)}"${font}${attrs} xml:space="preserve">${spans}</text>`
+        : `<text${font}${attrs} xml:space="preserve">${onPath}</text>`
     return [
       ...this.carriers(node, world, dropRuns, false).map((decls) => element(` fill="#000000"${decls}${CARRIER}`)),
       ...node.fills.map((fill, i) => element(`${this.paintAttr(fill, 'fill', node)}${filterOf(i)}`)),
       ...this.carriers(node, world, innerRuns, true).map((decls) => element(` fill="#000000"${decls}${CARRIER}`)),
     ]
+  }
+
+  /** 線に沿うテキストの中身（<textPath>）。線は定義に 1 つ置き、塗りごとの text から同じ線を指す */
+  private textPathContent(node: TextNode & { textPath: TextPath }): string {
+    const id = this.defId('text-path')
+    this.defs.push(`<path id="${id}" d="${contoursData([{ vertices: textPathVertices(node), closed: node.textPath.closed }])}"/>`)
+    const offset = node.textPath.startOffset === 0 ? '' : ` startOffset="${tidy(node.textPath.startOffset * 100)}%"`
+    return `<textPath href="#${id}"${offset}>${escapeXml(pathTextString(node.text))}</textPath>`
   }
 
   private image(node: ImageNode, world: Matrix): string[] {

@@ -4,7 +4,9 @@ import { drawnNode } from '../document/booleanNode.ts'
 import { withoutHidden } from '../document/paint.ts'
 import { dataUri, escapeXml as escapeHtml, pathSvg } from '../document/svgShapes.ts'
 import { embeddedFontFaces, fontFaceRule, fontFileName, usedFontFaces } from '../document/fontFace.ts'
-import type { Asset, AssetId, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode } from '../document/types.ts'
+import type { Asset, AssetId, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode, TextPath } from '../document/types.ts'
+import { contoursData } from '../document/path.ts'
+import { isPathText, pathTextString, textPathVertices } from '../document/textPath.ts'
 import { formatColor } from './colors.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, nodeCss } from './inspect.ts'
 import { camelClass, componentName, jsxStyle, parseDeclarations, tailwindClasses } from './codeFormat.ts'
@@ -107,7 +109,7 @@ export function nodeMarkup(
     const name = className(node)
     let css = nodeCss(tree, node.id, style, assets)
     // SVG は枠の外に出る線の太さの分を切らない
-    if (node.type === 'path') css += '\noverflow: visible;'
+    if (node.type === 'path' || isPathText(node)) css += '\noverflow: visible;'
     if (format !== 'react' && format !== 'tailwind') rules.push(`.${name} {\n${css.replace(/^/gm, '  ')}\n}`)
 
     const attr = attribute(name, css)
@@ -126,6 +128,11 @@ export function nodeMarkup(
       }
       case 'text': {
         texts.push(node)
+        // 線に沿う文字は CSS で表せないので、SVG の textPath で書く（文字の色・書体はクラスの CSS から受け継ぐ）
+        if (isPathText(node)) {
+          lines.push(`${indent}<svg ${attr} viewBox="0 0 ${tidy(node.width)} ${tidy(node.height)}">${pathTextSvg(node, name, jsx, format === 'vue')}</svg>`)
+          break
+        }
         // Vue のテンプレートも {{ }} を式と読むので、JSX と同じく { } を文字参照にする
         const text = jsx
           ? escapeJsx(node.text).replace(/\n/g, '<br />')
@@ -257,3 +264,17 @@ function escapeJsx(text: string): string {
   return escapeHtml(text).replace(/\{/g, '&#123;').replace(/\}/g, '&#125;')
 }
 
+
+/**
+ * 線に沿うテキストの SVG の中身（線の path を defs に置き、textPath で指す）。文字の色は CSS の color を currentColor で使う。
+ * 置き方は SVG の書き出し（document/svgExport.ts）と同じ
+ */
+function pathTextSvg(node: TextNode & { textPath: TextPath }, name: string, jsx: boolean, vue: boolean): string {
+  const id = `${name}-path`
+  const d = contoursData([{ vertices: textPathVertices(node), closed: node.textPath.closed }])
+  const anchor = node.textAlign === 'left' ? '' : ` ${jsx ? 'textAnchor' : 'text-anchor'}="${node.textAlign === 'center' ? 'middle' : 'end'}"`
+  const offset = node.textPath.startOffset === 0 ? '' : ` startOffset="${tidy(node.textPath.startOffset * 100)}%"`
+  const line = pathTextString(node.text)
+  const text = jsx || vue ? escapeJsx(line) : escapeHtml(line)
+  return `<defs><path id="${id}" d="${d}"${jsx ? ' />' : '/>'}</defs><text fill="currentColor"${anchor}><textPath href="#${id}"${offset}>${text}</textPath></text>`
+}

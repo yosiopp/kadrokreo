@@ -4,11 +4,14 @@ import { BOOLEAN_LABELS, MAX_PATH_POINTS, applyMask, booleanPaths, joinPaths, sp
 import { createBooleanNode, fitBooleanNodes, flattenBooleanNodes } from '../../src/editor/operations/booleanNodes.ts'
 import { updateNode } from '../../src/editor/operations/tree.ts'
 import { outlineStrokes, outlineTexts } from '../../src/editor/operations/outline.ts'
+import { attachTextToPath, detachTextFromPath, setTextPathOffset } from '../../src/editor/operations/textPath.ts'
+import { isPathText } from '../../src/document/textPath.ts'
+import { fitTextEstimated } from '../textMeasure.ts'
 import type { MaskType } from '../../src/document/types.ts'
 import { UsageError } from '../args.ts'
 import { type Command, checkStep, flag, option } from './common.ts'
 
-// パスの結合・分割、マスクとして使う、ブーリアン演算、線の輪郭化
+// パスの結合・分割、マスクとして使う、ブーリアン演算、線の輪郭化、テキストを線に沿わせる
 
 const MASK_TYPES: readonly MaskType[] = ['vector', 'alpha', 'luminance']
 
@@ -148,5 +151,44 @@ export const outlineText: Command = {
     if (result.tooMany.length > 0) ctx.warn(`outline-text: 文字の形の頂点が ${MAX_PATH_POINTS} を超えるテキストはそのままにしました: ${result.tooMany.join(' ')}`)
     if (result.ids.length === 0) throw new UsageError('outline-text: kdr に埋め込んだ書体で描く（空でない）テキストを指定してください')
     session.last = result.ids
+  },
+}
+
+export const textPath: Command = {
+  name: 'text-path',
+  kind: 'edit',
+  usage: 'text-path テキスト [図形] [--offset 割合] [--off]',
+  flags: ['off'],
+  summary:
+    'テキストを図形（矩形・楕円・パス・ブーリアン演算）の線に沿わせる（SVG の textPath と同じ置き方）。線は図形の最初の輪郭で、テキストが形を写して持つ（図形はそのまま残り、後で動かしてもテキストは変わらない）。' +
+    'テキストの枠は線を囲む矩形になり、回転・裏返しは線の形に焼き込む。改行は空白として 1 行に並べる。--offset は並べ始める位置（線の長さに対する %、0〜100）、行揃え（textAlign）はその位置に並びの始まり・真ん中・終わりを合わせる。' +
+    '図形を省くと、沿っているテキストの --offset だけを変える。--off は線から外してふつうに並べる',
+  run({ session }, step) {
+    checkStep(step, { options: ['offset', 'off'], positionals: 2 })
+    if (step.positionals.length === 0) throw new UsageError('text-path: テキストを指定してください')
+    const text = session.resolveOne(step.positionals[0])
+    if (session.page.nodes[text].type !== 'text') throw new UsageError(`text-path: ${step.positionals[0]} はテキストではありません`)
+    const raw = option(step, 'offset')
+    const percent = raw === undefined ? undefined : Number(raw.replace(/%$/, ''))
+    if (percent !== undefined && !(Number.isFinite(percent) && percent >= 0 && percent <= 100)) throw new UsageError('text-path: --offset は 0〜100 の数です')
+    if (flag(step, 'off')) {
+      if (step.positionals.length > 1 || percent !== undefined) throw new UsageError('text-path: --off には図形と --offset を指定できません')
+      session.apply((page) => fitTextEstimated(detachTextFromPath(page, [text]), [text]))
+      session.last = [text]
+      return
+    }
+    if (step.positionals.length === 2) {
+      const guide = session.resolveOne(step.positionals[1])
+      session.apply((page) => {
+        const attached = attachTextToPath(page, text, guide)
+        if (attached === page) throw new UsageError(`text-path: ${step.positionals[1]} は沿わせる線にできません（矩形・楕円・パス・ブーリアン演算を指定してください）`)
+        return percent === undefined ? attached : setTextPathOffset(attached, [text], percent / 100)
+      })
+    } else {
+      if (percent === undefined) throw new UsageError('text-path: 図形か --offset か --off を指定してください')
+      if (!isPathText(session.page.nodes[text])) throw new UsageError(`text-path: ${step.positionals[0]} は線に沿っていません（図形を指定してください）`)
+      session.apply((page) => setTextPathOffset(page, [text], percent / 100))
+    }
+    session.last = [text]
   },
 }

@@ -293,7 +293,24 @@ export type TextNode = BaseNode &
   textAlign: 'left' | 'center' | 'right'
   /** 行の高さ。fontSize に対する倍率 */
   lineHeight: number
+  /**
+   * 文字を沿わせる線（SVG の textPath）。null ならふつうに行に並べる。
+   * 沿わせるときは改行を空白として 1 行に並べ、折り返し・行の高さ・大きさの決め方（sizing）は効かない。枠は線を囲む矩形で、線と一緒に伸縮する
+   */
+  textPath: TextPath | null
 } & Flippable
+
+/**
+ * テキストを沿わせる線。文字の基線を線に乗せ、1 文字ずつ線の向きに回して並べる（SVG の textPath と同じ置き方）。
+ * points はパスの頂点（PathPoint）と同じく、テキストの枠に対する割合。startOffset は並べ始める位置で、線の長さに対する割合（0〜1。SVG の startOffset の %）。
+ * 行揃え（textAlign）はこの位置に文字の並びのどこを合わせるか（left は始まり、center は真ん中、right は終わり。SVG の text-anchor）。
+ * 線の外（始まりより前、終わりより後）に出た文字は描かない
+ */
+export type TextPath = {
+  points: PathPoint[]
+  closed: boolean
+  startOffset: number
+}
 
 /**
  * fit は、枠と画像の縦横比が違うときの収め方。

@@ -1,3 +1,4 @@
+import { isFlowText } from '../document/textPath.ts'
 import { nodeMatrix, tidy, transformRect } from '../document/geometry.ts'
 import { followsConstraints } from '../document/autoLayout.ts'
 import type { Constraint, FrameNode, NodeId, Scene, SceneNode } from '../document/types.ts'
@@ -117,7 +118,7 @@ function followParent<T extends Scene>(
 
 /** 大きさが変わる向きの書き換えを patch に足す。テキストの高さは中身で決まるので変えない */
 function resizePatch(child: SceneNode, patch: NodePatch, width: number, height: number, resized: NodeId[]): NodePatch {
-  if (child.type === 'text') height = child.height
+  if (isFlowText(child)) height = child.height
   if (width !== child.width) {
     patch.width = width
     // 中身に合わせていた向きを伸縮したら固定にする（そうしないと中身の大きさへ戻る）
@@ -148,7 +149,7 @@ export function followRotated(child: SceneNode, previous: FrameNode, frame: Fram
   const vertical = constrain(child.constraints.vertical, box.y, box.height, previous.height, frame.height)
   const size = rotatedSize(child, box, horizontal.size, vertical.size)
   const width = tidy(size.width)
-  const height = child.type === 'text' ? child.height : tidy(size.height)
+  const height = isFlowText(child) ? child.height : tidy(size.height)
   // 新しい大きさで、x / y はそのままにしたときの囲む矩形から、中心のずれを直す
   const moved = boundingBox({ ...child, width, height })
   const patch: NodePatch = {
@@ -167,7 +168,7 @@ function rotatedSize(
 ): { width: number; height: number } {
   if (Math.abs(boxWidth - box.width) < 1e-9 && Math.abs(boxHeight - box.height) < 1e-9) return child
   // テキストは高さが中身で決まるので、大きさを保つ（位置だけ追従する）
-  if (child.type === 'text') return child
+  if (isFlowText(child)) return child
   const radians = (child.rotation * Math.PI) / 180
   const c = Math.abs(Math.cos(radians))
   const s = Math.abs(Math.sin(radians))

@@ -34,7 +34,8 @@ import { isVariantSet } from '../document/variants.ts'
 import { getImage } from './images.ts'
 import { drawBlurred } from './blur.ts'
 import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
-import { applyFont, fontBox, layoutText, wrapWidth } from './text.ts'
+import { isPathText } from '../document/textPath.ts'
+import { applyFont, fontBox, layoutPathText, layoutText, wrapWidth } from './text.ts'
 import type { Viewport } from './viewport.ts'
 
 export type RenderOptions = {
@@ -417,7 +418,7 @@ function blurTextBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: TextN
   ctx.restore()
 }
 
-/** 文字の並び。ctx に書体を設定し、行・行揃え・行の高さ・ベースラインと、文字の形を描く関数（影・切り抜き用）を返す */
+/** 文字の並び。ctx に書体を設定し、行・行揃え・行の高さ・ベースラインと、文字を描く関数・文字の形を描く関数（影・切り抜き用）を返す */
 function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
   const { width } = node
   const font = applyFont(ctx, node)
@@ -428,31 +429,43 @@ function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
   const contentHeight = metrics.ascent + metrics.descent
   const baseline = (lineHeight - contentHeight) / 2 + metrics.ascent
   const align = alignFactor(node.textAlign)
-  const lines = layoutText(ctx, node)
+  // 線に沿うテキストは、文字ごとに線の上へ置く（基線を線に乗せ、線の向きに回す）
+  const glyphs = isPathText(node) ? layoutPathText(ctx, node) : null
+  const lines = glyphs ? [] : layoutText(ctx, node)
+  /** 全部の文字を method で描く。c の書体・textBaseline は設定してあること */
+  const put = (c: CanvasRenderingContext2D, method: 'fillText' | 'strokeText') => {
+    if (!glyphs) {
+      lines.forEach((line, i) => c[method](line.text, (width - line.width) * align, lineHeight * i + baseline))
+      return
+    }
+    const m = c.getTransform()
+    for (const glyph of glyphs) {
+      c.translate(glyph.x, glyph.y)
+      c.rotate(glyph.angle)
+      c[method](glyph.text, 0, 0)
+      c.setTransform(m)
+    }
+  }
   // 文字の影は、文字の形を別のキャンバスに描いてから影だけを落とす（行が分かれていても 1 つの形として）
   const silhouette: Silhouette = (c, spread) => {
     applyFont(c, node)
     c.textBaseline = 'alphabetic'
     c.lineJoin = 'round'
-    lines.forEach((line, i) => {
-      const x = (width - line.width) * align
-      const y = lineHeight * i + baseline
-      if (spread >= 0) c.fillText(line.text, x, y)
-      if (spread > 0) {
-        c.lineWidth = spread * 2
-        c.strokeText(line.text, x, y)
-      }
-    })
+    if (spread >= 0) put(c, 'fillText')
+    if (spread > 0) {
+      c.lineWidth = spread * 2
+      put(c, 'strokeText')
+    }
     // 細らせるのは、縁を太い線で消す
     if (spread < 0) {
-      lines.forEach((line, i) => c.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline))
+      put(c, 'fillText')
       c.globalCompositeOperation = 'destination-out'
       c.lineWidth = -spread * 2
-      lines.forEach((line, i) => c.strokeText(line.text, (width - line.width) * align, lineHeight * i + baseline))
+      put(c, 'strokeText')
       c.globalCompositeOperation = 'source-over'
     }
   }
-  return { lines, align, lineHeight, baseline, silhouette }
+  return { lines, glyphs, align, lineHeight, baseline, put, silhouette }
 }
 
 /** 文字の形を調べるキャンバス（1 画素）と、ノードの座標の 1 を何画素にして描くか */
@@ -488,7 +501,8 @@ export function textCovers(node: TextNode, local: Point): boolean | null {
 
 /** 帯で描くほど小さい文字か（tinyText） */
 function isTiny(pass: Pass, node: TextNode): boolean {
-  return pass.options.tinyText === true && node.fontSize * pass.scale < TINY_TEXT
+  // 線に沿う文字は帯にしない（帯は行に並べた形なので）
+  return pass.options.tinyText === true && node.fontSize * pass.scale < TINY_TEXT && node.textPath === null
 }
 
 /**
@@ -719,10 +733,15 @@ function drawContent(
         break
       }
       {
-        const { lines, align, lineHeight, baseline, silhouette } = textShape(ctx, node)
+        const { glyphs, put, silhouette } = textShape(ctx, node)
         const { drop: drops, inner } = splitEffects(node.effects)
         for (const shadow of drops) drawMaskedShadow(ctx, pass, shadow, silhouette, false)
         for (const fill of node.fills) {
+          // 線に沿う文字は 1 文字ずつ回して描くので、グラデーションは文字の形を別のキャンバスに描いてから枠の向きで塗る
+          if (glyphs && fill.type !== 'solid') {
+            fillTextLayer(ctx, pass, node, fill, silhouette)
+            continue
+          }
           const plain = isPlain(fill)
           if (!plain) {
             ctx.save()
@@ -731,9 +750,7 @@ function drawContent(
           }
           // 固定の幅からはみ出す行もあるので、文字の大きさの分だけ外まで覆う
           ctx.fillStyle = paintStyle(ctx, fill, node, node.fontSize)
-          lines.forEach((line, i) => {
-            ctx.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline)
-          })
+          put(ctx, 'fillText')
           if (!plain) ctx.restore()
         }
         // 内側の影は、別のキャンバスに影を描いてから文字の形で切り抜いて重ねる（パスで切り抜けないため）
@@ -1062,6 +1079,27 @@ function drawMaskedShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Sha
 }
 
 /**
+ * 文字の形を別のキャンバスに描き、その形の内側を塗り（枠の向きのグラデーション）で塗って ctx に重ねる。
+ * 線に沿う文字は 1 文字ずつ回して描くので、そのまま塗るとグラデーションも文字ごとに回ってしまうため
+ */
+function fillTextLayer(ctx: CanvasRenderingContext2D, pass: Pass, node: TextNode, fill: Paint, silhouette: Silhouette): void {
+  const layer = acquireLayer(ctx, pass.layerDepth)
+  layer.fillStyle = '#000000'
+  silhouette(layer, 0)
+  layer.globalCompositeOperation = 'source-in'
+  layer.fillStyle = paintStyle(layer, fill, node, node.fontSize)
+  const box = textInkBox(node, [])
+  layer.fillRect(box.x, box.y, box.width, box.height)
+  layer.globalCompositeOperation = 'source-over'
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.globalAlpha *= fill.opacity
+  if (fill.blendMode !== 'normal') ctx.globalCompositeOperation = fill.blendMode
+  ctx.drawImage(layer.canvas, 0, 0)
+  ctx.restore()
+}
+
+/**
  * 文字の内側の影。影を別のキャンバスに描き、文字の形（silhouette）で切り抜いてから ctx に重ねる
  */
 function drawTextInnerShadow(ctx: CanvasRenderingContext2D, pass: Pass, shadow: Shadow, silhouette: Silhouette): void {
@@ -1208,10 +1246,12 @@ export function paintedRect(ctx: CanvasRenderingContext2D, node: SceneNode): Bou
  * 字の形は行の箱から少しはみ出しうる（斜体や大きな飾り）ので、文字の大きさの半分だけ余裕を取る
  */
 function textRect(ctx: CanvasRenderingContext2D, node: TextNode): Bounds {
-  const ink = textInkBox(node, layoutText(ctx, node))
-  const bottom = Math.max(node.height, ink.height)
+  // 線に沿うテキストは行分けしない（範囲は線を囲む枠のまわり。上にも出る）
+  const ink = textInkBox(node, isPathText(node) ? [] : layoutText(ctx, node))
+  const top = Math.min(0, ink.y)
+  const bottom = Math.max(node.height, ink.y + ink.height)
   const margin = node.fontSize / 2
-  return { x: ink.x - margin, y: -margin, width: ink.width + margin * 2, height: bottom + margin * 2 }
+  return { x: ink.x - margin, y: top - margin, width: ink.width + margin * 2, height: bottom - top + margin * 2 }
 }
 
 /**

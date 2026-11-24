@@ -387,6 +387,7 @@ describe('parseKdr', () => {
       fontWeight: 400,
       textAlign: 'left',
       lineHeight: 1.2,
+      textPath: null,
       flipX: false,
       flipY: false,
       sizing: { width: 'fixed', height: 'hug' },
@@ -690,6 +691,21 @@ describe('parseKdr', () => {
     expect(() => parseOne(rawNode({ maxHeight: '40' }))).toThrow('maxHeight')
     expect(parseOne(rawNode({ layoutPositioning: 'absolute' }))).toMatchObject({ layoutPositioning: 'absolute' })
     expect(() => parseOne(rawNode({ layoutPositioning: 'fixed' }))).toThrow('layoutPositioning')
+  })
+
+  it('テキストを沿わせる線を検証し、閉じていない・始まりが 0 なら書かない', () => {
+    const text = (textPath: unknown) => rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif', textPath })
+    const line = { points: [{ x: 0, y: 1 }, { x: 1, y: 0, in: { x: -0.5, y: 0 } }] }
+    expect(parseOne(text(line))).toMatchObject({ textPath: { ...line, closed: false, startOffset: 0 } })
+    expect(parseOne(text({ ...line, closed: true, startOffset: 0.25 }))).toMatchObject({ textPath: { closed: true, startOffset: 0.25 } })
+    expect(parseOne(text(null))).toMatchObject({ textPath: null })
+    expect(roundTrip(text({ ...line, closed: false, startOffset: 0 })).textPath).toEqual(line)
+    expect(roundTrip(text({ ...line, closed: true, startOffset: 0.5 })).textPath).toEqual({ ...line, closed: true, startOffset: 0.5 })
+    expect(roundTrip(text(null))).not.toHaveProperty('textPath')
+    expect(() => parseOne(text({ points: [{ x: 0, y: 0 }] }))).toThrow('textPath.points')
+    expect(() => parseOne(text({ ...line, startOffset: 1.5 }))).toThrow('textPath.startOffset')
+    expect(() => parseOne(text({ ...line, closed: 'yes' }))).toThrow('textPath.closed')
+    expect(() => parseOne(text('line'))).toThrow('textPath')
   })
 
   it('テキストの太さは 100〜900 の 100 刻み', () => {

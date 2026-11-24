@@ -1,3 +1,4 @@
+import { isFlowText } from '../../document/textPath.ts'
 import type { CanvasPointer } from '../../canvas/CanvasView.tsx'
 import {
   type Bounds,
@@ -218,7 +219,7 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
         const framed = snapResize({ ...box, x: box.x + origin.x, y: box.y + origin.y }, handle, targets, SNAP_DISTANCE / zoom)
         box = { ...framed, x: tidy(framed.x - origin.x), y: tidy(framed.y - origin.y), width: tidy(framed.width), height: tidy(framed.height) }
         // テキストの高さは中身で決まるので、上下の辺は揃えない
-        const guideHandle = node.type === 'text' ? (handle.replace(/[ns]/g, '') as Handle) : handle
+        const guideHandle = isFlowText(node) ? (handle.replace(/[ns]/g, '') as Handle) : handle
         if (guideHandle) {
           gesture.guides = findGuides({ ...box, x: box.x + origin.x, y: box.y + origin.y }, targets, guideHandle).map((guide) => ({ ...guide, rotation: gesture.rotation }))
         }

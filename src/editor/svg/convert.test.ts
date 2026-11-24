@@ -332,7 +332,7 @@ describe('危険なもの・表せないもの', () => {
       'マスク（読めない中身。かけなかった）',
       'パターンの塗り',
       'たどれない塗りの参照',
-      '線に沿った文字（<textPath>）',
+      'text の外の線に沿った文字（<textPath>）',
     ])
   })
 
@@ -749,10 +749,39 @@ describe('テキスト', () => {
 })
 
 describe('textPath', () => {
-  it('text の中の textPath は文字だけをまっすぐ並べて知らせる', () => {
-    const result = convert('<svg><path id="curve" d="M0 0 C50 -50 100 50 150 0"/><text><textPath href="#curve">Along</textPath></text></svg>')
-    expect(children(result)[1]).toMatchObject({ type: 'text', text: 'Along' })
-    expect(labels(result)).toEqual(['線に沿った文字（<textPath>。まっすぐ並べた）'])
+  it('text の中の textPath は、href の図形の線に沿うテキストにする', () => {
+    const result = convert(
+      '<svg><defs><path id="curve" d="M10 50 L110 50 L110 150"/></defs>' +
+        '<text font-size="20" text-anchor="middle" fill="#ff0000"><textPath href="#curve" startOffset="25%">Along</textPath></text></svg>',
+    )
+    const text = children(result)[0] as TextNode
+    expect(text).toMatchObject({ type: 'text', text: 'Along', fontSize: 20, textAlign: 'center', x: 10, y: 50, width: 100, height: 100, rotation: 0 })
+    expect(text.fills).toMatchObject([{ type: 'solid', color: '#ff0000' }])
+    expect(text.textPath).toEqual({ points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], closed: false, startOffset: 0.25 })
+    expect(labels(result)).toEqual([])
+  })
+
+  it('長さの startOffset は線の長さで割り、図形と text の変換を線にかける', () => {
+    const result = convert(
+      '<svg><defs><path id="line" d="M0 0 H50" transform="translate(0 10)"/></defs>' +
+        '<text font-size="10" transform="scale(2)"><textPath xlink:href="#line" startOffset="25">A B</textPath></text></svg>',
+    )
+    const text = children(result)[0] as TextNode
+    expect(text).toMatchObject({ x: 0, y: 20, width: 100, height: 1, fontSize: 20 })
+    expect(text.textPath?.startOffset).toBe(0.5)
+  })
+
+  it('円も閉じた線として読み、線の外から始まる位置は端に寄せて知らせる', () => {
+    const result = convert('<svg><circle id="c" cx="50" cy="50" r="40"/><text><textPath href="#c" startOffset="150%">Ring</textPath></text></svg>')
+    const text = children(result)[1] as TextNode
+    expect(text.textPath).toMatchObject({ closed: true, startOffset: 1 })
+    expect(labels(result)).toEqual(['線の外から始まる textPath（線の端に寄せた）'])
+  })
+
+  it('たどれない線は、文字だけをまっすぐ並べて知らせる', () => {
+    const result = convert('<svg><text><textPath href="#missing">Along</textPath></text></svg>')
+    expect(children(result)[0]).toMatchObject({ type: 'text', text: 'Along', textPath: null })
+    expect(labels(result)).toEqual(['線に沿った文字（<textPath>。線を読めないのでまっすぐ並べた）'])
   })
 })
 

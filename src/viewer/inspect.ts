@@ -103,7 +103,18 @@ export function inspectNode(
     ])
   }
 
-  if (node.type === 'text') {
+  if (node.type === 'text' && node.textPath !== null) {
+    // 線に沿う文字は行に並べないので、行の高さ・折り返しは出さない
+    add('テキスト', [
+      { label: '内容', value: node.text },
+      { label: '書体', value: node.fontFamily },
+      { label: 'サイズ', value: num(node.fontSize) },
+      { label: '太さ', value: String(node.fontWeight) },
+      { label: 'パスに沿う', value: `始まり ${percent(node.textPath.startOffset)}・${node.textPath.closed ? '閉じた線' : '開いた線'}` },
+      { label: '行揃え', value: TEXT_ALIGN[node.textAlign] },
+      { label: 'CSS', value: '線に沿う文字は CSS で表せないので、HTML では SVG の textPath で書いている' },
+    ])
+  } else if (node.type === 'text') {
     add('テキスト', [
       { label: '内容', value: node.text },
       { label: '書体', value: node.fontFamily },
@@ -526,8 +537,11 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     add('font-family', cssFontFamily(node.fontFamily))
     add('font-size', px(node.fontSize))
     add('font-weight', String(node.fontWeight))
-    add('line-height', num(node.lineHeight))
-    if (node.textAlign !== 'left') add('text-align', node.textAlign)
+    // 線に沿う文字は SVG の textPath で並べる（markup.ts）ので、行の高さ・行揃えは CSS に書かない
+    if (node.textPath === null) {
+      add('line-height', num(node.lineHeight))
+      if (node.textAlign !== 'left') add('text-align', node.textAlign)
+    }
     // 中身に合わせる幅は、上限があればそこで折り返す（max-width は上で書いている）
     if (node.sizing.width === 'hug') {
       if (node.maxWidth === null) add('white-space', 'nowrap')

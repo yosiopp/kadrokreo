@@ -49,6 +49,8 @@ import { findFrameAt } from './hitTest.ts'
 import { isSelfOrAncestor } from './operations/tree.ts'
 import { createPath } from './nodes.ts'
 import { insertNode, updateNodes } from './operations/tree.ts'
+import { textPathTargets } from './operations/textPath.ts'
+import { isPathText } from '../document/textPath.ts'
 import {
   deleteContourVertices,
   editByContour,
@@ -865,6 +867,8 @@ export function EditorCanvas({
         disabled: !movableIds().some((id) => page.nodes[id]?.type === 'text'),
         onSelect: commands.outlineText,
       },
+      { label: 'テキストをパスに沿わせる', disabled: textPathTargets(page, movableIds()) === null, onSelect: commands.attachTextPath },
+      { label: 'テキストをパスから外す', disabled: !movableIds().some((id) => isPathText(page.nodes[id])), onSelect: commands.detachTextPath },
       {
         label: 'コンポーネントにする',
         shortcut: `${ALT}${MOD}K`,

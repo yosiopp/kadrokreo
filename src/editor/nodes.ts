@@ -122,6 +122,7 @@ export function createText(bounds: Bounds, text = ''): TextNode {
     fontWeight: 400,
     textAlign: 'left',
     lineHeight: 1.2,
+    textPath: null,
     flipX: false,
     flipY: false,
   }

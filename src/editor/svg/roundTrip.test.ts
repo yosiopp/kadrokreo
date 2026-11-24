@@ -21,7 +21,7 @@ const measureText = (node: TextNode) => ({
 /** ノードを並べたページ（親子は parentId から組む）。サイズの合ったテキストにする */
 function sceneOf(...nodes: SceneNode[]): Scene {
   const table: Record<string, SceneNode> = {}
-  for (const node of nodes) table[node.id] = node.type === 'text' ? { ...node, ...measureText(node) } : node
+  for (const node of nodes) table[node.id] = node.type === 'text' && node.textPath === null ? { ...node, ...measureText(node) } : node
   for (const node of nodes) {
     if (node.parentId === null) continue
     const parent = table[node.parentId]
@@ -282,6 +282,46 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     const sub = byName('Sub') as TextNode
     expect(sub.textAlign).toBe('center')
     expectSameBounds(scene, 'Sub', imported, sub.id, origin)
+  })
+
+  it('線に沿うテキストは textPath で書き、読み戻すと同じ線・始まり・揃え・位置に戻る', () => {
+    const k = 0.5522847498
+    const along = named(createText({ x: 0, y: 0, width: 0, height: 0 }, 'Along\nthe <path>'), 'Along', {
+      x: 40,
+      y: 60,
+      width: 200,
+      height: 100,
+      rotation: 30,
+      fontSize: 18,
+      textAlign: 'center',
+      sizing: { width: 'fixed', height: 'hug' },
+      textPath: { points: [{ x: 0, y: 1, out: { x: 0, y: -k } }, { x: 1, y: 0, in: { x: -0.5 * k, y: 0 } }], closed: false, startOffset: 0.5 },
+    })
+    const scene = sceneOf(along)
+    const { svg, byName, imported, origin, warnings } = roundTrip(scene)
+    expect(svg).toContain('<textPath href="#kdr-text-path-')
+    expect(svg).toContain('startOffset="50%"')
+    expect(svg).toContain('the &lt;path&gt;')
+    expect(warnings).toEqual([])
+    const back = byName('Along') as TextNode
+    expect(back.text).toBe('Along the <path>')
+    expect(back.textAlign).toBe('center')
+    expect(back.fontSize).toBe(18)
+    expect(back.rotation).toBe(0)
+    expect(back.textPath?.startOffset).toBe(0.5)
+    // 回転は線の形に焼き込まれるので、線の頂点のページ上の位置で比べる
+    const pagePoints = (node: TextNode, sceneOfNode: Scene, shift = { x: 0, y: 0 }) => {
+      const m = getContentWorldMatrix(sceneOfNode, node.id)
+      return pathPoints({ width: node.width, height: node.height, points: node.textPath!.points }).map((p) => ({
+        x: m[0] * p.x + m[2] * p.y + m[4] + shift.x,
+        y: m[1] * p.x + m[3] * p.y + m[5] + shift.y,
+      }))
+    }
+    const expected = pagePoints(along, scene, { x: -origin.x, y: -origin.y })
+    pagePoints(back, imported).forEach((point, i) => {
+      close(point.x, expected[i].x)
+      close(point.y, expected[i].y)
+    })
   })
 
   it('枠からはみ出すテキストの行も範囲（viewBox）に含める。行の分け方を渡さなければ枠だけ', () => {

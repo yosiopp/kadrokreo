@@ -34,7 +34,8 @@ function charWidth(char: string, mono: boolean): number {
   return OTHER_WIDTH / 1000
 }
 
-type Style = Pick<TextNode, 'text' | 'fontSize' | 'fontWeight' | 'fontFamily' | 'sizing' | 'width' | 'lineHeight' | 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight'>
+type Style = Pick<TextNode, 'text' | 'fontSize' | 'fontWeight' | 'fontFamily' | 'sizing' | 'width' | 'lineHeight' | 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight'> &
+  Partial<Pick<TextNode, 'height' | 'textPath'>>
 
 export function estimateTextWidth(text: string, fontSize: number, fontWeight: number, fontFamily = 'sans-serif'): number {
   const mono = /mono|courier/i.test(fontFamily)
@@ -53,6 +54,8 @@ export function estimateTextLines(style: Style): { text: string; width: number }
 
 /** canvas/text.ts の measureText と同じ決まりで、見積もった幅を使って大きさを出す */
 export function estimateTextSize(style: Style): { width: number; height: number } {
+  // 線に沿うテキストの枠は線を囲む矩形で、中身では決まらない
+  if (style.textPath && style.height !== undefined) return { width: style.width, height: style.height }
   const measure = (text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily)
   const paragraphs = style.text.split('\n')
   const wrapAt = wrapWidth(style)

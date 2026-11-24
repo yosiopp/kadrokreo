@@ -6,6 +6,9 @@ import { TextAlignIcon } from '../icons.tsx'
 import { type PanelContext, textsIn, MIXED, common, mapValue } from './context.ts'
 import { NumberField, OverrideMark, Section, SelectField } from './fields.tsx'
 import { FONT_ACCEPT } from '../importFont.ts'
+import { isPathText } from '../../document/textPath.ts'
+import { fitTextNodes } from '../measure.ts'
+import { detachTextFromPath, setTextPathOffset } from '../operations/textPath.ts'
 
 const FONT_FAMILIES = [
   { value: 'sans-serif', label: 'ゴシック体' },
@@ -34,6 +37,10 @@ export function TextSection({ ctx, onAddFonts }: { ctx: PanelContext; onAddFonts
     label: family,
   }))
   const known = [...FONT_FAMILIES, ...embedded]
+  // 線に沿うテキスト（折り返し・行の高さは効かない）
+  const onPath = texts.every(isPathText)
+  const offPath = !texts.some(isPathText)
+  const startOffset = common(texts.map((node) => node.textPath?.startOffset ?? 0))
 
   return (
     <Section title="テキスト" overridden={overridden.has('text')}>
@@ -45,7 +52,7 @@ export function TextSection({ ctx, onAddFonts }: { ctx: PanelContext; onAddFonts
         max={1000}
         onCommit={(fontSize) => apply({ fontSize })}
       />
-      {!inner && (
+      {!inner && offPath && (
         <NumberField
           label="行の高さ"
           value={common(texts.map((n) => n.lineHeight))}
@@ -89,7 +96,26 @@ export function TextSection({ ctx, onAddFonts }: { ctx: PanelContext; onAddFonts
         options={optionsOf(FONT_WEIGHT_LABELS)}
         onChange={(weight) => apply({ fontWeight: Number(weight) })}
       />
-      {!inner && (
+      {!inner && onPath && (
+        <>
+          <NumberField
+            label="パスの始まり（%）"
+            value={mapValue(startOffset, (value) => Math.round(value * 1000) / 10)}
+            min={0}
+            max={100}
+            onCommit={(percent) => ctx.store.apply((base) => setTextPathOffset(base, ctx.selection, percent / 100))}
+          />
+          <div className="font-actions">
+            <button
+              type="button"
+              onClick={() => ctx.store.apply((base) => fitTextNodes(detachTextFromPath(base, ctx.selection), ctx.selection))}
+            >
+              パスから外す
+            </button>
+          </div>
+        </>
+      )}
+      {!inner && offPath && (
         <SelectField
           label="折り返し"
           value={mapValue(autoWidth, (auto) => (auto ? 'auto' : 'fixed'))}

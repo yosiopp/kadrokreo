@@ -1,3 +1,4 @@
+import { isFlowText } from '../../document/textPath.ts'
 import {
   type Bounds,
   type Point,
@@ -70,7 +71,7 @@ export function reshapeNode<T extends Scene>(scene: T, id: NodeId, box: Bounds):
     x: box.x + box.width / 2,
     y: box.y + box.height / 2,
   })
-  const size = { width: box.width, height: node.type === 'text' ? node.height : box.height }
+  const size = { width: box.width, height: isFlowText(node) ? node.height : box.height }
   const pose = poseInParent(scene, node.parentId, center, getWorldRotation(scene, id), size)
   return updateNode(scene, id, { x: pose.x, y: pose.y, ...sizePatch(node, size.width, size.height) })
 }
@@ -81,12 +82,12 @@ export function reshapeNode<T extends Scene>(scene: T, id: NodeId, box: Bounds):
  * （そうしないと、すぐ中身に合わせた大きさへ戻ってしまう）。
  */
 function sizePatch(node: SceneNode, width: number, height: number): NodePatch {
-  if (node.type === 'text' && width === node.width) return {}
+  if (isFlowText(node) && width === node.width) return {}
   const unhug = (axis: 'width' | 'height', value: number) =>
     node.sizing[axis] === 'hug' && value !== node[axis] ? 'fixed' : node.sizing[axis]
   // テキストの高さは常に中身で決まる（hug のまま）
-  const sizing = { width: unhug('width', width), height: node.type === 'text' ? node.sizing.height : unhug('height', height) }
-  const size = node.type === 'text' ? { width } : { width, height }
+  const sizing = { width: unhug('width', width), height: isFlowText(node) ? node.sizing.height : unhug('height', height) }
+  const size = isFlowText(node) ? { width } : { width, height }
   if (sizing.width === node.sizing.width && sizing.height === node.sizing.height) return size
   return { ...size, sizing }
 }
@@ -138,7 +139,7 @@ export function resizeNodes<T extends Scene>(
             : [uniform, uniform]
       const size = {
         width: Math.max(minSize, Math.round(node.width * scaleW)),
-        height: node.type === 'text' ? node.height : Math.max(minSize, Math.round(node.height * scaleH)),
+        height: isFlowText(node) ? node.height : Math.max(minSize, Math.round(node.height * scaleH)),
       }
       const pose = poseInParent(scene, node.parentId, moved, getWorldRotation(scene, id), size)
       return { x: pose.x, y: pose.y, ...sizePatch(node, size.width, size.height) }

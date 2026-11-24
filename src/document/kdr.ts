@@ -20,6 +20,7 @@ import type {
   SceneNode,
   Sizing,
   Constraint,
+  TextPath,
 } from './types.ts'
 import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from './imageInfo.ts'
 import { EMBEDDED_FAMILY_FORBIDDEN, FONT_EXTENSIONS, FONT_MIME_TYPES, MAX_EMBEDDED_FAMILY_LENGTH, fontMime } from './fontFile.ts'
@@ -338,6 +339,7 @@ const DEFAULTS = {
   fontWeight: 400,
   textAlign: 'left',
   lineHeight: 1.2,
+  textPath: null,
   fit: 'cover',
   positionX: 0.5,
   positionY: 0.5,
@@ -469,6 +471,7 @@ function parseNode(
         fontWeight: optional('fontWeight', fontWeight),
         textAlign: optional('textAlign', (v, p) => oneOf(v, ['left', 'center', 'right'] as const, p)),
         lineHeight: optional('lineHeight', size),
+        textPath: optional('textPath', (v, p) => (v === null ? null : parseTextPath(v, p))),
         flipX: optional('flipX', boolean),
         flipY: optional('flipY', boolean),
         isMask: isMask(),
@@ -566,6 +569,18 @@ function contours(value: unknown, path: string): PathContour[] {
     if (points.length < 2 || total > MAX_PATH_POINTS) throw new KdrError(`${at}.points: 頂点の数が不正です`)
     return { points, closed: raw.closed === undefined ? false : boolean(raw.closed, `${at}.closed`) }
   })
+}
+
+/** テキストを沿わせる線。頂点はパスの頂点と同じ形で、2 つ以上 MAX_PATH_POINTS まで */
+function parseTextPath(value: unknown, path: string): TextPath {
+  const raw = record(value, path)
+  const points = array(raw.points, `${path}.points`).map((point, i) => parsePoint(point, `${path}.points[${i}]`))
+  if (points.length < 2 || points.length > MAX_PATH_POINTS) throw new KdrError(`${path}.points: 頂点の数が不正です`)
+  return {
+    points,
+    closed: raw.closed === undefined ? false : boolean(raw.closed, `${path}.closed`),
+    startOffset: raw.startOffset === undefined ? 0 : ratio(raw.startOffset, `${path}.startOffset`),
+  }
 }
 
 /** パスの頂点。制御点 in / out（頂点からのずれ）と角の丸め radius は省略でき、なければ書かない（角の頂点） */
@@ -862,7 +877,9 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
           ? (value as Paint[]).map(paintFile)
           : key === 'effects'
             ? (value as Effect[]).map(effectFile)
-            : value
+            : key === 'textPath' && value !== null
+              ? textPathFile(value as TextPath)
+              : value
   }
   // 大きさの決め方は fixed でない向きだけ。テキストの高さは常に hug なので書かない
   const sizing: Partial<Record<'width' | 'height', Sizing>> = {}
@@ -951,6 +968,15 @@ function omitDefaults<T extends object>(value: T, defaults: Partial<Record<keyof
 }
 
 /** 既定値との比較。既定値は数値・文字列・真偽値・null・空の配列だけ */
+/** テキストを沿わせる線。閉じていない・始まりが 0 なら書かない */
+function textPathFile(textPath: TextPath): Record<string, unknown> {
+  return {
+    points: textPath.points,
+    ...(textPath.closed ? { closed: true } : {}),
+    ...(textPath.startOffset !== 0 ? { startOffset: textPath.startOffset } : {}),
+  }
+}
+
 function sameValue(value: unknown, fallback: unknown): boolean {
   if (Array.isArray(fallback)) return Array.isArray(value) && value.length === 0
   return value === fallback

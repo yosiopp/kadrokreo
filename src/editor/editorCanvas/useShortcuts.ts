@@ -15,6 +15,8 @@ import { BOOLEAN_LABELS, MAX_PATH_POINTS, applyMask, booleanPaths, joinPaths, sp
 import { removeNodes } from '../operations/tree.ts'
 import { createBooleanNode, flattenBooleanNodes } from '../operations/booleanNodes.ts'
 import { outlineStrokes, outlineTexts } from '../operations/outline.ts'
+import { attachTextToPath, detachTextFromPath, textPathTargets } from '../operations/textPath.ts'
+import { fitTextNodes } from '../measure.ts'
 import type { EditorStore } from '../store.ts'
 import { isSvgFile, looksLikeSvg } from '../importSvg.ts'
 import type { Tool } from '../tools.ts'
@@ -166,6 +168,20 @@ export function useShortcuts(options: Options) {
     if (result.missing > 0) notes.push(`書体に無い文字（${result.missing.toLocaleString()} 字）は形にできないので除きました。`)
     if (result.tooMany.length > 0) notes.push(`文字の形の頂点が ${MAX_PATH_POINTS.toLocaleString()} を超えるテキストは、アウトライン化しませんでした。`)
     if (notes.length > 0) options.onMessage(notes.join('\n'))
+  }
+
+  /** 選んだテキストを、一緒に選んだ図形の線に沿わせる（テキスト 1 つと図形 1 つのとき）。テキストを選ぶ */
+  function attachTextPath() {
+    const targets = textPathTargets(store.getState().page, movableIds())
+    if (!targets) return
+    store.apply((base) => attachTextToPath(base, targets.text, targets.guide))
+    store.select([targets.text])
+  }
+
+  /** 選んだ線に沿うテキストを、線から外してふつうに並べる */
+  function detachTextPath() {
+    const ids = movableIds()
+    store.apply((base) => fitTextNodes(detachTextFromPath(base, ids), ids))
   }
 
   /** 選んだパスを輪郭ごとのパスに分ける */
@@ -399,6 +415,8 @@ export function useShortcuts(options: Options) {
     flattenBoolean,
     outlineStroke,
     outlineText,
+    attachTextPath,
+    detachTextPath,
     componentize,
     zoomToSelection,
     zoomToFit: () => camera.fit(getContentBounds(store.getState().page)),

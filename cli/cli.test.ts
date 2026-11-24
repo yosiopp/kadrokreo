@@ -220,6 +220,25 @@ describe('kadrokreo CLI', () => {
     expect(await h.run(argv(`${setup} + add rect --name Box --width 300 --height 200 + boolean subtract Box Plain --keep`))).toBe(2)
   })
 
+  it('text-path でテキストを図形の線に沿わせ、始まりを変え、外す。SVG では textPath で書く', async () => {
+    const h = harness()
+    const setup = ['new', '+', 'add', 'path', '--name', 'Curve', '--points', '0,100 100,0 200,100', '+', 'add', 'text', '--name', 'Label', '--text', 'Along\nthe path']
+    expect(await h.run([...setup, '+', 'text-path', 'Label', 'Curve', '--offset', '25', '-o', 'a.kdr'])).toBe(0)
+    const label = nodeByName(await h.doc('a.kdr'), 'Label')
+    expect(label).toMatchObject({ x: 0, y: 0, width: 200, height: 100, textPath: { points: [{ x: 0, y: 1 }, { x: 0.5, y: 0 }, { x: 1, y: 1 }], closed: false, startOffset: 0.25 } })
+    expect(nodeByName(await h.doc('a.kdr'), 'Curve')).toBeDefined()
+    expect(await h.run(['-f', 'a.kdr', '-w', 'text-path', 'Label', '--offset', '60%'])).toBe(0)
+    expect(nodeByName(await h.doc('a.kdr'), 'Label')).toMatchObject({ textPath: { startOffset: 0.6 } })
+    expect(await h.run(['-f', 'a.kdr', 'svg-out', 'Label', '--to', 'label.svg'])).toBe(0)
+    expect(new TextDecoder().decode(h.fs.get('label.svg'))).toContain('<textPath href="#kdr-text-path-1" startOffset="60%">Along the path</textPath>')
+    expect(await h.run(['-f', 'a.kdr', 'set', 'Label', 'textPath.startOffset=2'])).not.toBe(0)
+    expect(await h.run(['-f', 'a.kdr', '-w', 'text-path', 'Label', '--off'])).toBe(0)
+    expect(nodeByName(await h.doc('a.kdr'), 'Label')).toMatchObject({ textPath: null, sizing: { width: 'hug' } })
+    expect(await h.run(['-f', 'a.kdr', 'text-path', 'Label', '--offset', '10'])).toBe(2)
+    expect(await h.run(['-f', 'a.kdr', 'text-path', 'Label', '--offset', '120', 'Curve'])).toBe(2)
+    expect(await h.run(['-f', 'a.kdr', 'text-path', 'Curve', 'Label'])).toBe(2)
+  })
+
   it('破線のずれと線の角の形を set で変え、保存して読み直しても残る。不正な値はエラー', async () => {
     const h = harness()
     expect(await h.run(['new', '+', 'add', 'rect', '--name', 'Box', 'stroke=#000000', 'dash=4,2', 'dashOffset=1.5', 'join=bevel', '-o', 'a.kdr'])).toBe(0)

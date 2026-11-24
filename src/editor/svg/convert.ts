@@ -19,6 +19,7 @@ import { BLEND_MODES, CAPS, IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES, MAX_DASHES, M
 import { angleLine, fitFocus, isShadow, linearFromAngle, solidPaint } from '../../document/paint.ts'
 import { type Contour, type Vertex, mapVertices, pathBounds, pathFromContours } from '../../document/path.ts'
 import { PathDataError, parsePathData } from '../../document/pathData.ts'
+import { textPathFromVertices, verticesLength } from '../../document/textPath.ts'
 import { sha256Hex } from '../../document/sha256.ts'
 import { type SvgTextMetrics, estimateTextMetrics, textBaseline } from '../../document/svgExport.ts'
 import type {
@@ -70,12 +71,13 @@ import {
 //   ほかの形（パス・多角形・回った矩形・いくつもの形・objectBoundingBox）は、形をマスク（isMask）のパスにして中身と一緒にフレームにまとめる（maskShape）。
 //   mask の中身が図形 1 つで塗りがグラデーションか mask-type: alpha なら、その図形を明るさ・不透明度のマスクに（paintedMask）、
 //   中身にテキスト・画像・グループがあれば、中身のノード（いくつもならまとめたフレーム）をその絵で透かすマスクにする（pictureMask）。
+// - <text> の中の <textPath> は、href が指す図形の最初の輪郭を写した、線に沿うテキスト（TextNode.textPath）にする。
 // - <image> は data URI の PNG / JPEG / WebP / GIF を画像のノードに、SVG（data:image/svg+xml）を別の文書として変換したフレームにする（外部の URL は読まない）。
 // - <text> と <image> にかかる変換が裏返していれば、左右の裏返し（flipX）と回転にする（上下の裏返しは左右の裏返し + 180° の回転）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
 // - foreignObject の中身は読まない。中の要素の style にある backdrop-filter: blur(…) の値だけを文字として拾い（xml.ts）、次の図形の背景のぼかしにする。
 //   background: conic-gradient(…) の値も文字として拾い、clipPath で切り取った g の中に置かれていれば、clipPath の図形を角度のグラデーションで塗る（conicForeign）。
-// - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターン・textPath など）は
+// - スクリプト・foreignObject・外部参照は読まない。表せないもの（ほかのフィルタ・複雑なクリップやマスク・パターンなど）は
 //   近い形に置き換えるか読み飛ばし、warnings で知らせる。
 
 export type SvgWarning = { label: string; count: number }
@@ -201,7 +203,8 @@ const DEFINITIONS = new Set([
 const SKIPPED_ELEMENTS: Record<string, string> = {
   script: 'スクリプト（<script>）',
   foreignObject: '埋め込み HTML（<foreignObject>）',
-  textPath: '線に沿った文字（<textPath>）',
+  // text の中の textPath は線に沿うテキストにする（pathText）。ここに来るのは text の外に置かれたもの
+  textPath: 'text の外の線に沿った文字（<textPath>）',
 }
 
 /** 図形に付いていたら落としたと知らせる属性 */
@@ -1394,7 +1397,11 @@ class Converter {
   private text(element: SvgElement, given: Matrix, inherited: Inherited): NodeId[] {
     const lines = textLines(element)
     if (lines.length === 0) return []
-    if (hasDescendant(element, 'textPath')) this.warn('線に沿った文字（<textPath>。まっすぐ並べた）')
+    if (hasDescendant(element, 'textPath')) {
+      const onPath = this.pathText(element, lines, given, inherited)
+      if (onPath) return onPath
+      this.warn('線に沿った文字（<textPath>。線を読めないのでまっすぐ並べた）')
+    }
     const a = element.attributes
     const x = (parseNumbers(a.x)?.[0] ?? 0) + (parseNumbers(a.dx)?.[0] ?? 0)
     const y = (parseNumbers(a.y)?.[0] ?? 0) + (parseNumbers(a.dy)?.[0] ?? 0)
@@ -1435,6 +1442,58 @@ class Converter {
     }
     const userBox = { x, y: y - inherited.fontSize, width: size.width / (scale || 1), height: size.height / (scale || 1) }
     node = { ...node, fills: this.paint(inherited.fill, inherited.fillOpacity, inherited, matrix, userBox, node) }
+    if (inherited.stroke.trim() !== 'none') this.warn('文字の線（stroke）')
+    return [this.add(node)]
+  }
+
+  /**
+   * <textPath> を含む text を、線に沿うテキストにする。線は href が指す図形の最初の輪郭（その図形の transform をかけ、text の座標系で読む）。
+   * startOffset は % ならそのまま、長さなら線の長さで割った割合（0〜1 に収める）。text-anchor は行揃えにする。
+   * 線を読めなければ null（呼び出し側がまっすぐ並べる）。textPath の外の文字も 1 つの線に並べる
+   */
+  private pathText(element: SvgElement, lines: string[], given: Matrix, inherited: Inherited): NodeId[] | null {
+    const textPath = findDescendant(element, 'textPath')
+    const href = textPath ? hrefOf(textPath) : undefined
+    const target = href?.startsWith('#') ? this.definitions.get(href.slice(1)) : undefined
+    if (!textPath || !target) return null
+    const own = parseTransform(target.attributes.transform)
+    const contour = this.shapeOutline(target)?.[0]
+    if (!own || !contour || contour.vertices.length < 2) return null
+    if (contour.vertices.length > MAX_PATH_POINTS) {
+      this.warn('頂点が多すぎる textPath の線（まっすぐ並べた）')
+      return null
+    }
+    const userVertices = mapVertices(contour.vertices, (point) => applyMatrix(own, point))
+    const length = verticesLength(userVertices, contour.closed)
+    const raw = textPath.attributes.startOffset?.trim() ?? ''
+    const parsed = raw.endsWith('%') ? Number(raw.slice(0, -1)) / 100 : length > 0 ? (parseNumbers(raw)?.[0] ?? 0) / length : 0
+    const startOffset = Number.isFinite(parsed) ? Math.round(Math.min(1, Math.max(0, parsed)) * 10000) / 10000 : 0
+    if (Number.isFinite(parsed) && (parsed < 0 || parsed > 1)) this.warn('線の外から始まる textPath（線の端に寄せた）')
+    if (textPath.attributes.side?.trim() === 'right') this.warn('線の反対側に並べる textPath（side="right"。表側に並べた）')
+    const anchorValue = textPath.attributes['text-anchor']?.trim() ?? inherited.textAnchor
+    const anchor = anchorValue === 'middle' ? 'center' : anchorValue === 'end' ? 'right' : 'left'
+    const shape = textPathFromVertices(mapVertices(userVertices, (point) => applyMatrix(given, point)), contour.closed, startOffset)
+    const scale = lengthScale(given)
+    const base = createText({ x: 0, y: 0, width: 0, height: 0 }, lines.join(' '))
+    let node: TextNode = {
+      ...base,
+      x: tidy(shape.x),
+      y: tidy(shape.y),
+      width: tidy(shape.width),
+      height: tidy(shape.height),
+      sizing: { width: 'fixed', height: 'hug' },
+      textPath: shape.textPath,
+      fontSize: Math.max(1, tidy(inherited.fontSize * scale)),
+      fontFamily: inherited.fontFamily,
+      fontWeight: fontWeightOf(inherited.fontWeight),
+      textAlign: anchor,
+      name: element.attributes.id ?? lines.join(' ').slice(0, 40),
+      visible: inherited.visible,
+      opacity: this.opacityOf(element),
+    }
+    if (!decompose(given)) this.warn('歪めたテキスト（文字の形は回転と拡大だけにした）')
+    const userBox = pathBounds(userVertices, contour.closed)
+    node = { ...node, fills: this.paint(inherited.fill, inherited.fillOpacity, inherited, given, userBox, node) }
     if (inherited.stroke.trim() !== 'none') this.warn('文字の線（stroke）')
     return [this.add(node)]
   }
@@ -2316,6 +2375,17 @@ function fontWeightOf(raw: string): number {
   const value = Number(raw)
   if (!Number.isFinite(value)) return 400
   return Math.min(900, Math.max(100, Math.round(value / 100) * 100))
+}
+
+/** 名前が name の最初の子孫（深さ優先） */
+function findDescendant(element: SvgElement, name: string): SvgElement | null {
+  for (const child of element.children) {
+    if (typeof child === 'string') continue
+    if (child.name === name) return child
+    const found = findDescendant(child, name)
+    if (found) return found
+  }
+  return null
 }
 
 function hasDescendant(element: SvgElement, name: string): boolean {
