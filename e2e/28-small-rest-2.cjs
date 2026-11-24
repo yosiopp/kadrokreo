@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process')
 
 // 小さな残り 2: コンポーネントの一覧のまとまりの行に説明文、フレームの通過（pass through）、テキストの背景のぼかし、
 // PNG の背景、書き出しの範囲に線の太さを含めること
-const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument, rowFinder } = require('./harness.cjs')
 
 // バリアントのまとまり（Set、説明文つき）、黄色の上の半透明のフレーム（Group、中のシアンは乗算）、線の太い四角（Framed）、背景をぼかす文字（Glass）
 const sourcePath = path.join(OUT, 'small-rest-2-source.kdr')
@@ -40,7 +40,7 @@ cli(
   await page.waitForTimeout(500)
   const select = (label) => page.locator(`.properties-panel .field:has(.field-label:text-is("${label}")) select`).first()
   const button = (label) => page.locator(`.properties-panel button:text-is("${label}")`)
-  const row = (name) => page.locator(`.layer-row[data-copy="false"]:has(.layer-name:text-is("${name}"))`).first()
+  const row = rowFinder(page, { originals: true, first: true })
   const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }
   const named = (nodes, name) => nodes.find((n) => n.name === name)

@@ -2,7 +2,7 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 
-const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -15,7 +15,7 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   const box = await page.locator('.canvas-view').boundingBox()
   const saved = async () => (await savedDocument(page)).pages[0]
   const ring = async () => Object.values((await saved()).nodes).find((n) => n.name === 'ring')
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page)
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
 
   // 200×200 の SVG を貼り付ける。画面の真ん中に置かれる（最初の表示は等倍で、画面の左上がページの原点）
@@ -26,7 +26,7 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   })
   await page.waitForTimeout(700)
   const origin = { x: Math.round(box.width / 2 - 100), y: Math.round(box.height / 2 - 100) }
-  const at = (x, y) => [box.x + origin.x + x, box.y + origin.y + y]
+  const at = pointer(box, origin)
   const drag = async (from, to) => {
     await page.mouse.move(...at(...from)); await page.mouse.down()
     await page.mouse.move(...at((from[0] + to[0]) / 2, (from[1] + to[1]) / 2), { steps: 4 })

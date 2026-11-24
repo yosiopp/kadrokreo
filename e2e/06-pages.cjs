@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, pointer } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -13,7 +13,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to) => {
     await page.mouse.move(...at(...from)); await page.mouse.down()
     await page.mouse.move(...at((from[0] + to[0]) / 2, (from[1] + to[1]) / 2), { steps: 4 })

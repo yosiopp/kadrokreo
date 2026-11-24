@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder, rowFinder } = require('./harness.cjs')
 require('fs').mkdirSync(OUT, { recursive: true })
 
 ;(async () => {
@@ -16,7 +16,7 @@ require('fs').mkdirSync(OUT, { recursive: true })
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to, opts = {}) => {
     await page.mouse.move(...at(...from)); await page.mouse.down()
     await page.mouse.move(...at((from[0] + to[0]) / 2, (from[1] + to[1]) / 2), { steps: 4 })
@@ -25,8 +25,8 @@ require('fs').mkdirSync(OUT, { recursive: true })
     await page.mouse.up()
   }
   const layers = () => page.locator('.layer-row .layer-name').allTextContents()
-  const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`)
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const row = rowFinder(page)
+  const field = fieldFinder(page)
   const num = async (label) => Number(await field(label).inputValue())
   const saved = async () => {
     const doc = await savedDocument(page)

@@ -2,7 +2,7 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
 
-const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument, pointer } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -18,7 +18,7 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument } = requ
   const named = async (name) => (await nodes()).filter((n) => n.name === name)
 
   const origin = { x: Math.round(box.width / 2 - 100), y: Math.round(box.height / 2 - 100) }
-  const at = (x, y) => [box.x + origin.x + x, box.y + origin.y + y]
+  const at = pointer(box, origin)
   const shiftClick = async (x, y) => { await page.keyboard.down('Shift'); await page.mouse.click(...at(x, y)); await page.keyboard.up('Shift') }
 
   // ── 頂点の編集中にペンで輪郭を描き足す。終わったら Undo で貼り付けごと戻す ──

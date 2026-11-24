@@ -1,6 +1,6 @@
 const { chromium } = require('playwright-core')
 const path = require('path')
-const { OUT, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder } = require('./harness.cjs')
 require('fs').mkdirSync(OUT, { recursive: true })
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -13,14 +13,14 @@ require('fs').mkdirSync(OUT, { recursive: true })
   await page.reload()
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to, opts = {}) => {
     await page.mouse.move(...at(...from)); await page.mouse.down()
     await page.mouse.move(...at(...to), { steps: 6 })
     if (opts.beforeUp) await opts.beforeUp()
     await page.mouse.up()
   }
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page)
   const saved = async () => {
     const doc = await savedDocument(page)
     return { ...doc, nodes: Object.assign({}, ...doc.pages.map((page) => page.nodes)) }

@@ -62,4 +62,28 @@ function savedDocument(page) {
   }))
 }
 
-module.exports = { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument }
+/** .canvas-view の中の位置（box は .canvas-view の枠、origin は中の原点のずれ）を、画面の座標 [x, y] にする関数 */
+function pointer(box, origin = { x: 0, y: 0 }) {
+  return (x, y) => [box.x + origin.x + x, box.y + origin.y + y]
+}
+
+/**
+ * パネルの欄の入力を、欄の名前で探す関数。名前が重なれば最初の欄（first: false なら全部）。
+ * scope は探す範囲のセレクタ（'.properties-panel' など）
+ */
+function fieldFinder(page, { scope = '', first = true } = {}) {
+  return (label) => {
+    const inputs = page.locator(`${scope === '' ? '' : `${scope} `}.field:has(.field-label:text-is("${label}")) input`)
+    return first ? inputs.first() : inputs
+  }
+}
+
+/** レイヤーの行を名前で探す関数。originals はインスタンスの中身（写し）の行を除く。first は重なれば最初の行 */
+function rowFinder(page, { originals = false, first = false } = {}) {
+  return (name) => {
+    const rows = page.locator(`.layer-row${originals ? '[data-copy="false"]' : ''}:has(.layer-name:text-is("${name}"))`)
+    return first ? rows.first() : rows
+  }
+}
+
+module.exports = { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder, rowFinder }

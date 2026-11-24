@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process')
 
 // 小さな残り: まとまりの説明文、揃っていないバリアントのプロパティを揃える操作、テキストの内側の影、影の描画モード、
 // SVG の書き出しのオプション（id・背景）と、範囲に影のはみ出しを含めること
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, fieldFinder, rowFinder } = require('./harness.cjs')
 
 // CLI で、名前をバリアントの形にする前にプロパティを足して、揃っていないまとまり（Set）を作る。テキスト（Title）と影のあるカード（Card）も
 const sourcePath = path.join(OUT, 'small-rest-source.kdr')
@@ -32,10 +32,10 @@ cli(
   await page.waitForSelector('.canvas-view canvas')
   await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(sourcePath)
   await page.waitForTimeout(500)
-  const field = (label) => page.locator(`.properties-panel .field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page, { scope: '.properties-panel' })
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const button = (label) => page.locator(`.properties-panel button:text-is("${label}")`)
-  const row = (name) => page.locator(`.layer-row[data-copy="false"]:has(.layer-name:text-is("${name}"))`).first()
+  const row = rowFinder(page, { originals: true, first: true })
   const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }
   const named = (nodes, name) => nodes.find((n) => n.name === name)

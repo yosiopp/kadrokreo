@@ -3,7 +3,7 @@ const path = require('path')
 
 // editor の細かい改善: レイヤーの Shift 範囲選択、選択枠の内側をつかんで移動、複製を元の直上に置く、
 // 右クリックメニュー、選択へズーム、別のページへ移す
-const { OUT, EDITOR, check, finish, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, check, finish, watchErrors, savedDocument, pointer, rowFinder } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -17,7 +17,7 @@ const { OUT, EDITOR, check, finish, watchErrors, savedDocument } = require('./ha
   await page.reload()
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to) => {
     await page.mouse.move(...at(...from))
     await page.mouse.down()
@@ -27,7 +27,7 @@ const { OUT, EDITOR, check, finish, watchErrors, savedDocument } = require('./ha
   }
   const layers = () => page.locator('.layer-row .layer-name').allTextContents()
   const selected = () => page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()
-  const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`).first()
+  const row = rowFinder(page, { first: true })
   const pageRow = (name) => page.locator(`.page-row:has(.page-name:text-is("${name}"))`)
   const menu = page.locator('.context-menu').first()
   const item = (name) => page.getByRole('menuitem', { name, exact: false }).first()

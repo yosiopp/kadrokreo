@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 
 // レイヤーパネルの右クリックメニューと、メニューからの表示・ロックの切り替え
-const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, check, finish, watchErrors, pointer, rowFinder } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -16,7 +16,7 @@ const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
   await page.reload()
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to) => {
     await page.mouse.move(...at(...from))
     await page.mouse.down()
@@ -24,7 +24,7 @@ const { OUT, EDITOR, check, finish, watchErrors } = require('./harness.cjs')
     await page.mouse.up()
   }
   const selected = () => page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()
-  const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`).first()
+  const row = rowFinder(page, { first: true })
   const menu = page.locator('.context-menu').first()
   const item = (name) => page.locator(`.context-menu-item:has(.context-menu-label:text-is("${name}"))`).first()
   const hidden = async (name) => (await row(name).getAttribute('data-hidden')) === 'true'

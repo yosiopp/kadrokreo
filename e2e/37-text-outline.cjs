@@ -5,7 +5,7 @@ const path = require('path')
 const fs = require('fs')
 const { testFontBytes } = require('../src/document/testFont.ts')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer } = require('./harness.cjs')
 
 const fontPath = path.join(OUT, 'kdr-outline-test.ttf')
 fs.writeFileSync(fontPath, testFontBytes({ family: 'Kdr Test' }))
@@ -45,7 +45,7 @@ const near = (a, b, tolerance) => Math.abs(a - b) <= Math.max(b * tolerance, 4)
   const box = await page.locator('.canvas-view').boundingBox()
   const saved = async () => { await page.waitForTimeout(600); return (await savedDocument(page)).pages[0] }
   const origin = { x: Math.round(box.width / 2 - 150), y: Math.round(box.height / 2 - 75) }
-  const at = (x, y) => [box.x + origin.x + x, box.y + origin.y + y]
+  const at = pointer(box, origin)
 
   // 300×150 の青い板（画面の真ん中に置かれる）と、その上のテキスト（埋め込んだ書体）
   await page.evaluate(() => {

@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, watchErrors, pointer, fieldFinder } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -16,7 +16,7 @@ const { OUT, EDITOR, VIEWER, check, finish, watchErrors } = require('./harness.c
   await page.reload()
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to) => {
     await page.mouse.move(...at(...from))
     await page.mouse.down()
@@ -25,7 +25,7 @@ const { OUT, EDITOR, VIEWER, check, finish, watchErrors } = require('./harness.c
     await page.mouse.up()
   }
   const layers = () => page.locator('.layer-row .layer-name').allTextContents()
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page)
 
   // フレームを描く
   await page.keyboard.press('f')

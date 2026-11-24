@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process')
 
 // コンポーネントの残り: 入れ子の中の入れ子の差し替え、説明文とプロパティ、バリアントのプロパティと値の並べ替え・値の編集、
 // 一覧のページごとの見出しとサムネイル
-const { OUT, EDITOR, VIEWER, check, finish, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, watchErrors, savedDocument, fieldFinder, rowFinder } = require('./harness.cjs')
 
 // CLI で、ボタン ⊂ カード ⊂ パネル の元とパネルのインスタンス、アイコン、バリアントのまとまり（Chip）、2 ページ目の元を作る
 const sourcePath = path.join(OUT, 'component-rest-source.kdr')
@@ -30,10 +30,10 @@ cli(...(
   await page.waitForSelector('.canvas-view canvas')
   await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(sourcePath)
   await page.waitForTimeout(500)
-  const field = (label) => page.locator(`.properties-panel .field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page, { scope: '.properties-panel' })
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const button = (label) => page.locator(`.properties-panel button:text-is("${label}")`)
-  const row = (name) => page.locator(`.layer-row[data-copy="false"]:has(.layer-name:text-is("${name}"))`).first()
+  const row = rowFinder(page, { originals: true, first: true })
   const copyRow = (name) => page.locator(`.layer-row[data-copy="true"]:has(.layer-name:text-is("${name}"))`).first()
   const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }

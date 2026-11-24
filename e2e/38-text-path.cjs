@@ -4,7 +4,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, rowFinder } = require('./harness.cjs')
 
 const SOURCE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -99,7 +99,7 @@ async function svgInk(page, text) {
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const saved = async () => { await page.waitForTimeout(600); return (await savedDocument(page)).pages[0] }
-  const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`).first()
+  const row = rowFinder(page, { first: true })
   const item = (name) => page.locator(`.context-menu-item:has(.context-menu-label:text-is("${name}"))`).first()
 
   // ── 取り込み: <textPath> が線に沿うテキストになる ──

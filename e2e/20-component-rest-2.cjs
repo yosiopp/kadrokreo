@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process')
 
 // コンポーネントの残り 2: 入れ子のインスタンスの中のノードをプロパティに結ぶ、プロパティの並べ替え、
 // 差し替えのプロパティの候補（preferred values）、キャンバスでバリアントをまとまりの外へドラッグしたときの名前
-const { OUT, EDITOR, VIEWER, check, finish, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, watchErrors, savedDocument, fieldFinder, rowFinder } = require('./harness.cjs')
 
 // CLI で、ボタン（Label・Mark）を入れたカードの元、アイコン 2 つ、バリアントのまとまり（Chip）、ふつうのフレーム（Box）を作る。
 // 全体が 100% で画面に収まる大きさにしておく（読み込むと全体が画面の中央に映る）
@@ -31,10 +31,10 @@ cli(...(
   await page.waitForSelector('.canvas-view canvas')
   await page.locator('input[type=file][accept^=".kdr"]').setInputFiles(sourcePath)
   await page.waitForTimeout(500)
-  const field = (label) => page.locator(`.properties-panel .field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page, { scope: '.properties-panel' })
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const button = (label) => page.locator(`.properties-panel button:text-is("${label}")`)
-  const row = (name) => page.locator(`.layer-row[data-copy="false"]:has(.layer-name:text-is("${name}"))`).first()
+  const row = rowFinder(page, { originals: true, first: true })
   const copyRow = (name) => page.locator(`.layer-row[data-copy="true"]:has(.layer-name:text-is("${name}"))`).first()
   const expand = async (layer) => {
     const caret = layer.locator('.layer-caret[aria-label="開く"]')

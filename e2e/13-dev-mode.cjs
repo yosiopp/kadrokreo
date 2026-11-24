@@ -3,7 +3,7 @@ const path = require('path')
 const fs = require('fs')
 const { execFileSync } = require('child_process')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, fieldFinder } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -25,7 +25,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors } = require('./
     await page.mouse.move(editorBox.x + to[0], editorBox.y + to[1], { steps: 4 })
     await page.mouse.up()
   }
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page)
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const editorRow = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`)
   await page.keyboard.press('f'); await drag([100, 100], [500, 400])

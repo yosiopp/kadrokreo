@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder } = require('./harness.cjs')
 const FIXTURES = path.join(__dirname, 'fixtures')
 /** いちばん下の塗りの色（e2e で作る図形は単色 1 つ） */
 const fillOf = (node) => node.fills[0] && node.fills[0].color
@@ -16,10 +16,10 @@ const fillOf = (node) => node.fills[0] && node.fills[0].color
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const layers = () => page.locator('.layer-row .layer-name').allTextContents()
   const selected = () => page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page)
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const button = (label) => page.locator(`button:text-is("${label}")`)
   const section = (title) => page.locator(`.properties-panel .section-title:text-is("${title}")`)

@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder } = require('./harness.cjs')
 const { lineDirection, lineFlipped } = require('./kdr.cjs')
 
 ;(async () => {
@@ -14,7 +14,7 @@ const { lineDirection, lineFlipped } = require('./kdr.cjs')
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to) => {
     await page.mouse.move(...at(...from)); await page.mouse.down()
     await page.mouse.move(...at((from[0] + to[0]) / 2, (from[1] + to[1]) / 2), { steps: 4 })
@@ -158,7 +158,7 @@ const { lineDirection, lineFlipped } = require('./kdr.cjs')
   await deselect()
 
   // ── 頂点の複数選択・角の丸め・辺から開く・端の形（Path 2 は 300,300 / 400,300 / 350,380 の三角形） ──
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`)
+  const field = fieldFinder(page, { first: false })
   await page.mouse.dblclick(...at(350, 330))
   // 空いた所からドラッグで囲むと、囲んだ頂点を選ぶ。選んだ頂点の 1 つをつかむと、まとめて動く
   await drag([290, 290], [410, 310])

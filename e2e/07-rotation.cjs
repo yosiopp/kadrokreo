@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -13,7 +13,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
+  const at = pointer(box)
   const drag = async (from, to) => {
     await page.mouse.move(...at(...from)); await page.mouse.down()
     await page.mouse.move(...at((from[0] + to[0]) / 2, (from[1] + to[1]) / 2), { steps: 4 })
@@ -22,7 +22,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   }
   const layers = () => page.locator('.layer-row .layer-name').allTextContents()
   const selected = () => page.locator('.layer-row[data-selected="true"] .layer-name').allTextContents()
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const field = fieldFinder(page)
   const num = async (label) => Number(await field(label).inputValue())
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const deselect = () => page.mouse.click(...at(740, 560))

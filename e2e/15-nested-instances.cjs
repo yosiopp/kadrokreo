@@ -3,7 +3,7 @@ const path = require('path')
 const fs = require('fs')
 
 // コンポーネントの一覧からドラッグするときの入る先の表示と、入れ子のインスタンスの差し替え
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder, rowFinder } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -14,11 +14,11 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument 
   await page.goto(EDITOR)
   await page.waitForSelector('.canvas-view canvas')
   const box = await page.locator('.canvas-view').boundingBox()
-  const at = (x, y) => [box.x + x, box.y + y]
-  const field = (label) => page.locator(`.field:has(.field-label:text-is("${label}")) input`).first()
+  const at = pointer(box)
+  const field = fieldFinder(page)
   const set = async (label, value) => { await field(label).fill(String(value)); await field(label).press('Enter') }
   const button = (label) => page.locator(`button:text-is("${label}")`)
-  const row = (name) => page.locator(`.layer-row:has(.layer-name:text-is("${name}"))`)
+  const row = rowFinder(page)
   const deselect = () => page.mouse.click(...at(700, 720))
   const saved = () => savedDocument(page)
   const nodesOf = async () => { await page.waitForTimeout(700); return Object.values((await saved()).pages[0].nodes) }
