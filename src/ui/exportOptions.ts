@@ -1,18 +1,20 @@
 import { useSyncExternalStore } from 'react'
 
 // 書き出しのオプション（画面の書き出し欄のチェック）。viewer と editor の「PNG に」「SVG に」「SVG をコピー」で共有し、
-// ブラウザに覚えておく（次に開いたときも同じ）。ids は SVG だけ（document/svgExport.ts の SvgExportOptions）、background は PNG と SVG の両方に効く
+// ブラウザに覚えておく（次に開いたときも同じ）。ids と embedFonts は SVG だけ（document/svgExport.ts の SvgExportOptions）、background は PNG と SVG の両方に効く
 
 export type ExportOptions = {
   /** レイヤー名から作る id を付けるか（CLI の --no-ids の逆） */
   ids: boolean
   /** 範囲全体に敷く背景の色（PNG と SVG）。null なら透明（CLI の png / svg-out の --background） */
   background: string | null
+  /** SVG に、テキストが使う kdr に埋め込んだ書体を入れるか（CLI の svg-out の --no-fonts の逆） */
+  embedFonts: boolean
 }
 
 // 名前は SVG だけのオプションだったころのまま（覚えた設定を引き継ぐ）
 const KEY = 'kadrokreo.svgOptions'
-const DEFAULTS: ExportOptions = { ids: true, background: null }
+const DEFAULTS: ExportOptions = { ids: true, background: null, embedFonts: true }
 const listeners = new Set<() => void>()
 let current: ExportOptions = load()
 
@@ -22,6 +24,7 @@ function load(): ExportOptions {
     if (!raw || typeof raw !== 'object') return DEFAULTS
     return {
       ids: typeof raw.ids === 'boolean' ? raw.ids : DEFAULTS.ids,
+      embedFonts: typeof raw.embedFonts === 'boolean' ? raw.embedFonts : DEFAULTS.embedFonts,
       background: typeof raw.background === 'string' && /^#[0-9a-f]{6}$/i.test(raw.background) ? raw.background : null,
     }
   } catch {

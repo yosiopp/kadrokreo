@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { solid } from '../document/paint.ts'
 import type { ImageNode, PathNode } from '../document/types.ts'
 import { base, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
-import { nodeCode, nodeMarkup, slug, standaloneHtml } from './markup.ts'
+import { nodeCode, nodeFontFaces, nodeMarkup, slug, standaloneHtml } from './markup.ts'
 
 describe('nodeMarkup', () => {
   it('子孫を入れ子の要素にし、レイヤー名からクラス名を付ける。同じ名前には番号を付ける', () => {
@@ -468,5 +468,32 @@ describe('マスク', () => {
     expect(html).not.toContain('window')
     expect(html).toContain('class="photo"')
     expect(css).toContain("clip-path: path('M0 0 L100 0 L100 50 L0 50 Z');")
+  })
+})
+
+describe('nodeMarkup の書体', () => {
+  const fontAsset = { mime: 'font/ttf', bytes: new Uint8Array([0, 1, 0, 0]) }
+  const assets = { f: fontAsset }
+  const fonts = [{ assetId: 'f', family: 'Brand', weight: 400, style: 'normal' as const }]
+  const scene = sceneOf(
+    frame({ name: 'Card', children: ['label', 'plain'] }),
+    text({ id: 'label', name: 'Label', parentId: 'frame', fontFamily: 'Brand' }),
+    text({ id: 'plain', name: 'Plain', parentId: 'frame', fontFamily: 'sans-serif' }),
+  )
+
+  it('埋め込んだ書体を使うテキストがあれば、CSS の先頭に @font-face を置く（コピー用はファイル名、保存用は data URI）', () => {
+    const { css } = nodeMarkup(scene, 'frame', { assets, fonts })
+    expect(css.startsWith('@font-face {\n  font-family: "Brand";\n  src: url("Brand-400.ttf") format("truetype");')).toBe(true)
+    expect(css.match(/@font-face/g)).toHaveLength(1)
+    const embedded = nodeMarkup(scene, 'frame', { assets, fonts, images: 'embed' })
+    expect(embedded.css).toContain('src: url("data:font/ttf;base64,AAEAAA==") format("truetype");')
+    expect(standaloneHtml('Card', embedded)).toContain('data:font/ttf;base64,AAEAAA==')
+  })
+
+  it('React の style でも @font-face だけを CSS に出す。使わなければ出さない', () => {
+    expect(nodeMarkup(scene, 'frame', { assets, fonts, style: { format: 'react' } }).css).toMatch(/^@font-face \{[^}]*\}$/)
+    expect(nodeMarkup(scene, 'frame', { assets, fonts: [], style: { format: 'react' } }).css).toBe('')
+    expect(nodeFontFaces(scene, 'plain', fonts, assets)).toEqual([])
+    expect(nodeFontFaces(scene, 'frame', fonts, assets)).toEqual(fonts)
   })
 })

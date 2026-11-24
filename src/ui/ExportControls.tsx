@@ -12,7 +12,7 @@ type Props = {
   children: ReactNode
 }
 
-/** PNG 書き出しの倍率と実行ボタン、SVG 書き出しとコピーのボタンと、書き出しのオプション（背景は PNG と SVG、id は SVG だけ） */
+/** PNG 書き出しの倍率と実行ボタン、SVG 書き出しとコピーのボタンと、書き出しのオプション（背景は PNG と SVG、id と書体は SVG だけ） */
 export function ExportControls({ scale, onScaleChange, onExport, onExportSvg, onCopySvg, children }: Props) {
   // 「SVG をコピー」を押したあと、少しのあいだ「コピーしました」と出す
   const [copied, setCopied] = useState(false)
@@ -66,7 +66,7 @@ export function ExportControls({ scale, onScaleChange, onExport, onExportSvg, on
   )
 }
 
-/** 書き出しのオプション。背景を敷くか（PNG と SVG。CLI の --background）と、レイヤー名の id を付けるか（SVG だけ。CLI の --no-ids の逆） */
+/** 書き出しのオプション。背景を敷くか（PNG と SVG。CLI の --background）と、レイヤー名の id・埋め込んだ書体を入れるか（SVG だけ。CLI の --no-ids・--no-fonts の逆） */
 function ExportOptionFields({ svg }: { svg: boolean }) {
   const options = useExportOptions()
   return (
@@ -91,6 +91,16 @@ function ExportOptionFields({ svg }: { svg: boolean }) {
         <label title="SVG の要素に、レイヤー名から作る id を付ける（取り込み直すとレイヤー名に戻る）">
           <input type="checkbox" checked={options.ids} onChange={(event) => setExportOptions({ ids: event.target.checked })} />
           SVG に id
+        </label>
+      )}
+      {svg && (
+        <label title="テキストが使う、kdr に埋め込んだ書体のファイルを SVG に入れる（その書体のない環境でも同じ書体で表示される。ファイルは大きくなる）">
+          <input
+            type="checkbox"
+            checked={options.embedFonts}
+            onChange={(event) => setExportOptions({ embedFonts: event.target.checked })}
+          />
+          SVG に書体
         </label>
       )}
     </div>

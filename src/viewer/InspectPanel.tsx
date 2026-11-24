@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { DesignDocument, NodeId, Page } from '../document/types.ts'
+import type { DesignDocument, EmbeddedFont, NodeId, Page } from '../document/types.ts'
+import { fontFileName } from '../document/fontFace.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
 import { copyText } from '../ui/clipboard.ts'
 import { TYPE_LABELS } from '../ui/labels.ts'
@@ -13,7 +14,7 @@ import {
   inspectSelection,
 } from './inspect.ts'
 import { CODE_FORMAT_LABELS, type CodeFormat } from './codeFormat.ts'
-import { nodeCode, nodeMarkup } from './markup.ts'
+import { nodeCode, nodeFontFaces, nodeMarkup } from './markup.ts'
 import { inspectPage } from './summary.ts'
 import { findMain, instanceOf } from '../document/component.ts'
 
@@ -36,6 +37,8 @@ type Props = {
   onSelectNodes: (ids: NodeId[]) => void
   /** 選んでいる画像の、元のファイルを保存する */
   onSaveImage: () => void
+  /** テキストが使う、kdr に埋め込んだ書体のファイルを保存する */
+  onSaveFont: (font: EmbeddedFont) => void
   /** 選んでいるノードを、中身まで含めた HTML ファイルとして保存する */
   onSaveHtml: (style: CodeStyle) => void
   /** 選んでいるインスタンス（またはその中身）の元へ移る */
@@ -58,6 +61,7 @@ export function InspectPanel({
   onSelect,
   onSelectNodes,
   onSaveImage,
+  onSaveFont,
   onSaveHtml,
   onGoToMain,
 }: Props) {
@@ -243,7 +247,11 @@ export function InspectPanel({
   const cssKey = `${node.id}/css`
   // 中身のあるフレームは、子孫までまとめた HTML（形式が React なら JSX、Vue なら .vue ファイル）と CSS も出す
   const markup =
-    node.type === 'frame' && node.children.length > 0 ? nodeMarkup(page, node.id, { style, assets: document.assets }) : null
+    node.type === 'frame' && node.children.length > 0
+      ? nodeMarkup(page, node.id, { style, assets: document.assets, fonts: document.fonts })
+      : null
+  // コピー用の CSS の @font-face が指す書体ファイル（保存して HTML の隣に置く）
+  const faces = nodeFontFaces(page, node.id, document.fonts, document.assets)
   const markupName = style.format === 'html' ? 'HTML' : style.format === 'vue' ? 'Vue' : 'JSX'
   const instance = instanceOf(page, node.id)
   const main = instance ? findMain(document, instance.component.id) : null
@@ -285,7 +293,7 @@ export function InspectPanel({
               </button>
             </>
           )}
-          <button type="button" title="画像を埋め込んだ HTML ファイルとして保存" onClick={() => onSaveHtml(style)}>
+          <button type="button" title="画像と書体を埋め込んだ HTML ファイルとして保存" onClick={() => onSaveHtml(style)}>
             HTML ファイルを保存
           </button>
         </section>
@@ -300,6 +308,19 @@ export function InspectPanel({
             元の画像を保存
           </button>
         )}
+        {faces.map((font) => {
+          const fileName = fontFileName(font, document.assets[font.assetId].mime)
+          return (
+            <button
+              key={`${font.assetId}/${font.family}/${font.weight}/${font.style}`}
+              type="button"
+              title={`kdr に埋め込んである書体のファイルを、元の形式のまま ${fileName} として保存（CSS の @font-face が指す名前）`}
+              onClick={() => onSaveFont(font)}
+            >
+              書体ファイルを保存（{font.family} {font.weight}{font.style === 'italic' ? ' 斜体' : ''}）
+            </button>
+          )
+        })}
       </section>
     </aside>
   )

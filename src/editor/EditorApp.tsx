@@ -281,7 +281,7 @@ function Editor({ store }: { store: EditorStore }) {
   function exportSvg() {
     const { document, page, targets, name } = exportTargetsNow()
     try {
-      downloadBlob(renderSvg(page, document.assets, targets, getExportOptions()), svgFileName(name))
+      downloadBlob(renderSvg(page, document.assets, targets, getExportOptions(), document.fonts), svgFileName(name))
     } catch (error) {
       showError(error, 'SVG の書き出しに失敗しました')
     }
@@ -291,7 +291,7 @@ function Editor({ store }: { store: EditorStore }) {
   async function copySvg(): Promise<boolean> {
     const { document, page, targets } = exportTargetsNow()
     try {
-      const copied = await copyText(svgMarkup(page, document.assets, targets, getExportOptions()))
+      const copied = await copyText(svgMarkup(page, document.assets, targets, getExportOptions(), document.fonts))
       if (!copied) setMessage('クリップボードへコピーできませんでした')
       return copied
     } catch (error) {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type IO, run } from './run.ts'
+import { testFontBytes } from '../src/document/testFont.ts'
 
 // svg-out コマンド（SVG の書き出し）。中身の書き方は src/editor/svg/roundTrip.test.ts で確かめている
 
@@ -137,5 +138,24 @@ describe('svg-out', () => {
     expect(await h.run('-f in.kdr svg-out Dot --scale 2')).toBe(2)
     expect(await h.run('new Empty + svg-out -o e.kdr')).toBe(2)
     expect(h.stderr).toContain('ページが空です')
+  })
+
+  it('テキストが使う埋め込んだ書体だけを @font-face の data URI で入れる。--no-fonts なら入れない。取り込み直せる', async () => {
+    const h = harness()
+    h.fs.set('a.ttf', testFontBytes({ family: 'Kdr Test' }))
+    h.fs.set('b.ttf', testFontBytes({ family: 'Kdr Test', weight: 700 }))
+    h.fs.set('c.ttf', testFontBytes({ family: 'Unused' }))
+    const setup = ['new', '+', 'font-add', 'a.ttf', '+', 'font-add', 'b.ttf', '+', 'font-add', 'c.ttf',
+      '+', 'add', 'text', '--name', 'Title', '--text', 'AA', 'fontFamily=Kdr Test', 'fontWeight=600', '-o', 'f.kdr']
+    expect(await h.runArgv(setup)).toBe(0)
+    expect(await h.run('-f f.kdr svg-out --to a.svg')).toBe(0)
+    const svg = h.text('a.svg')
+    expect(svg.match(/@font-face/g)).toHaveLength(1)
+    expect(svg).toMatch(/<defs><style><!\[CDATA\[\n@font-face \{\n {2}font-family: "Kdr Test";\n {2}src: url\("data:font\/ttf;base64,[A-Za-z0-9+/=]+"\) format\("truetype"\);\n {2}font-weight: 700;/)
+    expect(svg).toContain('font-family="Kdr Test"')
+    expect(await h.run('-f f.kdr svg-out --no-fonts --to b.svg')).toBe(0)
+    expect(h.text('b.svg')).not.toContain('@font-face')
+    // 取り込み（svg）は @font-face を読み飛ばし、テキストは書体名のまま戻る
+    expect(await h.runArgv(['new', '+', 'svg', 'a.svg', '-o', 'back.kdr'])).toBe(0)
   })
 })

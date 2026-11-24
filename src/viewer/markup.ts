@@ -3,7 +3,8 @@ import { isMaskNode } from '../document/mask.ts'
 import { drawnNode } from '../document/booleanNode.ts'
 import { withoutHidden } from '../document/paint.ts'
 import { dataUri, escapeXml as escapeHtml, pathSvg } from '../document/svgShapes.ts'
-import type { Asset, AssetId, NodeId, PathNode, Scene, SceneNode } from '../document/types.ts'
+import { embeddedFontFaces, fontFaceRule, fontFileName, usedFontFaces } from '../document/fontFace.ts'
+import type { Asset, AssetId, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { formatColor } from './colors.ts'
 import { type CodeStyle, DEFAULT_CODE_STYLE, nodeCss } from './inspect.ts'
 import { camelClass, componentName, jsxStyle, parseDeclarations, tailwindClasses } from './codeFormat.ts'
@@ -12,8 +13,13 @@ import { camelClass, componentName, jsxStyle, parseDeclarations, tailwindClasses
 // 一つひとつの要素の CSS は nodeCss と同じもの。要素にはレイヤー名から作ったクラス名を付ける。
 // 出力形式（CodeStyle の format）が React や Tailwind なら、同じ木を JSX のコンポーネントにし、CSS をその形式で付ける。
 // Vue なら、HTML と同じ木を <template> に、CSS を <style scoped> に入れた単一ファイルコンポーネント（.vue）にする。
+// テキストが kdr に埋め込んだ書体（fonts）を使っていれば、CSS の先頭に @font-face を置く。url は画像と同じく、
+// コピー用は書体ファイルの名前（viewer の「書体ファイルを保存」で保存して置く前提。fontFileName）、保存する HTML ファイルは data URI で埋め込む。
 
-/** html は形式が React などなら JSX のコード、Vue なら .vue ファイルの全体。css は、その形式で別に CSS が要らなければ空文字 */
+/**
+ * html は形式が React などなら JSX のコード、Vue なら .vue ファイルの全体。css は、その形式で別に CSS が要らなければ空文字
+ * （React の style・Tailwind でも、埋め込んだ書体を使うなら @font-face だけを入れる）
+ */
 export type Markup = { html: string; css: string }
 
 /** 画像の src。snippet はファイル名だけ（元の画像を保存して置く前提）、standalone はファイルに埋め込む */
@@ -48,9 +54,9 @@ export function nodeCode(scene: Scene, id: NodeId, options: Partial<CodeStyle> =
 export function nodeMarkup(
   scene: Scene,
   id: NodeId,
-  options: { style?: Partial<CodeStyle>; assets?: Record<AssetId, Asset>; images?: ImageSource } = {},
+  options: { style?: Partial<CodeStyle>; assets?: Record<AssetId, Asset>; images?: ImageSource; fonts?: readonly EmbeddedFont[] } = {},
 ): Markup {
-  const { style = {}, assets = {}, images = 'file' } = options
+  const { style = {}, assets = {}, images = 'file', fonts = [] } = options
   const format = style.format ?? DEFAULT_CODE_STYLE.format
   const jsx = format !== 'html' && format !== 'vue'
   // 選んだノードを根にした木として扱う
@@ -62,6 +68,8 @@ export function nodeMarkup(
   const nextCount = new Map<string, number>()
   const rules: string[] = []
   const lines: string[] = []
+  /** 書いたテキスト（@font-face を入れる書体を選ぶため） */
+  const texts: TextNode[] = []
 
   function className(node: SceneNode): string {
     const base = slug(node.name) || node.type
@@ -117,6 +125,7 @@ export function nodeMarkup(
         break
       }
       case 'text': {
+        texts.push(node)
         // Vue のテンプレートも {{ }} を式と読むので、JSX と同じく { } を文字参照にする
         const text = jsx
           ? escapeJsx(node.text).replace(/\n/g, '<br />')
@@ -146,7 +155,12 @@ export function nodeMarkup(
   }
   visit(tree.nodes[id], jsx ? 2 : format === 'vue' ? 1 : 0)
 
-  const css = rules.join('\n\n')
+  const faces = usedFontFaces(fonts, assets, texts)
+  const fontCss =
+    images === 'embed'
+      ? embeddedFontFaces(faces, assets)
+      : faces.map((font) => fontFaceRule(font, assets[font.assetId].mime, fontFileName(font, assets[font.assetId].mime))).join('\n')
+  const css = [fontCss, ...rules].filter((rule) => rule !== '').join('\n\n')
   if (format === 'vue') {
     // <style> を閉じられないようにする（中身は信頼できない入力の kdr から作る）
     const scoped = css.replace(/</g, '\\3c ')
@@ -157,6 +171,7 @@ export function nodeMarkup(
   const component = componentName(slug(root.name))
   const head = format === 'css-modules' ? [`import styles from './${component}.module.css'`, ''] : []
   const code = [...head, `export function ${component}() {`, '  return (', ...lines, '  )', '}'].join('\n')
+  // React の style・Tailwind はクラスの CSS を持たないので、css は @font-face だけ（使わなければ空）
   return { html: code, css }
 }
 
@@ -181,7 +196,28 @@ function svgShapes(path: PathNode, name: string, style: Partial<CodeStyle>, jsx 
   return (defs.length > 0 ? `<defs>${defs.join('')}</defs>` : '') + elements.join('')
 }
 
-/** そのままブラウザで開ける HTML ファイル。画像は埋め込む */
+/**
+ * id のノードと、その表示されている子孫のテキストが使う、kdr に埋め込んだ書体（nodeMarkup が @font-face を書くものと同じ）。
+ * viewer の「書体ファイルを保存」に使う
+ */
+export function nodeFontFaces(scene: Scene, id: NodeId, fonts: readonly EmbeddedFont[], assets: Record<AssetId, Asset>): EmbeddedFont[] {
+  if (fonts.length === 0) return []
+  const texts: TextNode[] = []
+  const visit = (source: SceneNode) => {
+    // ブーリアン演算のノードは結果の形のパスとして書くので、中のテキストは使わない
+    const node = drawnNode(scene, source)
+    if (node.type === 'text') texts.push(node)
+    if (node.type !== 'frame') return
+    for (const child of node.children) {
+      const childNode = scene.nodes[child]
+      if (childNode.visible && !isMaskNode(childNode)) visit(childNode)
+    }
+  }
+  visit(scene.nodes[id])
+  return usedFontFaces(fonts, assets, texts)
+}
+
+/** そのままブラウザで開ける HTML ファイル。画像と書体は埋め込む */
 export function standaloneHtml(title: string, markup: Markup): string {
   // ファイルの中身は信頼できない入力（kdr）から作るので、<style> を閉じられないようにする
   const css = markup.css.replace(/</g, '\\3c ')

@@ -8,7 +8,8 @@ import { svgFileName } from '../document/svgExport.ts'
 import { assetBlob } from '../canvas/images.ts'
 import { getAbsoluteBounds, getContentBounds, getNodesBounds } from '../document/geometry.ts'
 import { decodeKdr } from '../document/kdr.ts'
-import type { DesignDocument, NodeId, PageId } from '../document/types.ts'
+import type { DesignDocument, EmbeddedFont, NodeId, PageId } from '../document/types.ts'
+import { fontFileName } from '../document/fontFace.ts'
 import { findMain, instanceOf } from '../document/component.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
 import { getExportOptions } from '../ui/exportOptions.ts'
@@ -163,7 +164,7 @@ export default function ViewerApp() {
     if (!doc || !page) return
     const { targets, name } = exportTargets(doc, page, nodeIds ?? null)
     try {
-      downloadBlob(renderSvg(page, doc.assets, targets, getExportOptions()), svgFileName(safeFileName(name)))
+      downloadBlob(renderSvg(page, doc.assets, targets, getExportOptions(), doc.fonts), svgFileName(safeFileName(name)))
       setMessage(null)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'SVG の書き出しに失敗しました')
@@ -175,7 +176,7 @@ export default function ViewerApp() {
     if (!doc || !page) return false
     const { targets } = exportTargets(doc, page, nodeIds ?? null)
     try {
-      const copied = await copyText(svgMarkup(page, doc.assets, targets, getExportOptions()))
+      const copied = await copyText(svgMarkup(page, doc.assets, targets, getExportOptions(), doc.fonts))
       setMessage(copied ? null : 'クリップボードへコピーできませんでした')
       return copied
     } catch (error) {
@@ -197,12 +198,29 @@ export default function ViewerApp() {
     }
   }
 
-  /** ノードを、中身まで含めた HTML ファイルとして保存する。画像は埋め込む */
+  /** kdr に埋め込んである書体のファイルを、元の形式のまま保存する（コピー用の CSS の @font-face が指す名前で） */
+  function saveFont(font: EmbeddedFont) {
+    const asset = doc && Object.hasOwn(doc.assets, font.assetId) ? doc.assets[font.assetId] : undefined
+    if (!asset) return
+    try {
+      downloadBlob(assetBlob(asset), fontFileName(font, asset.mime))
+      setMessage(null)
+    } catch {
+      setMessage('書体ファイルを保存できませんでした')
+    }
+  }
+
+  /** ノードを、中身まで含めた HTML ファイルとして保存する。画像と書体は埋め込む */
   function saveHtml(nodeId: NodeId, style: CodeStyle) {
     if (!doc || !page) return
     const node = page.nodes[nodeId]
     // ファイルはブラウザで開いて見比べるためのものなので、出力形式によらず HTML + CSS にする
-    const markup = nodeMarkup(page, nodeId, { style: { ...style, format: 'html' }, assets: doc.assets, images: 'embed' })
+    const markup = nodeMarkup(page, nodeId, {
+      style: { ...style, format: 'html' },
+      assets: doc.assets,
+      images: 'embed',
+      fonts: doc.fonts,
+    })
     const file = new Blob([standaloneHtml(node.name, markup)], { type: 'text/html' })
     downloadBlob(file, `${safeFileName(node.name)}.html`)
   }
@@ -356,6 +374,7 @@ export default function ViewerApp() {
             onSelect={selectAndReveal}
             onSelectNodes={selectNodes}
             onSaveImage={() => selectedId && saveImage(selectedId)}
+            onSaveFont={saveFont}
             onSaveHtml={(style) => selectedId && saveHtml(selectedId, style)}
             onGoToMain={() => selectedId && goToMain(selectedId)}
           />

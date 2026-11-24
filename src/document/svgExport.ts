@@ -6,12 +6,14 @@ import { isPassThroughFrame, passThroughFade } from './passThrough.ts'
 import { KAPPA, type MaskNode, clipsByOutline, isMaskNode, maskContours, maskFillRule, maskOf, maskPicture, masksOf } from './mask.ts'
 import { contoursData, isLine } from './path.ts'
 import { dataUri, escapeXml, gradientDef, pathSvg, strokeShapeAttrs } from './svgShapes.ts'
+import { embeddedFontFaces, usedFontFaces } from './fontFace.ts'
 import type {
   Asset,
   Effect,
   AssetId,
   BlendMode,
   CornerRadius,
+  EmbeddedFont,
   ImageNode,
   NodeId,
   Paint,
@@ -43,7 +45,8 @@ import type {
 // - 角度のグラデーションは SVG にないので、扇形を並べた pattern で近似する（svgShapes.ts の gradientDef）。
 // - 隠した塗り・線・効果（visible が false）は書かない。
 // - テキストは text と、行ごとの tspan。行の区切り（折り返し）は呼び出し側が渡す（ブラウザは Canvas で、CLI は見積もりで測る）。
-//   フォントは埋め込まず、名前だけを書く（kdr は書体のファイルを持たず、OS の書体は再配布できないものが多いため）。1 行目の基線は、呼び出し側がフォントの実際の高さ（textMetrics）を
+//   kdr に埋め込んだ書体（options.fonts）を使うテキストがあれば、その書体のファイルをそのまま @font-face の data URI で style に入れる（使う書体だけ。fontFace.ts）。
+//   埋め込んでいない書体は名前だけを書く（OS の書体は再配布できないものが多いため）。1 行目の基線は、呼び出し側がフォントの実際の高さ（textMetrics）を
 //   渡せば描画と同じ位置に、渡さなければ SVG の取り込みと同じ見積もり（文字の上 0.9・下 0.22）で置く。
 // - 画像は data URI の image。fit と切り抜きは imageRect で置き、枠の外は clipPath で切る。
 // - マスク（isMask）は書かず、そこから次のマスクまでの兄弟を、マスクの形の path の clipPath をかけた g にまとめる（画像・フレームは枠の形）。
@@ -67,6 +70,11 @@ export type SvgExportOptions = {
   ids?: boolean
   /** 範囲全体に敷く背景の色（#rrggbb など）。省略すると透明 */
   background?: string
+  /**
+   * kdr に埋め込んだ書体（document.fonts）。書き出すテキストが使う書体を @font-face の data URI で入れる（ファイルは assets から）。
+   * 省略すると書体を入れない（テキストは書体名だけ）
+   */
+  fonts?: readonly EmbeddedFont[]
 }
 
 /** SVG の取り込み（editor/svg/convert.ts）と同じ、フォントの高さの見積もり */
@@ -102,6 +110,9 @@ export function exportSvg(scene: Scene, targets: readonly NodeId[], options: Svg
     .join('')
   const width = tidy(Math.max(bounds.width, 0))
   const height = tidy(Math.max(bounds.height, 0))
+  // 書体は使うものだけを、定義の先頭の style に入れる（書体名に > は使えないので、CDATA を閉じられない）
+  const faces = usedFontFaces(options.fonts ?? [], options.assets, writer.texts)
+  if (faces.length > 0) writer.defs.unshift(`<style><![CDATA[\n${embeddedFontFaces(faces, options.assets)}\n]]></style>`)
   const defs = writer.defs.length > 0 ? `<defs>${writer.defs.join('')}</defs>\n` : ''
   // 背景は id を付けない矩形（取り込み直すと矩形のノードになる）
   const background =
@@ -141,6 +152,8 @@ export function svgFileName(name: string): string {
 
 class SvgWriter {
   readonly defs: string[] = []
+  /** 書いたテキスト（埋め込む書体を選ぶため） */
+  readonly texts: TextNode[] = []
   private readonly scene: Scene
   private readonly options: SvgExportOptions
   private readonly usedIds = new Set<string>()
@@ -491,6 +504,7 @@ class SvgWriter {
 
   private text(node: TextNode, world: Matrix): string[] {
     if (node.fills.length === 0) return []
+    this.texts.push(node)
     const lines = this.options.textLines?.(node) ?? node.text.split('\n').map((text) => ({ text }))
     const lineHeight = node.fontSize * node.lineHeight
     // 1 行目の基線。フォントの高さが分からなければ、SVG の取り込み（editor/svg/convert.ts の text）と同じ見積もり

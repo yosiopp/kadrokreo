@@ -109,15 +109,16 @@ export const png: Command = {
 export const svgOut: Command = {
   name: 'svg-out',
   kind: 'export',
-  usage: 'svg-out [ノード…] [--to ファイル.svg | - ] [--each] [--no-ids] [--background #rrggbb]',
+  usage: 'svg-out [ノード…] [--to ファイル.svg | - ] [--each] [--no-ids] [--no-fonts] [--background #rrggbb]',
   summary:
     'viewer の SVG 書き出しと同じ SVG ファイルを書き出す（取り込みの svg とは逆向き）。ノードなしならページ全体、ノードならそれらを囲む範囲。' +
     '--to を省くと viewer と同じ名前で今のフォルダへ（- は標準出力）。--each はノードごとに別のファイルにする（--to はフォルダ）。' +
     '--no-ids はレイヤー名から作る id を付けない、--background は範囲全体に背景の色を敷く。' +
+    'テキストが kdr に埋め込んだ書体（font-add）を使っていれば、その書体のファイルを @font-face で SVG に入れる（--no-fonts で入れない）。' +
     'テキストの折り返しは見積もった字幅で、基線は PNG と同じ Canvas で測った書体の高さで決める（測れなければ見積もる）',
-  flags: ['each', 'no-ids'],
+  flags: ['each', 'no-ids', 'no-fonts'],
   async run(ctx, step) {
-    checkStep(step, { options: ['to', 'each', 'no-ids', 'background'] })
+    checkStep(step, { options: ['to', 'each', 'no-ids', 'no-fonts', 'background'] })
     const { session } = ctx
     const page = session.page
     const to = option(step, 'to')
@@ -138,6 +139,7 @@ export const svgOut: Command = {
         textLines: estimateTextLines,
         ...(textMetrics ? { textMetrics } : {}),
         ids: !flag(step, 'no-ids'),
+        ...(flag(step, 'no-fonts') ? {} : { fonts: session.document.fonts }),
         ...(background === undefined ? {} : { background }),
       })
       const bytes = new TextEncoder().encode(svg)
