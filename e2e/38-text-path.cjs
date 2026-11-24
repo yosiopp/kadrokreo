@@ -45,9 +45,20 @@ function inkOf(data, width, height, ratio) {
   }
 }
 
-/** 2 つの範囲がほぼ同じか（各辺 tolerance px 以内、画素の数は 15% 以内） */
-function sameInk(a, b, tolerance = 2) {
-  return ['left', 'top', 'right', 'bottom'].every((key) => Math.abs(a[key] - b[key]) <= tolerance) && Math.abs(a.count - b.count) <= b.count * 0.15
+/**
+ * 2 つの範囲がほぼ同じか。中心は tolerance px 以内、幅・高さは 8%（か tolerance + 1 px）以内、画素の数は 15% 以内。
+ * Canvas の measureText と SVG の文字の送り幅は環境によって少し違う（Linux の Chrome では 15 字で 8px ほど。macOS ではほぼ同じ）ので、
+ * 並びの長さの差は割合で見て、置き方（線のどこに並ぶか）は中心で見る
+ */
+function sameInk(a, b, tolerance = 3) {
+  const center = (box, from, to) => (box[from] + box[to]) / 2
+  const size = (box, from, to) => box[to] - box[from]
+  const near = (x, y, slack) => Math.abs(x - y) <= slack
+  return near(center(a, 'left', 'right'), center(b, 'left', 'right'), tolerance) &&
+    near(center(a, 'top', 'bottom'), center(b, 'top', 'bottom'), tolerance) &&
+    near(size(a, 'left', 'right'), size(b, 'left', 'right'), Math.max(tolerance + 1, size(b, 'left', 'right') * 0.08)) &&
+    near(size(a, 'top', 'bottom'), size(b, 'top', 'bottom'), Math.max(tolerance + 1, size(b, 'top', 'bottom') * 0.08)) &&
+    Math.abs(a.count - b.count) <= b.count * 0.15
 }
 
 /** 画面のキャンバスの絵の文字の範囲 */
