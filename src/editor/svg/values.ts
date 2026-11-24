@@ -184,19 +184,3 @@ export function decompose(m: Matrix): { rotation: number; scaleX: number; scaleY
 export function lengthScale(m: Matrix): number {
   return Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]))
 }
-
-// ── style 属性 ──
-
-/** style 属性を「名前 → 値」にする。!important は外す */
-export function parseStyle(raw: string | undefined): Record<string, string> {
-  const result: Record<string, string> = {}
-  if (!raw) return result
-  for (const declaration of raw.split(';')) {
-    const colon = declaration.indexOf(':')
-    if (colon < 0) continue
-    const name = declaration.slice(0, colon).trim().toLowerCase()
-    const value = declaration.slice(colon + 1).replace(/!important\s*$/i, '').trim()
-    if (name !== '' && value !== '') result[name] = value
-  }
-  return result
-}

@@ -41,7 +41,7 @@ import type {
 } from '../../document/types.ts'
 import { createEllipse, createFrame, createImage, createPath, createRect, createText } from '../nodes.ts'
 import type { Fragment } from '../operations/clipboard.ts'
-import { type StyleSheet, matchedDeclarations, parseStyleSheet } from './css.ts'
+import { type StyleSheet, matchedDeclarations, parseStyle, parseStyleSheet } from './css.ts'
 import { readShadowFilter } from './filters.ts'
 import { MAX_SVG_LENGTH, type SvgElement, type SvgNode, parseSvgXml } from './xml.ts'
 import {
@@ -53,7 +53,6 @@ import {
   parseFraction,
   parseLength,
   parseNumbers,
-  parseStyle,
   parseTransform,
 } from './values.ts'
 

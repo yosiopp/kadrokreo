@@ -313,22 +313,40 @@ function specificityOf(compound: Compound): number {
   return value
 }
 
-/** 宣言の並び。名前は小文字にし、!important は別に持つ */
-export function parseDeclarations(body: string): { declarations: Record<string, string>; important: Record<string, string> } {
-  const declarations: Record<string, string> = {}
-  const important: Record<string, string> = {}
+const IMPORTANT = /!\s*important\s*$/i
+
+/** 「名前: 値」の並び（; で区切る）を読む。名前は小文字にし、値の末尾の !important は外して important に分ける。名前か値が空なら飛ばす */
+function eachDeclaration(body: string, visit: (name: string, value: string, important: boolean) => void): void {
   for (const declaration of body.split(';')) {
     const colon = declaration.indexOf(':')
     if (colon < 0) continue
     const name = declaration.slice(0, colon).trim().toLowerCase()
     let value = declaration.slice(colon + 1).trim()
-    const isImportant = /!\s*important\s*$/i.test(value)
-    if (isImportant) value = value.replace(/!\s*important\s*$/i, '').trim()
-    if (name === '' || value === '') continue
+    const important = IMPORTANT.test(value)
+    if (important) value = value.replace(IMPORTANT, '').trim()
+    if (name !== '' && value !== '') visit(name, value, important)
+  }
+}
+
+/** 宣言の並び。名前は小文字にし、!important は別に持つ */
+export function parseDeclarations(body: string): { declarations: Record<string, string>; important: Record<string, string> } {
+  const declarations: Record<string, string> = {}
+  const important: Record<string, string> = {}
+  eachDeclaration(body, (name, value, isImportant) => {
     if (isImportant) important[name] = value
     else declarations[name] = value
-  }
+  })
   return { declarations, important }
+}
+
+/** style 属性を「名前 → 値」にする。!important は外し、同じ名前は後のものを使う */
+export function parseStyle(raw: string | undefined): Record<string, string> {
+  const result: Record<string, string> = {}
+  if (!raw) return result
+  eachDeclaration(raw, (name, value) => {
+    result[name] = value
+  })
+  return result
 }
 
 function attributeValue(element: SvgElement, name: string): string | undefined {
