@@ -1849,19 +1849,27 @@ class Converter {
     return chain
   }
 
+  /** 色（stop）を持つ要素。href でたどった先も見る */
+  private stopOwner(element: SvgElement): SvgElement | undefined {
+    return this.gradientChain(element).find((item) => item.children.some((child) => typeof child !== 'string' && child.name === 'stop'))
+  }
+
+  /** stop の色と透明度（stop-color の alpha と stop-opacity の積） */
+  private stopColor(stop: SvgElement, inherited: Inherited): { color: string; alpha: number } {
+    const style = this.declared(stop)
+    const rawColor = (style['stop-color'] ?? 'black').trim()
+    const color = (rawColor === 'currentColor' ? parseColor(inherited.color) : parseColor(rawColor)) ?? { color: '#000000', alpha: 1 }
+    return { color: color.color, alpha: round4(clamp01(color.alpha * (parseFraction(style['stop-opacity']) ?? 1))) }
+  }
+
   /** グラデーションの色の透明度（stop-color の alpha と stop-opacity の積）がすべて同じなら、その値。違えば null */
   private uniformStopOpacity(element: SvgElement, inherited: Inherited): number | null {
-    const owner = this.gradientChain(element).find((item) =>
-      item.children.some((child) => typeof child !== 'string' && child.name === 'stop'),
-    )
+    const owner = this.stopOwner(element)
     if (!owner) return null
     const alphas = new Set<number>()
     for (const child of owner.children) {
       if (typeof child === 'string' || child.name !== 'stop') continue
-      const style = this.declared(child)
-      const rawColor = (style['stop-color'] ?? 'black').trim()
-      const color = (rawColor === 'currentColor' ? parseColor(inherited.color) : parseColor(rawColor)) ?? { color: '#000000', alpha: 1 }
-      alphas.add(round4(clamp01(color.alpha * (parseFraction(style['stop-opacity']) ?? 1))))
+      alphas.add(this.stopColor(child, inherited).alpha)
     }
     return alphas.size === 1 ? [...alphas][0] : null
   }
@@ -1871,22 +1879,17 @@ class Converter {
    * 色ごとに違えば色ごとの不透明度に写す
    */
   private stops(element: SvgElement, inherited: Inherited): ColorStop[] {
-    const owner = this.gradientChain(element).find((item) =>
-      item.children.some((child) => typeof child !== 'string' && child.name === 'stop'),
-    )
+    const owner = this.stopOwner(element)
     if (!owner) return []
     const uniform = this.uniformStopOpacity(element, inherited) !== null
     const stops: ColorStop[] = []
     let previous = 0
     for (const child of owner.children) {
       if (typeof child === 'string' || child.name !== 'stop') continue
-      const style = this.declared(child)
       const offset = Math.max(previous, clamp01(parseFraction(child.attributes.offset) ?? 0))
       previous = offset
-      const rawColor = (style['stop-color'] ?? 'black').trim()
-      const color = (rawColor === 'currentColor' ? parseColor(inherited.color) : parseColor(rawColor)) ?? { color: '#000000', alpha: 1 }
-      const opacity = uniform ? 1 : round4(clamp01(color.alpha * (parseFraction(style['stop-opacity']) ?? 1)))
-      stops.push({ offset, color: color.color, opacity })
+      const { color, alpha } = this.stopColor(child, inherited)
+      stops.push({ offset, color, opacity: uniform ? 1 : alpha })
     }
     if (stops.length > MAX_STOPS) {
       this.warn(`${MAX_STOPS} 色を超えるグラデーション（間引いた）`)
@@ -1894,6 +1897,25 @@ class Converter {
       return picked
     }
     return stops
+  }
+
+  /**
+   * linearGradient と radialGradient に共通の読み方。属性は href でたどった先も見る。toPage はグラデーションの座標からページへの変換で、
+   * 枠に対する割合の座標（objectBoundingBox）なのに幅や高さが 0 の枠なら null（SVG もグラデーションを描かない）
+   */
+  private gradientSpace(
+    element: SvgElement,
+    matrix: Matrix,
+    userBox: Bounds,
+  ): { attribute: (name: string) => string | undefined; userSpace: boolean; toPage: Matrix | null } {
+    const chain = this.gradientChain(element)
+    const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
+    const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
+    const gradientTransform = parseTransform(attribute('gradientTransform')) ?? IDENTITY
+    if (userSpace) return { attribute, userSpace, toPage: multiply(matrix, gradientTransform) }
+    if (userBox.width === 0 || userBox.height === 0) return { attribute, userSpace, toPage: null }
+    const toPage = multiply(multiply(matrix, [userBox.width, 0, 0, userBox.height, userBox.x, userBox.y]), gradientTransform)
+    return { attribute, userSpace, toPage }
   }
 
   /**
@@ -1909,9 +1931,7 @@ class Converter {
     const stops = this.stops(element, inherited)
     if (stops.length === 0) return null
     if (stops.length === 1) return stopPaint(stops[0])
-    const chain = this.gradientChain(element)
-    const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
-    const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
+    const { attribute, userSpace, toPage } = this.gradientSpace(element, matrix, userBox)
     const coordinate = (name: string, fallback: number, axis: 'width' | 'height') => {
       const raw = attribute(name)
       if (raw === undefined) return userSpace ? fallback * this.viewport[axis] : fallback
@@ -1920,14 +1940,7 @@ class Converter {
     }
     const p1 = { x: coordinate('x1', 0, 'width'), y: coordinate('y1', 0, 'height') }
     const p2 = { x: coordinate('x2', 1, 'width'), y: coordinate('y2', 0, 'height') }
-    const gradientTransform = parseTransform(attribute('gradientTransform')) ?? IDENTITY
-    let toPage: Matrix
-    if (userSpace) toPage = multiply(matrix, gradientTransform)
-    else {
-      // 枠に対する割合の座標。幅や高さが 0 の枠には SVG もグラデーションを描かない
-      if (userBox.width === 0 || userBox.height === 0) return stopPaint(stops[stops.length - 1])
-      toPage = multiply(multiply(matrix, [userBox.width, 0, 0, userBox.height, userBox.x, userBox.y]), gradientTransform)
-    }
+    if (!toPage) return stopPaint(stops[stops.length - 1])
     const start = toNodeSpace(node, applyMatrix(toPage, p1))
     const end = toNodeSpace(node, applyMatrix(toPage, p2))
     if (Math.hypot(end.x - start.x, end.y - start.y) < 1e-9) return stopPaint(stops[stops.length - 1])
@@ -1984,9 +1997,7 @@ class Converter {
     if (stops.length === 0) return null
     const last: Paint = stopPaint(stops[stops.length - 1])
     if (stops.length === 1) return stopPaint(stops[0])
-    const chain = this.gradientChain(element)
-    const attribute = (name: string) => chain.find((item) => item.attributes[name] !== undefined)?.attributes[name]
-    const userSpace = attribute('gradientUnits') === 'userSpaceOnUse'
+    const { attribute, userSpace, toPage } = this.gradientSpace(element, matrix, userBox)
     const coordinate = (name: string, axis: 'width' | 'height' | 'diagonal') => {
       const raw = attribute(name)
       if (raw === undefined) return userSpace ? (this.length('50%', axis) ?? 0) : 0.5
@@ -2002,14 +2013,7 @@ class Converter {
       const fy = attribute('fy') === undefined ? c.y : coordinate('fy', 'height')
       if (r > 0) focal = clampToUnit({ x: (fx - c.x) / r, y: (fy - c.y) / r })
     }
-    const gradientTransform = parseTransform(attribute('gradientTransform')) ?? IDENTITY
-    let toPage: Matrix
-    if (userSpace) toPage = multiply(matrix, gradientTransform)
-    else {
-      if (userBox.width === 0 || userBox.height === 0) return last
-      toPage = multiply(multiply(matrix, [userBox.width, 0, 0, userBox.height, userBox.x, userBox.y]), gradientTransform)
-    }
-    if (!(r > 0) || node.width === 0 || node.height === 0) return last
+    if (!toPage || !(r > 0) || node.width === 0 || node.height === 0) return last
     const center = toNodeSpace(node, applyMatrix(toPage, c))
     const alongX = toNodeSpace(node, applyMatrix(toPage, { x: c.x + r, y: c.y }))
     const alongY = toNodeSpace(node, applyMatrix(toPage, { x: c.x, y: c.y + r }))
