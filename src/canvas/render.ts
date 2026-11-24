@@ -33,7 +33,7 @@ import { isVariantSet } from '../document/variants.ts'
 import { getImage } from './images.ts'
 import { drawBlurred } from './blur.ts'
 import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
-import { applyFont, layoutText } from './text.ts'
+import { applyFont, fontBox, layoutText, wrapWidth } from './text.ts'
 import type { Viewport } from './viewport.ts'
 
 export type RenderOptions = {
@@ -52,7 +52,16 @@ export type RenderOptions = {
    * 前の絵をずらして使い回すパンで、新しく見えた端だけを描くのに使う（CanvasView）
    */
   region?: Bounds
+  /**
+   * 画面上でごく小さい文字（TINY_TEXT 未満）を、行分けせずに文字色の薄い帯で描くか（画面のキャンバスだけ。CanvasView）。
+   * 読めない大きさの文字を 1 つずつ描くと、大きなデザインの全体表示で描き直しの時間の大半を占めるため。
+   * 書き出し（PNG）とサムネイルは省くと見た目が変わるので、今までどおり文字を描く
+   */
+  tinyText?: boolean
 }
+
+/** 画面の実ピクセルでの文字の大きさがこれ未満なら、帯で描く（tinyText） */
+export const TINY_TEXT = 3
 
 /** 1 回の描画で変わらないもの */
 type Pass = {
@@ -141,13 +150,21 @@ export function renderScene(
   ctx.restore()
 }
 
+/** ctx のいまの変換行列。DOMMatrix のまま setTransform に渡すと 1 回ごとに手間がかかるので、数に直しておく */
+function currentTransform(ctx: CanvasRenderingContext2D): Matrix {
+  const m = ctx.getTransform()
+  return [m.a, m.b, m.c, m.d, m.e, m.f]
+}
+
 /**
  * 兄弟の並びを背面から描く。マスクは描かず、そこから次のマスクまでの兄弟をその形で切り取る（types.ts の Maskable）。
  * parent は親の座標系からページ座標系への変換で、ctx はすでに親の座標系になっている
  */
 function drawChildren(ctx: CanvasRenderingContext2D, pass: Pass, ids: readonly NodeId[], parent: Matrix): void {
   if (!hasMask(pass.scene, ids)) {
-    for (const id of ids) drawNode(ctx, pass, id, parent)
+    // 兄弟はどれも同じ親の座標系から描くので、変換行列を 1 回だけ取っておき、描き終えるたびに戻す（drawNode）
+    const back = ids.length > 0 ? currentTransform(ctx) : undefined
+    for (const id of ids) drawNode(ctx, pass, id, parent, back)
     return
   }
   // マスクごとに、かかる兄弟の並び（run）にまとめて描く
@@ -250,8 +267,14 @@ function clipToMask(ctx: CanvasRenderingContext2D, mask: MaskNode): void {
   ctx.clip(maskFillRule(mask))
 }
 
-/** parent は、親の座標系からページ座標系への変換。ctx はすでに親の座標系になっている */
-function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent: Matrix): void {
+/**
+ * parent は、親の座標系からページ座標系への変換。ctx はすでに親の座標系になっている。
+ * back は ctx のいまの変換行列（currentTransform）。渡すと、不透明度と描画モードを変えないノードは save / restore で囲まず、
+ * 描き終えたら変換行列だけを back に戻す（large の全部の描き直しで save / restore が 1 万回以上減る）。
+ * そのため drawContent は、変換行列のほかに後のノードの見た目に効く状態（影・切り抜き・不透明度・描画モード・線の端）を変えるときは、
+ * 自分で save / restore で囲む。塗りの色・線の太さ・書体のように、使う所が毎回設定し直すものは残してよい
+ */
+function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent: Matrix, back?: Matrix): void {
   // ブーリアン演算のノードは、結果の形のパスとして描く
   const node = drawnNode(pass.scene, pass.scene.nodes[id])
   if (!node.visible || node.opacity === 0) return
@@ -263,7 +286,8 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
   const world = multiply(parent, local)
   // はみ出した子を描くフレーム以外は、画面外なら丸ごと省ける
   const selfContained = node.type !== 'frame' || node.clipContent
-  if (selfContained && !intersects(transformRect(world, paintedRect(ctx, node)), pass.visible)) return
+  const tiny = node.type === 'text' && isTiny(pass, node)
+  if (selfContained && !intersects(transformRect(world, tiny ? tinyTextRect(node, pass.scale) : paintedRect(ctx, node)), pass.visible)) return
 
   const effects = shownPaints(node.effects)
   // 背景のぼかしは、ノードより先に描いてあるもの（後ろに見えているもの）をノードの形の内側でぼかす
@@ -312,6 +336,12 @@ function drawNode(ctx: CanvasRenderingContext2D, pass: Pass, id: NodeId, parent:
     return
   }
 
+  if (back && node.opacity === 1 && node.blendMode === 'normal') {
+    ctx.transform(...local)
+    drawContent(ctx, pass, node, world)
+    ctx.setTransform(back[0], back[1], back[2], back[3], back[4], back[5])
+    return
+  }
   ctx.save()
   ctx.globalAlpha *= node.opacity
   if (node.blendMode !== 'normal') ctx.globalCompositeOperation = node.blendMode
@@ -388,13 +418,13 @@ function blurTextBackdrop(ctx: CanvasRenderingContext2D, pass: Pass, node: TextN
 /** 文字の並び。ctx に書体を設定し、行・行揃え・行の高さ・ベースラインと、文字の形を描く関数（影・切り抜き用）を返す */
 function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
   const { width } = node
-  applyFont(ctx, node)
+  const font = applyFont(ctx, node)
   ctx.textBaseline = 'alphabetic'
   // CSS の行ボックスと同じ位置にベースラインを置き、編集中の入力欄と文字がずれないようにする
-  const metrics = ctx.measureText('')
+  const metrics = fontBox(ctx, font)
   const lineHeight = node.fontSize * node.lineHeight
-  const contentHeight = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent
-  const baseline = (lineHeight - contentHeight) / 2 + metrics.fontBoundingBoxAscent
+  const contentHeight = metrics.ascent + metrics.descent
+  const baseline = (lineHeight - contentHeight) / 2 + metrics.ascent
   const align = alignFactor(node.textAlign)
   const lines = layoutText(ctx, node)
   // 文字の影は、文字の形を別のキャンバスに描いてから影だけを落とす（行が分かれていても 1 つの形として）
@@ -421,6 +451,106 @@ function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
     }
   }
   return { lines, align, lineHeight, baseline, silhouette }
+}
+
+/** 帯で描くほど小さい文字か（tinyText） */
+function isTiny(pass: Pass, node: TextNode): boolean {
+  return pass.options.tinyText === true && node.fontSize * pass.scale < TINY_TEXT
+}
+
+/**
+ * 帯で描くテキストが描かれうる範囲（ノードの座標系）。帯は枠の中だけに描くので、行分けせずに決まる。
+ * 帯を実ピクセルの境目に揃えて広がる分（scale は実ピクセルへの倍率）も見込む
+ */
+function tinyTextRect(node: TextNode, scale: number): Bounds {
+  const margin = node.fontSize / 2 + 2 / scale
+  return { x: -margin, y: -margin, width: node.width + margin * 2, height: node.height + margin * 2 }
+}
+
+/** 帯の濃さ。読めない大きさの文字は、字の線が行の帯をおおよそこのくらい覆う */
+const BAND_ALPHA = 0.5
+/** 帯の太さ（文字の大きさに対する割合）。小文字の高さくらい */
+const BAND_HEIGHT = 0.5
+/** 帯の長さの見積もりに使う 1 文字の幅（文字の大きさに対する割合）。全角の字は 1 */
+const HALF_WIDTH = 0.55
+
+/** 見積もった行（左端からの長さ）。ノードは不変なので、同じオブジェクトなら同じ */
+const bandCache = new WeakMap<TextNode, number[]>()
+
+/**
+ * 帯で描く行の長さ。測らずに、字の数で幅を見積もって折り返す（行分けの measureText が、大きなデザインを開くときの重さになるため）。
+ * 帯は枠の中だけに描く（描き直す範囲を行分けせずに決められるように）ので、枠に収まる行の数までにする
+ */
+export function bandLines(node: TextNode): number[] {
+  const cached = bandCache.get(node)
+  if (cached) return cached
+  const wrapAt = wrapWidth(node)
+  const limit = Math.max(1, Math.floor(node.height / (node.fontSize * node.lineHeight) + 1e-6))
+  const lines: number[] = []
+  for (const paragraph of node.text.split('\n')) {
+    let width = 0
+    for (const char of paragraph) {
+      if (lines.length >= limit) break
+      const advance = (char.charCodeAt(0) >= 0x3000 ? 1 : HALF_WIDTH) * node.fontSize
+      if (wrapAt !== null && width + advance > wrapAt && width > 0) {
+        lines.push(width)
+        width = 0
+      }
+      width += advance
+    }
+    if (lines.length >= limit) break
+    lines.push(width)
+  }
+  const fitted = lines.slice(0, limit).map((width) => Math.min(width, node.width))
+  bandCache.set(node, fitted)
+  return fitted
+}
+
+/**
+ * ごく小さい文字を、行ごとの文字色の薄い帯で描く（tinyText）。影と内側の影は、帯では描かない。
+ * 回していなければ、帯を画面の実ピクセルの境目に揃えて塗る（細い帯の端のにじみは、範囲で切って描き直すと数階調変わり、
+ * パンで端だけを描いたときのつなぎ目が合わなくなるため）。揃えて太くなった分だけ薄くする
+ */
+function drawTextBands(ctx: CanvasRenderingContext2D, node: TextNode): void {
+  const lines = bandLines(node)
+  const lineHeight = node.fontSize * node.lineHeight
+  const height = node.fontSize * BAND_HEIGHT
+  const align = alignFactor(node.textAlign)
+  const bands: Bounds[] = []
+  lines.forEach((width, i) => {
+    // 枠が 1 行より低ければ、枠の真ん中に 1 本（描かれうる範囲の余白に収まる）
+    const top = node.height < lineHeight ? (node.height - height) / 2 : lineHeight * i + (lineHeight - height) / 2
+    if (width > 0) bands.push({ x: (node.width - width) * align, y: top, width, height })
+  })
+  if (bands.length === 0) return
+  const m = ctx.getTransform()
+  const aligned = m.b === 0 && m.c === 0
+  for (const fill of node.fills) {
+    ctx.save()
+    ctx.globalAlpha *= fill.opacity * BAND_ALPHA
+    if (fill.blendMode !== 'normal') ctx.globalCompositeOperation = fill.blendMode
+    ctx.fillStyle = paintStyle(ctx, fill, node, node.fontSize)
+    if (!aligned) {
+      for (const band of bands) ctx.fillRect(band.x, band.y, band.width, band.height)
+      ctx.restore()
+      continue
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    const alpha = ctx.globalAlpha
+    for (const band of bands) {
+      const x0 = m.a * band.x + m.e
+      const x1 = m.a * (band.x + band.width) + m.e
+      const y0 = m.d * band.y + m.f
+      const y1 = m.d * (band.y + band.height) + m.f
+      const left = Math.round(Math.min(x0, x1))
+      const right = Math.max(left + 1, Math.round(Math.max(x0, x1)))
+      const top = Math.round(Math.min(y0, y1))
+      const bottom = Math.max(top + 1, Math.round(Math.max(y0, y1)))
+      ctx.globalAlpha = alpha * Math.min(1, Math.abs(y1 - y0) / (bottom - top))
+      ctx.fillRect(left, top, right - left, bottom - top)
+    }
+    ctx.restore()
+  }
 }
 
 /** ノードの形のパスを組む（テキスト以外）。描画と同じ形 */
@@ -550,20 +680,28 @@ function drawContent(
       break
     }
     case 'text':
-      if (node.id !== pass.options.hiddenId) {
+      if (node.id === pass.options.hiddenId) break
+      if (isTiny(pass, node)) {
+        drawTextBands(ctx, node)
+        break
+      }
+      {
         const { lines, align, lineHeight, baseline, silhouette } = textShape(ctx, node)
         const { drop: drops, inner } = splitEffects(node.effects)
         for (const shadow of drops) drawMaskedShadow(ctx, pass, shadow, silhouette, false)
         for (const fill of node.fills) {
+          const plain = isPlain(fill)
+          if (!plain) {
+            ctx.save()
+            ctx.globalAlpha *= fill.opacity
+            if (fill.blendMode !== 'normal') ctx.globalCompositeOperation = fill.blendMode
+          }
           // 固定の幅からはみ出す行もあるので、文字の大きさの分だけ外まで覆う
-          ctx.save()
-          ctx.globalAlpha *= fill.opacity
-          if (fill.blendMode !== 'normal') ctx.globalCompositeOperation = fill.blendMode
           ctx.fillStyle = paintStyle(ctx, fill, node, node.fontSize)
           lines.forEach((line, i) => {
             ctx.fillText(line.text, (width - line.width) * align, lineHeight * i + baseline)
           })
-          ctx.restore()
+          if (!plain) ctx.restore()
         }
         // 内側の影は、別のキャンバスに影を描いてから文字の形で切り抜いて重ねる（パスで切り抜けないため）
         for (const shadow of inner) drawTextInnerShadow(ctx, pass, shadow, silhouette)
@@ -604,10 +742,15 @@ function drawContent(
       fillAll(ctx, pass, node, node.effects, filledSilhouette(outline, 'nonzero'))
       // 内側の影は背景の上、子の下（CSS の inset の box-shadow と同じ）
       drawInnerShadows(ctx, pass, node, node.effects, outline)
-      ctx.save()
-      if (node.clipContent) ctx.clip()
-      drawChildren(ctx, pass, node.children, world)
-      ctx.restore()
+      // 切り取らないなら、子は変換行列を戻しながら描くので囲まなくてよい
+      if (node.clipContent) {
+        ctx.save()
+        ctx.clip()
+        drawChildren(ctx, pass, node.children, world)
+        ctx.restore()
+      } else {
+        drawChildren(ctx, pass, node.children, world)
+      }
       // 枠線は子より手前に描く
       if (hasStroke(node)) {
         outline()
@@ -679,6 +822,13 @@ function fillAll(
   silhouette: Silhouette,
 ): void {
   node.fills.forEach((fill, i) => {
+    // 影を付けず、変換行列も変えない塗りは、囲まずに塗る（save / restore の手間を省く）
+    const shadowed = i === 0 && effects.some((effect) => effect.type === 'drop-shadow')
+    if (isPlain(fill) && !shadowed && fill.type !== 'radial') {
+      ctx.fillStyle = paintStyle(ctx, fill, node)
+      ctx.fill(fillRuleOf(node))
+      return
+    }
     ctx.save()
     ctx.globalAlpha *= fill.opacity
     if (fill.blendMode !== 'normal') ctx.globalCompositeOperation = fill.blendMode
@@ -699,6 +849,11 @@ function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'stro
   ctx.lineDashOffset = node.strokeDashOffset
   ctx.lineJoin = node.strokeJoin
   for (const stroke of node.strokes) {
+    if (isPlain(stroke)) {
+      ctx.strokeStyle = paintStyle(ctx, stroke, node, node.strokeWidth)
+      ctx.stroke()
+      continue
+    }
     ctx.save()
     ctx.globalAlpha *= stroke.opacity
     if (stroke.blendMode !== 'normal') ctx.globalCompositeOperation = stroke.blendMode
@@ -709,6 +864,11 @@ function strokeAll(ctx: CanvasRenderingContext2D, node: Size & Pick<Style, 'stro
   ctx.setLineDash([])
   ctx.lineDashOffset = 0
   ctx.lineJoin = 'miter'
+}
+
+/** 不透明度も描画モードも変えない塗り・線か。そのまま描けば、save / restore で囲まなくても後に残る状態は色だけ */
+function isPlain(paint: Paint): boolean {
+  return paint.opacity === 1 && paint.blendMode === 'normal'
 }
 
 /** 塗る範囲の決め方。パスだけが持ち、ほかは nonzero */

@@ -28,10 +28,39 @@ export function hugHeight(style: Pick<TextNode, 'minHeight' | 'maxHeight'>, cont
 /** 行の文字列と描画幅。折り返した行の幅には、行末にぶら下がった空白を含めない */
 export type TextLine = { text: string; width: number }
 
-export function applyFont(ctx: CanvasRenderingContext2D, style: FontStyle): void {
+// 書体の指定ごとに、実際に代入する文字列（fontFamily が不正なら太さと大きさだけの指定）。
+// 毎回 2 回代入すると、同じ指定が続いても Canvas が毎回解析し直す（large の全部の描き直しで約 2ms）。
+// 不正かどうかは書き方だけで決まり、書体の読み込みでは変わらないので、捨てずに覚える
+const resolvedFonts = new Map<string, string>()
+const RESOLVED_FONTS_LIMIT = 1000
+const styleFonts = new WeakMap<FontStyle, string>()
+
+/** 書体を ctx に設定し、実際に代入した文字列を返す */
+export function applyFont(ctx: CanvasRenderingContext2D, style: FontStyle): string {
+  // ノードは不変なので、同じオブジェクトなら代入する文字列も同じ（文字列を組み立てて引く手間も省く）
+  const known = styleFonts.get(style)
+  if (known !== undefined) {
+    ctx.font = known
+    return known
+  }
+  const font = `${style.fontWeight} ${style.fontSize}px ${style.fontFamily}`
+  const resolved = resolvedFonts.get(font)
+  if (resolved !== undefined) {
+    styleFonts.set(style, resolved)
+    ctx.font = resolved
+    return resolved
+  }
   // fontFamily が不正だと代入ごと無視されるので、先にサイズと太さだけ確実に反映しておく
-  ctx.font = `${style.fontWeight} ${style.fontSize}px sans-serif`
-  ctx.font = `${style.fontWeight} ${style.fontSize}px ${style.fontFamily}`
+  const fallback = `${style.fontWeight} ${style.fontSize}px sans-serif`
+  ctx.font = fallback
+  const before = ctx.font
+  ctx.font = font
+  // 代入が効かなかった（または効いても同じ指定になった）なら、次からは太さと大きさだけを代入すれば同じになる
+  if (resolvedFonts.size >= RESOLVED_FONTS_LIMIT) resolvedFonts.clear()
+  const result = ctx.font === before ? fallback : font
+  resolvedFonts.set(font, result)
+  styleFonts.set(style, result)
+  return result
 }
 
 /**
@@ -54,6 +83,25 @@ const CONTENT_CACHE_LIMIT = 20_000
 // 書体の読み込みが済むと測った幅が変わるので、中身で覚えたものは捨てる（ノードで覚えたものは、ノードの大きさと揃えるため残す）
 if (typeof document !== 'undefined') document.fonts?.addEventListener('loadingdone', () => contentCache.clear())
 
+// 書体ごとの上下の高さ。描画ではテキストの数だけ測り（large で約 6,000 回）、書体が同じなら答えも同じなので覚える。
+// 書体の読み込みが済むと値が変わるので、そのとき（と forgetTextLayout）は捨てる
+const fontBoxes = new Map<string, { ascent: number; descent: number }>()
+if (typeof document !== 'undefined') document.fonts?.addEventListener('loadingdone', () => fontBoxes.clear())
+
+/**
+ * ctx に設定した書体（font は applyFont が返した文字列）の上下の高さ。textBaseline は alphabetic にしておく
+ * （描画の textShape 用。fontMetrics と違い、ctx の書体と textBaseline は呼ぶ側が設定する）
+ */
+export function fontBox(ctx: CanvasRenderingContext2D, font: string): { ascent: number; descent: number } {
+  const cached = fontBoxes.get(font)
+  if (cached) return cached
+  const metrics = ctx.measureText('')
+  const box = { ascent: metrics.fontBoundingBoxAscent, descent: metrics.fontBoundingBoxDescent }
+  if (fontBoxes.size >= 1000) fontBoxes.clear()
+  fontBoxes.set(font, box)
+  return box
+}
+
 /**
  * 覚えた行分けを全部捨てる。ドキュメントに埋め込んだ書体が使えるようになったとき（canvas/fonts.ts）に呼ぶ。
  * 埋め込んだ書体で測って決めたテキストの大きさに、行分けを合わせ直すため
@@ -61,6 +109,7 @@ if (typeof document !== 'undefined') document.fonts?.addEventListener('loadingdo
 export function forgetTextLayout(): void {
   layoutCache = new WeakMap()
   contentCache.clear()
+  fontBoxes.clear()
 }
 
 /** 描画する行に分ける。折り返す幅（wrapWidth）がなければ改行だけ、あればその幅に収まるよう折り返す */

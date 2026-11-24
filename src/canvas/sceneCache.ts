@@ -177,5 +177,5 @@ function blit(source: HTMLCanvasElement, target: CanvasRenderingContext2D, x: nu
 
 function draw(ctx: CanvasRenderingContext2D, input: SceneInput, region?: Bounds): void {
   const { scene, assets, viewport, size, pixelRatio, labelColor, hiddenId } = input
-  renderScene(ctx, scene, assets, viewport, size, pixelRatio, { labelColor, hiddenId, region })
+  renderScene(ctx, scene, assets, viewport, size, pixelRatio, { labelColor, hiddenId, region, tinyText: true })
 }

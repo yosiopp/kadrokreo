@@ -226,6 +226,13 @@ async function measureOpen(browser, url, kdrPath, rowSelector, rows) {
 async function measurePanZoom(session, box) {
   const { page, measure } = session
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  // 全体表示のまわりで、ズームして止まり、描き直すまで（1 回ごとに行き来するので、全体表示とその 1 段上を交互に全部描き直す）
+  await page.keyboard.down('Control')
+  const fitSettle = await measure(10, async (i) => {
+    await page.mouse.wheel(0, i % 2 === 0 ? -20 : 20)
+    await page.waitForTimeout(300)
+  })
+  await page.keyboard.up('Control')
   const pan = await measure(args.runs, (i) => page.mouse.wheel(0, i % 2 === 0 ? 40 : -40))
   await page.keyboard.down('Control')
   // 10 回ずつ同じ向きにズームする（1 回ごとに行き来すると同じ倍率に戻り、取っておいた絵をそのまま使い回せてしまう）。
@@ -236,7 +243,7 @@ async function measurePanZoom(session, box) {
     await page.waitForTimeout(300)
   })
   await page.keyboard.up('Control')
-  return { pan, zoom, zoomSettle }
+  return { fitSettle, pan, zoom, zoomSettle }
 }
 
 let editorPort = ''
@@ -394,6 +401,7 @@ const LABELS = [
   ['editor', 'pan', 'パン 1 回', 'editor'],
   ['editor', 'zoom', 'ズーム 1 回', 'editor'],
   ['editor', 'zoomSettle', 'ズームして止まり、描き直すまで', 'editor'],
+  ['editor', 'fitSettle', '全体表示のまわりでズームして止まり、描き直すまで', 'editor'],
   ['viewer', 'open.main', 'kdr を開く（メインスレッド）', 'viewer'],
   ['viewer', 'open.wall', 'kdr を開く（経過時間）', 'viewer'],
   ['viewer', 'open.heap', 'kdr を開いたあとの JS ヒープの増分（MB）', 'viewer'],
@@ -401,6 +409,7 @@ const LABELS = [
   ['viewer', 'pan', 'パン 1 回', 'viewer'],
   ['viewer', 'zoom', 'ズーム 1 回', 'viewer'],
   ['viewer', 'zoomSettle', 'ズームして止まり、描き直すまで', 'viewer'],
+  ['viewer', 'fitSettle', '全体表示のまわりでズームして止まり、描き直すまで', 'viewer'],
 ]
 
 function lookup(result, group, key) {
