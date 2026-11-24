@@ -1,3 +1,4 @@
+import { findPage } from '../document/pages.ts'
 import type { DesignDocument, NodeId, Page, PageId } from '../document/types.ts'
 import { createHistory, pushHistory, redoHistory, undoHistory } from './history.ts'
 import { type FitText, captureOverrides, syncComponents } from './components.ts'
@@ -60,7 +61,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   function snapshot(): EditorState {
     const document = preview ?? history.present
     // 表示していたページが（Undo などで）なくなったら、先頭のページへ移る
-    const page = document.pages.find((candidate) => candidate.id === pageId) ?? document.pages[0]
+    const page = findPage(document, pageId) ?? document.pages[0]
     if (page.id !== pageId) {
       pageId = page.id
       selection = []
@@ -147,7 +148,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
     for (let pass = 0; pass < 4; pass++) {
       const previous = base
       const arranged = mapPages(current, (page) =>
-        previous.pages.includes(page) ? page : arrange(previous.pages.find((prior) => prior.id === page.id), page),
+        previous.pages.includes(page) ? page : arrange(findPage(previous, page.id), page),
       )
       // 前の回の結果（最初は変更の前）が合っていれば、そこから変わったところに関わるインスタンスだけを見る
       const synced = syncComponents(arranged, fitText, pass === 0 ? before : current)
@@ -224,7 +225,7 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
    * そうしないと、何が戻ったのか見えない。
    */
   function followChange(from: DesignDocument, to: DesignDocument) {
-    const find = (doc: DesignDocument) => doc.pages.find((page) => page.id === pageId)
+    const find = (doc: DesignDocument) => findPage(doc, pageId)
     if (find(from) !== find(to)) return
     const changed = to.pages.find((page) => !from.pages.includes(page))
     if (changed) {

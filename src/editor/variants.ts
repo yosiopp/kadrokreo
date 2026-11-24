@@ -1,4 +1,5 @@
 import { type MainNode, findMain, isInstance, isMain, mainsOf, owningInstance } from '../document/component.ts'
+import { findPage } from '../document/pages.ts'
 import type { DesignDocument, NodeId, Page, PageId, Scene } from '../document/types.ts'
 import {
   type VariantProps,
@@ -185,7 +186,7 @@ export function selectVariant(
   key: string,
   value: string,
 ): DesignDocument {
-  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const page = findPage(doc, pageId)
   const instance = page?.nodes[instanceId]
   if (!isInstance(instance)) return doc
   const main = findMain(doc, instance.component.id)
@@ -273,7 +274,7 @@ export function addVariantValue(
   key: string,
   value?: string,
 ): { document: DesignDocument; id: NodeId | null } {
-  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const page = findPage(doc, pageId)
   if (!page) return { document: doc, id: null }
   const property = variantProperties(page, setId).find((candidate) => candidate.name === key)
   const source = variantsIn(page, setId)[0]
@@ -301,7 +302,7 @@ export function fitMovedVariants(before: DesignDocument, after: DesignDocument):
   let changed = false
   const pages = after.pages.map((page) => {
     if (before.pages.includes(page)) return page
-    const prior = before.pages.find((candidate) => candidate.id === page.id)
+    const prior = findPage(before, page.id)
     if (!prior) return page
     const moved = [...mainsOf(page).values()].filter((main) => {
       const old = prior.nodes[main.id]

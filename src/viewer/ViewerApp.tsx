@@ -8,6 +8,7 @@ import { svgFileName } from '../document/svgExport.ts'
 import { assetBlob } from '../canvas/images.ts'
 import { getAbsoluteBounds, getContentBounds, getNodesBounds } from '../document/geometry.ts'
 import { decodeKdr } from '../document/kdr.ts'
+import { findPage } from '../document/pages.ts'
 import type { DesignDocument, EmbeddedFont, NodeId, PageId } from '../document/types.ts'
 import { fontFileName } from '../document/fontFace.ts'
 import { findMain, instanceOf } from '../document/component.ts'
@@ -51,7 +52,7 @@ export default function ViewerApp() {
   // 「リンクをコピー」を押したあと、少しのあいだ「コピーしました」と出す
   const [linkCopied, setLinkCopied] = useState(false)
 
-  const page = doc ? (doc.pages.find((candidate) => candidate.id === pageId) ?? doc.pages[0]) : null
+  const page = doc ? (findPage(doc, pageId) ?? doc.pages[0]) : null
   // ページ直下のフレームを「画面」として一覧に出す
   const frames = page ? page.rootIds.map((id) => page.nodes[id]).filter((node) => node.type === 'frame') : []
 
@@ -127,7 +128,7 @@ export default function ViewerApp() {
   /** URL のハッシュが指すページと選択を表示する。選んでいるものがあれば、そこが画面に収まるようにする */
   function showLink(target: DesignDocument) {
     const link = resolveViewLink(target, parseViewLink(window.location.hash))
-    const linkedPage = target.pages.find((candidate) => candidate.id === link.pageId)!
+    const linkedPage = findPage(target, link.pageId)!
     setPageId(link.pageId)
     setSelection(link.selection)
     camera.fit(

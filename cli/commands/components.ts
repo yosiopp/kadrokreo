@@ -1,6 +1,7 @@
 import { findMain, isInstance, isMain } from '../../src/document/component.ts'
 import { canBindProperty } from '../../src/document/componentProperties.ts'
 import { getWorldCenter } from '../../src/document/geometry.ts'
+import { findPage } from '../../src/document/pages.ts'
 import type { ComponentProperty, DesignDocument, NodeId, Scene } from '../../src/document/types.ts'
 import { isVariantSet, parseVariantName, propValue, variantProperties, variantSetOf } from '../../src/document/variants.ts'
 import {
@@ -89,11 +90,11 @@ export const instance: Command = {
     const pageId = session.page.id
     let created: NodeId | null = null
     session.applyDocument((doc) => {
-      const page = doc.pages.find((candidate) => candidate.id === pageId)!
+      const page = findPage(doc, pageId)!
       const at = parentId === null ? undefined : { center: getWorldCenter(page, parentId), parentId }
       const result = createInstance(doc, pageId, componentId, at)
       if (result.id === null) throw new UsageError('instance: インスタンスを置けません')
-      if (parentId !== null && result.document.pages.find((p) => p.id === pageId)!.nodes[result.id].parentId !== parentId) {
+      if (parentId !== null && findPage(result.document, pageId)!.nodes[result.id].parentId !== parentId) {
         throw new UsageError('instance: そのフレームの中には置けません（インスタンスの中か、元が自分自身を含むことになります）')
       }
       const id = wanted ?? result.id
@@ -244,7 +245,7 @@ export const variant: Command = {
 
 /** インスタンスの元のバリアントの、プロパティ key の値 */
 function currentValue(doc: DesignDocument, pageId: string, id: NodeId, key: string): string | undefined {
-  const node = doc.pages.find((page) => page.id === pageId)?.nodes[id]
+  const node = findPage(doc, pageId)?.nodes[id]
   if (!isInstance(node)) return undefined
   const main = findMain(doc, node.component.id)
   return main ? propValue(parseVariantName(main.node.name) ?? [], key) : undefined
@@ -426,7 +427,7 @@ export const prop: Command = {
     const pageId = session.page.id
     session.applyDocument((doc) =>
       ids.reduce((current, id) => {
-        const node = current.pages.find((page) => page.id === pageId)!.nodes[id]
+        const node = findPage(current, pageId)!.nodes[id]
         if (!isInstance(node)) throw new UsageError(`prop: ${id} はインスタンスではありません`)
         const main = findMain(current, node.component.id)
         return step.assignments.reduce((next, [key, raw]) => {

@@ -1,4 +1,5 @@
 import { getWorldCenter, getWorldRotation, poseInParent } from '../../document/geometry.ts'
+import { findPage } from '../../document/pages.ts'
 import { sha256Hex } from '../../document/sha256.ts'
 import type { Asset, AssetId, DesignDocument, EmbeddedFont, NodeId, Page, PageId } from '../../document/types.ts'
 import { createId } from '../nodes.ts'
@@ -183,8 +184,8 @@ export function moveNodesToPage(
   ids: readonly NodeId[],
   toPageId: PageId,
 ): DesignDocument {
-  const from = doc.pages.find((page) => page.id === fromPageId)
-  const to = doc.pages.find((page) => page.id === toPageId)
+  const from = findPage(doc, fromPageId)
+  const to = findPage(doc, toPageId)
   if (!from || !to || from === to) return doc
   const rootIds = sortByDocumentOrder(from, topLevelIds(from, ids))
   if (rootIds.length === 0) return doc

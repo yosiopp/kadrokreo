@@ -1,6 +1,7 @@
 import { type MainNode, derivedId, findMain, isInstance, isMain } from '../document/component.ts'
 import { canBindProperty, type PropertyValue } from '../document/componentProperties.ts'
 import { namePath, pathIndex } from '../document/componentSource.ts'
+import { findPage } from '../document/pages.ts'
 import { variantSetOf, variantsIn } from '../document/variants.ts'
 import type { ComponentProperty, DesignDocument, NodeId, Override, PageId, Scene } from '../document/types.ts'
 import { swapNestedInstance } from './components.ts'
@@ -255,7 +256,7 @@ export function setInstanceProperty(
   name: string,
   value: PropertyValue,
 ): DesignDocument {
-  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const page = findPage(doc, pageId)
   const instance = page?.nodes[instanceId]
   if (!page || !isInstance(instance)) return doc
   const main = findMain(doc, instance.component.id)

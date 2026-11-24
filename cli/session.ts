@@ -1,5 +1,6 @@
 import { kdrFile, parseKdr } from '../src/document/kdr.ts'
 import { setWoff2Decoder } from '../src/document/openType.ts'
+import { findPage } from '../src/document/pages.ts'
 import { setOutlineFonts } from '../src/document/textOutline.ts'
 import { decodeWoff2 } from '../src/document/woff2.ts'
 import type { DesignDocument, FrameNode, NodeId, Page, Scene, SceneNode } from '../src/document/types.ts'
@@ -38,7 +39,7 @@ export class Session {
   }
 
   get page(): Page {
-    return this.document.pages.find((page) => page.id === this.#pageId) ?? this.document.pages[0]
+    return findPage(this.document, this.#pageId) ?? this.document.pages[0]
   }
 
   setPage(id: string): void {
@@ -137,7 +138,7 @@ function resolveSelector(scene: Scene, selector: string, last: readonly NodeId[]
 /** ページのセレクタ: id、名前、1 から数えた番号の順に探す */
 export function resolvePage(doc: DesignDocument, selector: string): Page {
   const found =
-    doc.pages.find((page) => page.id === selector) ??
+    findPage(doc, selector) ??
     doc.pages.find((page) => page.name === selector) ??
     (/^\d+$/.test(selector) ? doc.pages[Number(selector) - 1] : undefined)
   if (!found) throw new UsageError(`ページが見つかりません: ${selector}`)

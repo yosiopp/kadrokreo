@@ -1,3 +1,4 @@
+import { findPage } from '../document/pages.ts'
 import type { DesignDocument, NodeId, PageId } from '../document/types.ts'
 
 // 見ている場所（ページと選択）を URL のハッシュで表す。kdr ファイルそのものは URL に入らないので、
@@ -30,7 +31,7 @@ export function parseViewLink(hash: string): ViewLink {
  * （ノードの id はページの中でだけ一意なので、別のページの id は当てにならない）。
  */
 export function resolveViewLink(doc: DesignDocument, link: ViewLink): { pageId: PageId; selection: NodeId[] } {
-  const found = doc.pages.find((candidate) => candidate.id === link.pageId)
+  const found = findPage(doc, link.pageId)
   const page = found ?? doc.pages[0]
   const wanted = found || link.pageId === null ? link.selection : []
   const selection = [...new Set(wanted)].filter((id) => Object.hasOwn(page.nodes, id))

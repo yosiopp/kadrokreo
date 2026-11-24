@@ -12,6 +12,7 @@ import {
   owningInstance,
 } from '../document/component.ts'
 import { type Point, getAbsoluteBounds, poseInParent } from '../document/geometry.ts'
+import { findPage } from '../document/pages.ts'
 import type {
   DesignDocument,
   FrameNode,
@@ -93,7 +94,7 @@ export function createInstance(
   at?: InstancePlacement,
 ): { document: DesignDocument; id: NodeId | null } {
   const main = findMain(doc, componentId)
-  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const page = findPage(doc, pageId)
   if (!main || !page) return { document: doc, id: null }
   const size = { width: main.node.width, height: main.node.height }
   let parentId: NodeId | null = null
@@ -134,7 +135,7 @@ export function canHoldInstance(doc: DesignDocument, scene: Scene, parentId: Nod
  * 差し替えると循環する（インスタンスが入っている元を、新しい元が含むことになる）なら変えない。
  */
 export function swapComponent(doc: DesignDocument, pageId: PageId, instanceId: NodeId, componentId: string): DesignDocument {
-  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const page = findPage(doc, pageId)
   const instance = page?.nodes[instanceId]
   if (!page || !isInstance(instance) || instance.component.id === componentId) return doc
   if (owningInstance(page, instanceId)) return doc
@@ -352,7 +353,7 @@ export function swapNestedInstance(
   copyId: NodeId,
   componentId: string,
 ): DesignDocument {
-  const page = doc.pages.find((candidate) => candidate.id === pageId)
+  const page = findPage(doc, pageId)
   const nested = page ? nestedInstanceOf(doc, page, copyId) : null
   if (!page || !nested || nested.componentId === componentId || !nested.allowed(componentId)) return doc
   const { instance, sourceId } = nested
@@ -392,7 +393,7 @@ export function captureOverrides(before: DesignDocument, after: DesignDocument):
   if (after === before) return after
   let changed = false
   const pages = after.pages.map((page) => {
-    const old = before.pages.find((candidate) => candidate.id === page.id)
+    const old = findPage(before, page.id)
     if (!old || old === page) return page
     let next = page
     // 変わったノードが分かれば、それだけを見る（ほかは前と同じ参照なので比べるまでもない）
@@ -461,7 +462,7 @@ export function pushOverrides(
   fitText?: FitText,
 ): DesignDocument {
   return ids.reduce((current, id) => {
-    const page = current.pages.find((candidate) => candidate.id === pageId)
+    const page = findPage(current, pageId)
     const found = page ? sourceOf(current, page, id) : null
     if (!found) return current
     const { instance, source } = found
@@ -499,7 +500,7 @@ export function pushOverrides(
       // 写しの中身の id の付け方が変わるので、差し替えた中身への上書きは、名前のたどり方が同じノードへ移す
       // 元のページの写しは同期するまで古いので、同期した姿で見る（返すのは同期する前のもの。同期はストアがかける）
       const synced = syncComponents(next, fitText)
-      const page = synced.pages.find((candidate) => candidate.id === pageId)!
+      const page = findPage(synced, pageId)!
       const nextMain = findMain(synced, instance.component.id)!
       const before = effectiveSource(current, page, instance, main)
       const after = effectiveSource(synced, page, { ...instance, component: { ...instance.component, overrides } }, nextMain)
