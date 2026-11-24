@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { type IO, run } from './run.ts'
+import { testFontBytes } from '../src/document/testFont.ts'
 
 // png コマンド。描画は本体の render.ts を @napi-rs/canvas に描かせているので、画素をいくつか確かめる
 
@@ -175,6 +176,27 @@ describe('png', () => {
       if (r > 40 && r < 215 && sharp.at(x, y)[0] !== r) mixed++
     }
     expect(mixed).toBeGreaterThan(20)
+  })
+
+  it('kdr に埋め込んだ書体で描く（OS にない書体でも）', async () => {
+    const h = harness()
+    // テスト用の書体は、どの字も送り幅 0.6em・高さ 0.7em の黒い四角
+    h.fs.set('box.ttf', testFontBytes({ family: 'PngBox' }))
+    const setup = 'new Demo + font-add box.ttf + add text --name T --text AB fontSize=100 fontFamily=PngBox fill=#000000 -o in.kdr'
+    expect(await h.run(setup)).toBe(0)
+    expect(h.stderr).toContain('書体を埋め込みました: PngBox')
+    expect(await h.run('-f in.kdr png T --to t.png')).toBe(0)
+    const image = await pixels(h.fs.get('t.png')!)
+    // 1 字目の四角は x が 5〜55、高さ 70 の範囲。その四隅の内側と真ん中が黒く、字の間（55〜65）は描かれない
+    const inked = Array.from({ length: image.height }, (_, y) => y).filter((y) => image.at(30, y)[3] > 128)
+    const [top, bottom] = [inked[0], inked.at(-1)!]
+    expect(bottom - top).toBeGreaterThan(60)
+    expect(bottom - top).toBeLessThan(75)
+    for (const [x, y] of [[8, top + 3], [52, top + 3], [8, bottom - 3], [52, bottom - 3], [30, (top + bottom) / 2]]) {
+      expect(image.at(x, Math.round(y))).toEqual([0, 0, 0, 255])
+    }
+    expect(image.at(60, Math.round((top + bottom) / 2))[3]).toBe(0)
+    expect(image.at(68, Math.round((top + bottom) / 2))).toEqual([0, 0, 0, 255])
   })
 
   it('png はドキュメントを変えないので、kdr を書き出さない', async () => {

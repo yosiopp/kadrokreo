@@ -6,6 +6,7 @@ import { getContentBounds } from '../document/geometry.ts'
 import { KDR_VERSION, KdrError, MAX_DEPTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
 import { tarParts } from '../document/tar.ts'
 import { fromBase64, gzipBlob, kdrBlob, tarGz } from '../document/testKdr.ts'
+import { testFontBytes } from '../document/testFont.ts'
 import type { Asset, DesignDocument } from '../document/types.ts'
 import { inspectNode, inspectSelection, nodeCss } from '../viewer/inspect.ts'
 import { nodeCode, nodeMarkup } from '../viewer/markup.ts'
@@ -199,6 +200,7 @@ function parseOrReject(value: unknown, assets: unknown = {}): 'ok' | 'error' {
 
 const ID_POOL = ['a', 'b', 'n1', 'constructor', 'toString', 'hasOwnProperty', 'valueOf', '__proto__', 'x'.repeat(64), 'x'.repeat(65), '', 'p1']
 const PNG = fromBase64('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
+const FONT = testFontBytes()
 
 /** JSON で表せる極端な値。NaN / Infinity は JSON にないので、文字列の段階で別に差し込む */
 const EXTREMES: unknown[] = [
@@ -365,7 +367,15 @@ function randomFile(r: Random): { file: Record<string, unknown>; assets: Record<
     name: `Page ${i}`,
     children: Array.from({ length: r.int(0, 5) }, () => randomNode(c, 1)),
   }))
-  return { file: { format: 'kadrokreo', version: KDR_VERSION, document: { name: 'fuzz', pages } }, assets }
+  // 埋め込んだ書体（書体名・太さ・斜体の組と、書体のファイル）。乱数を使うと、ほかのテストの種で作られるファイルが変わるので、
+  // 作った id の数で決める
+  const fonts: Record<string, unknown>[] = []
+  if (c.counter % 3 === 1) {
+    assets.font0 = { mime: 'font/ttf', bytes: FONT.slice() }
+    fonts.push({ assetId: 'font0', family: 'Kdr Test' }, { assetId: 'font0', family: 'Kdr Test', weight: 700, style: 'italic' })
+  }
+  const document = { name: 'fuzz', pages, ...(fonts.length > 0 ? { fonts } : {}) }
+  return { file: { format: 'kadrokreo', version: KDR_VERSION, document }, assets }
 }
 
 // ---- 壊し方 ----
@@ -628,7 +638,7 @@ describe('kdr の tar のファズテスト', () => {
       'document.json', 'document.json', 'assets/img0.png', 'assets/img1.jpg', 'assets/img0.gif', 'assets/img2.webp',
       'assets/img0.PNG', 'assets/img0.svg', 'assets/', 'assets', '../document.json', 'assets/../document.json', '/document.json',
       './document.json', 'assets/a/b.png', 'assets/__proto__.png', 'assets/constructor.png', `assets/${'x'.repeat(64)}.png`,
-      `assets/${'x'.repeat(65)}.png`, 'DOCUMENT.JSON', 'document.json/', 'assets\\img0.png',
+      `assets/${'x'.repeat(65)}.png`, 'DOCUMENT.JSON', 'document.json/', 'assets\\img0.png', 'assets/font0.ttf', 'assets/font0.ttc',
     ]
     const results = { ok: 0, error: 0 }
     for (let seed = 1; seed <= 300; seed++) {
@@ -637,7 +647,11 @@ describe('kdr の tar のファズテスト', () => {
       const file = simpleFile(false)
       const entries = Array.from({ length: r.int(0, 5) }, () => {
         const name = r.pick(NAMES)
-        const bytes = name.endsWith('.json') ? JSON.stringify(file) : r.chance(0.8) ? PNG.slice() : new Uint8Array(r.int(0, 2000))
+        const bytes = name.endsWith('.json')
+          ? JSON.stringify(file)
+          : r.chance(0.8)
+            ? name.endsWith('.ttf') ? FONT.slice() : PNG.slice()
+            : new Uint8Array(r.int(0, 2000))
         return { name, bytes }
       })
       try {

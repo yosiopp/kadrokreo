@@ -2,6 +2,7 @@ import { type Bounds, getWorldMatrix } from '../document/geometry.ts'
 import { paintOrder } from '../document/layers.ts'
 import { type TextLinesOf, getPaintedBounds } from '../document/paint.ts'
 import type { Asset, AssetId, DesignDocument, NodeId, Page, Scene } from '../document/types.ts'
+import { embeddedFontsReady } from './fonts.ts'
 import { loadImage } from './images.ts'
 import { renderScene } from './render.ts'
 import { layoutText } from './text.ts'
@@ -80,6 +81,8 @@ export async function renderPng(
   scale: number,
   background: string | null = null,
 ): Promise<Blob> {
+  // 埋め込んだ書体の読み込みが済んでから測って描く
+  await embeddedFontsReady()
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')!
   // テキストの行分けは描画と同じく Canvas で測る（枠からはみ出す行を範囲に含めるため）

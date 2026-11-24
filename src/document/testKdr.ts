@@ -2,7 +2,16 @@
 import { tarParts, type TarEntry } from './tar.ts'
 import type { Asset } from './types.ts'
 
-const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
+const EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'font/ttf': 'ttf',
+  'font/otf': 'otf',
+  'font/woff': 'woff',
+  'font/woff2': 'woff2',
+}
 
 export async function gzipBlob(data: BlobPart | BlobPart[]): Promise<Blob> {
   const parts = Array.isArray(data) ? data : [data]

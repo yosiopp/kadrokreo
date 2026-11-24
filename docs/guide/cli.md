@@ -70,6 +70,7 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | `info` / `ls [ノード] [--all] [--json]` / `get ノード [項目]` / `find 文字列` / `bounds ノード` | 調べる（`get パス d` は形を SVG の path の d で出す） |
 | `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の `document.json` の中身、コンポーネントの一覧。`css` と `html` は `--format html\|react\|css-modules\|tailwind\|vue` で viewer のコードの形式と同じものを出す |
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
+| `font-add 書体ファイル [--family 書体名]` / `font-rm 書体名 [--weight 太さ] [--italic]` | 書体ファイル（TTF / OTF / WOFF）を kdr に埋め込む・外す。書体名・太さ・斜体はファイルから読む（`--family` で書体名を変えられる）。テキストの `fontFamily` に書体名を書くと、その書体で描かれる（`png` も）。再配布できる書体だけを入れる |
 | `add 種類 …` | `rect` `ellipse` `frame` `text`（`--text`）`line`（`--from x,y --to x,y`）`path`（`--points "x,y …" [--closed]` か、曲線を含めるなら SVG の path の `--d "M0 0 C…"`。`M` のまとまりが複数なら穴のあるパス）`image`（`--src 画像`。PNG・JPEG・WebP・GIF、32MB・6,400 万画素まで） |
 | `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`sizing.width=fill`、`maxWidth=320`、`constraints.horizontal=end`、`fill=null` で外す）。`fill` / `stroke` / `shadow` は、単色の塗り・線と最初の影の略記（`shadow.spread=4` で影の広がり）。`blur=8` / `backgroundBlur=8` でレイヤー・背景のぼかし（`null` で外す）、`blendMode=multiply` でノードの描画モード。`cornerRadius=8,8,0,0` で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは `radius=8` で全部の輪郭（穴など 2 つ目以降も）の頂点の角を丸める（頂点ごとなら `radius=8,0,8` と、`get ノード d` の順の通し番号で並べる）。特定の輪郭だけなら `radius.N=8`（`N` は 0 から数えた輪郭の番号で、0 が最初の輪郭。`radius.1=4,0,4,0` のように頂点ごとも可）。破線は `dash=4,2`（線の長さ・間隔。`dash=null` で実線）、破線のずれは `dashOffset=2`、線の角の形は `join=round`（`miter` `round` `bevel`）。端の形は `endCap=arrow`（`none` `round` `square` `arrow` `circle` `diamond`）、印の大きさは `capSize=16`。配列は `fills=[…]` と JSON で書くか、`fills.0.color=#ff0000` のように番号でつなぐ |
 | `gradient [linear\|radial\|conic] ノード… [--colors 色,色@50%,色…] [--stop N=色[@位置],…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r\|rx,ry] [--focus fx,fy] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N \| --add]` | グラデーションの塗りにする（3 色以上、位置は 0〜1 か %。`#ff000000` のような `#rrggbbaa`・`#rgba` の色は最後の桁が色ごとの透明度）。直線は `--angle` か始点・終点（`--from` / `--to`）、円形の `--angle` は楕円を回す角度、`--focus` は焦点（中心からのずれを半径に対する割合で）、角度（conic）は `--center` と `--angle`（最初の色の向き）。`--blend multiply` で塗りの描画モード。ふつうはいちばん上の塗りを置き換え、`--index` で何番目か（0 が一番下）、`--add` で上に重ねる。`--stroke` なら線。`--hidden` でその塗りを隠す。`--colors` を省くと今の色のまま種類や向きだけ変える。`--stop 1=#ff0000` は N 番目（0 が最初、-1 が最後）の色だけを変える（`0=@20%` なら位置だけ。カンマで区切っていくつでも）。種類を省くと今のグラデーションの種類のまま変える。塗り・影を隠すだけなら `set ノード fills.0.visible=false`、内側の影は `set ノード shadow.type=inner-shadow` |
@@ -100,7 +101,9 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 - テキストの大きさ（`ls` の幅など）は、環境で結果が変わらないよう見積もる（英数字はブラウザの sans-serif と同じ字幅の表、全角は 1 文字 1em）。editor で文字を変えれば測り直される
 - `png` は viewer / editor と同じ描画を Node 用の Canvas（[`@napi-rs/canvas`](https://www.npmjs.com/package/@napi-rs/canvas)）で行う。
   任意の依存なので、入っていない環境（`npm install --omit=optional` など）では `png` だけがエラーになる。Docker のイメージには入っている。
-  文字は手元の書体で描く（macOS は Helvetica とヒラギノ、Docker のイメージは Liberation Sans と Noto Sans CJK）ので、ブラウザで書き出したものと文字の細部が少し違うことがある
+  文字は手元の書体で描く（macOS は Helvetica とヒラギノ、Docker のイメージは Liberation Sans と Noto Sans CJK）ので、ブラウザで書き出したものと文字の細部が少し違うことがある。
+  kdr に埋め込んだ書体（`font-add`）は、手元になくてもその書体で描く
+- `ls` などのテキストの大きさの見積もりは、埋め込んだ書体でも同じ見積もりを使う（editor で文字を変えれば、その書体で測り直される）
 
 ## Docker で使う
 

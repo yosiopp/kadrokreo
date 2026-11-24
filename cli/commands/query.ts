@@ -70,7 +70,7 @@ export const info: Command = {
   name: 'info',
   kind: 'query',
   usage: 'info',
-  summary: 'ドキュメントの名前・ページ・画像・コンポーネントの数を出す',
+  summary: 'ドキュメントの名前・ページ・画像・埋め込んだ書体・コンポーネントの数を出す',
   run({ session, print }, step) {
     checkStep(step, { positionals: 0 })
     const doc = pruneAssets(session.document)
@@ -85,6 +85,8 @@ export const info: Command = {
           (page.id === session.page.id ? '  (current)' : ''),
       ),
       `assets: ${Object.keys(doc.assets).length} (${bytes} bytes)`,
+      `fonts: ${doc.fonts.length}`,
+      ...doc.fonts.map((font) => `  ${JSON.stringify(font.family)}  ${font.weight}${font.style === 'italic' ? ' italic' : ''}  ${font.assetId}`),
       `components: ${listComponents(doc).length}`,
     ]
     print(lines.join('\n'))

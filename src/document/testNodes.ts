@@ -114,5 +114,6 @@ export function docOf(scene: Scene): DesignDocument {
     name: 'x',
     pages: [{ id: 'p1', name: 'Page 1', ...scene }],
     assets: { a1: { mime: 'image/png', bytes: new Uint8Array() } },
+    fonts: [],
   }
 }

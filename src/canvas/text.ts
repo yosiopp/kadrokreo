@@ -45,7 +45,7 @@ export function fontMetrics(ctx: CanvasRenderingContext2D, style: FontStyle): { 
 }
 
 // ノードは不変なので、同じオブジェクトなら行分けの結果も同じ
-const layoutCache = new WeakMap<TextStyle, TextLine[]>()
+let layoutCache = new WeakMap<TextStyle, TextLine[]>()
 // 行分けは文字と書体と折り返す幅だけで決まるので、それをキーにしても覚える。インスタンスの写しのテキストは
 // 別のノードでも中身が同じなので、1 回ずつ測らずに済む（large で開くときの行分けが約 19ms → 数 ms）
 const contentCache = new Map<string, TextLine[]>()
@@ -53,6 +53,15 @@ const contentCache = new Map<string, TextLine[]>()
 const CONTENT_CACHE_LIMIT = 20_000
 // 書体の読み込みが済むと測った幅が変わるので、中身で覚えたものは捨てる（ノードで覚えたものは、ノードの大きさと揃えるため残す）
 if (typeof document !== 'undefined') document.fonts?.addEventListener('loadingdone', () => contentCache.clear())
+
+/**
+ * 覚えた行分けを全部捨てる。ドキュメントに埋め込んだ書体が使えるようになったとき（canvas/fonts.ts）に呼ぶ。
+ * 埋め込んだ書体で測って決めたテキストの大きさに、行分けを合わせ直すため
+ */
+export function forgetTextLayout(): void {
+  layoutCache = new WeakMap()
+  contentCache.clear()
+}
 
 /** 描画する行に分ける。折り返す幅（wrapWidth）がなければ改行だけ、あればその幅に収まるよう折り返す */
 export function layoutText(ctx: CanvasRenderingContext2D, style: TextStyle): TextLine[] {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { onEmbeddedFontsChange } from '../canvas/fonts.ts'
 import { onImageLoad } from '../canvas/images.ts'
 import { renderScene } from '../canvas/render.ts'
 import { getNodesBounds, getWorldMatrix } from '../document/geometry.ts'
@@ -21,6 +22,7 @@ export function NodeThumbnail({ scene, assets, nodeId, width, height }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [imageTick, setImageTick] = useState(0)
   useEffect(() => onImageLoad(() => setImageTick((tick) => tick + 1)), [])
+  useEffect(() => onEmbeddedFontsChange(() => setImageTick((tick) => tick + 1)), [])
   useEffect(() => {
     const canvas = ref.current
     const ctx = canvas?.getContext('2d')

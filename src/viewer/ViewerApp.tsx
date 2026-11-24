@@ -3,6 +3,7 @@ import { createCamera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
 import { exportTargets, pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
+import { useEmbeddedFonts } from '../canvas/useEmbeddedFonts.ts'
 import { svgFileName } from '../document/svgExport.ts'
 import { assetBlob } from '../canvas/images.ts'
 import { getAbsoluteBounds, getContentBounds, getNodesBounds } from '../document/geometry.ts'
@@ -35,6 +36,8 @@ const STEP_KEYS: Record<string, [Step, Step] | undefined> = {
 export default function ViewerApp() {
   const [camera] = useState(createCamera)
   const [doc, setDoc] = useState<DesignDocument | null>(null)
+  // kdr に埋め込んだ書体で描く
+  useEmbeddedFonts(doc?.fonts, doc?.assets)
   const [pageId, setPageId] = useState<PageId | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [scale, setScale] = useState(1)

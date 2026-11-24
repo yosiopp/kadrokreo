@@ -178,7 +178,7 @@ export function docs(): string {
     '',
     '## 例が前提にするドキュメント',
     '',
-    '下の「コマンド」の例は、次のコマンドで作った `demo.kdr` があるディレクトリで、そのまま動く（`icon.svg` と `photo.png` は手元の SVG と画像）。',
+    '下の「コマンド」の例は、次のコマンドで作った `demo.kdr` があるディレクトリで、そのまま動く（`icon.svg` と `photo.png` と `font.ttf` は手元の SVG と画像と書体ファイル）。',
     '',
     `${fence}sh`,
     'kdr ' + EXAMPLE_DOCUMENT.join(' \\\n  '),

@@ -15,7 +15,8 @@ import {
   createRect,
   createText,
 } from './nodes.ts'
-import { addAsset, addOrReuseAsset, createPage, updatePage } from './operations/document.ts'
+import { addAsset, addFont, addOrReuseAsset, createPage, removeFont, updatePage } from './operations/document.ts'
+import { testFontBytes } from '../document/testFont.ts'
 import { insertNode, removeNodes } from './operations/tree.ts'
 
 function samplePage(): Page {
@@ -29,7 +30,7 @@ function samplePage(): Page {
 }
 
 function documentOf(...pages: Page[]): DesignDocument {
-  return { name: 'サンプル', pages, assets: {} }
+  return { name: 'サンプル', pages, assets: {}, fonts: [] }
 }
 
 // 1x1 の透明な PNG
@@ -113,7 +114,7 @@ describe('kdr', () => {
   })
 
   it('tar でない中身（v15 までの gzip した JSON など）は読めない', async () => {
-    const json = JSON.stringify(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', children: [] }], assets: {} }))
+    const json = JSON.stringify(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', children: [] }], assets: {}, fonts: [] }))
     await expect(decodeKdr(await gzipBlob(json))).rejects.toThrow(KdrError)
   })
 
@@ -128,7 +129,7 @@ describe('kdr', () => {
     await expect(decodeKdr(file, { maxJsonBytes: 100_000 })).rejects.toThrow('document.json が大きすぎ')
     const image = rawNode({ type: 'image', assetId: 'a1' })
     const big = await kdrBlob(kdrOf([image]), { a1: { mime: 'image/png', bytes: new Uint8Array(200_000) } })
-    await expect(decodeKdr(big, { maxAssetBytes: 100_000 })).rejects.toThrow('画像が大きすぎ')
+    await expect(decodeKdr(big, { maxAssetBytes: 100_000 })).rejects.toThrow('ファイルが大きすぎ')
     expect((await decodeKdr(big)).assets.a1.bytes).toHaveLength(200_000)
   })
 
@@ -161,6 +162,76 @@ describe('kdr', () => {
     const image = createImage({ x: 0, y: 0, width: 1, height: 1 }, 'big')
     const doc = addAsset(documentOf(insertNode(createPage('A'), image)), 'big', { mime: 'image/png', bytes: new Uint8Array(33 * 1024 * 1024) })
     await expect(encodeKdr(doc)).rejects.toThrow('書き出せません')
+  })
+})
+
+describe('kdr の書体', () => {
+  const FONT = { mime: 'font/ttf', bytes: testFontBytes() }
+  const face = { family: 'Kdr Test', weight: 400, style: 'normal' } as const
+  const withFont = (raw: unknown[], assets: Record<string, unknown> = { f1: FONT }) =>
+    parseKdr(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'Page 1', children: [] }], fonts: raw }), assets)
+
+  it('埋め込んだ書体は assets/<sha256>.ttf に入り、往復する。太さ 400・斜体なしは書かない', async () => {
+    let doc = addFont(documentOf(createPage('A')), FONT, face, () => 'x')
+    doc = addFont(doc, { mime: 'font/ttf', bytes: testFontBytes({ weight: 700, italic: true }) }, { ...face, weight: 700, style: 'italic' }, () => 'y')
+    const entries = kdrEntries(doc)
+    const id = sha256Hex(FONT.bytes)
+    expect(entries.map((entry) => entry.name)).toContain(`assets/${id}.ttf`)
+    const json = JSON.parse(new TextDecoder().decode(entries[0].bytes))
+    expect(json.document.fonts[0]).toEqual({ assetId: id, family: 'Kdr Test' })
+    expect(json.document.fonts[1]).toMatchObject({ weight: 700, style: 'italic' })
+    const back = await decodeKdr(await encodeKdr(doc))
+    expect(back.fonts).toEqual(doc.fonts)
+    expect(back.assets[id]).toEqual(FONT)
+  })
+
+  it('書体がなければ fonts を書かず、省けば空として読む', () => {
+    const doc = documentOf(createPage('A'))
+    expect((kdrFile(doc).document as Record<string, unknown>).fonts).toBeUndefined()
+    expect(parseKdr(kdrFile(doc)).fonts).toEqual([])
+  })
+
+  it('書体の項目を検証する', () => {
+    expect(withFont([{ assetId: 'f1', family: 'Kdr Test' }])).toMatchObject({ fonts: [face] })
+    expect(() => withFont([{ assetId: 'f2', family: 'Kdr Test' }])).toThrow('fonts[0].assetId: 書体のファイルがありません')
+    expect(() => withFont([{ assetId: 'f1', family: 'Kdr Test' }], { f1: PNG })).toThrow('書体のファイルではありません')
+    expect(() => withFont([{ assetId: 'f1', family: '' }])).toThrow('fonts[0].family')
+    expect(() => withFont([{ assetId: 'f1', family: ' Kdr' }])).toThrow('fonts[0].family')
+    expect(() => withFont([{ assetId: 'f1', family: 'a, b' }])).toThrow('使えない文字')
+    expect(() => withFont([{ assetId: 'f1', family: 'a"b' }])).toThrow('使えない文字')
+    expect(() => withFont([{ assetId: 'f1', family: 'x'.repeat(201) }])).toThrow('長すぎ')
+    expect(() => withFont([{ assetId: 'f1', family: 'K', weight: 450 }])).toThrow('fonts[0].weight')
+    expect(() => withFont([{ assetId: 'f1', family: 'K', style: 'oblique' }])).toThrow('fonts[0].style')
+    expect(() => withFont([{ assetId: 'f1', family: 'K' }, { assetId: 'f1', family: 'K', weight: 400 }])).toThrow('同じ書体名')
+    expect(withFont([{ assetId: 'f1', family: 'K' }, { assetId: 'f1', family: 'K', style: 'italic' }]).fonts).toHaveLength(2)
+    expect(() => withFont({} as unknown as unknown[])).toThrow('document.fonts: 配列ではありません')
+  })
+
+  it('書体のファイルは先頭が拡張子どおりの書体であること。画像のノードは書体のファイルを指せない', async () => {
+    expect(() => withFont([{ assetId: 'f1', family: 'K' }], { f1: { mime: 'font/ttf', bytes: PNG.bytes } })).toThrow('assets.f1: 書体のファイルとして読めません')
+    expect(() => withFont([{ assetId: 'f1', family: 'K' }], { f1: { mime: 'font/otf', bytes: FONT.bytes } })).toThrow('書体のファイルとして読めません')
+    expect(() => parseOne(rawNode({ type: 'image', assetId: 'f1' }), { f1: FONT })).toThrow('画像データがありません')
+    const json = JSON.stringify(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', children: [] }], fonts: [{ assetId: 'f1', family: 'K' }] }))
+    const ok = await tarGz([{ name: 'document.json', bytes: json }, { name: 'assets/f1.ttf', bytes: FONT.bytes }])
+    expect((await decodeKdr(ok)).assets.f1).toEqual(FONT)
+    const unknown = await tarGz([{ name: 'document.json', bytes: json }, { name: 'assets/f1.ttc', bytes: FONT.bytes }])
+    await expect(decodeKdr(unknown)).rejects.toThrow('知らないファイル')
+  })
+
+  it('どの書体からも使われていない書体のファイルは捨てる。外した書体のファイルは書き出さない', async () => {
+    expect(Object.keys(withFont([], { f1: FONT }).assets)).toEqual([])
+    const doc = addFont(documentOf(createPage('A')), FONT, face, () => 'x')
+    const removed = removeFont(doc, face)
+    expect(removed.fonts).toEqual([])
+    expect(kdrEntries(removed).map((entry) => entry.name)).toEqual(['document.json'])
+  })
+
+  it('同じ書体名・太さ・斜体の書体を足すとファイルを差し替え、同じファイルなら何もしない', () => {
+    const doc = addFont(documentOf(createPage('A')), FONT, face, () => 'x')
+    expect(addFont(doc, { ...FONT }, face, () => 'y')).toBe(doc)
+    const other = { mime: 'font/ttf', bytes: testFontBytes({ family: 'Other' }) }
+    const replaced = addFont(doc, other, face, () => 'y')
+    expect(replaced.fonts).toEqual([{ ...face, assetId: sha256Hex(other.bytes) }])
   })
 })
 
@@ -821,7 +892,7 @@ describe('parseKdr', () => {
     expect(roundTrip({ ...image, scale: 3 }, { a1: PNG })).toMatchObject({ scale: 3 })
     expect(() => parseOne({ ...image, positionX: 1.5 }, { a1: PNG })).toThrow('positionX')
     expect(() => parseOne(image, {})).toThrow('画像データ')
-    expect(() => parseOne(image, { a1: { ...PNG, mime: 'image/svg+xml' } })).toThrow('画像形式')
+    expect(() => parseOne(image, { a1: { ...PNG, mime: 'image/svg+xml' } })).toThrow('ファイル形式')
     expect(() => parseOne(image, { a1: { mime: 'image/png', data: 'iVBORw0K' } })).toThrow('バイト列')
     expect(() => parseOne(image, { a1: { mime: 'image/png', bytes: [1, 2, 3] } })).toThrow('バイト列')
     expect(() => parseOne(image, { a1: null })).toThrow('assets.a1')

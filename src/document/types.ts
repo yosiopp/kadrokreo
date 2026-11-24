@@ -486,10 +486,25 @@ export type SceneNode =
   | ImageNode
 
 /**
- * 埋め込みファイル（画像の元のファイルそのもの）。id は中身の SHA-256（document/sha256.ts）。
- * kdr では tar の assets/<id>.<拡張子> に入る。メモリ上も自動保存（IndexedDB）でもバイト列のまま持つ（base64 にしない）
+ * 埋め込みファイル（画像か書体の元のファイルそのもの）。id は中身の SHA-256（document/sha256.ts）。
+ * kdr では tar の assets/<id>.<拡張子> に入る。メモリ上も自動保存（IndexedDB）でもバイト列のまま持つ（base64 にしない）。
+ * 画像のノード（と上書き）は画像の mime のものだけを、埋め込んだ書体（EmbeddedFont）は書体の mime のものだけを指す
  */
 export type Asset = { mime: string; bytes: Uint8Array<ArrayBuffer> }
+
+/**
+ * ドキュメントに埋め込んだ書体。テキストの書体名（fontFamily）の先頭が family と同じなら、OS やブラウザの書体より先にこれで描く。
+ * family・weight・style は書体ファイルの name / OS/2 の表から読んだ値（document/fontFile.ts）。
+ * 同じ family・weight・style の組は 1 つだけ。再配布できる書体（SIL Open Font License など）だけを入れる前提で、ファイルは手を加えずに持つ
+ */
+export type EmbeddedFont = {
+  /** 書体ファイル。ドキュメントの assets にある書体の mime のもの */
+  assetId: AssetId
+  family: string
+  /** 100〜900 の 100 刻み */
+  weight: number
+  style: 'normal' | 'italic'
+}
 
 /** 1 ページ分のノードの木 */
 export type Scene = {
@@ -507,4 +522,6 @@ export type DesignDocument = {
   pages: Page[]
   /** 全ページで共有する */
   assets: Record<AssetId, Asset>
+  /** 埋め込んだ書体。全ページで共有する。並びは取り込んだ順 */
+  fonts: EmbeddedFont[]
 }

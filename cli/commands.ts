@@ -29,6 +29,7 @@ import { mv, order, rm, set } from './commands/edit.ts'
 import { boolean, flatten, join, mask, outlineStroke, split } from './commands/paths.ts'
 import { gradient } from './commands/paints.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
+import { fontAdd, fontRm } from './commands/fonts.ts'
 import { css, html, json, png, svgOut } from './commands/output.ts'
 import { docName, newDocument, page, pageAdd, pageRename, pageRm } from './commands/pages.ts'
 import { bounds, componentList, find, get, info, ls } from './commands/query.ts'
@@ -59,6 +60,8 @@ const commands: Command[] = [
   pageAdd,
   pageRename,
   pageRm,
+  fontAdd,
+  fontRm,
   // edit: ノード
   add,
   svg,

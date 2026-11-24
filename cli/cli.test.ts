@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { KDR_VERSION, decodeKdr, readKdrArchive } from '../src/document/kdr.ts'
 import type { DesignDocument, FrameNode, PathNode, RectNode, TextNode } from '../src/document/types.ts'
 import { type IO, run } from './run.ts'
+import { testFontBytes, toWoff } from '../src/document/testFont.ts'
 
 /** メモリ上のファイルで run を動かす */
 function harness(files: Record<string, Uint8Array> = {}, options: { stdin?: Uint8Array; tty?: boolean } = {}) {
@@ -172,6 +173,35 @@ describe('kadrokreo CLI', () => {
     expect(await h.run(['new', '+', 'add', 'image', '--src', 'big.png', '-o', 'b.kdr'])).not.toBe(0)
     expect(h.stderr).toContain('画像が大きすぎます')
     expect(await h.run(['new', '+', 'add', 'image', '--src', 'ok.png', '-o', 'c.kdr'])).toBe(0)
+  })
+
+  it('font-add で書体を埋め込み、info に出し、font-rm で外す。書体でないファイルはエラー', async () => {
+    const h = harness({
+      'a.ttf': testFontBytes({ family: 'Kdr Test' }),
+      'b.ttf': testFontBytes({ family: 'Kdr Test', weight: 700, italic: true }),
+      'c.woff': await toWoff(testFontBytes({ family: 'Woff Face' })),
+      'x.ttf': new Uint8Array(100),
+    })
+    expect(await h.run(['new', '+', 'font-add', 'a.ttf', '+', 'font-add', 'b.ttf', '+', 'font-add', 'c.woff', '--family', 'Brand', '-o', 'f.kdr'])).toBe(0)
+    expect(h.stderr).toContain('書体を埋め込みました: Kdr Test（太さ 700・斜体）。テキストで使うには fontFamily="Kdr Test"')
+    const doc = await h.doc('f.kdr')
+    expect(doc.fonts.map(({ family, weight, style }) => [family, weight, style])).toEqual([
+      ['Kdr Test', 400, 'normal'],
+      ['Kdr Test', 700, 'italic'],
+      ['Brand', 400, 'normal'],
+    ])
+    expect(doc.assets[doc.fonts[2].assetId].mime).toBe('font/woff')
+    expect(await h.run(['-f', 'f.kdr', 'info'])).toBe(0)
+    expect(h.stdout).toContain('fonts: 3\n  "Kdr Test"  400  ')
+    expect(h.stdout).toContain('"Kdr Test"  700 italic  ')
+    expect(await h.run(['-f', 'f.kdr', 'font-rm', 'Kdr Test', '--weight', '700', '--italic', '-o', 'g.kdr'])).toBe(0)
+    expect((await h.doc('g.kdr')).fonts.map((font) => font.family)).toEqual(['Kdr Test', 'Brand'])
+    expect(await h.run(['-f', 'f.kdr', 'font-rm', 'Kdr Test', '-o', 'h.kdr'])).toBe(0)
+    expect((await h.doc('h.kdr')).fonts.map((font) => font.family)).toEqual(['Brand'])
+    expect(await h.run(['-f', 'f.kdr', 'font-rm', 'Nope'])).toBe(2)
+    expect(await h.run(['new', '+', 'font-add', 'x.ttf'])).toBe(2)
+    expect(h.stderr).toContain('x.ttf: TTF / OTF / WOFF の書体ファイルとして読めません')
+    expect(await h.run(['new', '+', 'font-add', 'a.ttf', '--family', 'a,b'])).toBe(2)
   })
 
   it('破線のずれと線の角の形を set で変え、保存して読み直しても残る。不正な値はエラー', async () => {

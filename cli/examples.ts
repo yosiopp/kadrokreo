@@ -1,5 +1,5 @@
 // kdr help コマンド・kdr docs に出す例。コマンドの名前ごとに並べる。
-// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と icon.svg・photo.png）がある場所で、そのまま動く。
+// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と icon.svg・photo.png・font.ttf）がある場所で、そのまま動く。
 // cli/help.test.ts が、すべてのコマンドに例があること・すべての例が終了コード 0 で動くことを確かめる。
 // パイプやリダイレクト（| > <）は使わない（1 回の kdr の実行で完結させる）。
 
@@ -63,6 +63,11 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   'page-add': ['kdr -f demo.kdr -w page-add Icons --id icons + add rect --name Square'],
   'page-rename': ['kdr -f demo.kdr -w page-rename Home'],
   'page-rm': ['kdr -f demo.kdr -w page-add Draft + page-rm Draft'],
+  'font-add': [
+    'kdr -f demo.kdr -w font-add font.ttf + set btn/Label fontFamily="Kdr Test"   # 書体名はファイルから読む',
+    'kdr -f demo.kdr -w font-add font.ttf --family Brand',
+  ],
+  'font-rm': ['kdr -f demo.kdr -w font-add font.ttf + font-rm "Kdr Test"'],
   add: [
     'kdr -f demo.kdr -w add rect --name Badge --parent card --x 16 --y 120 --width 40 --height 20 fill=#ff0000 cornerRadius=10',
     'kdr -f demo.kdr -w add text --parent card --x 16 --y 160 --text "こんにちは" fontSize=18 fill=#333333',

@@ -8,6 +8,7 @@ import type {
   ComponentProperty,
   DesignDocument,
   Effect,
+  EmbeddedFont,
   NodeId,
   Override,
   Page,
@@ -21,11 +22,13 @@ import type {
   Constraint,
 } from './types.ts'
 import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from './imageInfo.ts'
+import { EMBEDDED_FAMILY_FORBIDDEN, FONT_EXTENSIONS, FONT_MIME_TYPES, MAX_EMBEDDED_FAMILY_LENGTH, fontMime } from './fontFile.ts'
 import { TarError, readTar, type TarEntry } from './tar.ts'
 
 // kdr ファイルの実体は、次のファイルを tar にまとめて gzip で圧縮した 1 つのファイル（中身は `tar xzf` で取り出せる）:
-//   document.json              { format: 'kadrokreo', version: 16, document: { name, pages: [{ id, name, children: [ノード, …] }] } }
+//   document.json              { format: 'kadrokreo', version: 16, document: { name, pages: [{ id, name, children: [ノード, …] }], fonts?: [書体, …] } }
 //   assets/<id>.<png|jpg|webp|gif>   画像の元のファイルそのまま。id は中身の SHA-256（16 進 64 文字）
+//   assets/<id>.<ttf|otf|woff|woff2> 埋め込んだ書体の元のファイルそのまま（document.fonts の assetId が指す）
 // ノードは木のまま入れ子で持ち（フレームの children にノードそのものが入る）、親の id は書かない。
 // 既定値（DEFAULTS）と同じ項目は書かず、読むときに補う。だから、既定値を持つ項目を足すだけなら
 // 古いファイルもそのまま読める（version を上げなくてよい）。読み込みは今の version だけに対応する。
@@ -43,7 +46,9 @@ export const KDR_DOCUMENT_NAME = 'document.json'
 
 /** 画像の種類と、kdr の中のファイルの拡張子 */
 const IMAGE_EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
-const ASSET_NAME_PATTERN = /^assets\/([A-Za-z0-9_-]{1,64})\.(png|jpg|webp|gif)$/
+/** 埋め込みファイル（画像と書体）の種類と拡張子 */
+const ASSET_EXTENSIONS: Record<string, string> = { ...IMAGE_EXTENSIONS, ...FONT_EXTENSIONS }
+const ASSET_NAME_PATTERN = /^assets\/([A-Za-z0-9_-]{1,64})\.(png|jpg|webp|gif|ttf|otf|woff|woff2)$/
 
 // 細工された圧縮ファイルでメモリを食い潰されないよう、展開した大きさに上限を設ける
 /** 展開した tar 全体の上限 */
@@ -52,8 +57,10 @@ export const KDR_MAX_BYTES = 256 * 1024 * 1024
 export const KDR_MAX_JSON_BYTES = 64 * 1024 * 1024
 /** 画像 1 枚の上限（取り込める画像の大きさもこれに揃える） */
 export const KDR_MAX_ASSET_BYTES = 32 * 1024 * 1024
-/** 画像の数の上限 */
+/** 画像の数の上限（書体のファイルも数える） */
 export const KDR_MAX_ASSETS = 10_000
+/** 埋め込める書体の数の上限 */
+export const KDR_MAX_FONTS = 1_000
 
 export type KdrLimits = { maxBytes?: number; maxJsonBytes?: number; maxAssetBytes?: number }
 
@@ -61,10 +68,10 @@ export class KdrError extends Error {
   override name = 'KdrError'
 }
 
-/** kdr の中の画像のファイル名 */
+/** kdr の中の画像・書体のファイル名 */
 export function assetFileName(id: AssetId, asset: Asset): string {
-  const extension = IMAGE_EXTENSIONS[asset.mime]
-  if (extension === undefined) throw new KdrError(`assets.${id}: 未対応の画像形式です`)
+  const extension = ASSET_EXTENSIONS[asset.mime]
+  if (extension === undefined) throw new KdrError(`assets.${id}: 未対応のファイル形式です`)
   return `assets/${id}.${extension}`
 }
 
@@ -111,10 +118,10 @@ export async function readKdrArchive(
     }
     const match = ASSET_NAME_PATTERN.exec(name)
     if (match === null || match[1] === '__proto__') throw new KdrError(`kdr の中に知らないファイルがあります: ${name.slice(0, 120)}`)
-    if (ids.has(match[1])) throw new KdrError(`kdr の中に同じ id の画像が 2 つあります: ${match[1]}`)
+    if (ids.has(match[1])) throw new KdrError(`kdr の中に同じ id のファイルが 2 つあります: ${match[1]}`)
     ids.add(match[1])
     if (ids.size > KDR_MAX_ASSETS) throw new KdrError('kdr の中の画像が多すぎます')
-    if (size > maxAssetBytes) throw new KdrError(`${name}: 画像が大きすぎます`)
+    if (size > maxAssetBytes) throw new KdrError(`${name}: ファイルが大きすぎます`)
   }
 
   let entries: TarEntry[]
@@ -140,7 +147,7 @@ export async function readKdrArchive(
       continue
     }
     const [, id, extension] = ASSET_NAME_PATTERN.exec(entry.name)!
-    const mime = Object.keys(IMAGE_EXTENSIONS).find((key) => IMAGE_EXTENSIONS[key] === extension)!
+    const mime = Object.keys(ASSET_EXTENSIONS).find((key) => ASSET_EXTENSIONS[key] === extension)!
     assets[id] = { mime, bytes: entry.bytes }
   }
   if (document === undefined) throw new KdrError(`kdr の中に ${KDR_DOCUMENT_NAME} がありません`)
@@ -148,8 +155,8 @@ export async function readKdrArchive(
 }
 
 /**
- * 展開済みの JSON（document.json の中身）と画像を検証し、既知のフィールドだけを持つドキュメントに組み直す。
- * 画像はノードや上書きから使われているものだけを残す（使われていない画像は捨てる）
+ * 展開済みの JSON（document.json の中身）と画像・書体のファイルを検証し、既知のフィールドだけを持つドキュメントに組み直す。
+ * 画像はノードや上書きから、書体のファイルは document.fonts から使われているものだけを残す（使われていないものは捨てる）
  */
 export function parseKdr(value: unknown, files: Record<AssetId, unknown> = {}): DesignDocument {
   const file = record(value, 'ファイル')
@@ -178,9 +185,45 @@ export function parseKdr(value: unknown, files: Record<AssetId, unknown> = {}): 
     throw new KdrError('document.pages: ページの id が重複しています')
   }
 
+  const fonts = doc.fonts === undefined ? [] : parseFonts(doc.fonts, 'document.fonts', context)
+
   const used: Record<AssetId, Asset> = {}
   for (const id of context.used) used[id] = assets[id]
-  return { name: string(doc.name, 'document.name'), pages, assets: used }
+  return { name: string(doc.name, 'document.name'), pages, assets: used, fonts }
+}
+
+/** 埋め込んだ書体の並び。書体のファイルがあること、同じ書体名・太さ・斜体の組が 2 つないことを確かめる */
+function parseFonts(value: unknown, path: string, assets: AssetContext): EmbeddedFont[] {
+  const list = array(value, path)
+  if (list.length > KDR_MAX_FONTS) throw new KdrError(`${path}: 書体が多すぎます（${KDR_MAX_FONTS} 個まで）`)
+  const seen = new Set<string>()
+  return list.map((rawFont, i) => {
+    const at = (key: string) => `${path}[${i}].${key}`
+    const raw = record(rawFont, `${path}[${i}]`)
+    const assetId = nodeId(raw.assetId, at('assetId'))
+    const asset = Object.hasOwn(assets.assets, assetId) ? assets.assets[assetId] : undefined
+    if (asset === undefined) throw new KdrError(`${at('assetId')}: 書体のファイルがありません`)
+    if (!FONT_MIME_TYPES.includes(asset.mime)) throw new KdrError(`${at('assetId')}: 書体のファイルではありません`)
+    const font: EmbeddedFont = {
+      assetId,
+      family: embeddedFamily(raw.family, at('family')),
+      weight: raw.weight === undefined ? 400 : fontWeight(raw.weight, at('weight')),
+      style: raw.style === undefined ? 'normal' : oneOf(raw.style, ['normal', 'italic'] as const, at('style')),
+    }
+    const key = `${font.family}\u0000${font.weight}\u0000${font.style}`
+    if (seen.has(key)) throw new KdrError(`${path}[${i}]: 同じ書体名・太さ・斜体の書体が 2 つあります`)
+    seen.add(key)
+    assets.used.add(assetId)
+    return font
+  })
+}
+
+function embeddedFamily(value: unknown, path: string): string {
+  const text = string(value, path)
+  if (text.trim() === '' || text !== text.trim()) throw new KdrError(`${path}: 書体名が空か、前後に空白があります`)
+  if (text.length > MAX_EMBEDDED_FAMILY_LENGTH) throw new KdrError(`${path}: 書体名が長すぎます（${MAX_EMBEDDED_FAMILY_LENGTH} 文字まで）`)
+  if (EMBEDDED_FAMILY_FORBIDDEN.test(text)) throw new KdrError(`${path}: 書体名に使えない文字があります`)
+  return text
 }
 
 /**
@@ -188,6 +231,11 @@ export function parseKdr(value: unknown, files: Record<AssetId, unknown> = {}): 
  * （読み終えてからページの全部のノードを辿り直すと、large で約 2ms かかった）
  */
 type AssetContext = { assets: Record<AssetId, Asset>; used: Set<AssetId> }
+
+/** 画像のノードと上書きが指せるのは画像のファイルだけ（書体のファイルは指せない） */
+function isImageAsset(assets: AssetContext, id: AssetId): boolean {
+  return Object.hasOwn(assets.assets, id) && IMAGE_MIME_TYPES.includes(assets.assets[id].mime)
+}
 
 function parsePage(value: unknown, path: string, assets: AssetContext): Page {
   const raw = record(value, path)
@@ -220,13 +268,19 @@ function parseChildren(
   })
 }
 
-/** 画像の形式と中身（バイト列）。自動保存から読んだものなど、どこから来たものでも同じように確かめる */
+/** 画像・書体の形式と中身（バイト列）。自動保存から読んだものなど、どこから来たものでも同じように確かめる */
 function parseAsset(value: unknown, path: string): Asset {
   const raw = record(value, path)
   const mime = string(raw.mime, `${path}.mime`)
-  if (!IMAGE_MIME_TYPES.includes(mime)) throw new KdrError(`${path}.mime: 未対応の画像形式です`)
+  const font = FONT_MIME_TYPES.includes(mime)
+  if (!font && !IMAGE_MIME_TYPES.includes(mime)) throw new KdrError(`${path}.mime: 未対応のファイル形式です`)
   if (!(raw.bytes instanceof Uint8Array) || !(raw.bytes.buffer instanceof ArrayBuffer)) {
     throw new KdrError(`${path}.bytes: バイト列ではありません`)
+  }
+  // 書体は、先頭が拡張子どおりの書体ファイルであることだけを確かめる（中身の検査は描くときにブラウザや Canvas がする）
+  if (font) {
+    if (fontMime(raw.bytes) !== mime) throw new KdrError(`${path}: 書体のファイルとして読めません`)
+    return { mime, bytes: raw.bytes as Uint8Array<ArrayBuffer> }
   }
   // 見出しの大きさが読める画像は、デコードする前に画素数を確かめる（読めない画像はデコードしないので描かれない。canvas/images.ts）
   const info = readImageInfo(raw.bytes)
@@ -422,7 +476,7 @@ function parseNode(
       }
     case 'image': {
       const assetId = nodeId(raw.assetId, at('assetId'))
-      if (!Object.hasOwn(assets.assets, assetId)) throw new KdrError(`${at('assetId')}: 画像データがありません`)
+      if (!isImageAsset(assets, assetId)) throw new KdrError(`${at('assetId')}: 画像データがありません`)
       assets.used.add(assetId)
       return {
         ...base,
@@ -588,7 +642,7 @@ function parseOverrides(value: unknown, path: string, assets: AssetContext): Rec
     if (Object.hasOwn(raw, 'assetId')) {
       override.assetId = nodeId(raw.assetId, at('assetId'))
       // 画像を差し替える上書きも、ファイルの中の画像を指していなければならない
-      if (!Object.hasOwn(assets.assets, override.assetId)) throw new KdrError(`${at('assetId')}: 上書きの画像データがありません`)
+      if (!isImageAsset(assets, override.assetId)) throw new KdrError(`${at('assetId')}: 上書きの画像データがありません`)
       assets.used.add(override.assetId)
     }
     // 差し替え先のコンポーネントは、なくても読める（インスタンスの元がないときと同じく、同期で無視される）
@@ -768,15 +822,29 @@ function fontWeight(value: unknown, path: string): number {
 
 /**
  * kdr の document.json の中身（JSON にするもの）。ノードを入れ子の木にし、既定値と同じ項目を省く。
- * 画像は入らない（tar の assets/ に別のファイルとして入れる。editor/exportKdr.ts）
+ * 画像と書体のファイルは入らない（tar の assets/ に別のファイルとして入れる。editor/exportKdr.ts）。
+ * 埋め込んだ書体の並び（fonts）は、空なら書かない。太さ 400・斜体なしも書かない
  */
-export function kdrFile(doc: Pick<DesignDocument, 'name' | 'pages'>): { format: string; version: number; document: unknown } {
+export function kdrFile(
+  doc: Pick<DesignDocument, 'name' | 'pages'> & { fonts?: readonly EmbeddedFont[] },
+): { format: string; version: number; document: unknown } {
+  const fonts = doc.fonts ?? []
   return {
     format: KDR_FORMAT,
     version: KDR_VERSION,
     document: {
       name: doc.name,
       pages: doc.pages.map((page) => ({ id: page.id, name: page.name, children: page.rootIds.map((id) => nodeFile(page, id)) })),
+      ...(fonts.length === 0
+        ? {}
+        : {
+            fonts: fonts.map(({ assetId, family, weight, style }) => ({
+              assetId,
+              family,
+              ...(weight === 400 ? {} : { weight }),
+              ...(style === 'normal' ? {} : { style }),
+            })),
+          }),
     },
   }
 }

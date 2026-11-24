@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { COMMANDS } from './commands.ts'
 import { EXAMPLES, EXAMPLE_DOCUMENT, splitExample } from './examples.ts'
 import { type IO, run } from './run.ts'
+import { testFontBytes } from '../src/document/testFont.ts'
 
 // kdr help / kdr コマンド --help / kdr docs。どれもコマンドの定義から作るので、食い違いがないことと、例がそのまま動くことを確かめる
 
@@ -58,6 +59,7 @@ async function exampleFiles(): Promise<Map<string, Uint8Array>> {
     ['demo.kdr', h.fs.get('demo.kdr')!],
     ['photo.png', PNG],
     ['icon.svg', SVG],
+    ['font.ttf', testFontBytes()],
   ])
 }
 

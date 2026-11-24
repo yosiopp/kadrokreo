@@ -1,6 +1,6 @@
 import { getWorldCenter, getWorldRotation, poseInParent } from '../../document/geometry.ts'
 import { sha256Hex } from '../../document/sha256.ts'
-import type { Asset, AssetId, DesignDocument, NodeId, Page, PageId } from '../../document/types.ts'
+import type { Asset, AssetId, DesignDocument, EmbeddedFont, NodeId, Page, PageId } from '../../document/types.ts'
 import { createId } from '../nodes.ts'
 import { type Fragment, copyFragment, pasteFragment } from './clipboard.ts'
 import { collectSubtrees, removeNodes, sortByDocumentOrder, topLevelIds } from './tree.ts'
@@ -12,7 +12,7 @@ export function createPage(name = 'Page 1'): Page {
 }
 
 export function createDocument(name = 'Untitled'): DesignDocument {
-  return { name, pages: [createPage()], assets: {} }
+  return { name, pages: [createPage()], assets: {}, fonts: [] }
 }
 
 export function renameDocument(doc: DesignDocument, name: string): DesignDocument {
@@ -104,6 +104,35 @@ export function addOrReuseAsset(
   return { document: addAsset(doc, assetId, asset), assetId }
 }
 
+/** 同じ書体（書体名・太さ・斜体の組）か */
+function sameFace(a: Omit<EmbeddedFont, 'assetId'>, b: Omit<EmbeddedFont, 'assetId'>): boolean {
+  return a.family === b.family && a.weight === b.weight && a.style === b.style
+}
+
+/**
+ * 書体を埋め込む。同じ書体名・太さ・斜体の書体がもうあれば、そのファイルを差し替える（並びの位置はそのまま）。
+ * 同じファイルの同じ書体なら何もしない（同じ参照を返す）
+ */
+export function addFont(
+  doc: DesignDocument,
+  asset: Asset,
+  face: Omit<EmbeddedFont, 'assetId'>,
+  newId: () => AssetId,
+): DesignDocument {
+  const { document, assetId } = addOrReuseAsset(doc, asset, newId)
+  const font: EmbeddedFont = { assetId, ...face }
+  const index = document.fonts.findIndex((other) => sameFace(other, face))
+  if (index === -1) return { ...document, fonts: [...document.fonts, font] }
+  if (document.fonts[index].assetId === assetId) return document
+  return { ...document, fonts: document.fonts.map((other, i) => (i === index ? font : other)) }
+}
+
+/** 埋め込んだ書体を外す（ファイルは保存・書き出しのときに pruneAssets が除く。Undo で戻せるよう、ここでは残す） */
+export function removeFont(doc: DesignDocument, face: Omit<EmbeddedFont, 'assetId'>): DesignDocument {
+  const fonts = doc.fonts.filter((font) => !sameFace(font, face))
+  return fonts.length === doc.fonts.length ? doc : { ...doc, fonts }
+}
+
 /** どのノードからも使われていないアセットを除く。保存や書き出しの前に呼ぶ */
 export function pruneAssets(doc: DesignDocument): DesignDocument {
   const used = new Set<AssetId>()
@@ -118,6 +147,8 @@ export function pruneAssets(doc: DesignDocument): DesignDocument {
       }
     }
   }
+  // 埋め込んだ書体のファイルも残す
+  for (const font of doc.fonts) used.add(font.assetId)
   const ids = Object.keys(doc.assets)
   if (ids.every((id) => used.has(id))) return doc
   return { ...doc, assets: Object.fromEntries(ids.filter((id) => used.has(id)).map((id) => [id, doc.assets[id]])) }

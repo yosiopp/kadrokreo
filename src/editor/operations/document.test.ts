@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sha256Hex } from '../../document/sha256.ts'
+import type { DesignDocument } from '../../document/types.ts'
 import { createFrame, createImage, createRect } from '../nodes.ts'
 import { copyFragment } from './clipboard.ts'
 import {
@@ -95,7 +96,7 @@ describe('assets', () => {
 describe('ページ', () => {
   function three() {
     const pages = ['A', 'B', 'C'].map((name) => createPage(name))
-    const doc = { name: 'doc', pages, assets: {} }
+    const doc: DesignDocument = { name: 'doc', pages, assets: {}, fonts: [] }
     const names = (d: typeof doc) => d.pages.map((page) => page.name).join('')
     return { doc, ids: pages.map((page) => page.id), names }
   }

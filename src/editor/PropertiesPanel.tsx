@@ -11,7 +11,9 @@ import type { PanelContext } from './properties/context.ts'
 import { ExportSection } from './properties/fields.tsx'
 import { FrameSections } from './properties/FrameSections.tsx'
 import { BooleanSection, MaskSection } from './properties/MaskSection.tsx'
+import { FontsSection } from './properties/FontsSection.tsx'
 import { TextSection } from './properties/TextSection.tsx'
+import type { EmbeddedFont } from '../document/types.ts'
 import type { EditorState, EditorStore } from './store.ts'
 
 // 節ごとの中身は properties/ にある。ここは選択から PanelContext を作り、節を並べるだけ
@@ -27,6 +29,10 @@ type Props = {
   onCopySvg: () => Promise<boolean>
   /** 選んでいる画像を、選んだファイルの画像に差し替える */
   onReplaceImage: (file: File) => void
+  /** 書体ファイルを kdr に埋め込む。最後に取り込めた書体の、テキストの書体名に書く値を返す */
+  onAddFonts: (files: File[]) => Promise<string | null>
+  /** 埋め込んだ書体を外す */
+  onRemoveFont: (font: EmbeddedFont) => void
 }
 
 const SHORTCUTS = [
@@ -40,7 +46,7 @@ const SHORTCUTS = [
   ['] / [', '最前面 / 最背面へ'],
 ]
 
-export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopySvg, onReplaceImage }: Props) {
+export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopySvg, onReplaceImage, onAddFonts, onRemoveFont }: Props) {
   const { page, selection } = state
   const nodes = selection.map((id) => page.nodes[id])
 
@@ -58,6 +64,7 @@ export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopy
             </div>
           ))}
         </dl>
+        <FontsSection fonts={state.document.fonts} onAddFonts={onAddFonts} onRemoveFont={onRemoveFont} />
         <ExportSection label="このページを PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
       </aside>
     )
@@ -90,7 +97,7 @@ export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopy
       <BooleanSection ctx={ctx} />
       <AppearanceSections ctx={ctx} onReplaceImage={onReplaceImage} />
       <FrameSections ctx={ctx} />
-      <TextSection ctx={ctx} />
+      <TextSection ctx={ctx} onAddFonts={onAddFonts} />
       <ExportSection label="PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
     </aside>
   )

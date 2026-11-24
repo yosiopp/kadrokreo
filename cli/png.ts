@@ -1,4 +1,4 @@
-import { type Asset, type AssetId, type NodeId, type Scene } from '../src/document/types.ts'
+import { type Asset, type AssetId, type EmbeddedFont, type NodeId, type Scene } from '../src/document/types.ts'
 import { drawPng, loadSceneImages, pngArea } from '../src/canvas/exportPng.ts'
 import { fontMetrics, layoutText } from '../src/canvas/text.ts'
 import type { SvgTextMetrics } from '../src/document/svgExport.ts'
@@ -85,9 +85,25 @@ function addFontFallback(napi: NapiCanvas): void {
   })
 }
 
+/** 登録した埋め込みの書体（書体のファイルと書体名）。同じ実行の中では、一度登録すれば次の書き出しでも使える */
+const registeredFonts = new Set<string>()
+
+/**
+ * kdr に埋め込んだ書体を Skia に登録する（ブラウザの FontFace に当たる）。書体名は family にし、太さと斜体は書体ファイルのもの
+ * （kdr の weight・style もファイルから読んだ値なので揃う）。登録できない（壊れた）書体は飛ばし、OS の書体で描く
+ */
+function registerEmbeddedFonts(napi: NapiCanvas, fonts: readonly EmbeddedFont[], assets: Record<AssetId, Asset>): void {
+  for (const font of fonts) {
+    const key = `${font.assetId}\u0000${font.family}`
+    if (registeredFonts.has(key) || !Object.hasOwn(assets, font.assetId)) continue
+    registeredFonts.add(key)
+    napi.GlobalFonts.register(Buffer.from(assets[font.assetId].bytes), font.family)
+  }
+}
+
 /**
  * targets を PNG のバイト列にする。範囲・倍率・上限・画像の待ち方は viewer / editor の renderPng と同じ（canvas/exportPng.ts を共有）。
- * targets は重なり順に並べ、親子を一緒に含めないこと。
+ * targets は重なり順に並べ、親子を一緒に含めないこと。fonts はドキュメントに埋め込んだ書体（描く前に登録する）
  */
 export async function encodePng(
   scene: Scene,
@@ -95,8 +111,10 @@ export async function encodePng(
   targets: readonly NodeId[],
   scale: number,
   background: string | null = null,
+  fonts: readonly EmbeddedFont[] = [],
 ): Promise<Uint8Array> {
   const napi = await canvasModule()
+  registerEmbeddedFonts(napi, fonts, assets)
   // テキストの行分けは描画と同じ Canvas で測る（枠からはみ出す行を範囲に含めるため）
   const measure = napi.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
   const area = pngArea(scene, targets, scale, (node) => layoutText(measure, node))

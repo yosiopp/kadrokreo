@@ -1,8 +1,11 @@
+import { fontFamilyValue } from '../../document/fontFile.ts'
 import type { TextNode } from '../../document/types.ts'
+import { OpenFileButton } from '../../ui/OpenFile.tsx'
 import { FONT_WEIGHT_LABELS, optionsOf } from '../../ui/labels.ts'
 import { TextAlignIcon } from '../icons.tsx'
 import { type PanelContext, textsIn, MIXED, common, mapValue } from './context.ts'
 import { NumberField, OverrideMark, Section, SelectField } from './fields.tsx'
+import { FONT_ACCEPT } from '../importFont.ts'
 
 const FONT_FAMILIES = [
   { value: 'sans-serif', label: 'ゴシック体' },
@@ -17,7 +20,7 @@ const TEXT_ALIGNMENTS: { value: TextNode['textAlign']; label: string }[] = [
 ]
 
 /** テキストだけを選んでいるときの、文字の書式 */
-export function TextSection({ ctx }: { ctx: PanelContext }) {
+export function TextSection({ ctx, onAddFonts }: { ctx: PanelContext; onAddFonts: (files: File[]) => Promise<string | null> }) {
   const { nodes, apply, inner, overridden } = ctx
   const texts = textsIn(nodes)
   if (texts.length !== nodes.length) return null
@@ -25,6 +28,12 @@ export function TextSection({ ctx }: { ctx: PanelContext }) {
   const autoWidth = common(texts.map((node) => node.sizing.width === 'hug'))
   const fontWeight = common(texts.map((node) => node.fontWeight))
   const textAlign = common(texts.map((node) => node.textAlign))
+  // kdr に埋め込んだ書体（同じ書体名の太さ違いは 1 つにまとめる）
+  const embedded = [...new Set(ctx.state.document.fonts.map((font) => font.family))].map((family) => ({
+    value: fontFamilyValue(family),
+    label: family,
+  }))
+  const known = [...FONT_FAMILIES, ...embedded]
 
   return (
     <Section title="テキスト" overridden={overridden.has('text')}>
@@ -105,7 +114,7 @@ export function TextSection({ ctx }: { ctx: PanelContext }) {
           }}
         >
           {fontFamily === MIXED && <option value="">混在</option>}
-          {typeof fontFamily === 'string' && !FONT_FAMILIES.some((f) => f.value === fontFamily) && (
+          {typeof fontFamily === 'string' && !known.some((f) => f.value === fontFamily) && (
             <option value={fontFamily}>{fontFamily}</option>
           )}
           {FONT_FAMILIES.map((font) => (
@@ -113,8 +122,28 @@ export function TextSection({ ctx }: { ctx: PanelContext }) {
               {font.label}
             </option>
           ))}
+          {embedded.length > 0 && (
+            <optgroup label="kdr に埋め込んだ書体">
+              {embedded.map((font) => (
+                <option key={font.value} value={font.value}>
+                  {font.label}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </label>
+      <div className="font-actions">
+        <OpenFileButton
+          accept={FONT_ACCEPT}
+          onFiles={async (files) => {
+            const family = await onAddFonts(files)
+            if (family !== null) apply({ fontFamily: family })
+          }}
+        >
+          書体ファイルを追加…
+        </OpenFileButton>
+      </div>
     </Section>
   )
 }

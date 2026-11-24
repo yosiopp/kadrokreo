@@ -2,13 +2,16 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { exportTargets, pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
+import { syncEmbeddedFonts } from '../canvas/fonts.ts'
+import { useEmbeddedFonts } from '../canvas/useEmbeddedFonts.ts'
+import { fontFamilyValue } from '../document/fontFile.ts'
 import { copyText } from '../ui/clipboard.ts'
 import { getExportOptions } from '../ui/exportOptions.ts'
 import { svgFileName } from '../document/svgExport.ts'
 import type { Viewport } from '../canvas/viewport.ts'
 import { getContentBounds } from '../document/geometry.ts'
 import { IMAGE_MIME_TYPES, KDR_EXTENSION, decodeKdr } from '../document/kdr.ts'
-import type { DesignDocument, NodeId, PageId } from '../document/types.ts'
+import type { DesignDocument, EmbeddedFont, NodeId, PageId } from '../document/types.ts'
 import { Message } from '../ui/Message.tsx'
 import { Logo } from '../ui/Logo.tsx'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
@@ -26,10 +29,11 @@ import { PropertiesPanel } from './PropertiesPanel.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
 import { RedoIcon, UndoIcon } from './icons.tsx'
+import { readFontFile } from './importFont.ts'
 import { placeImage, readImageFile } from './importImage.ts'
 import { SVG_ACCEPT, convertSvgText, isSvgFile, placeSvg, readSvgFile, svgWarningMessage } from './importSvg.ts'
 import { fitTextNodes } from './measure.ts'
-import { addOrReuseAsset, createDocument, renameDocument, updatePage } from './operations/document.ts'
+import { addFont, addOrReuseAsset, createDocument, removeFont, renameDocument, updatePage } from './operations/document.ts'
 import { patchNodes } from './operations/tree.ts'
 import { createId } from './nodes.ts'
 import { loadSavedDocument, saveDocument } from './persistence.ts'
@@ -57,6 +61,8 @@ export default function EditorApp() {
 function Editor({ store }: { store: EditorStore }) {
   const [camera] = useState(createCamera)
   const state = useSyncExternalStore(store.subscribe, store.getState)
+  // kdr に埋め込んだ書体で描く
+  useEmbeddedFonts(state.document.fonts, state.document.assets)
   const [tool, setTool] = useState<Tool>('select')
   const [message, setMessage] = useState<string | null>(null)
 
@@ -203,6 +209,34 @@ function Editor({ store }: { store: EditorStore }) {
     } catch (error) {
       showError(error, '画像を差し替えられませんでした')
     }
+  }
+
+  /**
+   * 書体ファイルを kdr に埋め込む。同じ書体名・太さ・斜体の書体があれば差し替える。
+   * 最後に取り込めた書体の、テキストの書体名に書く値を返す（取り込めなければ null）
+   */
+  async function addFonts(files: File[]): Promise<string | null> {
+    setMessage(null)
+    let last: string | null = null
+    const notices: string[] = []
+    for (const file of files) {
+      try {
+        const { asset, face } = await readFontFile(file)
+        store.applyDocument((doc) => addFont(doc, asset, face, createId))
+        // テキストに使う前（大きさを測る前）に登録しておく
+        const { document } = store.getState()
+        syncEmbeddedFonts(document.fonts, document.assets)
+        last = fontFamilyValue(face.family)
+      } catch (error) {
+        notices.push(error instanceof Error ? error.message : '書体を取り込めませんでした')
+      }
+    }
+    if (notices.length > 0) setMessage(notices.join('\n'))
+    return last
+  }
+
+  function removeEmbeddedFont(font: EmbeddedFont) {
+    store.applyDocument((doc) => removeFont(doc, font))
   }
 
   /** ドロップされたファイル。画像と SVG はキャンバスに置き、それ以外は kdr として開く */
@@ -370,7 +404,7 @@ function Editor({ store }: { store: EditorStore }) {
           />
           {dragging && <div className="drop-overlay">画像・SVG または kdr ファイルをドロップ</div>}
         </main>
-        <PropertiesPanel store={store} state={state} onExportPng={exportPng} onExportSvg={exportSvg} onCopySvg={copySvg} onReplaceImage={replaceImage} />
+        <PropertiesPanel store={store} state={state} onExportPng={exportPng} onExportSvg={exportSvg} onCopySvg={copySvg} onReplaceImage={replaceImage} onAddFonts={addFonts} onRemoveFont={removeEmbeddedFont} />
       </div>
     </div>
   )

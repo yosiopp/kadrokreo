@@ -10,6 +10,7 @@ import type { Point } from '../document/geometry.ts'
 import type { Asset, AssetId, NodeId, Scene } from '../document/types.ts'
 import type { Camera } from './camera.ts'
 import { isTextInput } from './dom.ts'
+import { onEmbeddedFontsChange } from './fonts.ts'
 import { onImageLoad } from './images.ts'
 import { SceneCache } from './sceneCache.ts'
 import { type Viewport, screenToWorld } from './viewport.ts'
@@ -145,6 +146,7 @@ export function CanvasView(props: Props) {
       requestDraw()
     })
     document.fonts?.addEventListener('loadingdone', redrawAll)
+    const unsubscribeFonts = onEmbeddedFontsChange(redrawAll)
 
     function onWheel(event: WheelEvent) {
       event.preventDefault()
@@ -185,6 +187,7 @@ export function CanvasView(props: Props) {
       observer.disconnect()
       unsubscribe()
       unsubscribeImages()
+      unsubscribeFonts()
       document.fonts?.removeEventListener('loadingdone', redrawAll)
       container.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKey)

@@ -93,7 +93,7 @@ export const png: Command = {
 
     const groups = each ? targets.map((id) => [id]) : [targets]
     for (const group of groups) {
-      const bytes = await encodePng(page, session.document.assets, group, scale, background)
+      const bytes = await encodePng(page, session.document.assets, group, scale, background, session.document.fonts)
       const name = pngFileName(safeFileName(pngBaseName(session.document, page, group, whole)), scale)
       if (to === '-') {
         ctx.stdout(bytes)
