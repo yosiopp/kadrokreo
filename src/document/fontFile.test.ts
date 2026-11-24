@@ -26,10 +26,11 @@ describe('書体ファイル', () => {
     expect(await readFontFileInfo(testFontBytes({ weight: 3 }))).toMatchObject({ weight: 300 })
   })
 
-  it('WOFF は表を展開して読む。WOFF2 と壊れたファイルは読まない', async () => {
+  it('WOFF は表を展開して読む。壊れたファイルは読まない', async () => {
     const woff = await toWoff(testFontBytes({ family: 'Woff Face', weight: 300 }))
     expect(fontMime(woff)).toBe('font/woff')
     expect(await readFontFileInfo(woff)).toEqual({ mime: 'font/woff', family: 'Woff Face', weight: 300, style: 'normal' })
+    // 先頭だけ WOFF2 のもの
     const woff2 = woff.slice()
     woff2[3] = '2'.charCodeAt(0)
     expect(await readFontFileInfo(woff2)).toBeNull()

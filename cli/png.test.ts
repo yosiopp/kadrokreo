@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { type IO, run } from './run.ts'
-import { testFontBytes } from '../src/document/testFont.ts'
+import { brotliCompressSync } from 'node:zlib'
+import { testFontBytes, toWoff2 } from '../src/document/testFont.ts'
 
 // png コマンド。描画は本体の render.ts を @napi-rs/canvas に描かせているので、画素をいくつか確かめる
 
@@ -178,11 +179,14 @@ describe('png', () => {
     expect(mixed).toBeGreaterThan(20)
   })
 
-  it('kdr に埋め込んだ書体で描く（OS にない書体でも）', async () => {
+  it.each([
+    ['box.ttf', () => testFontBytes({ family: 'PngBox' })],
+    ['box.woff2', () => toWoff2(testFontBytes({ family: 'PngBox' }), (data) => brotliCompressSync(data))],
+  ])('kdr に埋め込んだ書体で描く（OS にない書体でも。%s）', async (file, bytes) => {
     const h = harness()
     // テスト用の書体は、どの字も送り幅 0.6em・高さ 0.7em の黒い四角
-    h.fs.set('box.ttf', testFontBytes({ family: 'PngBox' }))
-    const setup = 'new Demo + font-add box.ttf + add text --name T --text AB fontSize=100 fontFamily=PngBox fill=#000000 -o in.kdr'
+    h.fs.set(file, bytes())
+    const setup = `new Demo + font-add ${file} + add text --name T --text AB fontSize=100 fontFamily=PngBox fill=#000000 -o in.kdr`
     expect(await h.run(setup)).toBe(0)
     expect(h.stderr).toContain('書体を埋め込みました: PngBox')
     expect(await h.run('-f in.kdr png T --to t.png')).toBe(0)

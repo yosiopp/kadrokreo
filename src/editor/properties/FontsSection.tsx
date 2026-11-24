@@ -25,7 +25,7 @@ export function FontsSection({ fonts, onAddFonts, onRemoveFont }: Props) {
     <>
       <h2 className="panel-title">書体</h2>
       {fonts.length === 0 ? (
-        <p className="panel-hint">書体ファイル（TTF / OTF / WOFF）を kdr に入れると、OS にない書体でも同じに描かれます。再配布できる書体（SIL Open Font License など）だけを入れてください。</p>
+        <p className="panel-hint">書体ファイル（TTF / OTF / WOFF / WOFF2）を kdr に入れると、OS にない書体でも同じに描かれます。再配布できる書体（SIL Open Font License など）だけを入れてください。</p>
       ) : (
         <ul className="font-list" aria-label="埋め込んだ書体">
           {fonts.map((font) => (

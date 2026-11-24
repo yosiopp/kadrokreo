@@ -284,3 +284,151 @@ export async function toWoff(font: Uint8Array<ArrayBuffer>): Promise<Uint8Array<
   header.tag('wOFF').u32(data.getUint32(0), 44 + count * 20 + body.length).u16(count, 0).u32(font.length).u16(1, 0).u32(0, 0, 0, 0, 0)
   return new Uint8Array([...header.bytes, ...directory.bytes, ...body])
 }
+
+const WOFF2_KNOWN_TAGS = ['cmap', 'head', 'hhea', 'hmtx', 'maxp', 'name', 'OS/2', 'post', 'cvt ', 'fpgm', 'glyf', 'loca', 'prep', 'CFF ']
+
+function base128(value: number): number[] {
+  const bytes = [value & 0x7f]
+  for (let rest = Math.floor(value / 128); rest > 0; rest = Math.floor(rest / 128)) bytes.unshift((rest & 0x7f) | 0x80)
+  return bytes
+}
+
+function u255(value: number): number[] {
+  if (value < 253) return [value]
+  if (value < 506) return [255, value - 253]
+  if (value < 762) return [254, value - 506]
+  return [253, value >> 8, value & 0xff]
+}
+
+/**
+ * 単純な字だけの glyf / loca を WOFF2 の変換した glyf にする（合成字は扱わない。座標の差は 1 バイトか 4 バイトの形で書く）。
+ * 枠は点から計算できるので書かない
+ */
+function transformGlyf(glyf: Uint8Array, loca: Uint8Array, glyphCount: number, longLoca: boolean): number[] {
+  const g = new DataView(glyf.buffer, glyf.byteOffset, glyf.byteLength)
+  const l = new DataView(loca.buffer, loca.byteOffset, loca.byteLength)
+  const offset = (i: number) => (longLoca ? l.getUint32(i * 4) : l.getUint16(i * 2) * 2)
+  const contours: number[] = []
+  const points: number[] = []
+  const flags: number[] = []
+  const glyphs: number[] = []
+  for (let glyph = 0; glyph < glyphCount; glyph++) {
+    const start = offset(glyph)
+    if (offset(glyph + 1) === start) {
+      contours.push(0, 0)
+      continue
+    }
+    const count = g.getInt16(start)
+    if (count < 0) throw new Error('toWoff2: 合成字は扱いません')
+    contours.push((count >> 8) & 0xff, count & 0xff)
+    let pos = start + 10
+    let previous = -1
+    for (let i = 0; i < count; i++, pos += 2) {
+      const end = g.getUint16(pos)
+      points.push(...u255(end - previous))
+      previous = end
+    }
+    const total = previous + 1
+    const instructionLength = g.getUint16(pos)
+    pos += 2 + instructionLength
+    if (instructionLength !== 0) throw new Error('toWoff2: 命令は扱いません')
+    const pointFlags: number[] = []
+    while (pointFlags.length < total) {
+      const flag = g.getUint8(pos++)
+      pointFlags.push(flag)
+      if (flag & 0x08) for (let r = g.getUint8(pos++); r > 0; r--) pointFlags.push(flag)
+    }
+    const coords = (shortBit: number, sameBit: number) =>
+      pointFlags.map((flag) => {
+        if (flag & shortBit) {
+          const value = g.getUint8(pos++)
+          return flag & sameBit ? value : -value
+        }
+        if (flag & sameBit) return 0
+        const value = g.getInt16(pos)
+        pos += 2
+        return value
+      })
+    const dxs = coords(0x02, 0x10)
+    const dys = coords(0x04, 0x20)
+    for (let i = 0; i < total; i++) {
+      const dx = dxs[i]
+      const dy = dys[i]
+      const off = pointFlags[i] & 1 ? 0 : 0x80
+      if (dx === 0 && Math.abs(dy) < 1280) {
+        flags.push(off | (((Math.abs(dy) >> 8) << 1) + (dy >= 0 ? 1 : 0)))
+        glyphs.push(Math.abs(dy) & 0xff)
+      } else if (dy === 0 && Math.abs(dx) < 1280) {
+        flags.push(off | (10 + ((Math.abs(dx) >> 8) << 1) + (dx >= 0 ? 1 : 0)))
+        glyphs.push(Math.abs(dx) & 0xff)
+      } else {
+        flags.push(off | (124 + (dx >= 0 ? 1 : 0) + (dy >= 0 ? 2 : 0)))
+        glyphs.push((Math.abs(dx) >> 8) & 0xff, Math.abs(dx) & 0xff, (Math.abs(dy) >> 8) & 0xff, Math.abs(dy) & 0xff)
+      }
+    }
+    glyphs.push(...u255(0)) // 命令の長さ
+  }
+  const bbox = new Array(4 * Math.floor((glyphCount + 31) / 32)).fill(0)
+  const streams = [contours, points, flags, glyphs, [], bbox, []]
+  const header = new Writer().u16(0, 0, glyphCount, longLoca ? 1 : 0).u32(...streams.map((stream) => stream.length))
+  return [...header.bytes, ...streams.flat()]
+}
+
+/**
+ * TrueType / OpenType のファイルを WOFF2 にする。compress は Brotli の圧縮（テストでは node:zlib の brotliCompressSync）。
+ * transform なら glyf / loca を変換し、hmtx も左の余白を省いた形にする（左の余白が字の左端と同じ書体だけ）
+ */
+export function toWoff2(font: Uint8Array<ArrayBuffer>, compress: (data: Uint8Array) => Uint8Array, { transform = true } = {}): Uint8Array<ArrayBuffer> {
+  const data = new DataView(font.buffer, font.byteOffset, font.byteLength)
+  const count = data.getUint16(4)
+  const tables = new Map<string, Uint8Array<ArrayBuffer>>()
+  for (let i = 0; i < count; i++) {
+    const record = 12 + i * 16
+    const tag = String.fromCharCode(...font.subarray(record, record + 4))
+    const offset = data.getUint32(record + 8)
+    tables.set(tag, font.slice(offset, offset + data.getUint32(record + 12)))
+  }
+  // loca は glyf のすぐ後に置く
+  const tags = [...tables.keys()].sort().filter((tag) => tag !== 'loca')
+  if (tables.has('loca')) tags.splice(tags.indexOf('glyf') + 1, 0, 'loca')
+  const directory = new Writer()
+  const stream: number[] = []
+  const glyphCount = new DataView(tables.get('maxp')!.buffer).getUint16(4)
+  for (const tag of tags) {
+    const table = tables.get(tag)!
+    const known = WOFF2_KNOWN_TAGS.indexOf(tag)
+    let version = 0
+    let stored: number[] = [...table]
+    let transformed = false
+    if (tag === 'glyf' || tag === 'loca') {
+      version = transform ? 0 : 3
+      transformed = transform
+      if (transform) {
+        const head = new DataView(tables.get('head')!.buffer)
+        stored = tag === 'glyf' ? transformGlyf(table, tables.get('loca')!, glyphCount, head.getInt16(50) === 1) : []
+      }
+    } else if (tag === 'hmtx' && transform && tables.has('glyf')) {
+      const metricCount = new DataView(tables.get('hhea')!.buffer).getUint16(34)
+      const view = new DataView(table.buffer)
+      version = 1
+      transformed = true
+      // 左の余白を両方とも省く（flags = 3）
+      stored = [3, ...Array.from({ length: metricCount }, (_, i) => [view.getUint8(i * 4), view.getUint8(i * 4 + 1)]).flat()]
+    }
+    directory.u8((known >= 0 ? known : 63) | (version << 6))
+    if (known < 0) directory.tag(tag)
+    directory.bytes.push(...base128(table.length))
+    if (transformed) directory.bytes.push(...base128(stored.length))
+    stream.push(...stored)
+  }
+  const compressed = compress(new Uint8Array(stream))
+  const totalSfntSize = 12 + count * 16 + [...tables.values()].reduce((sum, table) => sum + Math.ceil(table.length / 4) * 4, 0)
+  // 圧縮したデータの後ろは、ファイルの先頭から数えて 4 バイトの境目まで埋める
+  const length = Math.ceil((48 + directory.bytes.length + compressed.length) / 4) * 4
+  const header = new Writer().tag('wOF2').u32(data.getUint32(0), length).u16(count, 0).u32(totalSfntSize, compressed.length).u16(1, 0).u32(0, 0, 0, 0, 0)
+  const out = new Uint8Array(length)
+  out.set(header.bytes, 0)
+  out.set(directory.bytes, 48)
+  out.set(compressed, 48 + directory.bytes.length)
+  return out
+}

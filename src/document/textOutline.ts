@@ -1,6 +1,6 @@
 import { firstFamily } from './fontFile.ts'
 import { applyMatrix, flipMatrix } from './geometry.ts'
-import { type GlyphCommand, type OutlineFont, parseOutlineFont } from './openType.ts'
+import { type GlyphCommand, type OutlineFont, hasWoff2Decoder, parseOutlineFont, setWoff2Decoder } from './openType.ts'
 import { alignFactor } from './paint.ts'
 import type { Contour, Vertex } from './path.ts'
 import { isPathText, pathTextClusters, placeOnPath } from './textPath.ts'
@@ -49,8 +49,27 @@ export function outlineFontsGeneration(): number {
 function parsedFont(font: EmbeddedFont): OutlineFont | null {
   const asset = current.assets[font.assetId]
   if (!asset || !Object.hasOwn(current.assets, font.assetId)) return null
-  if (!parsed.has(asset.bytes)) parsed.set(asset.bytes, parseOutlineFont(asset.bytes))
+  if (!parsed.has(asset.bytes)) {
+    // WOFF2 は戻す処理を読み込むまで読めない（覚えずに、読み込んだら読み直す）
+    if (asset.mime === 'font/woff2' && !hasWoff2Decoder()) return null
+    parsed.set(asset.bytes, parseOutlineFont(asset.bytes))
+  }
   return parsed.get(asset.bytes) ?? null
+}
+
+/**
+ * 今の書体に WOFF2 があり、WOFF2 を戻す処理（woff2.ts。Brotli の辞書を含むので大きい）をまだ読み込んでいなければ読み込む。
+ * 読み込んだら世代を進めて true を返す（読み込むまで WOFF2 の書体のテキストは字の形を持たないので、覚えた結果を捨ててもらう）
+ */
+export async function loadWoff2Decoder(): Promise<boolean> {
+  if (hasWoff2Decoder()) return false
+  const used = current.fonts.some((font) => Object.hasOwn(current.assets, font.assetId) && current.assets[font.assetId].mime === 'font/woff2')
+  if (!used) return false
+  const { decodeWoff2 } = await import('./woff2.ts')
+  if (hasWoff2Decoder()) return false
+  setWoff2Decoder(decodeWoff2)
+  generation++
+  return true
 }
 
 /** CSS の書体の選び方で、望む太さにいちばん合う太さを選ぶ */

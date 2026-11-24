@@ -2,6 +2,7 @@ import { type Asset, type AssetId, type EmbeddedFont, type NodeId, type Scene } 
 import { drawPng, loadSceneImages, pngArea } from '../src/canvas/exportPng.ts'
 import { fontMetrics, layoutText } from '../src/canvas/text.ts'
 import type { SvgTextMetrics } from '../src/document/svgExport.ts'
+import { decodeWoff2 } from '../src/document/woff2.ts'
 
 // PNG の書き出し。描画は本体の canvas/render.ts をそのまま使い、ブラウザの代わりに @napi-rs/canvas（Skia）の Canvas に描く。
 // @napi-rs/canvas は optionalDependencies なので、入っていない環境（ネイティブのバイナリがない、--omit=optional）では png だけが使えない。
@@ -97,7 +98,10 @@ function registerEmbeddedFonts(napi: NapiCanvas, fonts: readonly EmbeddedFont[],
     const key = `${font.assetId}\u0000${font.family}`
     if (registeredFonts.has(key) || !Object.hasOwn(assets, font.assetId)) continue
     registeredFonts.add(key)
-    napi.GlobalFonts.register(Buffer.from(assets[font.assetId].bytes), font.family)
+    const asset = assets[font.assetId]
+    // WOFF2 は sfnt に戻してから登録する（字の形を読む openType.ts と同じ中身にし、Skia の WOFF2 の対応に頼らない）
+    const bytes = asset.mime === 'font/woff2' ? (decodeWoff2(asset.bytes) ?? asset.bytes) : asset.bytes
+    napi.GlobalFonts.register(Buffer.from(bytes), font.family)
   }
 }
 

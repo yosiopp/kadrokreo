@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto'
 import { KDR_VERSION, decodeKdr, readKdrArchive } from '../src/document/kdr.ts'
 import type { DesignDocument, FrameNode, PathNode, RectNode, TextNode } from '../src/document/types.ts'
 import { type IO, run } from './run.ts'
-import { testFontBytes, toWoff } from '../src/document/testFont.ts'
+import { brotliCompressSync } from 'node:zlib'
+import { testFontBytes, toWoff, toWoff2 } from '../src/document/testFont.ts'
 
 /** メモリ上のファイルで run を動かす */
 function harness(files: Record<string, Uint8Array> = {}, options: { stdin?: Uint8Array; tty?: boolean } = {}) {
@@ -180,8 +181,13 @@ describe('kadrokreo CLI', () => {
       'a.ttf': testFontBytes({ family: 'Kdr Test' }),
       'b.ttf': testFontBytes({ family: 'Kdr Test', weight: 700, italic: true }),
       'c.woff': await toWoff(testFontBytes({ family: 'Woff Face' })),
+      'd.woff2': toWoff2(testFontBytes({ family: 'Woff2 Face', weight: 300 }), (data) => brotliCompressSync(data)),
       'x.ttf': new Uint8Array(100),
     })
+    expect(await h.run(['new', '+', 'font-add', 'd.woff2', '-o', 'w.kdr'])).toBe(0)
+    expect(h.stderr).toContain('書体を埋め込みました: Woff2 Face（太さ 300）')
+    const woff2Doc = await h.doc('w.kdr')
+    expect(woff2Doc.assets[woff2Doc.fonts[0].assetId].mime).toBe('font/woff2')
     expect(await h.run(['new', '+', 'font-add', 'a.ttf', '+', 'font-add', 'b.ttf', '+', 'font-add', 'c.woff', '--family', 'Brand', '-o', 'f.kdr'])).toBe(0)
     expect(h.stderr).toContain('書体を埋め込みました: Kdr Test（太さ 700・斜体）。テキストで使うには fontFamily="Kdr Test"')
     const doc = await h.doc('f.kdr')
@@ -200,7 +206,7 @@ describe('kadrokreo CLI', () => {
     expect((await h.doc('h.kdr')).fonts.map((font) => font.family)).toEqual(['Brand'])
     expect(await h.run(['-f', 'f.kdr', 'font-rm', 'Nope'])).toBe(2)
     expect(await h.run(['new', '+', 'font-add', 'x.ttf'])).toBe(2)
-    expect(h.stderr).toContain('x.ttf: TTF / OTF / WOFF の書体ファイルとして読めません')
+    expect(h.stderr).toContain('x.ttf: TTF / OTF / WOFF / WOFF2 の書体ファイルとして読めません')
     expect(await h.run(['new', '+', 'font-add', 'a.ttf', '--family', 'a,b'])).toBe(2)
   })
 
@@ -218,6 +224,13 @@ describe('kadrokreo CLI', () => {
     const kept = await h.doc('b.kdr')
     expect(nodeByName(kept, 'Title').parentId).toBe(nodeByName(kept, '差し引き').id)
     expect(await h.run(argv(`${setup} + add rect --name Box --width 300 --height 200 + boolean subtract Box Plain --keep`))).toBe(2)
+  })
+
+  it('outline-text は WOFF2 の書体のテキストも文字の形のパスにする', async () => {
+    const h = harness({ 'a.woff2': toWoff2(testFontBytes({ family: 'KdrW2' }), (data) => brotliCompressSync(data)) })
+    expect(await h.run(argv('new + font-add a.woff2 + add text --name Title --text AA fontFamily=KdrW2 fontSize=100 + outline-text Title -o o.kdr'))).toBe(0)
+    const title = nodeByName(await h.doc('o.kdr'), 'Title')
+    expect(title).toMatchObject({ type: 'path', fillRule: 'nonzero' })
   })
 
   it('text-path でテキストを図形の線に沿わせ、始まりを変え、外す。SVG では textPath で書く', async () => {

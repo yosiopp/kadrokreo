@@ -1,7 +1,8 @@
 import { inflateZlib } from './inflate.ts'
 
-// 書体ファイル（TrueType / OpenType の CFF / WOFF）から、字の輪郭と送り幅・字詰めを読む。テキストのアウトライン化と、
-// テキストを入れたブーリアン演算（document/textOutline.ts）が使う。描画の途中で使うので同期で読む（WOFF は inflate.ts で展開する）。
+// 書体ファイル（TrueType / OpenType の CFF / WOFF / WOFF2）から、字の輪郭と送り幅・字詰めを読む。テキストのアウトライン化と、
+// テキストを入れたブーリアン演算（document/textOutline.ts）が使う。描画の途中で使うので同期で読む（WOFF は inflate.ts で展開する。
+// WOFF2 は woff2.ts で戻すが、Brotli の辞書が大きいのでブラウザでは別のチャンクにして、読み込んだら setWoff2Decoder で知らせてもらう）。
 // 読むのは、文字から字を引く cmap（format 4 / 12）、送り幅の hmtx、上下の高さの hhea / OS/2、輪郭の glyf（合成字を含む）と CFF（Type 2 の字形の命令）、
 // 字詰めの GPOS（kern の機能の PairPos）か古い kern の表。合字や文脈で字を替える置き換え（GSUB）、可変の書体（CFF2・gvar）、縦書きは読まない。
 // 書体ファイルは信頼できない入力なので、範囲の外を読んだら（DataView が投げる）その字・その書体を読めないものとして扱う。
@@ -44,9 +45,26 @@ function viewOf(bytes: Uint8Array, offset = 0, length = bytes.length - offset): 
   return new DataView(bytes.buffer, bytes.byteOffset + offset, length)
 }
 
+type Woff2Decoder = (bytes: Uint8Array) => Uint8Array | null
+let woff2Decoder: Woff2Decoder | null = null
+
+/** WOFF2 を sfnt に戻す処理（woff2.ts の decodeWoff2）を知らせる。知らせるまで WOFF2 の書体は読めない（null） */
+export function setWoff2Decoder(decoder: Woff2Decoder): void {
+  woff2Decoder = decoder
+}
+
+/** WOFF2 の書体を読めるか（setWoff2Decoder が済んだか） */
+export function hasWoff2Decoder(): boolean {
+  return woff2Decoder !== null
+}
+
 function readTables(bytes: Uint8Array): Tables | null {
   const data = viewOf(bytes)
   const tag = tagAt(data, 0)
+  if (tag === 'wOF2') {
+    const sfnt = woff2Decoder?.(bytes)
+    return sfnt && tagAt(viewOf(sfnt), 0) !== 'wOF2' ? readTables(sfnt) : null
+  }
   const tables: Tables = new Map()
   if (tag === 'wOFF') {
     const count = data.getUint16(12)
@@ -75,7 +93,7 @@ function readTables(bytes: Uint8Array): Tables | null {
   return tables
 }
 
-/** 書体ファイルを読む。字の輪郭を読めない書体（表が足りない・壊れている・WOFF2・可変の CFF2 だけ）は null */
+/** 書体ファイルを読む。字の輪郭を読めない書体（表が足りない・壊れている・可変の CFF2 だけ・WOFF2 を戻す処理がまだ無い）は null */
 export function parseOutlineFont(bytes: Uint8Array): OutlineFont | null {
   try {
     const tables = readTables(bytes)

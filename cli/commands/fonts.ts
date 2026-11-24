@@ -12,7 +12,7 @@ export const fontAdd: Command = {
   kind: 'edit',
   usage: 'font-add 書体ファイル [--family 書体名]',
   summary:
-    '書体ファイル（TTF / OTF / WOFF）を kdr に埋め込む。書体名・太さ・斜体はファイルから読む。同じ書体名・太さ・斜体の書体があれば差し替える。' +
+    '書体ファイル（TTF / OTF / WOFF / WOFF2）を kdr に埋め込む。書体名・太さ・斜体はファイルから読む。同じ書体名・太さ・斜体の書体があれば差し替える。' +
     'テキストの fontFamily に書体名を書くと、その書体で描かれる（再配布できる書体だけを入れること）',
   async run(ctx, step) {
     checkStep(step, { options: ['family'], positionals: 1 })
@@ -22,7 +22,7 @@ export const fontAdd: Command = {
       throw new UsageError(`${file}: 書体ファイルが大きすぎます（${KDR_MAX_ASSET_BYTES / 1024 / 1024}MB まで）`)
     }
     const info = await readFontFileInfo(bytes)
-    if (info === null) throw new UsageError(`${file}: TTF / OTF / WOFF の書体ファイルとして読めません（WOFF2 は扱いません）`)
+    if (info === null) throw new UsageError(`${file}: TTF / OTF / WOFF / WOFF2 の書体ファイルとして読めません`)
     const rawFamily = option(step, 'family')
     const given = rawFamily === undefined ? null : cleanFamilyName(rawFamily)
     if (rawFamily !== undefined && given !== rawFamily) throw new UsageError(`font-add: 書体名に使えない文字があります: ${rawFamily}`)

@@ -87,13 +87,13 @@ export type FontFileInfo = { mime: string; family: string | null; weight: number
 
 /**
  * 書体ファイルの種類・書体名（name の表の 16 か 1）・太さ（OS/2 の usWeightClass を 100 刻みに丸めたもの）・斜体を読む。
- * WOFF は表を展開して読む（非同期）。WOFF2 は表の展開に Brotli が要るので読まない（null）。書体として読めなければ null
+ * WOFF は表を展開して読む（非同期）。WOFF2 は sfnt に戻して読む（woff2.ts。Brotli の辞書が大きいので、要るときだけ読み込む）。書体として読めなければ null
  */
 export async function readFontFileInfo(bytes: Uint8Array): Promise<FontFileInfo | null> {
   const mime = fontMime(bytes)
-  if (mime === null || mime === 'font/woff2') return null
+  if (mime === null) return null
   try {
-    const tables = mime === 'font/woff' ? await woffTables(bytes) : sfntTables(bytes)
+    const tables = mime === 'font/woff' ? await woffTables(bytes) : mime === 'font/woff2' ? await woff2Tables(bytes) : sfntTables(bytes)
     if (tables === null) return null
     return { mime, ...fontInfoOf(tables) }
   } catch {
@@ -129,6 +129,13 @@ function sfntTables(bytes: Uint8Array): Tables | null {
     tables[key] = bytes.subarray(offset, offset + length)
   }
   return tables
+}
+
+/** WOFF2 を sfnt に戻して、要る表を切り出す */
+async function woff2Tables(bytes: Uint8Array): Promise<Tables | null> {
+  const { decodeWoff2 } = await import('./woff2.ts')
+  const sfnt = decodeWoff2(bytes)
+  return sfnt === null ? null : sfntTables(sfnt)
 }
 
 /** WOFF の表の一覧から、要る表を切り出す（圧縮された表は zlib で展開する） */

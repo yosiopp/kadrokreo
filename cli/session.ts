@@ -1,5 +1,7 @@
 import { kdrFile, parseKdr } from '../src/document/kdr.ts'
+import { setWoff2Decoder } from '../src/document/openType.ts'
 import { setOutlineFonts } from '../src/document/textOutline.ts'
+import { decodeWoff2 } from '../src/document/woff2.ts'
 import type { DesignDocument, FrameNode, NodeId, Page, Scene, SceneNode } from '../src/document/types.ts'
 import { createEditorStore } from '../src/editor/store.ts'
 import { updatePage } from '../src/editor/operations/document.ts'
@@ -11,6 +13,9 @@ import { fitTextEstimated } from './textMeasure.ts'
 // editor と同じ結果になるよう、editor のストアにそのまま任せる。
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+
+// WOFF2 の書体の字の形も同期で読めるようにする（ブラウザでは大きいので遅れて読み込むが、CLI は最初から読み込んでおく）
+setWoff2Decoder(decodeWoff2)
 
 export class Session {
   #store
