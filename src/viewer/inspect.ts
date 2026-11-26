@@ -5,6 +5,7 @@ import { BOOLEAN_OPERATION_LABELS, booleanParts, drawnNode, isBooleanNode } from
 import { type MaskNode, clipsByOutline, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
 import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
+import { CONTRAST_AA, CONTRAST_AAA, CONTRAST_AAA_LARGE, CONTRAST_AA_LARGE, formatRatio, textContrast } from './contrast.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
 import { cssFontFamily } from './fontFamily.ts'
@@ -192,6 +193,8 @@ export function inspectNode(
   }
 
   if ('fills' in node) add('塗り', paintRows(node.fills))
+
+  if (node.type === 'text') add('コントラスト', contrastRows(scene, node.id, hex))
 
   if ('strokes' in node && hasStroke(node)) {
     add('線', [
@@ -853,4 +856,25 @@ function svgDataUrl(svg: string): string {
 /** グラデーションの角度を CSS の角度（90° ずらす）に直し、0〜360 に収める */
 function cssDegrees(deg: number): number {
   return (((deg + 90) % 360) + 360) % 360
+}
+
+/**
+ * テキストと背景のコントラスト比（contrast.ts）。文字と背景は合成した後の色。グラデーションの上などで組がいくつもあるときは、
+ * いちばん低い比の組を出し、基準もそれで判定する
+ */
+function contrastRows(scene: Scene, id: NodeId, hex: (color: string) => string): InspectRow[] {
+  const result = textContrast(scene, id)
+  if (result === null) return []
+  if (result.kind === 'unknown') return [{ label: '比', value: `求められない（${result.reason}）` }]
+  const { lowest, highest, large } = result
+  const level = (ok: boolean, need: number) => `${ok ? '満たす' : '満たさない'}（${need}:1 以上）`
+  return [
+    { label: '文字', value: hex(lowest.text), color: lowest.text },
+    { label: '背景', value: result.overWhite ? `${hex(lowest.background)}（後ろが透けている所は白の地として）` : hex(lowest.background), color: lowest.background },
+    { label: '比', value: result.varies ? `いちばん低い所で ${formatRatio(lowest.ratio)}（高い所で ${formatRatio(highest.ratio)}）` : formatRatio(lowest.ratio) },
+    { label: '文字の大きさ', value: large ? '大きな文字（24px 以上か、太字で 18.66px 以上）' : 'ふつうの文字' },
+    { label: 'AA', value: level(result.aa, large ? CONTRAST_AA_LARGE : CONTRAST_AA) },
+    { label: 'AAA', value: level(result.aaa, large ? CONTRAST_AAA_LARGE : CONTRAST_AAA) },
+    result.varies && { label: '求め方', value: 'グラデーションは、止めの間も含めた全体の色のうち、いちばん低い比で判定している' },
+  ].filter((row) => row !== false)
 }
