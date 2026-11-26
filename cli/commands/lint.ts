@@ -27,7 +27,7 @@ type Report = (check: string, message: string, page?: Page, node?: SceneNode) =>
 
 /** 検査の名前と意味（kdr docs・ユーザーズガイドにもこのまま載せる）。needs があれば、そのオプションを指定したときだけ動く */
 export const CHECKS: readonly { name: string; description: string; needs?: string }[] = [
-  { name: 'default-name', description: '作ったときの名前のままのレイヤー（`Rectangle 1`・`Frame`・`Text 3` など。マスクの `Mask group`、SVG の `Group`、ブーリアン演算の `合体` なども）' },
+  { name: 'default-name', description: '作ったときの名前のままのレイヤー（`Rectangle 1`・`Frame`・`Text 3`・`Star 2` など。マスクの `Mask group`、SVG の `Group`、ブーリアン演算の `合体` なども）' },
   { name: 'empty-text', description: '中身が空（空白だけ）のテキスト' },
   { name: 'hidden', description: '非表示のまま残っているノード（中身は 1 つずつ出さない。コンポーネントの表示のプロパティに結んだものは除く）' },
   { name: 'zero-size', description: '幅か高さが 0 の図形・フレーム・画像（直線・パス・テキストは、幅も高さも 0 のときだけ）' },
@@ -49,7 +49,7 @@ export const CHECKS: readonly { name: string; description: string; needs?: strin
 ]
 
 const NAMES = new Set(CHECKS.map((check) => check.name))
-const DEFAULT_NAME = /^(?:Frame|Rectangle|Ellipse|Line|Path|Text|Image|Boolean|Group|Mask group|合体|差し引き|交差|除外)(?: \d+)?$/
+const DEFAULT_NAME = /^(?:Frame|Rectangle|Ellipse|Line|Path|Polygon|Star|Text|Image|Boolean|Group|Mask group|合体|差し引き|交差|除外)(?: \d+)?$/
 const DEFAULT_TARGET = 'button|btn|link|ボタン|リンク'
 
 /** ls と同じ順（手前が上、親の次に子）でページのノードを辿る */

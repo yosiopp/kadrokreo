@@ -74,7 +74,7 @@ describe('kdr lint', () => {
 
   it('既定の名前・空のテキスト・非表示・大きさ 0 を見つける', async () => {
     const h = await make(
-      'new + add rect --id r1 + add frame --name Box --id box --width 100 --height 100' +
+      'new + add rect --id r1 + add star --id s1 + add frame --name Box --id box --width 100 --height 100' +
         ' + add text --name Empty --id e --text x + set e text=' +
         ' + add frame --name Hid --id hid visible=false + add rect --name Child --id child --parent hid visible=false' +
         ' + add rect --name Flat --id flat --width 0 + add line --name Rule --id rule --from 0,0 --to 100,0',
@@ -83,6 +83,7 @@ describe('kdr lint', () => {
     expect(pairs(list)).toEqual(
       expect.arrayContaining([
         ['default-name', 'r1'],
+        ['default-name', 's1'],
         ['empty-text', 'e'],
         ['hidden', 'hid'],
         ['zero-size', 'flat'],

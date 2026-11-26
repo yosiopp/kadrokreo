@@ -125,7 +125,7 @@ btn  small-target  frame "Button": 押す対象が 30×30（44×44 より小さ�
 
 | 検査 | 見つけるもの |
 | --- | --- |
-| `default-name` | 作ったときの名前のままのレイヤー（`Rectangle 1`・`Frame`・`Text 3` など。マスクの `Mask group`、SVG の `Group`、ブーリアン演算の `合体` なども） |
+| `default-name` | 作ったときの名前のままのレイヤー（`Rectangle 1`・`Frame`・`Text 3`・`Star 2` など。マスクの `Mask group`、SVG の `Group`、ブーリアン演算の `合体` なども） |
 | `empty-text` | 中身が空（空白だけ）のテキスト |
 | `hidden` | 非表示のまま残っているノード（中身は 1 つずつ出さない。コンポーネントの表示のプロパティに結んだものは除く） |
 | `zero-size` | 幅か高さが 0 の図形・フレーム・画像（直線・パス・テキストは、幅も高さも 0 のときだけ） |
