@@ -10,7 +10,7 @@
   "bugs": {
     "url": "https://github.com/yosiopp/kadrokreo/issues"
   },
-  "version": "0.0.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -26,7 +26,8 @@
     "preview:editor": "vite preview --outDir dist/editor",
     "kdr": "node cli/kadrokreo.ts",
     "check:viewer": "node scripts/check-viewer.mjs",
-    "check": "npm test && npm run lint && npm run build && npm run check:viewer && npm run e2e",
+    "check:version": "node scripts/version.mjs check",
+    "check": "npm test && npm run lint && npm run check:version && npm run build && npm run check:viewer && npm run e2e",
     "bench": "node bench/run.mjs"
   },
   "dependencies": {

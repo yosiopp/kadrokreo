@@ -1,4 +1,4 @@
-# 基本の CI。npm run check と同じ順（test → lint → build → check:viewer → e2e）に流す。
+# 基本の CI。npm run check と同じ順（test → lint → check:version → build → check:viewer → e2e）に流す。
 name: CI
 
 on:
@@ -40,6 +40,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run lint
+      - run: npm run check:version
       - run: npm run build
       - run: npm run check:viewer
       - run: npm run e2e

@@ -21,6 +21,7 @@ npm run build        # tsc -b のあと dist/viewer と dist/editor を出力
 npm run e2e          # ブラウザでの動作確認（開発サーバーを自動で立てる。Google Chrome が必要）
 npm run e2e -- 05-style   # 1 本だけ
 npm run check        # 下の「確認」をまとめて流す
+npm run check:version   # 版の表記（package.json など）が揃っているか
 npm run capture      # サンプルのデザインを組み立てて画面のキャプチャを e2e/out/captures/ に撮る
 npm run bench        # 大きなデザインでの性能を測る（結果は bench/out/）
 npm run kdr -- --help   # コマンドライン（npm link すれば kdr --help）
@@ -32,9 +33,10 @@ npm run kdr -- --help   # コマンドライン（npm link すれば kdr --help�
 
 1. `npm test` — 単体テスト
 2. `npm run lint` — oxlint（依存の向きの決まりもここで確かめる。警告も失敗にする。意図して残すものは、その行だけ理由を添えて無効にする）
-3. `npm run build` — 型検査と viewer・editor のビルド
-4. `npm run check:viewer` — `dist/viewer` に editor にしかない文言・API が入っていないか（`scripts/check-viewer.mjs`）
-5. `npm run e2e` — ブラウザでの動作確認（`e2e/` のスクリプトを番号順に。`01` が書き出した kdr を `02` が使う）。スクリーンショットは `e2e/out/`。
+3. `npm run check:version` — 版の表記が揃っているか（`scripts/version.mjs`。下の「リリースの手順」）
+4. `npm run build` — 型検査と viewer・editor のビルド
+5. `npm run check:viewer` — `dist/viewer` に editor にしかない文言・API が入っていないか（`scripts/check-viewer.mjs`）
+6. `npm run e2e` — ブラウザでの動作確認（`e2e/` のスクリプトを番号順に。`01` が書き出した kdr を `02` が使う）。スクリーンショットは `e2e/out/`。
    スクリプトを足すときは、使っていない次の番号を付ける（番号は重ねない。`npm run e2e -- 40` のように番号で 1 本を指せるように）
 
 `npm run capture` と `npm run bench` は `check` に入れていない。性能の計測の結果の控えは [`docs/bench/`](docs/bench/) にある。
@@ -83,7 +85,7 @@ cli/            コマンドライン kdr（Node で TypeScript のまま動か�
 docker/         nginx の設定と起動スクリプト
 e2e/            ブラウザでの動作確認とキャプチャ
 bench/          性能の計測（大きな kdr の生成と Node での計測は cli/bench/）
-scripts/        check:viewer、リリースの本文（release-notes.sh）など
+scripts/        check:viewer、版の表記の確認と書き換え（version.mjs）、リリースの本文（release-notes.sh）など
 docs/guide/     ユーザーズガイド
 docs/examples/  kdr コマンドの例と、viewer で開くサンプル（sample.kdr は sample.xml から作る）
 plugins/kdr/    配布する skill（kdr を Docker 越しに使う）。.claude-plugin/marketplace.json でマーケットプレイスにしている
@@ -102,7 +104,7 @@ plugins/kdr/    配布する skill（kdr を Docker 越しに使う）。.claude
 
 GitHub Actions（`.github/`）:
 
-- `workflows/ci.yml`（main への push と PR）: `npm ci` → `npm test` → `npm run lint` → `npm run build` → `npm run check:viewer` → `npm run e2e`。
+- `workflows/ci.yml`（main への push と PR）: `npm ci` → `npm test` → `npm run lint` → `npm run check:version` → `npm run build` → `npm run check:viewer` → `npm run e2e`。
   ランナーの Google Chrome を使い、日本語の描画のために `fonts-noto-cjk` を入れる。失敗したら `e2e/out/` を artifact `e2e-out` に上げる。
 - `workflows/docker.yml`: イメージを作って viewer・editor・`kdr` コマンドが動くかを確かめ（`verify`）、push のときだけ GHCR に上げる（`publish`。main → `edge`、`v*` タグ → semver と `latest`）。
   `v*` タグのときは、イメージを上げた後に GitHub Releases も作る（`release`。本文は前のタグからのコミットの一覧と、イメージの pull・起動コマンド）。
@@ -112,12 +114,23 @@ GitHub Actions（`.github/`）:
 
 タグを push すると、Docker イメージ（`ghcr.io/yosiopp/kadrokreo:X.Y.Z`・`X.Y`・`latest`）と GitHub Releases ができる。
 
+版は 1 つで、タグ `vX.Y.Z` の `X.Y.Z` と同じ。`package.json`・`package-lock.json` の `version` と、`.claude-plugin/marketplace.json` のプラグイン `kdr` の `version` に書いている。
+main の版は最後に打ったタグのままにしておき、**タグを打つ直前のコミットで上げる**（機能を入れるたびには上げない）。
+
 ```sh
+node scripts/version.mjs set X.Y.Z      # 版を書いている 3 つのファイルを書き換える
+npm run check
+git commit -am "版を X.Y.Z にする"
+git push origin main                    # CI が通るのを待つ
 git tag -a vX.Y.Z -m "（変更の一行サマリ）"
 git push origin vX.Y.Z
 ```
 
-GitHub の画面（Releases → Draft a new release）でタグを作ってもよい（そのときも本文は自動のものに置き換わる）。`v0.2.0-rc.1` のように `-` を含むタグはプレリリースになる。
+- 3 つのファイルの版が互いに揃っているかは `npm run check:version`（`npm run check` と CI の中でも流れる）が確かめる。
+- タグと版が揃っているかは、タグを push したときに Docker のワークフローが最初に確かめる（`node scripts/version.mjs check vX.Y.Z`。手元でも流せる）。
+  ずれていたらそこで失敗し、イメージの公開にもリリースの作成にも進まない。版を揃えるコミットを足して、タグを打ち直す。
+
+GitHub の画面（Releases → Draft a new release）でタグを作ってもよい（そのときも先に版を上げておく。本文は自動のものに置き換わる）。`v0.2.0-rc.1` のように `-` を含むタグはプレリリースになる（版も `0.2.0-rc.1` にする）。
 リリースの本文は `scripts/release-notes.sh vX.Y.Z` で手元でも確かめられる（前の `v*` タグからのコミットの件名と本文の箇条書き）。
 
 ## ライセンス
