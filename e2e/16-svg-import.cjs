@@ -185,10 +185,12 @@ const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
   await viewer.waitForSelector('.app-message')
   check('viewer は SVG を開かない', (await viewer.evaluate(() => window.svgPwned)) === undefined)
 
-  // CSP を付けた配信（配布するイメージ）では、DOMParser が SVG の on* 属性を読んだ時点で「インラインのイベントハンドラを止めた」とコンソールに出る。
-  // 属性を読んだ時点の検査で、ハンドラが動こうとしたわけではない（動いていないことは上の svgPwned で確かめている）ので、これは数えない
-  const unexpected = errors.filter((message) => !message.includes('Executing inline event handler violates the following Content Security Policy'))
-  check('コンソールエラーなし（CSP が止めたと知らせる on* 属性の分は除く）', unexpected.length === 0, unexpected.join(' | '))
+  // CSP を付けた配信（配布するイメージ）では、DOMParser が SVG の on* 属性・style 属性・<style> を読んだ時点で「インラインの…を止めた」とコンソールに出る
+  // （style のほうは Chrome の版によって出る）。読んだ時点の検査で、ハンドラが動こうとしたわけではなく（動いていないことは上の svgPwned で確かめている）、
+  // 取り込みは属性の文字を自分で読むので結果も変わらない（上の色や線の確認が通る）。この知らせは数えない
+  const cspNotice = /^(Executing inline event handler|Applying inline style) violates the following Content Security Policy/
+  const unexpected = errors.filter((message) => !cspNotice.test(message))
+  check('コンソールエラーなし（CSP が止めたと知らせる on* 属性・インラインの style の分は除く）', unexpected.length === 0, unexpected.join(' | '))
   await browser.close()
   finish()
 })().catch(crashed)
