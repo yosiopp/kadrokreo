@@ -207,7 +207,9 @@ function rebuildGlyf(transformed: Uint8Array, origLength: number): { glyf: Uint8
   const overlapBitmap = (options & 1) !== 0 ? new Reader(transformed, offset).bytes(Math.floor((glyphCount + 7) / 8)) : null
   const hasBit = (bitmap: Uint8Array, glyph: number): boolean => (bitmap[glyph >> 3] & (0x80 >> (glyph & 7))) !== 0
 
-  const glyf = new Writer(Math.min(origLength, MAX_TOTAL_SIZE))
+  // 最初の大きさは見出しの値（origLength）をそのまま信じず、変換したデータの大きさに見合う分まで（足りなければ伸びる）。
+  // 数バイトの見出しだけで、上限いっぱいの確保をさせない
+  const glyf = new Writer(Math.min(origLength, transformed.length * 2 + 1024, MAX_TOTAL_SIZE))
   const offsets = new Uint32Array(glyphCount + 1)
   const xMins = new Int16Array(glyphCount)
   for (let glyph = 0; glyph < glyphCount; glyph++) {

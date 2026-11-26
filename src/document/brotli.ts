@@ -13,8 +13,13 @@ class BitReader {
   constructor(data: Uint8Array) {
     this.data = data
   }
-  /** 少なくとも 25 ビットを貯める（データの終わりより先は 0 で埋め、使ったら checkEnd で弾く） */
+  /**
+   * 少なくとも 25 ビットを貯める（データの終わりより先は 0 で埋め、使ったら checkEnd で弾く）。
+   * 貯めておけるのは 32 ビットまでなので、終わりより 4 バイト以上先を読みに来たら、もう終わりより先を使っている。
+   * そこで止める（0 を読み続けられると、短い入力で長い繰り返しを回せてしまう）
+   */
   private fill(): void {
+    if (this.pos > this.data.length + 3) throw new Error('brotli: 途中で切れています')
     while (this.count <= 24) {
       const byte = this.pos < this.data.length ? this.data[this.pos] : 0
       this.pos++
@@ -283,15 +288,15 @@ function readContextMap(reader: BitReader, size: number, trees: number): Uint8Ar
     }
   }
   if (reader.read(1) === 1) {
-    // 前へ移す変換（move-to-front）を戻す
-    const order = Array.from({ length: 256 }, (_, i) => i)
+    // 前へ移す変換（move-to-front）を戻す。項目は 1 万を超えることがあり、見出しごとに通るので、並びはバイト列をずらして動かす
+    const order = Uint8Array.from({ length: 256 }, (_, i) => i)
     for (let i = 0; i < size; i++) {
       const index = map[i]
       const value = order[index]
       map[i] = value
       if (index > 0) {
-        order.splice(index, 1)
-        order.unshift(value)
+        order.copyWithin(1, 0, index)
+        order[0] = value
       }
     }
   }
@@ -312,7 +317,8 @@ type BlockCategory = {
 
 function readBlockCategory(reader: BitReader): BlockCategory {
   const types = readVarLenUint8(reader) + 1
-  if (types < 2) return { types, typeTable: null, lengthTable: null, left: 1 << 28, current: 0, previous: 1 }
+  // 種類が 1 つなら切り替えは起きない（残りの数を数え切らないよう、無限大にしておく）
+  if (types < 2) return { types, typeTable: null, lengthTable: null, left: Infinity, current: 0, previous: 1 }
   const typeTable = readHuffman(reader, types + 2)
   const lengthTable = readHuffman(reader, 26)
   return { types, typeTable, lengthTable, left: readBlockLength(reader, lengthTable), current: 0, previous: 1 }

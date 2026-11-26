@@ -33,6 +33,30 @@ export type OutlineFont = {
 const MAX_TABLES_SIZE = 128 * 1024 * 1024
 /** 合成字・サブルーチンの入れ子の上限 */
 const MAX_NESTING = 10
+/**
+ * 字 1 つの輪郭を作るのにかけてよい手間（合成字の部品の展開・点・字形の命令を 1 つずつ数える）。合成字やサブルーチンが互いを
+ * 何度も指す書体は、入れ子の深さの上限だけでは掛け算で増えて終わらなくなる。超えた字は読めない字として空にする
+ */
+const MAX_GLYPH_WORK = 50_000
+/** 古い kern の表から読む組の数の上限（個数の欄だけを大きくした表で、同じ組を読み続けないように） */
+const MAX_KERN_PAIRS = 200_000
+/** GPOS の kern の機能からたどるルックアップの番号・小表の数の上限と、字詰めに使う小表（PairPos）の数の上限 */
+const MAX_KERN_LOOKUP_WORK = 200_000
+const MAX_KERN_SUBTABLES = 1024
+
+/** 手間を数える。上限を超えたら例外（その字・その表を読めないものとして扱う） */
+function workBudget(limit: number): { spend(amount: number): void; reset(): void } {
+  let used = 0
+  return {
+    spend: (amount) => {
+      used += amount
+      if (used > limit) throw new RangeError('too much work')
+    },
+    reset: () => {
+      used = 0
+    },
+  }
+}
 
 type Tables = Map<string, DataView>
 
@@ -241,13 +265,15 @@ function glyfOutlines(tables: Tables, head: DataView, glyphCount: number): ((gly
     if (long) return [loca.getUint32(glyph * 4), loca.getUint32(glyph * 4 + 4)]
     return [loca.getUint16(glyph * 2) * 2, loca.getUint16(glyph * 2 + 2) * 2]
   }
+  const budget = workBudget(MAX_GLYPH_WORK)
   const contoursOf = (glyph: number, depth: number): GlyphPoint[][] => {
     if (depth > MAX_NESTING || glyph >= glyphCount) return []
+    budget.spend(1)
     const [start, end] = locate(glyph)
     if (end <= start) return []
     const data = viewOf(new Uint8Array(glyf.buffer, glyf.byteOffset, glyf.byteLength), start, end - start)
     const contourCount = data.getInt16(0)
-    if (contourCount >= 0) return simpleGlyph(data, contourCount)
+    if (contourCount >= 0) return simpleGlyph(data, contourCount, budget.spend)
     const result: GlyphPoint[][] = []
     let offset = 10
     for (;;) {
@@ -287,19 +313,24 @@ function glyfOutlines(tables: Tables, head: DataView, glyphCount: number): ((gly
         offset += 8
       }
       for (const contour of contoursOf(component, depth + 1)) {
+        budget.spend(contour.length)
         result.push(contour.map((p) => ({ x: a * p.x + c * p.y + dx, y: b * p.x + d * p.y + dy, on: p.on })))
       }
       if ((flags & 0x20) === 0) break
     }
     return result
   }
-  return (glyph) => quadraticPath(contoursOf(glyph, 0))
+  return (glyph) => {
+    budget.reset()
+    return quadraticPath(contoursOf(glyph, 0))
+  }
 }
 
-function simpleGlyph(data: DataView, contourCount: number): GlyphPoint[][] {
+function simpleGlyph(data: DataView, contourCount: number, spend: (amount: number) => void): GlyphPoint[][] {
   const endPoints: number[] = []
   for (let i = 0; i < contourCount; i++) endPoints.push(data.getUint16(10 + i * 2))
   const pointCount = contourCount === 0 ? 0 : endPoints[contourCount - 1] + 1
+  spend(contourCount + pointCount)
   let offset = 10 + contourCount * 2
   offset += 2 + data.getUint16(offset)
   const flags = new Uint8Array(pointCount)
@@ -464,6 +495,8 @@ function subrBias(count: number): number {
 function privateSubrs(cff: DataView, dict: Map<number, number[]>): CffIndex {
   const [size, offset] = dict.get(18) ?? [0, 0]
   if (!size) return EMPTY_INDEX
+  // Private DICT は CFF の表の中（表の外は、同じバッファにあるほかの表やファイルなので読まない）
+  if (size < 0 || offset < 0 || offset + size > cff.byteLength) throw new RangeError('bad private dict')
   const priv = cffDict(new DataView(cff.buffer, cff.byteOffset + offset, size))
   const subrs = priv.get(19)?.[0]
   return subrs ? cffIndex(cff, offset + subrs).index : EMPTY_INDEX
@@ -526,17 +559,24 @@ function runCharString(code: DataView, globalSubrs: CffIndex, localSubrs: CffInd
   let ended = false
   const globalBias = subrBias(globalSubrs.count)
   const localBias = subrBias(localSubrs.count)
+  const budget = workBudget(MAX_GLYPH_WORK)
 
+  // 数が足りない命令（スタックに無い数を読む）は座標が数でなくなる。壊れた字として読むのをやめる
+  const checkPoint = () => {
+    if (!Number.isFinite(x + y)) throw new RangeError('bad operand')
+  }
   const moveTo = (dx: number, dy: number) => {
     if (open) out.push({ type: 'Z' })
     x += dx
     y += dy
+    checkPoint()
     out.push({ type: 'M', x, y })
     open = true
   }
   const lineTo = (dx: number, dy: number) => {
     x += dx
     y += dy
+    checkPoint()
     out.push({ type: 'L', x, y })
   }
   const curveTo = (dx1: number, dy1: number, dx2: number, dy2: number, dx3: number, dy3: number) => {
@@ -546,6 +586,7 @@ function runCharString(code: DataView, globalSubrs: CffIndex, localSubrs: CffInd
     const y2 = y1 + dy2
     x = x2 + dx3
     y = y2 + dy3
+    checkPoint()
     out.push({ type: 'C', x1, y1, x2, y2, x, y })
   }
   // 幅は最初の「スタックを空にする」命令の前に、余分な 1 つとして置かれる
@@ -563,6 +604,7 @@ function runCharString(code: DataView, globalSubrs: CffIndex, localSubrs: CffInd
     if (depth > MAX_NESTING) throw new RangeError('subr nesting')
     let i = 0
     while (i < data.byteLength && !ended) {
+      budget.spend(1)
       const b0 = data.getUint8(i++)
       if (b0 >= 32 || b0 === 28) {
         if (b0 === 28) {
@@ -674,13 +716,13 @@ function runCharString(code: DataView, globalSubrs: CffIndex, localSubrs: CffInd
         }
         case 10: { // callsubr
           const index = s.pop()! + localBias
-          if (index < 0 || index >= localSubrs.count) throw new RangeError('bad subr')
+          if (!Number.isInteger(index) || index < 0 || index >= localSubrs.count) throw new RangeError('bad subr')
           run(localSubrs.at(index), depth + 1)
           break
         }
         case 29: { // callgsubr
           const index = s.pop()! + globalBias
-          if (index < 0 || index >= globalSubrs.count) throw new RangeError('bad subr')
+          if (!Number.isInteger(index) || index < 0 || index >= globalSubrs.count) throw new RangeError('bad subr')
           run(globalSubrs.at(index), depth + 1)
           break
         }
@@ -766,6 +808,7 @@ function kernTable(kern: DataView): ((left: number, right: number) => number) | 
   if (kern.getUint16(0) !== 0) return null
   const count = kern.getUint16(2)
   const pairs = new Map<number, number>()
+  const budget = workBudget(MAX_KERN_PAIRS)
   let offset = 4
   for (let t = 0; t < count; t++) {
     const length = kern.getUint16(offset + 2)
@@ -773,6 +816,7 @@ function kernTable(kern: DataView): ((left: number, right: number) => number) | 
     // 横書き（bit 0）で、最小値・直交でない format 0 だけ
     if ((coverage & 0x1) !== 0 && (coverage & 0x6) === 0 && coverage >> 8 === 0) {
       const pairCount = kern.getUint16(offset + 6)
+      budget.spend(pairCount)
       for (let i = 0; i < pairCount; i++) {
         const at = offset + 14 + i * 6
         const key = kern.getUint16(at) * 65536 + kern.getUint16(at + 2)
@@ -854,23 +898,27 @@ function gposKerning(gpos: DataView): ((left: number, right: number) => number) 
   const featureList = gpos.getUint16(6)
   const lookupList = gpos.getUint16(8)
   const lookupIndices = new Set<number>()
+  const budget = workBudget(MAX_KERN_LOOKUP_WORK)
   const featureCount = gpos.getUint16(featureList)
   for (let i = 0; i < featureCount; i++) {
     const record = featureList + 2 + i * 6
     if (tagAt(gpos, record) !== 'kern') continue
     const feature = featureList + gpos.getUint16(record + 4)
     const count = gpos.getUint16(feature + 2)
+    budget.spend(count)
     for (let k = 0; k < count; k++) lookupIndices.add(gpos.getUint16(feature + 4 + k * 2))
   }
   if (lookupIndices.size === 0) return null
   // 字詰め（PairPos）の小表。拡張（type 9）の先も開く
   const subtables: DataView[][] = []
+  let subtableCount = 0
   const lookupCount = gpos.getUint16(lookupList)
   for (const index of [...lookupIndices].sort((a, b) => a - b)) {
     if (index >= lookupCount) continue
     const lookup = lookupList + gpos.getUint16(lookupList + 2 + index * 2)
     const type = gpos.getUint16(lookup)
     const count = gpos.getUint16(lookup + 4)
+    budget.spend(count)
     const list: DataView[] = []
     for (let k = 0; k < count; k++) {
       let at = lookup + gpos.getUint16(lookup + 6 + k * 2)
@@ -882,6 +930,8 @@ function gposKerning(gpos: DataView): ((left: number, right: number) => number) 
       if (subtableType === 2) list.push(new DataView(gpos.buffer, gpos.byteOffset + at, gpos.byteLength - at))
     }
     if (list.length > 0) subtables.push(list)
+    subtableCount += list.length
+    if (subtableCount > MAX_KERN_SUBTABLES) throw new RangeError('too many subtables')
   }
   if (subtables.length === 0) return null
   return (left, right) => {

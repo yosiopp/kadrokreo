@@ -2,6 +2,7 @@
 // kdr に埋め込む書体（document.fonts）の名前と太さは、ファイルの name / OS/2 の表から決める
 // （ブラウザの FontFace と CLI の Canvas が同じ書体を同じ名前・太さで使えるように、利用者の打ち込みには頼らない）。
 
+import { inflateZlib } from './inflate.ts'
 import type { EmbeddedFont } from './types.ts'
 
 /** 埋め込める書体の種類と、kdr の中のファイルの拡張子 */
@@ -87,13 +88,13 @@ export type FontFileInfo = { mime: string; family: string | null; weight: number
 
 /**
  * 書体ファイルの種類・書体名（name の表の 16 か 1）・太さ（OS/2 の usWeightClass を 100 刻みに丸めたもの）・斜体を読む。
- * WOFF は表を展開して読む（非同期）。WOFF2 は sfnt に戻して読む（woff2.ts。Brotli の辞書が大きいので、要るときだけ読み込む）。書体として読めなければ null
+ * WOFF は表を展開して読む。WOFF2 は sfnt に戻して読む（woff2.ts。Brotli の辞書が大きいので、要るときだけ読み込む）。書体として読めなければ null
  */
 export async function readFontFileInfo(bytes: Uint8Array): Promise<FontFileInfo | null> {
   const mime = fontMime(bytes)
   if (mime === null) return null
   try {
-    const tables = mime === 'font/woff' ? await woffTables(bytes) : mime === 'font/woff2' ? await woff2Tables(bytes) : sfntTables(bytes)
+    const tables = mime === 'font/woff' ? woffTables(bytes) : mime === 'font/woff2' ? await woff2Tables(bytes) : sfntTables(bytes)
     if (tables === null) return null
     return { mime, ...fontInfoOf(tables) }
   } catch {
@@ -138,8 +139,14 @@ async function woff2Tables(bytes: Uint8Array): Promise<Tables | null> {
   return sfnt === null ? null : sfntTables(sfnt)
 }
 
-/** WOFF の表の一覧から、要る表を切り出す（圧縮された表は zlib で展開する） */
-async function woffTables(bytes: Uint8Array): Promise<Tables | null> {
+/** 読む表（name・OS/2・head）の、展開した大きさの上限 */
+const MAX_INFO_TABLE_SIZE = 1024 * 1024
+
+/**
+ * WOFF の表の一覧から、要る表を切り出す。圧縮された表は、一覧に書かれた大きさ（上限つき）までしか展開しない
+ * （小さな圧縮データが大きく膨らむファイルで、メモリを使い切らないように）
+ */
+function woffTables(bytes: Uint8Array): Tables | null {
   const data = view(bytes)
   const count = data.getUint16(12)
   const tables: Tables = {}
@@ -150,16 +157,11 @@ async function woffTables(bytes: Uint8Array): Promise<Tables | null> {
     const offset = data.getUint32(record + 4)
     const compressed = data.getUint32(record + 8)
     const length = data.getUint32(record + 12)
-    if (offset + compressed > bytes.length || length > 1024 * 1024) return null
-    const raw = bytes.slice(offset, offset + compressed)
-    tables[key] = compressed < length ? await inflate(raw) : raw
+    if (offset + compressed > bytes.length || length > MAX_INFO_TABLE_SIZE) return null
+    const raw = bytes.subarray(offset, offset + compressed)
+    tables[key] = compressed < length ? inflateZlib(raw, length) : raw
   }
   return tables
-}
-
-async function inflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))
-  return new Uint8Array(await new Response(stream).arrayBuffer())
 }
 
 function fontInfoOf(tables: Tables): Omit<FontFileInfo, 'mime'> {
@@ -202,20 +204,16 @@ function familyName(table: Uint8Array, nameId: number): string | null {
     if (start + length > table.length) continue
     const raw = table.subarray(start, start + length)
     let score: number
-    let text: string
-    if (platform === 3 && (encoding === 1 || encoding === 10)) {
-      score = language === 0x409 ? 3 : 2
-      text = new TextDecoder('utf-16be').decode(raw)
-    } else if (platform === 0) {
-      score = 2
-      text = new TextDecoder('utf-16be').decode(raw)
-    } else if (platform === 1 && encoding === 0) {
-      score = 1
-      text = String.fromCharCode(...raw)
-    } else {
-      continue
-    }
-    if (text.trim() !== '' && (best === null || score > best.score)) best = { score, text }
+    if (platform === 3 && (encoding === 1 || encoding === 10)) score = language === 0x409 ? 3 : 2
+    else if (platform === 0) score = 2
+    else if (platform === 1 && encoding === 0) score = 1
+    else continue
+    // 今の候補より良いものだけを文字にする（項目は 6 万個まで書けるので、全部を文字にすると項目の数 × 長さの手間になる）
+    if (best !== null && score <= best.score) continue
+    let text = ''
+    if (score === 1) for (const byte of raw) text += String.fromCharCode(byte)
+    else text = new TextDecoder('utf-16be').decode(raw)
+    if (text.trim() !== '') best = { score, text }
   }
   return best?.text ?? null
 }
