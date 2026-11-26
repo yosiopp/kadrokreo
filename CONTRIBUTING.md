@@ -34,7 +34,8 @@ npm run kdr -- --help   # コマンドライン（npm link すれば kdr --help�
 2. `npm run lint` — oxlint（依存の向きの決まりもここで確かめる。警告も失敗にする。意図して残すものは、その行だけ理由を添えて無効にする）
 3. `npm run build` — 型検査と viewer・editor のビルド
 4. `npm run check:viewer` — `dist/viewer` に editor にしかない文言・API が入っていないか（`scripts/check-viewer.mjs`）
-5. `npm run e2e` — ブラウザでの動作確認（`e2e/` のスクリプトを番号順に。`01` が書き出した kdr を `02` が使う）。スクリーンショットは `e2e/out/`
+5. `npm run e2e` — ブラウザでの動作確認（`e2e/` のスクリプトを番号順に。`01` が書き出した kdr を `02` が使う）。スクリーンショットは `e2e/out/`。
+   スクリプトを足すときは、使っていない次の番号を付ける（番号は重ねない。`npm run e2e -- 40` のように番号で 1 本を指せるように）
 
 `npm run capture` と `npm run bench` は `check` に入れていない。性能の計測の結果の控えは [`docs/bench/`](docs/bench/) にある。
 

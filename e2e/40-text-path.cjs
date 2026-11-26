@@ -125,7 +125,7 @@ async function svgInk(page, text) {
   const drawn = await canvasInk(page)
   const fromSvg = await svgInk(page, exported)
   const original = await svgInk(page, SOURCE)
-  await page.locator('.canvas-view').screenshot({ path: path.join(OUT, '38-text-path.png') })
+  await page.locator('.canvas-view').screenshot({ path: path.join(OUT, '40-text-path.png') })
   check('書き出した SVG は textPath で書く', exported.includes('<textPath href="#kdr-text-path-') && exported.includes('startOffset="50%"'))
   check('キャンバスの文字は、書き出した SVG をブラウザで描いた文字と同じ範囲に並ぶ', drawn.count > 300 && sameInk(drawn, fromSvg),
     `canvas ${JSON.stringify(drawn)} / svg ${JSON.stringify(fromSvg)}`)
@@ -166,7 +166,7 @@ async function svgInk(page, text) {
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   const inEditor = await canvasInk(page)
-  await page.locator('.canvas-view').screenshot({ path: path.join(OUT, '38-text-path-attached.png') })
+  await page.locator('.canvas-view').screenshot({ path: path.join(OUT, '40-text-path-attached.png') })
   const [kdr] = await Promise.all([page.waitForEvent('download'), page.locator('button:text-is("kdr に書き出し")').click()])
   const kdrPath = path.join(OUT, 'text-path.kdr')
   await kdr.saveAs(kdrPath)
@@ -185,7 +185,7 @@ async function svgInk(page, text) {
   check('viewer でも editor と同じ形に文字が並ぶ', sameInk(scaled, inEditor, 3), `viewer ${JSON.stringify(scaled)}（${zoom * 100}%）/ editor ${JSON.stringify(inEditor)}`)
   await viewer.locator(`.layer-row:has(.layer-name:text-is("${text.name}"))`).first().click()
   check('viewer のインスペクトに「パスに沿う」が出る', (await viewer.locator('text=パスに沿う').count()) > 0)
-  await viewer.screenshot({ path: path.join(OUT, '38-text-path-viewer.png') })
+  await viewer.screenshot({ path: path.join(OUT, '40-text-path-viewer.png') })
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
