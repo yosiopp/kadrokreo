@@ -257,8 +257,8 @@ kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほか�
 
 | 書くもの | 決まり |
 | --- | --- |
-| 要素 | `<frame>` `<rect>` `<ellipse>` `<text>` `<image src="…">` `<line from="x,y" to="x,y">` `<path d="M0 0 L…">`（か `points="x,y x,y …" closed="true"`）、`<component>`（コンポーネントの元になるフレーム）、`<instance of="元の id か名前">` |
-| 親子と重なり順 | 入れ子が親子、書いた順が重なり順（先に書いたものが背面。自動で並べるフレームでは並ぶ順）。子を持てるのは `<frame>` と `<component>` |
+| 要素 | `<frame>` `<rect>` `<ellipse>` `<text>` `<image src="…">` `<line from="x,y" to="x,y">` `<path d="M0 0 L…">`（か `points="x,y x,y …" closed="true"`）、`<component>`（コンポーネントの元になるフレーム）、`<component-set>`（バリアントのまとまり）、`<instance of="元の id か名前">` |
+| 親子と重なり順 | 入れ子が親子、書いた順が重なり順（先に書いたものが背面。自動で並べるフレームでは並ぶ順）。子を持てるのは `<frame>` `<component>` `<component-set>` |
 | 属性 | `set` の「名前=値」と同じ（`name` `fill` `stroke` `cornerRadius` `opacity` `fontSize` `shadow.blur` …）。書く順は問わない |
 | 書かなかった項目 | 「なし」から始まる（塗りなし・線なし・余白 0・間隔 0）。`add` や editor で作るときの灰色の塗り・余白 10 は付かない。テキストだけは黒・16px の sans-serif |
 | 並べ方 | `layout="row\|column"` で子を自動で並べ、`gap` `padding`（`"16"` `"12 40"` `"12 40 24"` `"1 2 3 4"`。CSS と同じ順）`align` `justify` `wrap` で決める |
@@ -267,7 +267,34 @@ kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほか�
 | テキスト | 要素の中身に書く（前後の空白と行ごとの字下げは除く。途中の改行は改行になる）。`<` と `&` は `&lt;` `&amp;`。空白をそのまま残すなら `text="…"` の属性に。行の高さは `lineHeight="1.5"`（倍率）か `"24px"`、字間は `letterSpacing="2"`（px）か `"0.05em"`、装飾は `textDecoration="underline"`（`line-through`） |
 | 画像 | `src` は、マークアップのファイルからの相対パス |
 | コンポーネント | `<instance of="…">` の元は、マークアップの中の `<component>` の `id`、なければ `name` で探す（`place` は今の kdr の元からも探す）。中身を変えるのは `<override node="レイヤー名" text="…" fill="…" visible="false"/>`。同じ名前がいくつもあれば `node="親/子"` か、元の側で付けた `id` で指す。入れ子のインスタンスの差し替えは `<override node="…" of="別の元"/>`。`<instance>` 自身に書けるのは名前・位置・回転・表示・不透明度、`width="fill"` / `height="fill"`、塗りと線で、ほかは元で決まる |
+| 説明文・プロパティ・バリアント | 説明文は `<component description="…">`。プロパティは元の中のノードに `prop="名前"`（`<text>` なら文言、`<instance>` なら差し替え）か `prop.visible="名前"`（表示）を書いて結ぶ。インスタンスでの値は `<override prop="名前" value="…"/>`。バリアントは `<component-set>` の直下に `<component variant="種類=大, 状態=標準">` を並べ、`<instance of="まとまり" variant="種類=大">` で選ぶ（下の例） |
 | id | 省ける。省くと木の道筋（名前と、同じ名前の兄弟の中での順）から決まる。後で `set` などから指すノードには `id` を書いておく |
+
+コンポーネントの説明文・プロパティ・バリアントも、マークアップに書ける:
+
+```xml
+<component name="Icon" id="icon" width="16" height="16" fill="#5b4cf5"/>
+<component-set name="Button" description="主な操作に使うボタン" layout="row" gap="8">
+  <component variant="種類=標準, 大きさ=大" description="ふつうはこれ" layout="row" gap="4" padding="8 16" fill="#5b4cf5">
+    <instance of="icon" name="Icon" prop.visible="アイコンを出す"/>
+    <text name="Label" fill="#ffffff" prop="文言">OK</text>
+  </component>
+  <component variant="種類=標準, 大きさ=小" layout="row" gap="4" padding="4 8" fill="#5b4cf5">
+    <instance of="icon" name="Icon"/>
+    <text name="Label" fontSize="12" fill="#ffffff">OK</text>
+  </component>
+</component-set>
+
+<instance of="Button" variant="大きさ=小">
+  <override prop="文言" value="送信"/>
+  <override prop="アイコンを出す" value="false"/>
+</instance>
+```
+
+- `prop="名前"` は `<text>` なら文言、`<instance>` なら差し替えのプロパティ、`prop.visible="名前"` はどのノードでも表示のプロパティとして結ぶ。同じ名前を別のノードにも書けば結び足し、元がバリアントなら、まとまりのほかのバリアントにも同じ名前で足す（結ぶのはレイヤー名のたどり方が同じノード）
+- `variant` に書かなかったプロパティは、`of` で指したバリアント（まとまりを指したなら最初のバリアント）に近いものを選ぶ。入れ子のインスタンスの差し替え `<override node="…" of="…" variant="…"/>` でも選べる
+- 差し替えの候補（`prop-prefer`）とプロパティの並べ替え（`prop-order`）は、`build` に `+` でつなぐ
+- ないプロパティ名・ないバリアントの値・同じ組み合わせのバリアントなども、行番号つきのエラーになる
 
 - 知らない要素・属性、値の誤り、閉じ忘れは、`kdr: build: design.xml:12: fill="red": …` のようにファイルと行番号を付けて知らせ、何も書き出さない
 - 繰り返しや変数はない。同じ形はコンポーネントとインスタンスで表すか、マークアップを作る側（スクリプトなど）で繰り返す

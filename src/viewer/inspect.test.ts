@@ -697,6 +697,29 @@ describe('inspectNode', () => {
     ])
   })
 
+  it('テキストは背景とのコントラスト比と、基準を満たすかを出す', () => {
+    const backdrop = rect({ id: 'bg', x: -10, y: -10, width: 200, height: 100, fills: solid('#ffffff') })
+    expect(rowsOf(sceneOf(backdrop, text({ fills: solid('#777777') })), 'text', 'コントラスト')).toEqual([
+      '文字=#777777',
+      '背景=#FFFFFF',
+      '比=4.47:1',
+      '文字の大きさ=ふつうの文字',
+      'AA=満たさない（4.5:1 以上）',
+      'AAA=満たさない（7:1 以上）',
+    ])
+    expect(rowsOf(sceneOf(text({ fills: solid('#000000'), fontSize: 24 })), 'text', 'コントラスト')).toEqual([
+      '文字=#000000',
+      '背景=#FFFFFF（後ろが透けている所は白の地として）',
+      '比=21.00:1',
+      '文字の大きさ=大きな文字（24px 以上か、太字で 18.66px 以上）',
+      'AA=満たす（3:1 以上）',
+      'AAA=満たす（4.5:1 以上）',
+    ])
+    const half = rect({ id: 'half', x: 50, y: 0, width: 100, height: 100, name: '半分' })
+    expect(rowsOf(sceneOf(half, text()), 'text', 'コントラスト')).toEqual(['比=求められない（「半分」の塗りが一部だけ重なる）'])
+    expect(rowsOf(sceneOf(rect()), 'rect', 'コントラスト')).toBeUndefined()
+  })
+
   it('オートレイアウトの設定と、コンポーネントとのつながりを出す', () => {
     const main = frame({
       id: 'main',

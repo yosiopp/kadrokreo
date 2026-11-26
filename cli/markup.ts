@@ -16,12 +16,15 @@
 //   落ち着くまでかける → インスタンスの上書きを当てる」の順で、途中の大きさ（仮の 100）で子が辺に追従しないよう、最初の後始末は自分でかける
 // - id を省くと、木の道筋（名前と、同じ名前の兄弟の中での番号）のハッシュにする。同じマークアップからは同じ id になる
 // - 書き間違いは「ファイル:行: 内容」のエラー（MarkupError）にする。値の誤りも、ノードごとに kdr の検証を通して行を付ける
-import { OVERRIDE_KEYS, derivedId, isInstance, owningInstance } from '../src/document/component.ts'
-import { subtreeIds } from '../src/document/componentSource.ts'
+import { type MainNode, OVERRIDE_KEYS, derivedId, findMain, isInstance, isMain, owningInstance } from '../src/document/component.ts'
+import { canBindProperty, enclosingMainNode, instanceProperties } from '../src/document/componentProperties.ts'
+import { namePath, pathIndex, subtreeIds } from '../src/document/componentSource.ts'
 import { KdrError, MAX_DEPTH, kdrFile, parseKdr } from '../src/document/kdr.ts'
 import { pathFromPoints } from '../src/document/path.ts'
 import { sha256Hex } from '../src/document/sha256.ts'
-import type { Asset, AssetId, DesignDocument, FrameNode, NodeId, Page, SceneNode } from '../src/document/types.ts'
+import type { Asset, AssetId, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, SceneNode } from '../src/document/types.ts'
+import { type VariantProps, formatVariantName, isVariantSet, parseVariantName, propValue, variantSetOf, variantsIn } from '../src/document/variants.ts'
+import { alignVariantProperties, setInstanceProperty } from '../src/editor/componentProperties.ts'
 import { canHoldInstance, listComponents, componentName, nestedInstanceOf, sameJson, swapNestedInstance, syncComponents } from '../src/editor/components.ts'
 import { relayout } from '../src/editor/layout.ts'
 import { createEllipse, createFrame, createImage, createLine, createPath, createRect, createText } from '../src/editor/nodes.ts'
@@ -56,7 +59,7 @@ export type MarkupElement = {
 const MAX_LENGTH = 16 * 1024 * 1024
 const MAX_ELEMENTS = 100_000
 
-const NODE_ELEMENTS = ['frame', 'component', 'instance', 'rect', 'ellipse', 'line', 'path', 'text', 'image'] as const
+const NODE_ELEMENTS = ['frame', 'component', 'component-set', 'instance', 'rect', 'ellipse', 'line', 'path', 'text', 'image'] as const
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 type Fail = (line: number, message: string) => MarkupError
@@ -175,6 +178,9 @@ function uniqueId(seed: string, taken: Set<string>): string {
 
 type ComponentTarget = { componentId: string; name: string }
 
+/** あとで結ぶ、コンポーネントのプロパティ（prop="…" / prop.visible="…"） */
+type PendingBinding = { pageId: string; mainId: NodeId; targetId: NodeId; type: ComponentProperty['type']; name: string; line: number }
+
 /** あとで当てる、インスタンスの上書き */
 type PendingInstance = {
   pageId: string
@@ -188,13 +194,18 @@ type Scope = {
   fail: Fail
   images: ReadonlyMap<string, MarkupImage>
   assets: Record<AssetId, Asset>
-  /** <instance of="…"> の指す元 */
-  component: (of: MarkupAttribute) => ComponentTarget
+  /** <instance of="…" variant="…"> の指す元 */
+  component: (of: MarkupAttribute, variant?: MarkupAttribute) => ComponentTarget
   /** 要素に振った id */
   ids: Map<MarkupElement, NodeId>
   /** <component> に振ったコンポーネントの id */
   componentIds: Map<MarkupElement, string>
   pending: PendingInstance[]
+  bindings: PendingBinding[]
+  /** バリアントのまとまり（<component-set>、place の入れる先のまとまり）と、その中のバリアントの名前 */
+  sets: Map<NodeId, { names: Set<string>; strict: boolean }>
+  /** place で、入れる先を含むコンポーネントの元（prop の結び先になる） */
+  outerMain: NodeId | null
 }
 
 /** kdr として読める値かを、ノード 1 つで確かめる（子とコンポーネントのつながりは、最後の全体の検証が見る） */
@@ -263,8 +274,9 @@ function textContent(element: MarkupElement): string {
 /** ノードの属性のうち、種類ごとに自分で読むもの（残りは buildPatch に渡す） */
 const STRUCTURAL: Record<(typeof NODE_ELEMENTS)[number], readonly string[]> = {
   frame: ['id'],
-  component: ['id'],
-  instance: ['id', 'of'],
+  component: ['id', 'description', 'variant'],
+  'component-set': ['id', 'description'],
+  instance: ['id', 'of', 'variant'],
   rect: ['id'],
   ellipse: ['id'],
   line: ['id', 'from', 'to'],
@@ -272,6 +284,146 @@ const STRUCTURAL: Record<(typeof NODE_ELEMENTS)[number], readonly string[]> = {
   text: ['id'],
   image: ['id', 'src'],
 }
+
+/** コンポーネントのプロパティに結ぶ属性（どのノードにも書ける。元の中のノードでだけ意味がある） */
+const BINDING_ATTRIBUTES = ['prop', 'prop.visible']
+
+/** 子を持てる要素 */
+const CONTAINERS = new Set(['frame', 'component', 'component-set'])
+
+/** parent（と祖先）を含む、いちばん近いコンポーネントの元。scene の外（place の入れる先）まで来たら scope.outerMain */
+function enclosingComponent(scope: Scope, scene: { nodes: Record<NodeId, SceneNode> }, parent: FrameNode | null): NodeId | null {
+  for (let id = parent?.id ?? null; id !== null; ) {
+    const node = scene.nodes[id]
+    if (!node) return scope.outerMain
+    if (isMain(node)) return id
+    id = node.parentId
+  }
+  return null
+}
+
+/**
+ * <component variant="種類=大, 状態=標準"> の名前（「プロパティ=値」をカンマでつないだもの）。variant がなければ null。
+ * variant を書けるのは <component-set> の直下の <component> だけで、そこでは省けない。同じまとまりに同じ組み合わせは 2 つ書けない
+ */
+function variantName(scope: Scope, element: MarkupElement, parent: FrameNode | null): string | null {
+  const { fail } = scope
+  const variant = element.attributes.find((attribute) => attribute.name === 'variant')
+  const set = parent ? scope.sets.get(parent.id) : undefined
+  if (!set) {
+    if (variant) throw fail(variant.line, 'variant は <component-set> の直下の <component> にだけ書けます')
+    return null
+  }
+  const names = set.names
+  if (!variant && !set.strict) return null
+  if (!variant) throw fail(element.line, '<component-set> の直下の <component> には variant が要ります（variant="種類=大, 状態=標準" のように）')
+  const name = element.attributes.find((attribute) => attribute.name === 'name')
+  if (name) throw fail(name.line, 'バリアントの名前は variant から決まるので、name は書けません')
+  const props = parseVariantName(variant.value)
+  if (props === null) {
+    throw fail(variant.line, `variant="${variant.value}": 「プロパティ=値」をカンマでつないで書きます（名前も値も空にできず、同じプロパティは 1 回だけ）`)
+  }
+  const written = formatVariantName(props)
+  const key = canonicalVariant(props)
+  if (names.has(key)) throw fail(variant.line, `variant="${variant.value}": 同じ組み合わせのバリアントが、このまとまりにもうあります`)
+  names.add(key)
+  return written
+}
+
+/** バリアントの組み合わせを、プロパティの並びによらない形にする（同じ組み合わせを見分けるため） */
+function canonicalVariant(props: VariantProps): string {
+  return JSON.stringify([...props].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+}
+
+/** prop="名前"（文言・差し替え）と prop.visible="名前"（表示）を、あとで結ぶものとして覚える */
+function bindingsOf(scope: Scope, scene: { id: string; nodes: Record<NodeId, SceneNode> }, element: MarkupElement, node: SceneNode, parent: FrameNode | null): void {
+  const { fail } = scope
+  for (const attribute of element.attributes) {
+    if (!BINDING_ATTRIBUTES.includes(attribute.name)) continue
+    const name = attribute.value.trim()
+    if (name === '') throw fail(attribute.line, `${attribute.name}: プロパティの名前が空です`)
+    const mainId = enclosingComponent(scope, scene, parent)
+    if (mainId === null) {
+      throw fail(attribute.line, `${attribute.name}: コンポーネントのプロパティに結べるのは、<component> の中のノードだけです`)
+    }
+    let type: ComponentProperty['type'] = 'boolean'
+    if (attribute.name === 'prop') {
+      if (node.type === 'text') type = 'text'
+      else if (isInstance(node)) type = 'instance'
+      else throw fail(attribute.line, `prop: 文言のプロパティは <text>、差し替えのプロパティは <instance> に書きます（表示を切り替えるなら prop.visible）`)
+    }
+    scope.bindings.push({ pageId: scene.id, mainId, targetId: node.id, type, name, line: attribute.line })
+  }
+}
+
+/**
+ * 覚えておいたプロパティを、書いた順に元へ結ぶ。同じ名前なら結び足し、元がバリアントなら、まとまりのほかのバリアントにも
+ * 同じ名前で足して、レイヤー名のたどり方が同じノードを結ぶ（editor の addComponentProperty / bindComponentProperty と同じ結果）。
+ * 1 つずつ editor の処理に通すと、ノードの表とプロパティの並びを毎回写すので、数が多いと時間が 2 乗で伸びる。まとめて作って 1 回で書き戻す
+ */
+function applyBindings(scope: Scope, doc: DesignDocument): DesignDocument {
+  if (scope.bindings.length === 0) return doc
+  const byPage = new Map<string, PendingBinding[]>()
+  for (const binding of scope.bindings) {
+    const list = byPage.get(binding.pageId)
+    if (list) list.push(binding)
+    else byPage.set(binding.pageId, [binding])
+  }
+  return [...byPage].reduce((current, [pageId, bindings]) => updatePage(current, pageId, (page) => bindAll(scope, page, bindings)), doc)
+}
+
+type Working = { properties: ComponentProperty[]; byName: Map<string, { property: ComponentProperty; targets: Set<NodeId> }> }
+
+function bindAll(scope: Scope, page: Page, bindings: readonly PendingBinding[]): Page {
+  const working = new Map<NodeId, Working>()
+  const workingOf = (main: MainNode): Working => {
+    let entry = working.get(main.id)
+    if (!entry) {
+      const properties = main.component.properties.map((property) => ({ ...property, targets: [...property.targets] }))
+      entry = { properties, byName: new Map(properties.map((property) => [property.name, { property, targets: new Set(property.targets) }])) }
+      working.set(main.id, entry)
+    }
+    return entry
+  }
+  const indexes = new Map<NodeId, Map<string, NodeId>>()
+  const indexOf = (id: NodeId) => indexes.get(id) ?? indexes.set(id, pathIndex(page, id)).get(id)!
+  // まとまりとその中のバリアントは、元ごと・まとまりごとに 1 回だけ求める（バリアントが多いと、名前を読み直すだけで重い）
+  const sets = new Map<NodeId, FrameNode | null>()
+  const setOf = (id: NodeId) => (sets.has(id) ? sets.get(id)! : sets.set(id, variantSetOf(page, id)).get(id)!)
+  const members = new Map<NodeId, MainNode[]>()
+  const membersOf = (setId: NodeId) => members.get(setId) ?? members.set(setId, variantsIn(page, setId)).get(setId)!
+  for (const { mainId, targetId, type, name, line } of bindings) {
+    const main = page.nodes[mainId]
+    if (!isMain(main)) continue
+    const existing = workingOf(main).byName.get(name)?.property
+    if (existing && existing.type !== type) {
+      throw scope.fail(line, `プロパティ ${name} は ${TYPE_NAMES[existing.type]}のプロパティです（ここでは${TYPE_NAMES[type]}として結ぼうとしています）`)
+    }
+    if (!canBindProperty(page, mainId, type, targetId)) throw scope.fail(line, `プロパティ ${name} に結べません`)
+    const set = setOf(mainId)
+    const variants = set ? membersOf(set.id) : [main]
+    const path = set ? namePath(page, mainId, targetId) : null
+    for (const variant of variants) {
+      const mapped = variant.id === mainId ? targetId : path ? (indexOf(variant.id).get(path) ?? null) : null
+      const bindable = mapped !== null && canBindProperty(page, variant.id, type, mapped)
+      const own = workingOf(variant)
+      const found = own.byName.get(name)
+      if (!found) {
+        const property: ComponentProperty = { name, type, targets: bindable ? [mapped] : [], preferred: [] }
+        own.properties.push(property)
+        own.byName.set(name, { property, targets: new Set(property.targets) })
+      } else if (found.property.type === type && bindable && !found.targets.has(mapped)) {
+        found.property.targets.push(mapped)
+        found.targets.add(mapped)
+      }
+    }
+  }
+  return patchNodes(page, working.keys(), (node) =>
+    isMain(node) ? { component: { ...node.component, properties: working.get(node.id)!.properties } } : null,
+  )
+}
+
+const TYPE_NAMES: Record<ComponentProperty['type'], string> = { text: '文言', boolean: '表示', instance: '差し替え' }
 
 /** 属性では決められない項目（木の形から決まる） */
 const FORBIDDEN = new Set(['type', 'parentId', 'children', 'component', 'assetId'])
@@ -306,17 +458,17 @@ function buildElement(
     if (FORBIDDEN.has(name)) throw fail(line, `${name} は属性では指定できません`)
   }
   if (kind !== 'text' && element.textLine !== null) throw fail(element.textLine, `<${kind}> の中に文字は書けません（文字は <text> に書く）`)
-  if (kind !== 'frame' && kind !== 'component' && kind !== 'instance' && element.children.length > 0) {
-    throw fail(element.children[0].line, `<${kind}> の中に要素は書けません（子を持てるのは <frame> と <component>）`)
+  if (!CONTAINERS.has(kind) && kind !== 'instance' && element.children.length > 0) {
+    throw fail(element.children[0].line, `<${kind}> の中に要素は書けません（子を持てるのは <frame> <component> <component-set>）`)
   }
 
   const id = scope.ids.get(element)!
-  const rest = element.attributes.filter(({ name }) => !STRUCTURAL[kind].includes(name))
+  const rest = element.attributes.filter(({ name }) => !STRUCTURAL[kind].includes(name) && !BINDING_ATTRIBUTES.includes(name))
   const at = { x: 0, y: 0, width: 100, height: 100 }
   let node: SceneNode
 
   if (kind === 'instance') {
-    const target = scope.component(required('of', '元の <component> の id か名前'))
+    const target = scope.component(required('of', '元の <component> の id か名前'), attribute('variant'))
     const own = rest.filter(({ name }) => INSTANCE_OWN.has(name))
     for (const { name, value, line } of own) {
       if ((name === 'width' || name === 'height') && value.trim() !== 'fill') {
@@ -347,9 +499,23 @@ function buildElement(
       case 'frame':
         created = { ...createFrame(at), fills: [] }
         break
-      case 'component':
-        created = { ...createFrame(at), fills: [], component: { id: scope.componentIds.get(element)!, role: 'main', description: '', properties: [] } }
+      case 'component': {
+        const description = attribute('description')?.value ?? ''
+        created = { ...createFrame(at), fills: [], component: { id: scope.componentIds.get(element)!, role: 'main', description, properties: [] } }
+        const variant = variantName(scope, element, parent)
+        if (variant !== null) created = { ...created, name: variant }
         break
+      }
+      case 'component-set': {
+        if (enclosingComponent(scope, scene, parent) !== null) {
+          throw fail(element.line, '<component-set> は <component> の中には書けません（バリアントのまとまりは、元の外のフレーム）')
+        }
+        if (!element.children.some((child) => child.name === 'component')) {
+          throw fail(element.line, '<component-set> には、バリアントの <component variant="…"> が 1 つ以上要ります')
+        }
+        created = { ...createFrame(at), fills: [], setDescription: attribute('description')?.value ?? '' }
+        break
+      }
       case 'line': {
         const from = required('from', '始点 "x,y"')
         const to = required('to', '終点 "x,y"')
@@ -432,6 +598,8 @@ function buildElement(
   scene.nodes[id] = placed
   if (parent) parent.children.push(id)
   else scene.rootIds.push(id)
+  if (kind === 'component-set') scope.sets.set(id, { names: new Set(), strict: true })
+  bindingsOf(scope, scene, element, placed, parent)
   if (placed.type === 'frame' && kind !== 'instance') {
     // children は createFrame が作った、このノードだけの配列
     for (const child of element.children) buildElement(scope, scene, child, placed, depth + 1)
@@ -458,7 +626,10 @@ function assignIds(scope: Scope, elements: readonly MarkupElement[], seed: strin
       if (element.name === 'override') continue
       const written = element.attributes.find((attribute) => attribute.name === 'id')?.value
       // 道筋の 1 段は、id を書いていればそれ、なければ名前（なければ要素名）と、同じ名前の兄弟の中での番号
-      const label = written !== undefined ? `#${written}` : (element.attributes.find((attribute) => attribute.name === 'name')?.value ?? `<${element.name}>`)
+      const attributeValue = (name: string) => element.attributes.find((attribute) => attribute.name === name)?.value
+      // バリアントは名前を書かないので、variant を名前の代わりに使う（属性を書いた順にはよらない）
+      const named = attributeValue('name') ?? (element.name === 'component' ? attributeValue('variant') : undefined)
+      const label = written !== undefined ? `#${written}` : (named ?? `<${element.name}>`)
       const nth = seen.get(label) ?? 0
       seen.set(label, nth + 1)
       const here = `${path}/${label}${nth === 0 ? '' : `~${nth}`}`
@@ -469,41 +640,139 @@ function assignIds(scope: Scope, elements: readonly MarkupElement[], seed: strin
   derive(elements, seed)
 }
 
-type LocalComponent = ComponentTarget & { id: string | undefined }
+/**
+ * of="…" で指せる元。keys は指すのに使える id（書いた id・元のノードの id・コンポーネントの id・まとまりの id）、
+ * name は名前（バリアントならまとまりの名前）。set はバリアントのまとまり（同じ値なら同じまとまり。並びはまとまりの中の順）
+ */
+type Candidate = ComponentTarget & { keys: string[]; names: string[]; set: string | null; props: VariantProps | null; order: number }
 
 /** マークアップの中の <component> を集め、コンポーネントの id を決める */
-function collectComponents(scope: Scope, elements: readonly MarkupElement[], pageKey: string, taken: Set<string>, found: LocalComponent[]): void {
-  for (const element of elements) {
+function collectComponents(
+  scope: Scope,
+  elements: readonly MarkupElement[],
+  pageKey: string,
+  taken: Set<string>,
+  found: Candidate[],
+  set: MarkupElement | null = null,
+): void {
+  const written = (element: MarkupElement, name: string) => element.attributes.find((attribute) => attribute.name === name)?.value
+  elements.forEach((element, order) => {
     if (element.name === 'component') {
       const componentId = uniqueId(`component:${pageKey}:${scope.ids.get(element)}`, taken)
       scope.componentIds.set(element, componentId)
+      // まとまりの中の <component> は、variant の誤りがあってもまとまりの一員として扱う（誤りは組み立てるときに、その行で知らせる）
+      const name = written(set ?? element, 'name') ?? 'Frame'
       found.push({
         componentId,
-        name: element.attributes.find((attribute) => attribute.name === 'name')?.value ?? 'Frame',
-        id: element.attributes.find((attribute) => attribute.name === 'id')?.value,
+        name,
+        names: [name],
+        keys: [written(element, 'id'), set ? written(set, 'id') : undefined].filter((key) => key !== undefined),
+        set: set ? `markup:${pageKey}:${scope.ids.get(set)}` : null,
+        props: set ? parseVariantName(written(element, 'variant') ?? '') : null,
+        order,
       })
     }
-    collectComponents(scope, element.children, pageKey, taken, found)
+    collectComponents(scope, element.children, pageKey, taken, found, element.name === 'component-set' ? element : null)
+  })
+}
+
+/** 今のドキュメントの元を、of="…" で指せるものにする。名前は、元のノードの名前とまとまりの名前のどちらでも指せる */
+function documentCandidates(doc: DesignDocument): Candidate[] {
+  const orders = new Map<string, Map<NodeId, number>>()
+  return listComponents(doc).map((main) => {
+    const set = variantSetOf(main.page, main.node.id)
+    const key = set ? `doc:${main.page.id}:${set.id}` : null
+    let order = 0
+    if (set && key) {
+      if (!orders.has(key)) orders.set(key, new Map(variantsIn(main.page, set.id).map((variant, index) => [variant.id, index])))
+      order = orders.get(key)!.get(main.node.id) ?? 0
+    }
+    return {
+      componentId: main.node.component.id,
+      name: componentName(main),
+      names: [...new Set([main.node.name, componentName(main)])],
+      keys: [main.node.id, main.node.component.id, ...(set ? [set.id] : [])],
+      set: key,
+      props: set ? parseVariantName(main.node.name) : null,
+      order,
+    }
+  })
+}
+
+/** id・名前・まとまりから元を引く表 */
+type CandidateIndex = { byKey: Map<string, Candidate[]>; byName: Map<string, Candidate[]>; bySet: Map<string, Candidate[]> }
+
+function indexCandidates(candidates: readonly Candidate[]): CandidateIndex {
+  const index: CandidateIndex = { byKey: new Map(), byName: new Map(), bySet: new Map() }
+  const add = (map: Map<string, Candidate[]>, key: string, candidate: Candidate) => {
+    const list = map.get(key)
+    if (list) list.push(candidate)
+    else map.set(key, [candidate])
+  }
+  for (const candidate of candidates) {
+    for (const key of new Set(candidate.keys)) add(index.byKey, key, candidate)
+    for (const name of candidate.names) add(index.byName, name, candidate)
+    if (candidate.set !== null) add(index.bySet, candidate.set, candidate)
+  }
+  for (const list of index.bySet.values()) list.sort((a, b) => a.order - b.order)
+  return index
+}
+
+/**
+ * of="…"（と variant="…"）の指す元を探す関数。マークアップの中の <component>（id、名前の順）、なければ今のドキュメントの元。
+ * バリアントのまとまりを指したら（まとまりの id・名前、バリアントの id）、variant の組み合わせを持つバリアントを選ぶ。
+ * variant に書かなかったプロパティは、指したバリアント（まとまりを指したなら最初のバリアント）の値に近いものを選ぶ
+ */
+function componentResolver(fail: Fail, locals: readonly Candidate[], doc: DesignDocument | null): Scope['component'] {
+  const local = indexCandidates(locals)
+  let existing: CandidateIndex | null = null
+  return (of, variant) => {
+    const choose = (index: CandidateIndex, candidates: readonly Candidate[] | undefined, what: string): ComponentTarget | null => {
+      if (!candidates || candidates.length === 0) return null
+      const set = candidates[0].set
+      const inOneSet = set !== null && candidates.every((candidate) => candidate.set === set)
+      if (candidates.length > 1 && !inOneSet) {
+        throw fail(of.line, `${of.name}="${of.value}": 同じ${what}の元が ${candidates.length} 個あります。<component> に id を付けて、その id で指してください`)
+      }
+      // まとまりを指したら、まとまりの最初のバリアントから選ぶ
+      const base = candidates.length === 1 ? candidates[0] : index.bySet.get(set!)![0]
+      if (!variant) return base
+      if (!inOneSet) throw fail(variant.line, `variant="${variant.value}": ${of.name}="${of.value}" の元は、バリアントのまとまり（<component-set>）の中のものではありません`)
+      return pickVariantOf(fail, variant, index.bySet.get(set)!, base)
+    }
+    const search = (index: CandidateIndex) => choose(index, index.byKey.get(of.value), ' id ') ?? choose(index, index.byName.get(of.value), '名前')
+    const found = search(local) ?? search((existing ??= indexCandidates(doc ? documentCandidates(doc) : [])))
+    if (!found) throw fail(of.line, `${of.name}="${of.value}": コンポーネントの元（<component>）が見つかりません`)
+    return found
   }
 }
 
-/** of="…" の指す元を探す関数。マークアップの中の <component>（id、名前の順）、なければ今のドキュメントの元 */
-function componentResolver(fail: Fail, locals: readonly LocalComponent[], doc: DesignDocument | null): Scope['component'] {
-  return (of) => {
-    const pick = (candidates: readonly ComponentTarget[], what: string): ComponentTarget | null => {
-      if (candidates.length > 1) throw fail(of.line, `of="${of.value}": 同じ${what}の元が ${candidates.length} 個あります。<component> に id を付けて、その id で指してください`)
-      return candidates[0] ?? null
+/** まとまりのバリアント（variants）から、variant="…" の組み合わせを持ち、ほかのプロパティが base に近いものを選ぶ */
+function pickVariantOf(fail: Fail, variant: MarkupAttribute, variants: readonly Candidate[], base: Candidate): Candidate {
+  const wanted = parseVariantName(variant.value)
+  if (wanted === null) throw fail(variant.line, `variant="${variant.value}": 「プロパティ=値」をカンマでつないで書きます`)
+  let best: Candidate | null = null
+  let bestScore = -1
+  for (const candidate of variants) {
+    const props = candidate.props ?? []
+    if (!wanted.every(([key, value]) => propValue(props, key) === value)) continue
+    const score = (base.props ?? []).filter(([key, value]) => propValue(wanted, key) === undefined && propValue(props, key) === value).length
+    if (score > bestScore) {
+      best = candidate
+      bestScore = score
     }
-    const local = pick(locals.filter((component) => component.id === of.value), ' id ') ?? pick(locals.filter((component) => component.name === of.value), '名前')
-    if (local) return local
-    const mains = doc ? listComponents(doc) : []
-    const existing = (matches: typeof mains) => matches.map((main) => ({ componentId: main.node.component.id, name: componentName(main) }))
-    const found =
-      pick(existing(mains.filter(({ node }) => node.id === of.value || node.component.id === of.value)), ' id ') ??
-      pick(existing(mains.filter(({ node }) => node.name === of.value)), '名前')
-    if (!found) throw fail(of.line, `of="${of.value}": コンポーネントの元（<component>）が見つかりません`)
-    return found
   }
+  if (best) return best
+  // 見つからなければ、どのプロパティ・値がないのかを知らせる
+  for (const [key, value] of wanted) {
+    const values = [...new Set(variants.flatMap((candidate) => (candidate.props ?? []).filter(([other]) => other === key).map(([, v]) => v)))]
+    if (values.length === 0) {
+      const keys = [...new Set(variants.flatMap((candidate) => (candidate.props ?? []).map(([other]) => other)))]
+      throw fail(variant.line, `variant="${variant.value}": プロパティ ${key} がありません（あるもの: ${keys.join(', ')}）`)
+    }
+    if (!values.includes(value)) throw fail(variant.line, `variant="${variant.value}": ${key} に値 ${value} がありません（あるもの: ${values.join(', ')}）`)
+  }
+  throw fail(variant.line, `variant="${variant.value}": その組み合わせのバリアントがありません`)
 }
 
 function checkAttributes(fail: Fail, element: MarkupElement, allowed: readonly string[]): void {
@@ -531,6 +800,9 @@ function newScope(file: string, images: ReadonlyMap<string, MarkupImage>, assets
     ids: new Map(),
     componentIds: new Map(),
     pending: [],
+    bindings: [],
+    sets: new Map(),
+    outerMain: null,
   }
 }
 
@@ -583,19 +855,19 @@ export function buildMarkupDocument(
   })
   // ノードの id はページの中でだけ一意
   for (const { element } of pages) assignIds(scope, element.children, '', new Set())
-  const locals: LocalComponent[] = []
+  const locals: Candidate[] = []
   const componentIds = new Set<string>()
   for (const { element, scene } of pages) collectComponents(scope, element.children, scene.id, componentIds, locals)
   scope.component = componentResolver(fail, locals, null)
   for (const { element, scene } of pages) {
     for (const child of element.children) buildElement(scope, scene, child, null, 0)
   }
-  const document: DesignDocument = {
+  const document = applyBindings(scope, {
     name: root.attributes.find((attribute) => attribute.name === 'name')?.value ?? 'Untitled',
     pages: pages.map(({ scene }) => scene),
     assets,
     fonts: [],
-  }
+  })
   checkCycles(scope, document)
   return { document, build: { pending: scope.pending, scope } }
 }
@@ -621,8 +893,15 @@ export function placeMarkupFragment(
   }
   const page = doc.pages.find((candidate) => candidate.id === pageId)!
   const parent = parentId === null ? null : (page.nodes[parentId] as FrameNode)
+  if (parentId !== null) {
+    scope.outerMain = enclosingMainNode(page, parentId)?.id ?? null
+    // 今の kdr のまとまり（名前で作ったものもある）には、variant を省いた <component> も今までどおり足せる
+    if (isVariantSet(page, parentId)) {
+      scope.sets.set(parentId, { names: new Set(variantsIn(page, parentId).map((variant) => canonicalVariant(parseVariantName(variant.name)!))), strict: false })
+    }
+  }
   assignIds(scope, [root], `place:${parentId ?? ''}`, new Set(Object.keys(page.nodes)))
-  const locals: LocalComponent[] = []
+  const locals: Candidate[] = []
   collectComponents(scope, [root], pageId, new Set(listComponents(doc).map(({ node }) => node.component.id)), locals)
   scope.component = componentResolver(fail, locals, doc)
 
@@ -637,7 +916,11 @@ export function placeMarkupFragment(
   const nodes: Record<NodeId, SceneNode> = { ...page.nodes, ...descendants, [id]: placed }
   if (parent) nodes[parent.id] = { ...parent, children: siblings }
   const next: Page = { ...page, nodes, rootIds: parent ? page.rootIds : siblings }
-  const document = updatePage(doc, pageId, () => next)
+  let document = applyBindings(scope, updatePage(doc, pageId, () => next))
+  // まとまりにバリアントを足したら、まとまりのほかのバリアントのプロパティを揃える（editor でバリアントを増やしたときと同じ）
+  if (parentId !== null && isMain(built) && variantSetOf(document.pages.find((candidate) => candidate.id === pageId)!, id)) {
+    document = updatePage(document, pageId, (scene) => alignVariantProperties(scene, parentId, document))
+  }
   checkCycles(scope, document)
   return { document, id, build: { pending: scope.pending, scope } }
 }
@@ -707,13 +990,24 @@ export function applyMarkupOverrides(session: Session, { pending, scope }: Marku
     throw fail(node.line, `node="${node.value}": インスタンスの中に、その名前のレイヤーがありません（あるのは ${names.join('、')}）`)
   }
 
+  const attributeOf = (element: MarkupElement, name: string) => element.attributes.find((attribute) => attribute.name === name)
+  const byProperty = (override: MarkupElement) => attributeOf(override, 'prop') !== undefined
+  for (const item of pending) {
+    for (const override of item.element.children) {
+      const variant = attributeOf(override, 'variant')
+      if (variant && !attributeOf(override, 'of') && !byProperty(override)) {
+        throw fail(variant.line, 'variant は of="…"（差し替える元）か prop="…"（差し替えのプロパティ）と一緒に書きます')
+      }
+    }
+  }
+
   // 入れ子のインスタンスの差し替え（中身の形が変わるので、ほかの上書きより先に、1 つずつ同期する）
   for (const item of pending) {
     for (const override of item.element.children) {
-      const of = override.attributes.find((attribute) => attribute.name === 'of')
-      if (!of) continue
+      const of = attributeOf(override, 'of')
+      if (!of || byProperty(override)) continue
       const copyId = target(item, override)
-      const { componentId } = scope.component(of)
+      const { componentId } = scope.component(of, attributeOf(override, 'variant'))
       const nested = nestedInstanceOf(session.document, pageOf(item.pageId), copyId)
       if (!nested) throw fail(of.line, `of="${of.value}": 差し替えられるのは、元の中に置いたインスタンスだけです`)
       if (nested.componentId === componentId) continue
@@ -721,6 +1015,24 @@ export function applyMarkupOverrides(session: Session, { pending, scope }: Marku
       session.applyDocument((doc) => swapNestedInstance(doc, item.pageId, copyId, componentId))
       if (session.document === before) throw fail(of.line, `of="${of.value}": 差し替えられません（元が自分自身を含むことになります）`)
     }
+  }
+
+  // コンポーネントのプロパティの値（<override prop="名前" value="値"/>）。結んだノードすべてへの上書きになる
+  // 差し替えは中身の形が変わるので 1 つずつ、文言と表示はまとめて 1 回で当てる（数が多くても同期を何度もかけない）
+  const values: { item: PendingInstance; name: string; value: string | boolean }[] = []
+  for (const item of pending) {
+    const seen = new Set<string>()
+    for (const override of item.element.children) {
+      if (!byProperty(override)) continue
+      const resolved = propertyValue(session, scope, item, override)
+      if (resolved && seen.has(resolved.name)) throw fail(override.line, `同じプロパティ ${resolved.name} への <override> が 2 つあります。1 つにまとめてください`)
+      if (resolved) seen.add(resolved.name)
+      if (resolved?.type === 'instance') applySwapProperty(session, scope, item, resolved)
+      else if (resolved) values.push({ item, name: resolved.name, value: resolved.value })
+    }
+  }
+  if (values.length > 0) {
+    session.applyDocument((doc) => values.reduce((next, { item, name, value }) => setInstanceProperty(next, item.pageId, item.instanceId, name, value), doc))
   }
 
   // 値の上書き。写しをまとめて書き換える
@@ -758,6 +1070,7 @@ export function applyMarkupOverrides(session: Session, { pending, scope }: Marku
   for (const item of pending) {
     if (item.root.length > 0) add(item, item.instanceId, item.element, item.root, INSTANCE_ROOT_OVERRIDES, {})
     for (const override of item.element.children) {
+      if (byProperty(override)) continue
       const copyId = target(item, override)
       const src = override.attributes.find((attribute) => attribute.name === 'src')
       const extra: NodePatch = {}
@@ -765,7 +1078,7 @@ export function applyMarkupOverrides(session: Session, { pending, scope }: Marku
         if (pageOf(item.pageId).nodes[copyId].type !== 'image') throw fail(src.line, 'src: 画像のレイヤーにだけ指定できます')
         Object.assign(extra, { assetId: scope.images.get(src.value)!.assetId })
       }
-      const attributes = override.attributes.filter(({ name }) => name !== 'node' && name !== 'of' && name !== 'src')
+      const attributes = override.attributes.filter(({ name }) => name !== 'node' && name !== 'of' && name !== 'src' && name !== 'variant')
       if (attributes.length === 0 && !src && !override.attributes.some(({ name }) => name === 'of')) {
         throw fail(override.line, '<override> に上書きする項目がありません（text="…" fill="…" visible="false" など）')
       }
@@ -788,6 +1101,56 @@ export function applyMarkupOverrides(session: Session, { pending, scope }: Marku
       const lost = Object.keys(before).find((key) => !node || (!sameJson(before[key], patch[key]) && sameJson(node[key], before[key])))
       if (lost !== undefined) throw fail(line, `${lost} は、このレイヤーでは上書きできません`)
     }
+  }
+}
+
+/** <override prop="名前" value="値" [variant="…"]/> を、インスタンスのプロパティの値として当てる（kdr prop と同じ） */
+type ResolvedValue = { name: string; type: ComponentProperty['type']; value: string | boolean; line: number; written: string }
+
+/** <override prop="名前" value="値" [variant="…"]/> を確かめ、プロパティの値にする（kdr prop と同じ値） */
+function propertyValue(session: Session, scope: Scope, item: PendingInstance, override: MarkupElement): ResolvedValue | null {
+  const { fail } = scope
+  checkAttributes(fail, override, ['prop', 'value', 'variant'])
+  if (override.children.length > 0) throw fail(override.children[0].line, '<override> の中に要素は書けません')
+  const prop = override.attributes.find((attribute) => attribute.name === 'prop')!
+  const value = override.attributes.find((attribute) => attribute.name === 'value')
+  if (!value) throw fail(override.line, `<override prop="${prop.value}"> には value が要ります（文言なら文字、表示なら true か false、差し替えなら元の id か名前）`)
+  const instance = session.document.pages.find((page) => page.id === item.pageId)!.nodes[item.instanceId]
+  if (!isInstance(instance)) return null
+  const properties = findMain(session.document, instance.component.id)?.node.component.properties ?? []
+  const key = prop.value.trim()
+  const property = properties.find((candidate) => candidate.name === key)
+  if (!property) {
+    const names = properties.map((candidate) => candidate.name)
+    throw fail(prop.line, `prop="${prop.value}": 元にそのプロパティがありません（${names.length > 0 ? `あるもの: ${names.join(', ')}` : '元にプロパティがありません'}）`)
+  }
+  const variant = override.attributes.find((attribute) => attribute.name === 'variant')
+  if (variant && property.type !== 'instance') throw fail(variant.line, `variant は差し替えのプロパティにだけ書けます（${prop.value} は ${TYPE_NAMES[property.type]}のプロパティ）`)
+  let resolved: string | boolean = value.value
+  if (property.type === 'boolean') {
+    if (value.value !== 'true' && value.value !== 'false') throw fail(value.line, `value="${value.value}": ${prop.value} は表示のプロパティなので true か false です`)
+    resolved = value.value === 'true'
+  } else if (property.type === 'instance') {
+    resolved = scope.component(value, variant).componentId
+  }
+  // 結んだノードがこのバリアントにないプロパティは、値を入れても何も変わらない。黙って捨てずに知らせる
+  const page = session.document.pages.find((candidate) => candidate.id === item.pageId)!
+  if (!instanceProperties(session.document, page, instance).some((state) => state.property.name === property.name)) {
+    throw fail(prop.line, `prop="${prop.value}": この元では、プロパティ ${property.name} に結んだノードがありません`)
+  }
+  return { name: property.name, type: property.type, value: resolved, line: value.line, written: value.value }
+}
+
+/** 差し替えのプロパティの値を当てる。当たらなければ（元が自分自身を含むことになる）エラー */
+function applySwapProperty(session: Session, scope: Scope, item: PendingInstance, { name, value, line, written }: ResolvedValue): void {
+  const pageOf = () => session.document.pages.find((page) => page.id === item.pageId)!
+  const before = session.document
+  session.applyDocument((doc) => setInstanceProperty(doc, item.pageId, item.instanceId, name, value))
+  if (session.document !== before) return
+  const instance = pageOf().nodes[item.instanceId]
+  const current = isInstance(instance) ? instanceProperties(session.document, pageOf(), instance) : []
+  if (current.find((state) => state.property.name === name)?.value !== value) {
+    throw scope.fail(line, `value="${written}": 差し替えられません（元が自分自身を含むことになります）`)
   }
 }
 

@@ -368,6 +368,181 @@ describe('kdr build', () => {
   })
 })
 
+const VARIANTS = `<kdr name="V">
+  <page name="P">
+    <frame name="Parts" x="0" y="0" layout="column" gap="16">
+      <component name="Icon" id="icon" width="16" height="16" fill="#ff0000"/>
+      <component name="Star" id="star" width="16" height="16" fill="#00ff00"/>
+      <component-set name="Button" id="buttons" description="主な操作のボタン" layout="row" gap="8">
+        <component variant="種類=標準, 大きさ=大" id="large" description="大きいボタン" layout="row" padding="8 16" gap="4" fill="#5b4cf5">
+          <instance of="icon" name="Icon" prop="アイコン" prop.visible="アイコンを出す"/>
+          <text name="Label" fill="#ffffff" prop="文言">OK</text>
+        </component>
+        <component variant="種類=標準, 大きさ=小" id="small" layout="row" padding="4 8" gap="4" fill="#5b4cf5">
+          <instance of="icon" name="Icon"/>
+          <text name="Label" fill="#ffffff" fontSize="12">OK</text>
+        </component>
+        <component variant="種類=控えめ, 大きさ=大" id="quiet" layout="row" padding="8 16" gap="4" fill="#dddddd">
+          <instance of="icon" name="Icon"/>
+          <text name="Label" prop="文言">OK</text>
+        </component>
+      </component-set>
+    </frame>
+    <frame name="Screen" x="400" y="0" layout="column" gap="8">
+      <instance of="Button" id="b1"/>
+      <instance of="Button" id="b2" variant="大きさ=小"/>
+      <instance of="buttons" id="b3" variant="種類=控えめ">
+        <override prop="文言" value="やめる"/>
+        <override prop="アイコンを出す" value="false"/>
+      </instance>
+      <instance of="large" id="b4">
+        <override prop="アイコン" value="star"/>
+      </instance>
+    </frame>
+  </page>
+</kdr>`
+
+describe('kdr build のコンポーネントの説明文・プロパティ・バリアント', () => {
+  it('説明文・プロパティ・バリアントを持つコンポーネントを、マークアップ 1 つから作れる', async () => {
+    const doc = await built(VARIANTS)
+    const page = doc.pages[0]
+    const main = (id: string) => page.nodes[id] as FrameNode & { component: { role: 'main' } }
+    const set = page.nodes.buttons as FrameNode
+    expect(set.setDescription).toBe('主な操作のボタン')
+    expect(set.children.map((id) => page.nodes[id].name)).toEqual(['種類=標準, 大きさ=大', '種類=標準, 大きさ=小', '種類=控えめ, 大きさ=大'])
+    expect(main('large').component).toMatchObject({ role: 'main', description: '大きいボタン' })
+    expect(main('small').component).toMatchObject({ role: 'main', description: '' })
+    // プロパティは書いた順に作り、まとまりのすべてのバリアントで揃える（結ぶのはレイヤー名のたどり方が同じノード）
+    for (const id of ['large', 'small', 'quiet']) {
+      const variant = main(id)
+      const child = (name: string) => variant.children.find((childId) => page.nodes[childId].name === name)
+      expect(variant.component.properties, id).toEqual([
+        { name: 'アイコン', type: 'instance', targets: [child('Icon')], preferred: [] },
+        { name: 'アイコンを出す', type: 'boolean', targets: [child('Icon')], preferred: [] },
+        { name: '文言', type: 'text', targets: [child('Label')], preferred: [] },
+      ])
+    }
+    // バリアントは、まとまりを id か名前で指して variant で選ぶ。省いたプロパティは、指したもの（まとまりなら最初のバリアント）に近いもの
+    const componentOf = (id: string) => (page.nodes[id] as FrameNode).component!.id
+    expect(componentOf('b1')).toBe(componentOf('large'))
+    expect(componentOf('b2')).toBe(componentOf('small'))
+    expect(componentOf('b3')).toBe(componentOf('quiet'))
+    expect(componentOf('b4')).toBe(componentOf('large'))
+    expect(page.nodes.b1.name).toBe('Button')
+    // インスタンスでの値は <override prop="…" value="…"/>
+    const copies = (id: string) => (page.nodes[id] as FrameNode).children.map((childId) => page.nodes[childId])
+    expect(copies('b3').find((node) => node.type === 'text')).toMatchObject({ text: 'やめる' })
+    expect(copies('b3').find((node) => node.name === 'Icon')).toMatchObject({ visible: false })
+    expect(copies('b4').find((node) => node.type === 'frame')).toMatchObject({ name: 'Star' })
+  })
+
+  it('variant に書いたプロパティの並びは問わない。place は、今の kdr のまとまりにもバリアントを足せる', async () => {
+    const h = harness({
+      'a.xml': VARIANTS,
+      'part.xml': '<component variant="大きさ=小, 種類=控えめ" id="quietSmall" layout="row" fill="#eeeeee"><text name="Label" prop="文言">OK</text></component>',
+      'use.xml': '<instance of="Button" variant="種類=控えめ, 大きさ=小" id="b5"><override prop="文言" value="あとで"/></instance>',
+      'dup.xml': '<component variant="種類=標準, 大きさ=小" layout="row"/>',
+    })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    const code = await h.run(['-f', 'a.kdr', '-o', 'b.kdr', 'place', 'part.xml', '--parent', 'buttons', '+', 'place', 'use.xml', '--parent', 'Screen'])
+    expect(h.stderr).toBe('')
+    expect(code).toBe(0)
+    const page = (await h.doc('b.kdr')).pages[0]
+    const added = page.nodes.quietSmall as FrameNode
+    expect(added).toMatchObject({ name: '大きさ=小, 種類=控えめ', parentId: 'buttons' })
+    // まとまりのほかのバリアントのプロパティも揃える（結ぶのはレイヤー名のたどり方が同じノード。ないものは結ばない）
+    const label = added.children.find((id) => page.nodes[id].name === 'Label')
+    expect(added.component).toMatchObject({
+      properties: [
+        { name: 'アイコン', type: 'instance', targets: [] },
+        { name: 'アイコンを出す', type: 'boolean', targets: [] },
+        { name: '文言', type: 'text', targets: [label] },
+      ],
+    })
+    expect((page.nodes.b5 as FrameNode).component!.id).toBe(added.component!.id)
+    expect((page.nodes.b5 as FrameNode).children.map((id) => page.nodes[id]).find((node) => node.type === 'text')).toMatchObject({ text: 'あとで' })
+    // 同じ組み合わせは足せない
+    const again = await h.run(['-f', 'a.kdr', '-o', 'c.kdr', 'place', 'dup.xml', '--parent', 'buttons'])
+    expect(h.stderr).toMatch(/dup\.xml:1: variant="種類=標準, 大きさ=小": 同じ組み合わせのバリアント/)
+    expect(again).toBe(1)
+  })
+
+  it('名前で作ったまとまり（<component-set> を使わないもの）は今までどおり。元の名前でもまとまりの名前でも指せ、place で variant なしの元も足せる', async () => {
+    const h = harness({
+      'a.xml': '<kdr><page><frame name="Btn" id="set" layout="row"><component name="size=L" width="10" height="10"/><component name="size=S" width="5" height="5"/></frame></page></kdr>',
+      'use.xml': '<frame name="Uses" layout="row"><instance of="size=S" id="u1"/><instance of="Btn" id="u2" variant="size=S"/><instance of="Btn" id="u3"/></frame>',
+      'add.xml': '<component name="size=M" id="m" width="7" height="7"/>',
+    })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    const code = await h.run(['-f', 'a.kdr', '-o', 'b.kdr', 'place', 'use.xml', '+', 'place', 'add.xml', '--parent', 'set'])
+    expect(h.stderr).toBe('')
+    expect(code).toBe(0)
+    const page = (await h.doc('b.kdr')).pages[0]
+    const componentOf = (id: string) => (page.nodes[id] as FrameNode).component!.id
+    const small = (page.nodes.set as FrameNode).children.map((id) => page.nodes[id]).find((node) => node.name === 'size=S')!
+    const large = (page.nodes.set as FrameNode).children.map((id) => page.nodes[id]).find((node) => node.name === 'size=L')!
+    expect(componentOf('u1')).toBe((small as FrameNode).component!.id)
+    expect(componentOf('u2')).toBe((small as FrameNode).component!.id)
+    expect(componentOf('u3')).toBe((large as FrameNode).component!.id)
+    expect(page.nodes.m.parentId).toBe('set')
+  })
+
+  it('id は variant と name の書いた順によらない', async () => {
+    const one = harness({ 'a.xml': VARIANTS.replace('<instance of="Button" id="b1"/>', '<instance of="Button" variant="大きさ=小" name="X"/>') })
+    const two = harness({ 'a.xml': VARIANTS.replace('<instance of="Button" id="b1"/>', '<instance of="Button" name="X" variant="大きさ=小"/>') })
+    expect(await one.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await two.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(Buffer.from(one.fs.get('a.kdr')!).equals(Buffer.from(two.fs.get('a.kdr')!))).toBe(true)
+  })
+
+  it('書き間違い（ないプロパティ名・ないバリアントの値など）は行番号つきのエラーになる', async () => {
+    const lines = VARIANTS.split('\n')
+    const replace = (from: string, to: string) => {
+      const at = lines.findIndex((line) => line.includes(from))
+      expect(at, from).toBeGreaterThanOrEqual(0)
+      return [lines.with(at, lines[at].replace(from, to)).join('\n'), at + 1] as const
+    }
+    const cases: (readonly [string, number, RegExp])[] = [
+      [...replace('prop="文言" value="やめる"', 'prop="文字" value="やめる"'), /prop="文字": 元にそのプロパティがありません（あるもの: アイコン, アイコンを出す, 文言）/],
+      [...replace('variant="種類=控えめ">', 'variant="種類=派手">'), /variant="種類=派手": 種類 に値 派手 がありません（あるもの: 標準, 控えめ）/],
+      [...replace('variant="大きさ=小"/>', 'variant="色=赤"/>'), /variant="色=赤": プロパティ 色 がありません（あるもの: 種類, 大きさ）/],
+      [...replace('variant="大きさ=小"/>', 'variant="大きさ"/>'), /variant="大きさ": 「プロパティ=値」をカンマでつないで/],
+      [...replace('id="b4">', 'id="b4" variant="種類=控えめ, 大きさ=小">'), /その組み合わせのバリアントがありません/],
+      [...replace('<instance of="Button" id="b1"/>', '<instance of="icon" id="b1" variant="種類=標準"/>'), /of="icon" の元は、バリアントのまとまり/],
+      [...replace('value="false"', 'value="no"'), /value="no": アイコンを出す は表示のプロパティなので true か false/],
+      [...replace('value="star"', 'value="nope"'), /value="nope": コンポーネントの元（<component>）が見つかりません/],
+      [...replace('<override prop="文言" value="やめる"/>', '<override prop="文言"/>'), /<override prop="文言"> には value が要ります/],
+      [...replace('<override prop="アイコンを出す" value="false"/>', '<override prop=" 文言 " value="x"/>'), /同じプロパティ 文言 への <override> が 2 つあります/],
+      [...replace('<override prop="文言" value="やめる"/>', '<override prop="文言" value="x" fill="#000000"/>'), /<override> に fill は指定できません/],
+      [...replace('<override prop="文言" value="やめる"/>', '<override node="Label" variant="種類=標準" text="x"/>'), /variant は of="…"（差し替える元）か prop="…"/],
+      [...replace('variant="種類=標準, 大きさ=小" id="small"', 'id="small"'), /<component-set> の直下の <component> には variant が要ります/],
+      [...replace('variant="種類=標準, 大きさ=小" id="small"', 'variant="種類=標準, 大きさ=大" id="small"'), /同じ組み合わせのバリアントが、このまとまりにもうあります/],
+      [...replace('variant="種類=標準, 大きさ=小" id="small"', 'variant="種類=標準, 種類=小" id="small"'), /同じプロパティは 1 回だけ/],
+      [...replace('variant="種類=標準, 大きさ=小" id="small"', 'variant="種類=標準, 大きさ=小" name="S" id="small"'), /name は書けません/],
+      [...replace('<component name="Icon" id="icon"', '<component name="Icon" variant="a=b" id="icon"'), /variant は <component-set> の直下の <component> にだけ書けます/],
+      [...replace('<text name="Label" prop="文言">OK</text>', '<rect name="Label" prop="文言" width="1" height="1"/>'), /prop: 文言のプロパティは <text>、差し替えのプロパティは <instance> に書きます/],
+      [...replace('<text name="Label" prop="文言">OK</text>', '<text name="Label" prop.visible="文言">OK</text>'), /プロパティ 文言 は 文言のプロパティです（ここでは表示として結ぼうとしています）/],
+      [...replace('<text name="Label" prop="文言">OK</text>', '<text name="Label" prop=" ">OK</text>'), /prop: プロパティの名前が空です/],
+      [...replace('<instance of="Button" id="b1"/>', '<text prop="文言">x</text>'), /prop: コンポーネントのプロパティに結べるのは、<component> の中のノードだけ/],
+      [...replace('<component name="Star" id="star" width="16" height="16" fill="#00ff00"/>', '<component name="Star" id="star" layout="row"><component-set><component variant="a=b" width="1" height="1"/></component-set></component>'), /<component-set> は <component> の中には書けません/],
+      [...replace('<component name="Star" id="star" width="16" height="16" fill="#00ff00"/>', '<component-set name="Empty" width="1" height="1"/>'), /<component-set> には、バリアントの <component variant="…"> が 1 つ以上要ります/],
+    ]
+    // 結ぶノードのないバリアントのプロパティに値を入れる（小さいボタンからアイコンを外す）
+    const noIcon = lines.map((line, i) => (i === lines.findIndex((other) => other.includes('<instance of="icon" name="Icon"/>')) ? '' : line))
+    const b2 = noIcon.findIndex((line) => line.includes('id="b2"'))
+    cases.push([noIcon.with(b2, '<instance of="Button" id="b2" variant="大きさ=小"><override prop="アイコンを出す" value="false"/></instance>').join('\n'), b2 + 1, /prop="アイコンを出す": この元では、プロパティ アイコンを出す に結んだノードがありません/])
+    // まとまりの中の誤りは、先にそのまとまりを指すインスタンスがあっても、誤りの行で知らせる
+    cases.push([VARIANTS.replace('variant="種類=標準, 大きさ=小" id="small"', 'id="small"').replace('<frame name="Parts"', '<instance of="Button"/><frame name="Parts"'), lines.findIndex((line) => line.includes('id="small"')) + 1, /variant が要ります/])
+    for (const [markup, line, message] of cases) {
+      const h = harness({ 'a.xml': markup })
+      const code = await h.run(['build', 'a.xml', '-o', 'a.kdr'])
+      expect(h.stderr, String(message)).toMatch(new RegExp(`a\\.xml:${line}: `))
+      expect(h.stderr, String(message)).toMatch(message)
+      expect(code, String(message)).toBe(1)
+    }
+  })
+})
+
 describe('kdr place', () => {
   const PART = `<frame name="Row" layout="row" gap="8" padding="4">
     <rect name="Dot" width="12" height="12" fill="#00aaff"/>

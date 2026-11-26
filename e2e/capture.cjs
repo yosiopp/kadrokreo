@@ -288,6 +288,14 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await shot(viewer, '13-viewer-vue.png')
   await codeFormat.selectOption('html')
 
+  // ボタンの元の文字（「はじめる」）を検索して選び、背景とのコントラスト比を出す（検索は空に戻しておく）
+  const layerSearch = viewer.locator('input[aria-label="レイヤーを検索"]')
+  await layerSearch.fill('はじめる')
+  await viewer.locator('.inspect-layer').last().click()
+  await viewer.locator('section[aria-label="コントラスト"]').scrollIntoViewIfNeeded()
+  await shot(viewer, '17-viewer-contrast.png')
+  await layerSearch.fill('')
+
   // ── editor のバリアント（ほかのキャプチャに写らないよう、最後に 2 ページ目で作る） ──
   await page.bringToFront()
   await page.locator('.page-row:has(.page-name:text-is("設定"))').click()
