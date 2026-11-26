@@ -139,6 +139,7 @@ export function docs(): string {
     '- 表で出すもの: `find`（id・種類・道筋のタブ区切り）、`components`（ページ・id・名前・インスタンスの数のタブ区切り）、`bounds`（`x y width height` の空白区切り）、`ls`（字下げした木。1 行に種類・名前・id・位置と大きさ）、`info`（`名前: 値`）',
     '- コード: `css`・`html`（`--format html|react|css-modules|tailwind|vue`）',
     '- 書き出し: `png` と `svg-out` はファイルへ書き、書いたパスを標準エラーへ知らせる。`--to -` なら標準出力へ（ほかの標準出力への出力とは一緒にできない）',
+    '- 集計: `colors`・`text-styles`・`shadows`（viewer の「このページの色・文字・影」と同じ数え方。見えない色・隠れた色は数えない）。1 行に値と使われている数のタブ区切り。`--json` なら値（`color` / 書式の項目 / `shadow`）・`value`（表示用の書き方）・`count`・`nodes`（`{"page": ページの id, "id": ノードの id}` の配列）を持つオブジェクトの配列',
     '- 違い: `diff 前.kdr 後.kdr`（ほかのコマンドとはつなげない）。1 行に `+`（増えた）`-`（消えた）`~`（変わった）・種類・名前・id、変わったノードは続く行に `項目: 前 → 後`。ノードはページごとに `# ページ名  id` の見出しの下。`--json` なら `different`・`document`・`pages`・`nodes`・`components`・`assets`・`fonts` を持つ JSON（違いが無くても出す）',
     '',
     '## 終了コードとエラー',

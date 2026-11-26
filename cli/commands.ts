@@ -26,6 +26,7 @@ import {
 } from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
 import { diff } from './commands/diff.ts'
+import { colors, shadows, textStyles } from './commands/styles.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
 import { boolean, flatten, join, mask, outlineStroke, outlineText, split, textPath } from './commands/paths.ts'
 import { gradient } from './commands/paints.ts'
@@ -53,6 +54,9 @@ const commands: Command[] = [
   html,
   json,
   componentList,
+  colors,
+  textStyles,
+  shadows,
   diff,
   // export
   png,

@@ -70,6 +70,7 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | `build マークアップ.xml` / `place マークアップ.xml [--parent フレーム] [--index N] [--x N --y N]` | ノードの木を XML で書いたマークアップから、新しいドキュメントを作る（先頭にだけ置ける）／今のページに木の一部を足す。書き方は下の「[マークアップで組み立てる](#マークアップで組み立てる)」 |
 | `info` / `ls [ノード] [--all] [--json]` / `get ノード [項目]` / `find 文字列` / `bounds ノード` | 調べる（`get パス d` は形を SVG の path の d で出す） |
 | `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の `document.json` の中身、コンポーネントの一覧。`css` と `html` は `--format html\|react\|css-modules\|tailwind\|vue` で viewer のコードの形式と同じものを出す |
+| `colors [ノード…] [--all] [--color hex\|rgb\|hsl] [--json]` / `text-styles [ノード…] [--all] [--json]` / `shadows [ノード…] [--all] [--color hex\|rgb\|hsl] [--json]` | 使われている色・文字の書式・影と、使われている数。viewer のインスペクトの「このページの色・文字・影」と同じ数え方（非表示・不透明度 0・マスクのもの、不透明な塗りの下に隠れた色は数えない）・同じ順。いまのページ、`--all` なら全ページを足し合わせ、ノードを指定すればその中だけ。`--json` は使っているノードの id も出す |
 | `diff 前.kdr 後.kdr [--json]` | 2 つの kdr の違い（増えた・消えた・変わったノードと変わった項目の前後の値、ページ・コンポーネント・画像・書体の増減）。下の「[2 つの kdr の違いを見る](#2-つの-kdr-の違いを見る)」 |
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
 | `font-add 書体ファイル [--family 書体名]` / `font-rm 書体名 [--weight 太さ] [--italic]` | 書体ファイル（TTF / OTF / WOFF / WOFF2）を kdr に埋め込む・外す。書体名・太さ・斜体はファイルから読む（`--family` で書体名を変えられる）。テキストの `fontFamily` に書体名を書くと、その書体で描かれる（`png` も）。再配布できる書体だけを入れる |

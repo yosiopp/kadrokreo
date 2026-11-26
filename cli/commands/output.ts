@@ -11,7 +11,7 @@ import { nodeCode, nodeMarkup, slug, standaloneHtml } from '../../src/viewer/mar
 import { type Step, UsageError } from '../args.ts'
 import { canvasTextMetrics, encodePng } from '../png.ts'
 import { estimateTextLines } from '../textMeasure.ts'
-import { type Command, checkStep, flag, numberOption, option, positional } from './common.ts'
+import { type Command, checkStep, colorOption, flag, numberOption, option, positional } from './common.ts'
 
 // 書き出すコマンド（CSS・HTML・kdr の JSON を標準出力に出す）
 
@@ -175,15 +175,14 @@ function codeStyle(step: Step): { unit?: Unit; remBase?: number; color?: ColorFo
     throw new UsageError(`--format は ${Object.keys(CODE_FORMAT_LABELS).join(' / ')} です: ${format}`)
   }
   const unit = option(step, 'unit')
-  const color = option(step, 'color')
+  const color = colorOption(step)
   if (unit !== undefined && unit !== 'px' && unit !== 'rem') throw new UsageError(`--unit は px か rem です: ${unit}`)
-  if (color !== undefined && !['hex', 'rgb', 'hsl'].includes(color)) throw new UsageError(`--color は hex / rgb / hsl です: ${color}`)
   const remBase = numberOption(step, 'rem-base')
   if (remBase !== undefined && remBase <= 0) throw new UsageError('--rem-base は正の数です')
   return {
     ...(format === undefined ? {} : { format: format as CodeFormat }),
     ...(unit === undefined ? {} : { unit }),
-    ...(color === undefined ? {} : { color: color as ColorFormat }),
+    ...(color === undefined ? {} : { color }),
     ...(remBase === undefined ? {} : { remBase }),
   }
 }

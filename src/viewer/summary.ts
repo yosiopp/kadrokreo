@@ -79,7 +79,7 @@ export function summarizePage(scene: Scene): {
     }
     if (node.type === 'text') {
       countPaints(node.fills)
-      const key = [node.fontFamily, node.fontSize, node.fontWeight, node.lineHeight].join('\n')
+      const key = textStyleKey(node)
       const { fontFamily, fontSize, fontWeight, lineHeight } = node
       const style = textStyles.get(key) ?? { fontFamily, fontSize, fontWeight, lineHeight, count: 0, nodes: [] }
       style.count++
@@ -90,8 +90,7 @@ export function summarizePage(scene: Scene): {
       if (hasStroke(node)) countPaints(node.strokes)
     }
     for (const shadow of 'effects' in node ? shownPaints(node.effects).filter(isShadow) : []) {
-      const { type, x, y, blur, spread, color, opacity } = shadow
-      const key = [type, x, y, blur, spread, color.toLowerCase(), opacity].join('\n')
+      const key = shadowKey(shadow)
       const use = shadows.get(key) ?? { shadow, count: 0, nodes: [] }
       use.count++
       if (use.nodes.at(-1) !== node.id) use.nodes.push(node.id)
@@ -103,17 +102,38 @@ export function summarizePage(scene: Scene): {
   for (const id of scene.rootIds) visit(scene.nodes[id])
 
   return {
-    colors: [...colors.values()].sort((a, b) => b.count - a.count || a.color.localeCompare(b.color)),
-    textStyles: [...textStyles.values()].sort(
-      (a, b) =>
-        b.fontSize - a.fontSize ||
-        b.fontWeight - a.fontWeight ||
-        a.fontFamily.localeCompare(b.fontFamily) ||
-        a.lineHeight - b.lineHeight,
-    ),
-    // 使われている数の多い順。同じ数なら、ぼかしの大きい（強い）順
-    shadows: [...shadows.values()].sort((a, b) => b.count - a.count || b.shadow.blur - a.shadow.blur),
+    colors: [...colors.values()].sort(compareColorUses),
+    textStyles: [...textStyles.values()].sort(compareTextStyleUses),
+    shadows: [...shadows.values()].sort(compareShadowUses),
   }
+}
+
+// 同じものとして数える決まりと並べ方。CLI（colors・text-styles・shadows）が、ページをまたいで足し合わせるときにも使う
+
+/** 同じ文字の書式として数える項目 */
+export function textStyleKey(text: Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight'>): string {
+  return [text.fontFamily, text.fontSize, text.fontWeight, text.lineHeight].join('\n')
+}
+
+/** 同じ影として数える項目 */
+export function shadowKey(shadow: Shadow): string {
+  const { type, x, y, blur, spread, color, opacity } = shadow
+  return [type, x, y, blur, spread, color.toLowerCase(), opacity].join('\n')
+}
+
+/** 色は使われている数の多い順 */
+export const compareColorUses = (a: ColorUse, b: ColorUse) => b.count - a.count || a.color.localeCompare(b.color)
+
+/** 文字は大きい順 */
+export const compareTextStyleUses = (a: TextStyleUse, b: TextStyleUse) =>
+  b.fontSize - a.fontSize || b.fontWeight - a.fontWeight || a.fontFamily.localeCompare(b.fontFamily) || a.lineHeight - b.lineHeight
+
+/** 影は使われている数の多い順。同じ数なら、ぼかしの大きい（強い）順 */
+export const compareShadowUses = (a: ShadowUse, b: ShadowUse) => b.count - a.count || b.shadow.blur - a.shadow.blur
+
+/** 文字の書式を、CSS の font にそのまま書ける形で */
+export function textStyleCss(text: Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight'>): string {
+  return `${text.fontWeight} ${text.fontSize}px/${text.lineHeight} ${cssFontFamily(text.fontFamily)}`
 }
 
 /** summarizePage の結果を、パネルに出す形にする。文字は、CSS の font にそのまま書ける形で出す */
@@ -132,7 +152,7 @@ export function inspectPage(scene: Scene, style: CodeStyle = DEFAULT_CODE_STYLE)
       title: 'このページの文字',
       rows: textStyles.map((text) => ({
         label: uses(text.count),
-        value: `${text.fontWeight} ${text.fontSize}px/${text.lineHeight} ${cssFontFamily(text.fontFamily)}`,
+        value: textStyleCss(text),
         nodes: text.nodes,
       })),
     })

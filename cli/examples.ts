@@ -82,6 +82,13 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   ],
   json: ['kdr -f demo.kdr json --pretty'],
   components: ['kdr -f demo.kdr components'],
+  colors: [
+    'kdr -f demo.kdr colors',
+    'kdr -f demo.kdr colors --all --color rgb --json',
+    'kdr -f demo.kdr colors Card   # Card とその中だけ',
+  ],
+  'text-styles': ['kdr -f demo.kdr text-styles', 'kdr -f demo.kdr text-styles --all --json'],
+  shadows: ['kdr -f demo.kdr shadows --color hsl'],
   diff: [
     'kdr diff old.kdr demo.kdr   # 違いが無ければ何も出さない（終了コード 0）。違いがあれば 1',
     'kdr diff old.kdr demo.kdr --json',

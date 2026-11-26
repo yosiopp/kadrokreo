@@ -1,4 +1,5 @@
 import type { Point } from '../../src/document/geometry.ts'
+import type { ColorFormat } from '../../src/viewer/colors.ts'
 import { type Step, UsageError } from '../args.ts'
 import type { Session } from '../session.ts'
 
@@ -54,6 +55,13 @@ export function option(step: Step, key: string): string | undefined {
   const value = step.options.get(key)
   if (value === true) throw new UsageError(`${step.name}: --${key} に値を指定してください`)
   return value
+}
+
+/** --color hex|rgb|hsl（css・html・colors・shadows で同じ） */
+export function colorOption(step: Step): ColorFormat | undefined {
+  const color = option(step, 'color')
+  if (color !== undefined && !['hex', 'rgb', 'hsl'].includes(color)) throw new UsageError(`--color は hex / rgb / hsl です: ${color}`)
+  return color as ColorFormat | undefined
 }
 
 export function flag(step: Step, key: string): boolean {
