@@ -166,6 +166,53 @@ input.document-name:focus {
   background: transparent;
 }
 
+/* 別のタブが保存先を書いたので、自動保存を止めたことの知らせ（閉じられない） */
+.app-message.autosave-stopped {
+  justify-content: flex-start;
+}
+
+/* editor を出せないとき（読めない自動保存が残っている・別のタブが編集中）の知らせの画面 */
+.editor-notice {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+  background: var(--canvas-bg);
+}
+
+.editor-notice-card {
+  max-width: 520px;
+  padding: 24px 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.editor-notice-card h1 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.editor-notice-card p {
+  margin: 0 0 10px;
+}
+
+.editor-notice-card .editor-notice-error {
+  color: var(--danger-text);
+}
+
+.editor-notice-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
 .app-main {
   position: relative;
   flex: 1;

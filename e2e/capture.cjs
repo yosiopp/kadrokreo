@@ -332,6 +332,12 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await page.locator('.field:has(.field-label:text-is("縦")) select').selectOption('end')
   await shot(page, '15-editor-constraints.png')
 
+  // editor を 2 つ目のタブで開いたときの知らせ（編集できるタブは 1 つだけ）
+  const second = await context.newPage()
+  await second.goto(EDITOR)
+  await second.waitForSelector('.editor-notice[data-kind="elsewhere"]')
+  await shot(second, '16-editor-elsewhere.png')
+
   await browser.close()
 })().catch((e) => {
   console.error('CRASHED', e)

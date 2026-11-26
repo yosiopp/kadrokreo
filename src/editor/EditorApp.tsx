@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { type RefObject, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { exportTargets, pngFileName, renderPng } from '../canvas/exportPng.ts'
 import { renderSvg, svgMarkup } from '../canvas/exportSvg.ts'
@@ -36,29 +36,132 @@ import { fitTextNodes } from './measure.ts'
 import { addFont, addOrReuseAsset, createDocument, removeFont, renameDocument, updatePage } from './operations/document.ts'
 import { patchNodes } from './operations/tree.ts'
 import { createId } from './nodes.ts'
-import { loadSavedDocument, saveDocument } from './persistence.ts'
+import { type SaveResult, type UnreadableReason, discardSavedDocument, loadSavedDocument, saveDocument } from './persistence.ts'
+import { ElsewhereNotice, UnreadableNotice } from './SavedNotice.tsx'
 import { type EditorStore, createEditorStore } from './store.ts'
+import { type EditorTab, createEditorTab, openTabChannel } from './tabs.ts'
 
 const SAVE_DELAY = 500
 
-export default function EditorApp() {
-  const [store, setStore] = useState<EditorStore | null>(null)
+/** 保存先を別のタブが書いたので自動保存を止めた、という知らせ（閉じられない。このタブの内容は画面に残っている） */
+const AUTOSAVE_STOPPED =
+  '別のタブがこのドキュメントを編集しているため、このタブの自動保存を止めました。このタブの内容を残すには「kdr に書き出し」でファイルに保存してください。' +
+  'ページを読み込み直すと、保存されている内容が開きます。'
 
-  // 自動保存したドキュメントの読み込みを待ってから画面を出す
-  useEffect(() => {
-    let cancelled = false
-    loadSavedDocument().then((doc) => {
-      if (!cancelled) setStore(createEditorStore(doc ?? createDocument(), fitTextNodes))
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+/** 画面に出すもの */
+type View =
+  /** 別のタブが編集中かを確かめている・自動保存を読んでいる */
+  | { kind: 'waiting' }
+  /** 別のタブが編集中（taking は引き継いでいる途中） */
+  | { kind: 'elsewhere'; taking: boolean }
+  /** 読めない自動保存が残っている */
+  | { kind: 'unreadable'; reason: UnreadableReason; error: string | null }
+  /** 編集中。serial は開くたびに変わる番号、stopped は、保存先を別のタブが書いたので自動保存を止めた */
+  | { kind: 'editor'; store: EditorStore; serial: number; stopped: boolean }
 
-  return store ? <Editor store={store} /> : <div className="app" data-mode="editor" />
+/** 編集中の内容を保存しきる関数（保存しきれたら true）。Editor が入れる */
+type FlushRef = RefObject<(() => Promise<boolean>) | null>
+
+/** editor の画面を開いた回数（開くたびに画面を作り直すためのキー） */
+let opened = 0
+
+/** 自動保存を読んで、出す画面を返す。編集するタブになったときと、読めない自動保存を破棄したあとに呼ぶ */
+async function openSaved(): Promise<View> {
+  const saved = await loadSavedDocument()
+  if (saved.kind === 'unreadable') return { kind: 'unreadable', reason: saved.reason, error: null }
+  const document = saved.kind === 'document' ? saved.document : createDocument()
+  return { kind: 'editor', store: createEditorStore(document, fitTextNodes), serial: ++opened, stopped: false }
 }
 
-function Editor({ store }: { store: EditorStore }) {
+export default function EditorApp() {
+  const [view, setView] = useState<View>({ kind: 'waiting' })
+  const tabRef = useRef<EditorTab | null>(null)
+  const flushRef: FlushRef = useRef(null)
+
+  /** 保存先を別のタブが書いていた。このタブの内容は画面に残し、自動保存を止めて知らせる（知らせ合いからも外れる） */
+  const stopAutosave = useCallback(() => {
+    tabRef.current?.close()
+    setView((current) => (current.kind === 'editor' ? { ...current, stopped: true } : current))
+  }, [])
+
+  // 編集するタブは 1 つだけ。別のタブが編集中なら、自動保存を読まずに知らせる
+  useEffect(() => {
+    const tab = createEditorTab({
+      channel: openTabChannel(),
+      async release() {
+        const flushed = (await flushRef.current?.()) ?? true
+        // 保存しきれなかった内容は捨てない。自動保存を止めたまま画面に残す
+        if (!flushed && tabRef.current === tab) stopAutosave()
+        return flushed
+      },
+      onChange(state) {
+        if (tabRef.current !== tab) return
+        if (state === 'owner') {
+          void openSaved().then((next) => {
+            // 読んでいる間に、タブを閉じた・別のタブに編集を渡した
+            if (tabRef.current === tab && tab.state() === 'owner') setView(next)
+          })
+        } else if (state !== 'checking') setView({ kind: 'elsewhere', taking: state === 'taking' })
+      },
+    })
+    tabRef.current = tab
+    tab.start()
+    // 別のタブを閉じたあとでこのタブを表に出したら、そのまま続きを編集できるようにする
+    const recheck = () => {
+      if (document.visibilityState === 'visible') tab.recheck()
+    }
+    // 戻る・進むで前の画面がそのまま戻ってきたら、その間に別のタブが編集しているかもしれないので開き直す
+    const restored = (event: PageTransitionEvent) => {
+      if (event.persisted) window.location.reload()
+    }
+    window.addEventListener('focus', recheck)
+    document.addEventListener('visibilitychange', recheck)
+    window.addEventListener('pageshow', restored)
+    return () => {
+      tabRef.current = null
+      tab.close()
+      window.removeEventListener('focus', recheck)
+      document.removeEventListener('visibilitychange', recheck)
+      window.removeEventListener('pageshow', restored)
+    }
+  }, [stopAutosave])
+
+  async function discardSaved() {
+    const tab = tabRef.current
+    if (tab === null || !window.confirm('残っている保存データを破棄します。元に戻せません。よろしいですか？')) return
+    try {
+      // 別のタブが書き換えていたら消されない。どちらでも、読み直した結果を出す
+      await discardSavedDocument()
+      const next = await openSaved()
+      if (tabRef.current === tab && tab.state() === 'owner') setView(next)
+    } catch {
+      setView((current) => (current.kind === 'unreadable' ? { ...current, error: '保存データを破棄できませんでした。' } : current))
+    }
+  }
+
+  switch (view.kind) {
+    case 'waiting':
+      return <div className="app" data-mode="editor" />
+    case 'elsewhere':
+      return <ElsewhereNotice taking={view.taking} onTakeOver={() => tabRef.current?.takeOver()} />
+    case 'unreadable':
+      return <UnreadableNotice reason={view.reason} error={view.error} onDiscard={discardSaved} />
+    case 'editor':
+      // 開き直したら（別のタブから編集を引き継いで読み直したら）、画面ごと作り直す
+      return <Editor key={view.serial} store={view.store} autosaveStopped={view.stopped} onSaveBlocked={stopAutosave} flushRef={flushRef} />
+  }
+}
+
+type EditorProps = {
+  store: EditorStore
+  /** 保存先を別のタブが書いたので、自動保存を止めている */
+  autosaveStopped: boolean
+  /** 自動保存が、保存先を別のタブが書いていたために書けなかった */
+  onSaveBlocked: () => void
+  flushRef: FlushRef
+}
+
+function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps) {
   const [camera] = useState(createCamera)
   const state = useSyncExternalStore(store.subscribe, store.getState)
   // kdr に埋め込んだ書体で描く
@@ -101,36 +204,65 @@ function Editor({ store }: { store: EditorStore }) {
   useEffect(() => {
     let timer = 0
     let warned = false
+    // 保存先を別のタブが書いた・編集を別のタブに渡したあとは、もう書かない
+    let stopped = false
     // 最後に保存できたドキュメント。失敗したときは進めないので、次の変更でもう一度試す
     let lastSaved: DesignDocument | null = null
+    // 保存している途中のドキュメントと、その結果
+    let saving: DesignDocument | null = null
+    let last: Promise<SaveResult> = Promise.resolve('saved')
+    // 開いてから変更があったか
+    let changed = false
     const save = () => {
       clearTimeout(timer)
       timer = 0
       const document = store.getState().document
-      saveDocument(document).then((saved) => {
-        if (saved) lastSaved = document
-        // 保存できない環境では変更のたびに失敗するので、知らせるのは一度だけにする
-        if (saved || warned) return
-        warned = true
-        setMessage('ブラウザへの自動保存に失敗しました。kdr に書き出して保存してください。')
+      saving = document
+      last = saveDocument(document).then((result) => {
+        if (saving === document) saving = null
+        if (result === 'saved') lastSaved = document
+        else if (result === 'blocked') {
+          // 別のタブが保存先を書いていた。上書きせず、このタブの自動保存を止めて知らせる
+          stopped = true
+          clearTimeout(timer)
+          timer = 0
+          onSaveBlocked()
+        } else if (!warned) {
+          // 保存できない環境では変更のたびに失敗するので、知らせるのは一度だけにする
+          warned = true
+          setMessage('ブラウザへの自動保存に失敗しました。kdr に書き出して保存してください。')
+        }
+        return result
       })
+      return last
     }
     const unsubscribe = store.subscribe(() => {
       // 選択やページの切り替えだけなら、保存するものは変わっていない
-      if (store.getState().document === lastSaved) return
+      if (stopped || store.getState().document === lastSaved) return
+      changed = true
       clearTimeout(timer)
       timer = window.setTimeout(save, SAVE_DELAY)
     })
     const flush = () => {
-      if (timer !== 0) save()
+      if (timer !== 0 && !stopped) save()
     }
+    // 別のタブに編集を渡す前に、保存していない変更を書ききる。以後は書かない
+    const release = async () => {
+      if (stopped) return false
+      stopped = true
+      const document = store.getState().document
+      const unsaved = changed && document !== lastSaved && document !== saving
+      return (await (unsaved ? save() : last)) === 'saved'
+    }
+    flushRef.current = release
     window.addEventListener('pagehide', flush)
     return () => {
       unsubscribe()
       flush()
       window.removeEventListener('pagehide', flush)
+      if (flushRef.current === release) flushRef.current = null
     }
-  }, [store])
+  }, [store, flushRef, onSaveBlocked])
 
   const isEmpty = state.document.pages.every((page) => page.rootIds.length === 0)
 
@@ -358,6 +490,11 @@ function Editor({ store }: { store: EditorStore }) {
           kdr に書き出し
         </button>
       </header>
+      {autosaveStopped && (
+        <div className="app-message autosave-stopped" role="alert">
+          {AUTOSAVE_STOPPED}
+        </div>
+      )}
       <Message text={message} onClose={() => setMessage(null)} />
       <div className="editor-body">
         <aside className="panel layers-panel">

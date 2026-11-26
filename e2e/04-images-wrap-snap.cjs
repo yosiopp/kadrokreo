@@ -233,36 +233,6 @@ require('fs').mkdirSync(OUT, { recursive: true })
   await viewer.waitForSelector('.app-message')
   check('viewer は画像ファイルを受け付けない', true)
 
-  // 古い形の自動保存（v15: 画像は base64 の文字列）が残っていても落ちず、空のドキュメントで始まり、古いデータは片付く
-  const writeOld = (version) => page.evaluate((version) => new Promise((resolve, reject) => {
-    const open = indexedDB.open('kadrokreo')
-    open.onsuccess = () => {
-      const tx = open.result.transaction(['document', 'assets'], 'readwrite')
-      const image = { id: 'img', name: 'old photo', type: 'image', parentId: null, x: 0, y: 0, width: 10, height: 10, assetId: 'a1' }
-      tx.objectStore('document').put({ version, document: { name: '古い', assets: {}, pages: [{ id: 'p1', name: 'P', nodes: { img: image }, rootIds: ['img'] }] } }, 'current')
-      tx.objectStore('assets').put({ mime: 'image/png', data: 'iVBORw0KGgo=' }, 'a1')
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    }
-  }), version)
-  const assetCount = () => page.evaluate(() => new Promise((resolve) => {
-    indexedDB.open('kadrokreo').onsuccess = (event) => {
-      const request = event.target.result.transaction('assets').objectStore('assets').count()
-      request.onsuccess = () => resolve(request.result)
-    }
-  }))
-  for (const version of [15, 16]) {
-    await writeOld(version)
-    await page.reload()
-    await page.waitForSelector('.canvas-view canvas')
-    await page.waitForTimeout(500)
-    check(`古い形の自動保存（version ${version}・base64 の画像）が残っていても、空のドキュメントで始まる`, !(await layers()).includes('old photo'), (await layers()).join())
-    if (version === 15) {
-      const count = await assetCount()
-      check('古い version の自動保存は画像ごと消える', count === 0, `assets=${count}`)
-    }
-  }
-
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()
   finish()
