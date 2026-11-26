@@ -57,6 +57,7 @@ async function exampleFiles(): Promise<Map<string, Uint8Array>> {
   expect(code).toBe(0)
   return new Map([
     ['demo.kdr', h.fs.get('demo.kdr')!],
+    ['old.kdr', h.fs.get('demo.kdr')!],
     ['photo.png', PNG],
     ['icon.svg', SVG],
     ['font.ttf', testFontBytes()],
@@ -152,8 +153,11 @@ describe('kdr help / docs', () => {
     for (const examples of Object.values(EXAMPLES)) {
       for (const example of examples) {
         const h = harness(files)
-        const code = await h.run(splitExample(example))
-        if (code !== 0) failures.push(`${example}\n${h.stderr}`)
+        const argv = splitExample(example)
+        const code = await h.run(argv)
+        // diff・lint は見つけたものがあると 1（失敗なら 2 で、標準エラーに出る）
+        const reports = argv.some((arg) => COMMANDS.get(arg)?.reports)
+        if (code !== 0 && !(reports && code === 1 && h.stderr === '')) failures.push(`${example}\n${h.stderr}`)
       }
     }
     expect(failures.join('\n')).toBe('')

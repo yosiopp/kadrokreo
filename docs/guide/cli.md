@@ -70,6 +70,7 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | `build マークアップ.xml` / `place マークアップ.xml [--parent フレーム] [--index N] [--x N --y N]` | ノードの木を XML で書いたマークアップから、新しいドキュメントを作る（先頭にだけ置ける）／今のページに木の一部を足す。書き方は下の「[マークアップで組み立てる](#マークアップで組み立てる)」 |
 | `info` / `ls [ノード] [--all] [--json]` / `get ノード [項目]` / `find 文字列` / `bounds ノード` | 調べる（`get パス d` は形を SVG の path の d で出す） |
 | `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の `document.json` の中身、コンポーネントの一覧。`css` と `html` は `--format html\|react\|css-modules\|tailwind\|vue` で viewer のコードの形式と同じものを出す |
+| `diff 前.kdr 後.kdr [--json]` | 2 つの kdr の違い（増えた・消えた・変わったノードと変わった項目の前後の値、ページ・コンポーネント・画像・書体の増減）。下の「[2 つの kdr の違いを見る](#2-つの-kdr-の違いを見る)」 |
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
 | `font-add 書体ファイル [--family 書体名]` / `font-rm 書体名 [--weight 太さ] [--italic]` | 書体ファイル（TTF / OTF / WOFF / WOFF2）を kdr に埋め込む・外す。書体名・太さ・斜体はファイルから読む（`--family` で書体名を変えられる）。テキストの `fontFamily` に書体名を書くと、その書体で描かれる（`png` も）。再配布できる書体だけを入れる |
 | `add 種類 …` | `rect` `ellipse` `frame` `text`（`--text`）`line`（`--from x,y --to x,y`）`path`（`--points "x,y …" [--closed]` か、曲線を含めるなら SVG の path の `--d "M0 0 C…"`。`M` のまとまりが複数なら穴のあるパス）`image`（`--src 画像`。PNG・JPEG・WebP・GIF、32MB・6,400 万画素まで） |
@@ -96,6 +97,34 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 
 すべてのコマンドの説明は `kdr --help`、1 つだけなら `kdr help add`（`kdr add --help` も同じ）で、例も出る。
 `kdr docs` は、呼び方・ノードの指定・出力の形・終了コード・すべてのコマンドと例をまとめたリファレンスを Markdown で出す（[AI エージェントから使う](#ai-エージェントから使う)）。
+
+## 2 つの kdr の違いを見る
+
+`kdr diff 前.kdr 後.kdr` は、2 つの kdr の違いをノード単位で出す。kdr は tar.gz なので Git の差分では中身が分からないが、これで「どのノードが増えた・消えた・変わったか」を確かめられる。
+
+```sh
+kdr diff old.kdr new.kdr            # 人が読むテキスト
+kdr diff old.kdr new.kdr --json     # スクリプト向け
+git show HEAD:design.kdr | kdr diff - design.kdr   # コミットした版と手元の版を比べる（- は標準入力）
+```
+
+```text
+~ page "Home"  p1
+    name: "Page 1" → "Home"
++ asset 3f2a…  image/png  1234 bytes
+# Home  p1
++ rect "Badge"  n7
+~ frame "Card"  card
+    width: 320 → 360
+    fills: [{"type":"solid","color":"#ffffff",…}] → […]
+- frame "Old"  n3  (+4 descendants)
+```
+
+- ノードは、同じ id のページの中で id で突き合わせる。行の頭は `+`（増えた）`-`（消えた）`~`（変わった）。変わったノードは、続く行に `項目: 前 → 後`（項目は `get` と同じく `.` でつなぐ。配列は丸ごと）
+- 増えた・消えたフレームの中身は 1 つずつ並べず、子孫の数だけ出す。子の並び順は、両方にある子の順が変わったときだけ `children` に出る
+- ページ・コンポーネント・画像（`asset`）・書体（`font`）の増減も出す。画像は中身で決まる id で比べるので、差し替えた画像は「消えた」と「増えた」になる
+- 違いが無ければ何も出さず終了コード `0`、あれば `1`。読めないなどの失敗は `2`（`diff` では 1 が「違いがある」なので）。`--json` は違いが無くても出す（`"different": false`）
+- `-f`・`-o`・`-w` や、`+` でほかのコマンドとはつなげない
 
 ## 注意
 

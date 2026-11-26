@@ -21,6 +21,12 @@ export type Context = {
   stdout: (data: Uint8Array) => void
   /** 標準エラーへの知らせ（kdr や query の出力を汚さない） */
   warn: (text: string) => void
+  /** ファイルを読む。'-' は標準入力（standalone のコマンドが、入力の kdr を自分で読むときに使う） */
+  readInput: (path: string) => Promise<Uint8Array<ArrayBuffer>>
+  /** 標準入力が端末か（standalone のコマンドが - を読む前に確かめる） */
+  stdinIsTTY: boolean
+  /** 見つけたものがあったことを知らせる（reports のコマンド。終了コードが 1 になる） */
+  report: () => void
 }
 
 export type Command = {
@@ -32,6 +38,13 @@ export type Command = {
   flags?: readonly string[]
   /** 「名前=値」を受け付ける。'any' なら名前に英字以外も使える（バリアントのプロパティ名） */
   assignments?: true | 'any'
+  /** 入力の kdr を -f でなく引数で受け取る（diff）。ほかのコマンドとも -f / -o / -w ともつなげない。ctx.session は使えない */
+  standalone?: true
+  /**
+   * 見つけたもの（違い・検査の結果）を終了コード 1 で知らせる（diff・lint）。
+   * 見つけたものと失敗を見分けられるよう、このコマンドを含む実行の失敗は、ふだん 1 のもの（kdr が読めないなど）も 2 にする
+   */
+  reports?: true
   run: (ctx: Context, step: Step) => void | Promise<void>
 }
 

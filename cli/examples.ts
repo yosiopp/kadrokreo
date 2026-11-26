@@ -1,5 +1,5 @@
 // kdr help コマンド・kdr docs に出す例。コマンドの名前ごとに並べる。
-// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と icon.svg・photo.png・font.ttf、EXAMPLE_MARKUP の design.xml・part.xml）がある場所で、そのまま動く。
+// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と変える前の写し old.kdr、icon.svg・photo.png・font.ttf、EXAMPLE_MARKUP の design.xml・part.xml）がある場所で、そのまま動く。
 // cli/help.test.ts が、すべてのコマンドに例があること・すべての例が終了コード 0 で動くことを確かめる。
 // パイプやリダイレクト（| > <）は使わない（1 回の kdr の実行で完結させる）。
 
@@ -82,6 +82,10 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   ],
   json: ['kdr -f demo.kdr json --pretty'],
   components: ['kdr -f demo.kdr components'],
+  diff: [
+    'kdr diff old.kdr demo.kdr   # 違いが無ければ何も出さない（終了コード 0）。違いがあれば 1',
+    'kdr diff old.kdr demo.kdr --json',
+  ],
   png: [
     'kdr -f demo.kdr png   # ページ全体を「Demo - Page 1.png」へ',
     'kdr -f demo.kdr png Card --scale 2 --to card.png',

@@ -24,26 +24,32 @@ export type IO = {
   stderr: (text: string) => void
 }
 
+/** 終了コード 1 で「見つけた」を知らせるコマンド（diff・lint）のための状態 */
+type Outcome = { reports: boolean; found: boolean }
+
 export async function run(argv: readonly string[], io: IO): Promise<number> {
+  const outcome: Outcome = { reports: false, found: false }
   try {
-    await execute(argv, io)
-    return 0
+    await execute(argv, io, outcome)
+    return outcome.found ? 1 : 0
   } catch (error) {
     if (error instanceof UsageError) {
       io.stderr(`kdr: ${error.message}\n（使い方は kdr --help）\n`)
       return 2
     }
+    // diff・lint では 1 が「見つけた」なので、失敗は 2 にして見分けられるようにする
+    const code = outcome.reports ? 2 : 1
     if (error instanceof KdrError) {
       io.stderr(`kdr: ${error.message}\n`)
-      return 1
+      return code
     }
     const message = error instanceof Error ? error.message : String(error)
     io.stderr(`kdr: ${message}\n`)
-    return 1
+    return code
   }
 }
 
-async function execute(argv: readonly string[], io: IO): Promise<void> {
+async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promise<void> {
   const { global, steps } = parseArgs(argv, (name) => ({
     flags: new Set(COMMANDS.get(name)?.flags ?? []),
     assignments: COMMANDS.get(name)?.assignments ?? false,
@@ -76,21 +82,32 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
     if (!command) throw new UsageError(`不明なコマンドです: ${step.name}`)
     return command
   })
-  const plan = convert ? { source: false } : checkPlan(commands, steps, global, io)
+  outcome.reports = commands.some((command) => command.reports)
+  const standalone = commands.find((command) => command.standalone)
+  if (standalone) checkStandalone(standalone, steps, global)
+  const plan = convert || standalone ? { source: false } : checkPlan(commands, steps, global, io)
 
-  // new・build は、ここで作った空のドキュメントを置き換える
-  const session = new Session(
-    plan.source ? createDocument() : await decodeKdr(new Blob([await readInput(global.file, io)])),
-  )
+  // new・build は、ここで作った空のドキュメントを置き換える。standalone のコマンドは入力の kdr を自分で読む
+  const session = standalone
+    ? null
+    : new Session(plan.source ? createDocument() : await decodeKdr(new Blob([await readInput(global.file, io)])))
 
   const output: string[] = []
   const ctx = {
-    session,
+    get session(): Session {
+      if (session === null) throw new Error('この実行にはドキュメントがありません')
+      return session
+    },
     print: (text: string) => output.push(text),
     readFile: io.readFile,
     writeFile: io.writeFile,
     stdout: (data: Uint8Array) => io.stdout(data),
     warn: (text: string) => io.stderr(`kdr: ${text}\n`),
+    readInput: (path: string) => readInput(path, io),
+    stdinIsTTY: io.stdinIsTTY,
+    report: () => {
+      outcome.found = true
+    },
   }
   for (const [i, step] of steps.entries()) {
     try {
@@ -103,12 +120,21 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
     }
   }
   if (output.length > 0) io.stdout(output.join('\n') + '\n')
+  if (session === null) return
 
   const destination = global.out ?? (global.write ? global.file : session.modified ? '-' : null)
   if (destination === null) return
   const bytes = new Uint8Array(await (await encodeKdr(session.document)).arrayBuffer())
   if (destination === '-') io.stdout(bytes)
   else await io.writeFile(destination, bytes)
+}
+
+/** 入力の kdr を引数で受け取るコマンド（diff）は、1 つだけで動かす */
+function checkStandalone(command: Command, steps: readonly Step[], global: { file: string | null; out: string | null; write: boolean }) {
+  if (steps.length > 1) throw new UsageError(`${command.name}: ほかのコマンドとはつなげません`)
+  if (global.file !== null || global.out !== null || global.write) {
+    throw new UsageError(`${command.name}: -f・-o・-w は指定できません（kdr は引数で渡します）`)
+  }
 }
 
 /** 実行する前に、入出力の組み合わせがおかしくないかを確かめる */

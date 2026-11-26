@@ -25,6 +25,7 @@ import {
   variantValueRename,
 } from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
+import { diff } from './commands/diff.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
 import { boolean, flatten, join, mask, outlineStroke, outlineText, split, textPath } from './commands/paths.ts'
 import { gradient } from './commands/paints.ts'
@@ -52,6 +53,7 @@ const commands: Command[] = [
   html,
   json,
   componentList,
+  diff,
   // export
   png,
   svgOut,
