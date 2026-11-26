@@ -87,11 +87,16 @@ async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promi
   if (standalone) checkStandalone(standalone, steps, global)
   const plan = convert || standalone ? { source: false } : checkPlan(commands, steps, global, io)
 
+  // place - はマークアップを標準入力から読むので、入力の kdr も標準入力だと読めない（kdr として読む前に断る）
+  if (!standalone && !plan.source && (global.file === null || global.file === '-') && steps.some((step) => step.name === 'place' && step.positionals[0] === '-')) {
+    throw new UsageError('place -: マークアップを標準入力から読むときは、入力の kdr を -f のファイルで渡してください')
+  }
   // new・build は、ここで作った空のドキュメントを置き換える。standalone のコマンドは入力の kdr を自分で読む
   const session = standalone
     ? null
     : new Session(plan.source ? createDocument() : await decodeKdr(new Blob([await readInput(global.file, io)])))
 
+  let stdinRead = session !== null && !plan.source && (global.file === null || global.file === '-')
   const output: string[] = []
   const ctx = {
     get session(): Session {
@@ -103,7 +108,14 @@ async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promi
     writeFile: io.writeFile,
     stdout: (data: Uint8Array) => io.stdout(data),
     warn: (text: string) => io.stderr(`kdr: ${text}\n`),
-    readInput: (path: string) => readInput(path, io),
+    readInput: (path: string) => {
+      // 標準入力は 1 回しか読めない（入力の kdr を標準入力から読んだときの build - / place - など）
+      if (path === '-') {
+        if (stdinRead) throw new UsageError('標準入力（-）はもう読んでいます（入力の kdr か、前のコマンドで）。どちらかをファイルにしてください')
+        stdinRead = true
+      }
+      return readInput(path, io)
+    },
     stdinIsTTY: io.stdinIsTTY,
     report: () => {
       outcome.found = true

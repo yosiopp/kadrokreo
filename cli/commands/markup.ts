@@ -19,13 +19,16 @@ import { readImageFile } from './create.ts'
 
 // マークアップ（ノードの木を宣言的に書いた XML）からノードを作るコマンド（build・place）。読み方と組み立ては markup.ts
 
+/** マークアップを読む。'-' なら標準入力から（エラーの場所は「-:行」） */
 async function readMarkup(ctx: Context, file: string): Promise<MarkupElement> {
-  return parseMarkup(new TextDecoder('utf-8', { fatal: false }).decode(await ctx.readFile(file)), file)
+  if (file === '-' && ctx.stdinIsTTY) throw new UsageError('標準入力（-）が端末です。パイプでマークアップを渡してください')
+  const bytes = file === '-' ? await ctx.readInput('-') : await ctx.readFile(file)
+  return parseMarkup(new TextDecoder('utf-8', { fatal: false }).decode(bytes), file)
 }
 
-/** src は、マークアップのファイルのある場所からの相対パス（絶対パスならそのまま） */
+/** src は、マークアップのファイルのある場所からの相対パス（絶対パスならそのまま。標準入力のマークアップなら、今のディレクトリから） */
 function resolveSource(file: string, src: string): string {
-  if (/^([\\/]|[A-Za-z]:[\\/])/.test(src)) return src
+  if (/^([\\/]|[A-Za-z]:[\\/])/.test(src) || file === '-') return src
   return file.replace(/[^\\/]*$/, '') + src
 }
 
@@ -54,9 +57,9 @@ function finish(ctx: Context, built: MarkupBuild, pageIds: ReadonlySet<string>):
 export const build: Command = {
   name: 'build',
   kind: 'source',
-  usage: 'build マークアップ.xml',
+  usage: 'build マークアップ.xml|-',
   summary:
-    'ノードの木を XML で宣言的に書いたマークアップ（<kdr><page><frame>…）から、新しいドキュメントを作る（先頭にだけ置ける）。同じマークアップからは同じ kdr ができる。書き間違いは「ファイル:行」を付けて知らせ、何も書き出さない。書き方は kdr docs の「マークアップ」',
+    'ノードの木を XML で宣言的に書いたマークアップ（<kdr><page><frame>…）から、新しいドキュメントを作る（先頭にだけ置ける）。- なら標準入力から読む（画像の src は今のディレクトリから）。同じマークアップからは同じ kdr ができる。書き間違いは「ファイル:行」を付けて知らせ、何も書き出さない。書き方は kdr docs の「マークアップ」',
   async run(ctx, step) {
     checkStep(step, { positionals: 1 })
     const file = positional(step, 0, 'マークアップのファイル')
@@ -73,9 +76,9 @@ export const build: Command = {
 export const place: Command = {
   name: 'place',
   kind: 'edit',
-  usage: 'place マークアップ.xml [--parent フレーム] [--index N] [--x N --y N]',
+  usage: 'place マークアップ.xml|- [--parent フレーム] [--index N] [--x N --y N]',
   summary:
-    'マークアップで書いた木の一部（最上位が <frame> などノードの要素 1 つ）を、いまのページに足す。--parent でフレームの中へ、--index は兄弟の中での重なり順（0 が最背面）。<instance> の元は、マークアップの中になければ今のドキュメントから探す。置いたものは「@」で指せる',
+    'マークアップで書いた木の一部（最上位が <frame> などノードの要素 1 つ）を、いまのページに足す。--parent でフレームの中へ、--index は兄弟の中での重なり順（0 が最背面）。<instance> の元は、マークアップの中になければ今のドキュメントから探す。置いたものは「@」で指せる。- なら標準入力から読む（入力の kdr は -f のファイルで渡す）',
   async run(ctx, step) {
     checkStep(step, { options: ['parent', 'index', 'x', 'y'], positionals: 1 })
     const { session } = ctx

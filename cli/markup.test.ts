@@ -14,7 +14,7 @@ const PNG = Uint8Array.from(
   (c) => c.charCodeAt(0),
 )
 
-function harness(files: Record<string, Uint8Array | string> = {}) {
+function harness(files: Record<string, Uint8Array | string> = {}, stdin: string | null = null) {
   const fs = new Map(Object.entries(files).map(([path, data]) => [path, typeof data === 'string' ? encode(data) : data]))
   let stdout = ''
   let stderr = ''
@@ -27,8 +27,8 @@ function harness(files: Record<string, Uint8Array | string> = {}) {
     writeFile: async (path, data) => {
       fs.set(path, data)
     },
-    readStdin: async () => new Uint8Array(),
-    stdinIsTTY: true,
+    readStdin: async () => (stdin === null ? new Uint8Array() : encode(stdin)),
+    stdinIsTTY: stdin === null,
     stdoutIsTTY: false,
     stdout: (data) => {
       if (typeof data === 'string') stdout += data
@@ -605,6 +605,47 @@ describe('kdr place', () => {
       expect(code, markup).toBe(expected)
       if (expected !== 0) expect(run.fs.get('a.kdr'), markup).toBe(before)
     }
+  })
+})
+
+describe('マークアップを標準入力から読む（build - / place -）', () => {
+  it('build - は標準入力のマークアップから kdr を作り、ファイルから作ったものと同じになる。画像の src は今のディレクトリから', async () => {
+    const markup = '<kdr name="S"><page><frame name="F" x="0" y="0" layout="row"><image src="img/a.png"/><text>標準入力</text></frame></page></kdr>'
+    const piped = harness({ 'img/a.png': PNG }, markup)
+    const code = await piped.run(['build', '-', '-o', 'a.kdr'])
+    expect(piped.stderr).toBe('')
+    expect(code).toBe(0)
+    const file = harness({ 'img/a.png': PNG, 'a.xml': markup })
+    expect(await file.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(Buffer.from(piped.fs.get('a.kdr')!).equals(Buffer.from(file.fs.get('a.kdr')!))).toBe(true)
+  })
+
+  it('エラーの場所は「-:行」で出る', async () => {
+    const h = harness({}, '<kdr><page>\n<rect width="10" height="10" fill="red"/></page></kdr>')
+    expect(await h.run(['build', '-', '-o', 'a.kdr'])).toBe(1)
+    expect(h.stderr).toMatch(/^kdr: build: -:2: fill="red": /)
+  })
+
+  it('place - は、入力の kdr を -f のファイルで渡したときだけ読める', async () => {
+    const base = harness({ 'a.xml': SCREEN })
+    expect(await base.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    const piped = harness(Object.fromEntries(base.fs), '<rect name="Piped" width="5" height="5"/>')
+    expect(await piped.run(['-f', 'a.kdr', '-o', 'b.kdr', 'place', '-', '--x', '600'])).toBe(0)
+    expect(byName(await piped.doc('b.kdr'), 'Piped')).toMatchObject({ x: 600, width: 5 })
+    // 入力の kdr も標準入力なら、kdr として読む前に断る
+    const both = harness(Object.fromEntries(base.fs), '<rect width="5" height="5"/>')
+    expect(await both.run(['-o', 'b.kdr', 'place', '-'])).toBe(2)
+    expect(both.stderr).toMatch(/入力の kdr を -f のファイルで渡してください/)
+    // 標準入力は 1 回しか読めない
+    const twice = harness(Object.fromEntries(base.fs), '<rect width="5" height="5"/>')
+    expect(await twice.run(['-f', 'a.kdr', '-o', 'b.kdr', 'place', '-', '+', 'place', '-'])).toBe(2)
+    expect(twice.stderr).toMatch(/標準入力（-）はもう読んでいます/)
+  })
+
+  it('標準入力が端末なら、待たずに断る', async () => {
+    const h = harness()
+    expect(await h.run(['build', '-', '-o', 'a.kdr'])).toBe(2)
+    expect(h.stderr).toMatch(/標準入力（-）が端末です/)
   })
 })
 

@@ -3,7 +3,6 @@
 //   ./cli/kadrokreo.ts --help
 // package.json の bin で kdr（短い名前）と kadrokreo の 2 つの名前を付けている。npm link すると、どちらでも呼べる
 import { readFile, writeFile } from 'node:fs/promises'
-import { buffer } from 'node:stream/consumers'
 import { KDR_MAX_BYTES } from '../src/document/kdr.ts'
 import { run } from './run.ts'
 
@@ -16,10 +15,28 @@ async function readLimited(path: string): Promise<Uint8Array<ArrayBuffer>> {
   return new Uint8Array(data)
 }
 
+/** 標準入力も、ファイルと同じ大きさまでしか読まない（kdr もマークアップも） */
+async function readStdinLimited(): Promise<Uint8Array<ArrayBuffer>> {
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for await (const chunk of process.stdin as AsyncIterable<Uint8Array>) {
+    total += chunk.byteLength
+    if (total > MAX_INPUT_BYTES) throw new Error('標準入力が大きすぎます')
+    chunks.push(chunk)
+  }
+  const data = new Uint8Array(total)
+  let at = 0
+  for (const chunk of chunks) {
+    data.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return data
+}
+
 const code = await run(process.argv.slice(2), {
   readFile: readLimited,
   writeFile: (path, data) => writeFile(path, data),
-  readStdin: async () => new Uint8Array(await buffer(process.stdin)),
+  readStdin: readStdinLimited,
   stdinIsTTY: process.stdin.isTTY === true,
   stdoutIsTTY: process.stdout.isTTY === true,
   stdout: (data) => {
