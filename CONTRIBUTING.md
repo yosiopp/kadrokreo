@@ -109,6 +109,7 @@ GitHub Actions（`.github/`）:
 - `workflows/docker.yml`: イメージを作って viewer・editor・`kdr` コマンドが動くかを確かめ（`verify`）、push のときだけ GHCR に上げる（`publish`。main → `edge`、`v*` タグ → semver と `latest`）。
   `v*` タグのときは、イメージを上げた後に GitHub Releases も作る（`release`。本文は前のタグからのコミットの一覧と、イメージの pull・起動コマンド）。
 - `dependabot.yml`: npm と GitHub Actions の更新を週 1 回。
+- ワークフローの外部の action は、タグではなくコミットの SHA で指す（`uses: actions/checkout@<sha> # vX.Y.Z`）。action を足すときも同じ形にする。SHA とコメントの版は Dependabot が上げる。
 
 ### リリースの手順
 
