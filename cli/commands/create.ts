@@ -1,5 +1,6 @@
 import { IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../../src/document/kdr.ts'
 import { pathFromContours, pathFromPoints } from '../../src/document/path.ts'
+import { POLYGON_MAX_COUNT, POLYGON_MIN_COUNT, STAR_DEFAULT_RATIO, type PolygonShape, polygonSize, regularPolygon, star } from '../../src/document/polygon.ts'
 import { PathDataError, parsePathData } from '../../src/document/pathData.ts'
 import type { Asset, NodeId, PathNode, SceneNode } from '../../src/document/types.ts'
 import {
@@ -26,7 +27,7 @@ import { type Command, type Context, checkStep, flag, numberOption, option, poin
 
 // ノードを作るコマンド（add・svg・dup）
 
-const NODE_TYPES = ['rect', 'ellipse', 'line', 'path', 'text', 'frame', 'image'] as const
+const NODE_TYPES = ['rect', 'ellipse', 'polygon', 'star', 'line', 'path', 'text', 'frame', 'image'] as const
 type NodeType = (typeof NODE_TYPES)[number]
 
 async function buildNode(ctx: Context, step: Step, type: NodeType): Promise<SceneNode> {
@@ -41,6 +42,13 @@ async function buildNode(ctx: Context, step: Step, type: NodeType): Promise<Scen
       return createRect(box)
     case 'ellipse':
       return createEllipse(box)
+    case 'polygon':
+    case 'star': {
+      const shape = polygonShape(type, numberOption(step, 'count'), numberOption(step, 'ratio'), `add ${type}`)
+      // 大きさを省いた側は、正しい形になる縦横比から決める
+      // editor のツールと同じく、塗りだけで線は付けない
+      return { ...createPath({ x, y, ...polygonSize(shape.aspect, width, height), points: shape.points }, true), strokes: [], name: type === 'star' ? 'Star' : 'Polygon' }
+    }
     case 'frame':
       return createFrame(box)
     case 'line': {
@@ -93,6 +101,24 @@ async function buildNode(ctx: Context, step: Step, type: NodeType): Promise<Scen
   }
 }
 
+/**
+ * 正多角形（count は頂点の数。既定 3）と星（count は先の数。既定 5。ratio は内側の頂点の半径の、先に対する比。既定 0.382）の頂点。
+ * できるのはふつうの閉じたパス。label はエラーの頭に付ける呼び名、dash は項目名の前に付けるもの（オプションなら --、属性なら空）
+ */
+export function polygonShape(type: 'polygon' | 'star', count: number | undefined, ratio: number | undefined, label: string, dash = '--'): PolygonShape {
+  const n = count ?? (type === 'star' ? 5 : 3)
+  if (!Number.isInteger(n) || n < POLYGON_MIN_COUNT || n > POLYGON_MAX_COUNT) {
+    throw new UsageError(`${label}: ${dash}count は ${POLYGON_MIN_COUNT}〜${POLYGON_MAX_COUNT} の整数です: ${n}`)
+  }
+  if (type === 'polygon') {
+    if (ratio !== undefined) throw new UsageError(`${label}: ${dash}ratio は star にだけ指定できます`)
+    return regularPolygon(n)
+  }
+  const r = ratio ?? STAR_DEFAULT_RATIO
+  if (!(r > 0 && r < 1)) throw new UsageError(`${label}: ${dash}ratio は 0 より大きく 1 未満です: ${r}`)
+  return star(n, r)
+}
+
 /** 画像ファイルを読み、kdr に入れられる画像か（種類・ファイルの大きさ・画素数。kdr の読み込みと同じ上限）を確かめる */
 export async function readImageFile(
   readFile: Context['readFile'],
@@ -134,7 +160,7 @@ async function runAdd(ctx: Context, step: Step): Promise<void> {
   const type = positional(step, 0, '種類（' + NODE_TYPES.join(' / ') + '）') as NodeType
   if (!NODE_TYPES.includes(type)) throw new UsageError(`add: 不明な種類です: ${type}（${NODE_TYPES.join(' / ')}）`)
   checkStep(step, {
-    options: ['x', 'y', 'width', 'height', 'parent', 'index', 'id', 'name', 'text', 'from', 'to', 'points', 'd', 'closed', 'src', 'asset'],
+    options: ['x', 'y', 'width', 'height', 'parent', 'index', 'id', 'name', 'text', 'from', 'to', 'points', 'd', 'closed', 'src', 'asset', 'count', 'ratio'],
     positionals: 1,
     assignments: true,
   })
@@ -169,6 +195,7 @@ export const add: Command = {
   usage:
     'add 種類 [--x N --y N --width N --height N] [--parent フレーム] [--index N] [--id ID] [--name 名前] [名前=値…]\n' +
     '      種類: rect ellipse frame text（--text 文字）line（--from x,y --to x,y）\n' +
+    '            polygon（[--count 頂点の数 3〜100]）star（[--count 先の数] [--ratio 内側の比 0〜1]）\n' +
     '            path（--points "x,y x,y …" [--closed] | --d "M0 0 C…"）image（--src 画像 | --asset ID）',
   summary: 'ノードを足す。座標は親の左上が原点。作ったノードは次のコマンドで「@」で指せる',
   flags: ['closed'],

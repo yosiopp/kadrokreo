@@ -20,7 +20,7 @@ import { TypeIcon } from '../ui/icons.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
 import { useFileDrop } from '../ui/useFileDrop.ts'
 import { EditorCanvas, type MenuOpener } from './EditorCanvas.tsx'
-import type { Tool } from './tools.ts'
+import { DEFAULT_SHAPE_OPTIONS, type ShapeOptions, type Tool } from './tools.ts'
 import { ComponentsPanel } from './ComponentsPanel.tsx'
 import { LayersPanel } from './LayersPanel.tsx'
 import { PagesPanel } from './PagesPanel.tsx'
@@ -167,6 +167,7 @@ function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps
   // kdr に埋め込んだ書体で描く
   useEmbeddedFonts(state.document.fonts, state.document.assets)
   const [tool, setTool] = useState<Tool>('select')
+  const [shapeOptions, setShapeOptions] = useState<ShapeOptions>(DEFAULT_SHAPE_OPTIONS)
   const [message, setMessage] = useState<string | null>(null)
 
   // ページごとに、最後に見ていた位置を覚えておく
@@ -445,7 +446,7 @@ function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps
           value={state.document.name}
           onCommit={(name) => store.applyDocument((doc) => renameDocument(doc, name))}
         />
-        <Toolbar tool={tool} onToolChange={setTool}>
+        <Toolbar tool={tool} onToolChange={setTool} shapeOptions={shapeOptions} onShapeOptionsChange={setShapeOptions}>
           <OpenFileButton
             className="icon-button"
             title="画像・SVG を配置"
@@ -532,6 +533,7 @@ function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps
             state={state}
             tool={tool}
             onToolChange={setTool}
+            shapeOptions={shapeOptions}
             onPasteImages={importImages}
             onPasteSvg={importSvgText}
             onCopySvg={copySvg}

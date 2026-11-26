@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dir = join(root, 'dist/viewer')
-const pattern = /kdr に書き出し|影を付ける|ページを追加|indexedDB|BroadcastChannel|CompressionStream|表せないものは置き換えるか読み飛ばしました/
+const pattern = /kdr に書き出し|影を付ける|ページを追加|indexedDB|BroadcastChannel|CompressionStream|多角形の頂点の数|表せないものは置き換えるか読み飛ばしました/
 
 if (!existsSync(dir)) {
   console.error('dist/viewer がありません。先に npm run build を実行してください。')

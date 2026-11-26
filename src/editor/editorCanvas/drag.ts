@@ -32,7 +32,9 @@ import { type GradientEdit, type GradientPart, dragGradient, toNodeSpace } from 
 import { findFrameAt, nodesInMarquee } from '../hitTest.ts'
 import { placeInLayout } from '../layout.ts'
 import { fitTextNodes } from '../measure.ts'
-import { createEllipse, createFrame, createLine, createRect } from '../nodes.ts'
+import { createEllipse, createFrame, createLine, createPath, createRect } from '../nodes.ts'
+import { regularPolygon, star } from '../../document/polygon.ts'
+import { DEFAULT_SHAPE_OPTIONS, type ShapeOptions } from '../tools.ts'
 import { reshapeNode, resizeNodes, rotateNodes, translateNodes } from '../operations/transform.ts'
 import { insertNode, reparentNodes } from '../operations/tree.ts'
 import { type Handle, resizeBounds } from '../resize.ts'
@@ -83,15 +85,33 @@ type CreateGesture = {
   node: SceneNode
   parentId: NodeId | null
   dragged: boolean
+  /** 正しい形になる枠の縦横比（幅 / 高さ）。Shift で描くときとクリックで置くときにこの比にする。多角形・星以外は 1 */
+  aspect: number
 }
 
 /** 図形を描くツールで押したときのジェスチャー */
 export function createGesture(
   page: Scene,
-  tool: 'frame' | 'rect' | 'ellipse' | 'line',
+  tool: 'frame' | 'rect' | 'ellipse' | 'polygon' | 'star' | 'line',
   pointer: CanvasPointer,
+  shapeOptions: ShapeOptions = DEFAULT_SHAPE_OPTIONS,
 ): CreateGesture {
   const world = roundPoint(pointer.world)
+  if (tool === 'polygon' || tool === 'star') {
+    // 多角形・星はふつうの閉じたパスとして作る（頂点は枠に対する割合なので、ドラッグで決めた枠いっぱいに広がる）
+    const shape = tool === 'star' ? star(shapeOptions.starCount, shapeOptions.starRatio) : regularPolygon(shapeOptions.polygonCount)
+    const name = numberedName(page, tool === 'star' ? 'Star' : 'Polygon')
+    return {
+      kind: 'create',
+      screen: pointer.screen,
+      world,
+      // 長方形・楕円と同じく、塗りだけで線は付けない
+      node: { ...createPath({ x: 0, y: 0, width: 1, height: 1, points: shape.points }, true), strokes: [], name },
+      parentId: findFrameAt(page, world),
+      dragged: false,
+      aspect: shape.aspect,
+    }
+  }
   const create = {
     frame: createFrame,
     rect: createRect,
@@ -105,7 +125,16 @@ export function createGesture(
     node: { ...create({ x: 0, y: 0, width: 1, height: 1 }), name: nextName(page, tool) },
     parentId: findFrameAt(page, world),
     dragged: false,
+    aspect: 1,
   }
+}
+
+/** 「Polygon 3」のような、ページの中で使っていない番号の名前（同じ頭の名前の数 + 1 から） */
+function numberedName(page: Scene, prefix: string): string {
+  const used = new Set(Object.values(page.nodes).map((node) => node.name))
+  let count = Object.values(page.nodes).filter((node) => node.name.startsWith(`${prefix} `)).length + 1
+  while (used.has(`${prefix} ${count}`)) count++
+  return `${prefix} ${count}`
 }
 
 /** 回転ハンドルを押したときのジェスチャー。pivot（ページ座標）を軸に ids を回す */
@@ -379,10 +408,12 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
       }
       let end = roundPoint(to)
       if (pointer.shiftKey) {
+        // 縦横比を揃える（長方形・楕円は正方形・円、多角形・星は正しい形の比）
         const dx = end.x - from.x
         const dy = end.y - from.y
-        const side = Math.max(Math.abs(dx), Math.abs(dy))
-        end = { x: from.x + (dx < 0 ? -side : side), y: from.y + (dy < 0 ? -side : side) }
+        const width = Math.round(Math.max(Math.abs(dx), Math.abs(dy) * gesture.aspect) * 100) / 100
+        const height = Math.round((width / gesture.aspect) * 100) / 100
+        end = { x: from.x + (dx < 0 ? -width : width), y: from.y + (dy < 0 ? -height : height) }
       }
       previewCreate(store, gesture, boundsFromPoints(from, end))
       return

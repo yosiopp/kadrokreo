@@ -65,7 +65,8 @@ import {
 } from './pathEdit.ts'
 import { handleCursor } from './resize.ts'
 import type { EditorState, EditorStore } from './store.ts'
-import type { Tool } from './tools.ts'
+import { DEFAULT_SHAPE_OPTIONS, type ShapeOptions, type Tool } from './tools.ts'
+import { polygonSize } from '../document/polygon.ts'
 
 // メニューに出すショートカットの表記。macOS は記号、ほかは Ctrl などの名前
 const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -89,6 +90,8 @@ type Props = {
   state: EditorState
   tool: Tool
   onToolChange: (tool: Tool) => void
+  /** 多角形・星のツールで描く形 */
+  shapeOptions?: ShapeOptions
   /** クリップボードから画像が貼り付けられた */
   onPasteImages: (files: File[]) => void
   onPasteSvg: (text: string) => void
@@ -111,6 +114,7 @@ export function EditorCanvas({
   state,
   tool,
   onToolChange,
+  shapeOptions = DEFAULT_SHAPE_OPTIONS,
   onPasteImages,
   onPasteSvg,
   onCopySvg,
@@ -357,7 +361,7 @@ export function EditorCanvas({
     }
     if (tool === 'pen') return penDown(pointer)
     if (tool !== 'select') {
-      gestureRef.current = createGesture(page, tool, pointer)
+      gestureRef.current = createGesture(page, tool, pointer, shapeOptions)
       return
     }
 
@@ -560,7 +564,7 @@ export function EditorCanvas({
         // ドラッグせずクリックしただけなら既定の大きさで置く
         if (!gesture.dragged) {
           const at = roundPoint(toLocal(store.getState().page, gesture.parentId, gesture.world))
-          previewCreate(store, gesture, { ...at, width: 100, height: isLine(gesture.node) ? 0 : 100 })
+          previewCreate(store, gesture, { ...at, ...(isLine(gesture.node) ? { width: 100, height: 0 } : polygonSize(gesture.aspect)) })
         }
         store.commitPreview()
         store.select([gesture.node.id])

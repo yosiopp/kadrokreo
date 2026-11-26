@@ -399,6 +399,26 @@ input.document-name:focus {
   background: transparent;
 }
 
+.toolbar-shape {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px;
+  font-size: 12px;
+  color: var(--text-muted, inherit);
+}
+
+.toolbar-shape label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.toolbar-shape input {
+  width: 48px;
+}
+
 .icon-button[aria-pressed='true'] {
   background: var(--accent);
   color: var(--accent-text);

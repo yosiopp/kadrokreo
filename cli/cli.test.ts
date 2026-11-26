@@ -1112,7 +1112,7 @@ describe('kadrokreo CLI', () => {
   it('使い方の誤りは終了コード 2', async () => {
     const cases: [string, RegExp][] = [
       ['new + new', /先頭にだけ/],
-      ['new + add star', /不明な種類/],
+      ['new + add hexagon', /不明な種類/],
       ['new + set fill=#ffffff', /ノードを指定/],
       ['new + add rect + set Rectangle', /名前=値/],
       ['new + add rect --bogus 1', /不明なオプション/],

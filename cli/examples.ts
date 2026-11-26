@@ -121,6 +121,8 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w add line --from 0,250 --to 320,250 stroke=#cccccc dash=4,2',
     'kdr -f demo.kdr -w add path --d "M0 300 C40 260 80 340 120 300" stroke=#5b4cf5 endCap=arrow',
     'kdr -f demo.kdr -w add image --src photo.png --width 64',
+    'kdr -f demo.kdr -w add star --name Rating --x 16 --y 360 --count 5 --width 24 fill=#f5b301',
+    'kdr -f demo.kdr -w add polygon --name Badge --x 60 --y 360 --count 6 --height 40 fill=#5b4cf5',
     'kdr -f demo.kdr -w add frame --name Row --id row --y 300 --width 320 --height 48 + add ellipse --parent @ --width 24 --height 24',
   ],
   svg: ['kdr -f demo.kdr -w svg icon.svg --parent card --x 280 --y 16 --name Icon'],

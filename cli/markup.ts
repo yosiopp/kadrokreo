@@ -21,6 +21,7 @@ import { canBindProperty, enclosingMainNode, instanceProperties } from '../src/d
 import { namePath, pathIndex, subtreeIds } from '../src/document/componentSource.ts'
 import { KdrError, MAX_DEPTH, kdrFile, parseKdr } from '../src/document/kdr.ts'
 import { pathFromPoints } from '../src/document/path.ts'
+import { polygonSize } from '../src/document/polygon.ts'
 import { sha256Hex } from '../src/document/sha256.ts'
 import type { Asset, AssetId, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, SceneNode } from '../src/document/types.ts'
 import { type VariantProps, formatVariantName, isVariantSet, parseVariantName, propValue, variantSetOf, variantsIn } from '../src/document/variants.ts'
@@ -33,7 +34,7 @@ import { type NodePatch, patchNodes } from '../src/editor/operations/tree.ts'
 import { lineCounter, readXml } from '../src/editor/xml.ts'
 import { UsageError } from './args.ts'
 import { point } from './commands/common.ts'
-import { pathFromData } from './commands/create.ts'
+import { pathFromData, polygonShape } from './commands/create.ts'
 import type { Session } from './session.ts'
 import { estimateTextSize, fitTextEstimated } from './textMeasure.ts'
 import { buildPatch, orderAssignments } from './values.ts'
@@ -59,7 +60,7 @@ export type MarkupElement = {
 const MAX_LENGTH = 16 * 1024 * 1024
 const MAX_ELEMENTS = 100_000
 
-const NODE_ELEMENTS = ['frame', 'component', 'component-set', 'instance', 'rect', 'ellipse', 'line', 'path', 'text', 'image'] as const
+const NODE_ELEMENTS = ['frame', 'component', 'component-set', 'instance', 'rect', 'ellipse', 'polygon', 'star', 'line', 'path', 'text', 'image'] as const
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 type Fail = (line: number, message: string) => MarkupError
@@ -279,6 +280,8 @@ const STRUCTURAL: Record<(typeof NODE_ELEMENTS)[number], readonly string[]> = {
   instance: ['id', 'of', 'variant'],
   rect: ['id'],
   ellipse: ['id'],
+  polygon: ['id', 'count', 'ratio'],
+  star: ['id', 'count', 'ratio'],
   line: ['id', 'from', 'to'],
   path: ['id', 'd', 'points', 'closed'],
   text: ['id'],
@@ -496,6 +499,35 @@ function buildElement(
       case 'ellipse':
         created = { ...createEllipse(at), fills: [] }
         break
+      case 'polygon':
+      case 'star': {
+        // 頂点の数（星は内側の比も）で形を決めたふつうのパス。大きさは片方だけ書けば、正しい形になる縦横比から決める
+        const number = (name: string) => {
+          const found = attribute(name)
+          if (!found) return undefined
+          const value = Number(found.value)
+          if (found.value.trim() === '' || !Number.isFinite(value)) throw fail(found.line, `${name}="${found.value}": 数値を指定してください`)
+          return value
+        }
+        const count = number('count')
+        const ratio = number('ratio')
+        let shape
+        try {
+          shape = polygonShape(kind, count, ratio, `<${kind}>`, '')
+        } catch (error) {
+          // 誤りのある属性の行を指す
+          const line = (error instanceof Error && error.message.includes('ratio') ? attribute('ratio') : attribute('count'))?.line ?? element.line
+          if (error instanceof UsageError) throw fail(line, error.message)
+          throw error
+        }
+        // 数値で書いた大きさだけを縦横比の計算に使う（fill などは、もう片方を書かなければ幅 100 の形の大きさになる）
+        const size = (name: 'width' | 'height') => {
+          const value = Number(attribute(name)?.value ?? '')
+          return attribute(name) && attribute(name)!.value.trim() !== '' && Number.isFinite(value) && value >= 0 ? value : undefined
+        }
+        created = { ...createPath({ x: 0, y: 0, ...polygonSize(shape.aspect, size('width'), size('height')), points: shape.points }, true), fills: [], strokes: [] }
+        break
+      }
       case 'frame':
         created = { ...createFrame(at), fills: [] }
         break
