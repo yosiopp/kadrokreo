@@ -18,7 +18,7 @@
     "build": "tsc -b && npm run build:viewer && npm run build:editor",
     "build:viewer": "vite build --outDir dist/viewer",
     "build:editor": "vite build --mode editor --outDir dist/editor",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "test": "vitest run",
     "e2e": "node e2e/run.mjs",
     "capture": "node e2e/run.mjs capture",

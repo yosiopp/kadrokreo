@@ -31,7 +31,7 @@ npm run kdr -- --help   # コマンドライン（npm link すれば kdr --help�
 変更したら `npm run check` を通す。中身は次の順で、落ちたらそこで止まる（e2e を含むので数分かかる）。
 
 1. `npm test` — 単体テスト
-2. `npm run lint` — oxlint（依存の向きの決まりもここで確かめる）
+2. `npm run lint` — oxlint（依存の向きの決まりもここで確かめる。警告も失敗にする。意図して残すものは、その行だけ理由を添えて無効にする）
 3. `npm run build` — 型検査と viewer・editor のビルド
 4. `npm run check:viewer` — `dist/viewer` に editor にしかない文言・API が入っていないか（`scripts/check-viewer.mjs`）
 5. `npm run e2e` — ブラウザでの動作確認（`e2e/` のスクリプトを番号順に。`01` が書き出した kdr を `02` が使う）。スクリーンショットは `e2e/out/`

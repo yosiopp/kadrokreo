@@ -46,7 +46,6 @@ cli(...(
 
   let nodes = await nodesOf()
   const card = mainNamed(nodes, 'Card')
-  const btn = mainNamed(nodes, 'Btn')
   const icon = mainNamed(nodes, 'Icon')
   const star = mainNamed(nodes, 'Star')
   const btnInCard = nodes.find((n) => n.name === 'BtnInCard' && n.parentId === card.id)

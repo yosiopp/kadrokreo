@@ -20,6 +20,7 @@ export const MAX_EMBEDDED_FAMILY_LENGTH = 200
  * 埋め込む書体の名前に使えない文字。テキストの書体名で使えない文字に加えて、
  * 書体名の並び（カンマ区切り）と引用符の区切りになる `,` `"` `'` も使えない（ノードの書体名に引用符で囲んで書くため）
  */
+// eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査なので、制御文字そのものを書く
 export const EMBEDDED_FAMILY_FORBIDDEN = /[\u0000-\u001f\u007f;{}<>\\,"']/
 
 /** CSS の総称名。同じ名前の書体は引用符で囲まないと総称名の意味になる */

@@ -35,7 +35,6 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
     return [...canvas.getContext('2d').getImageData(Math.round(x * ratio), Math.round(y * ratio), 1, 1).data]
   }, [x, y])
   const reddish = (p) => p[0] > 200 && p[1] < 90 && p[2] < 90 && p[3] === 255
-  const bluish = (p) => p[0] < 60 && p[2] > 200 && p[3] === 255
   const whitish = (p) => p[0] > 240 && p[1] > 240 && p[2] > 240 && p[3] === 255
   const typeSelect = (label) => page.locator(`.field:has(.field-label:text-is("${label}の種類")) select`)
   const canvasButton = page.locator('.properties-panel button[aria-pressed]:not(.icon-button)')

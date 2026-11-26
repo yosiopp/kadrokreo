@@ -997,6 +997,7 @@ function string(value: unknown, path: string): string {
 /** 書体名の長さの上限 */
 export const MAX_FONT_FAMILY_LENGTH = 200
 /** 書体名に使えない文字（制御文字と、CSS や HTML の区切りになる記号）。書体名にはふつう現れない */
+// eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査なので、制御文字そのものを書く
 const FONT_FAMILY_FORBIDDEN = /[\u0000-\u001f\u007f;{}<>\\]/
 
 function fontFamily(value: unknown, path: string): string {
