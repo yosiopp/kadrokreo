@@ -58,6 +58,10 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr build design.xml + set btn fill=#222222 + png Card --to card.png -o design.kdr   # 続けてほかのコマンドをつなげる',
   ],
   info: ['kdr -f demo.kdr info'],
+  markup: [
+    'kdr -f demo.kdr markup            # 全体を <kdr> のマークアップに（build で作り直せる）',
+    'kdr -f demo.kdr markup Card       # Card と子孫だけ（place で置ける形）',
+  ],
   ls: [
     'kdr -f demo.kdr ls',
     'kdr -f demo.kdr ls Card',

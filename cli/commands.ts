@@ -31,7 +31,7 @@ import { colors, shadows, textStyles } from './commands/styles.ts'
 import { mv, order, replace, rm, set } from './commands/edit.ts'
 import { boolean, flatten, join, mask, outlineStroke, outlineText, split, textPath } from './commands/paths.ts'
 import { gradient } from './commands/paints.ts'
-import { build, place } from './commands/markup.ts'
+import { build, markup, place } from './commands/markup.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
 import { fontAdd, fontRm } from './commands/fonts.ts'
 import { css, html, json, png, svgOut } from './commands/output.ts'
@@ -54,6 +54,7 @@ const commands: Command[] = [
   css,
   html,
   json,
+  markup,
   componentList,
   colors,
   textStyles,

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { decodeKdr } from '../src/document/kdr.ts'
 import type { DesignDocument, FrameNode, ImageNode, RectNode, SceneNode, TextNode } from '../src/document/types.ts'
+import { documentDifferences } from './markupCompare.ts'
 import { type IO, run } from './run.ts'
 
 // kdr build / kdr place（マークアップからノードを作る）と、それに合わせて set / add に足した略記
@@ -605,6 +606,125 @@ describe('kdr place', () => {
       expect(code, markup).toBe(expected)
       if (expected !== 0) expect(run.fs.get('a.kdr'), markup).toBe(before)
     }
+  })
+})
+
+describe('kdr markup（ノードの木をマークアップに書き出す）', () => {
+  /** kdr を markup で書き出し、build し直す。書き出した文字・標準エラー・作り直したドキュメント */
+  async function roundTrip(h: ReturnType<typeof harness>, input: string, extra: string[] = []) {
+    const code = await h.run(['-f', input, 'markup', ...extra])
+    expect(code).toBe(0)
+    const text = h.stdout
+    const warnings = h.stderr
+    h.fs.set('out.xml', encode(text))
+    expect(await h.run(['build', 'out.xml', '-o', 'rebuilt.kdr'])).toBe(0)
+    return { text, warnings, original: await h.doc(input), rebuilt: await h.doc('rebuilt.kdr') }
+  }
+
+  it('docs/examples/sample.kdr を書き出して build し直すと、元と同じドキュメントになり、もう一度書き出すと同じ文字になる', async () => {
+    const h = harness({ 'sample.kdr': readFileSync('docs/examples/sample.kdr') })
+    const { text, warnings, original, rebuilt } = await roundTrip(h, 'sample.kdr')
+    expect(warnings).toBe('')
+    expect(documentDifferences(original, rebuilt)).toEqual([])
+    // id はすべて書き、インスタンスの中身は書かない（上書きだけ）
+    expect(text).toContain('<instance id="task1" of="task" name="Task 1" width="fill">')
+    expect(text).toContain('<override node="Title" text="ワイヤーフレームを描く" fill="#8a8aa0"/>')
+    const again = harness({ 'rebuilt.kdr': h.fs.get('rebuilt.kdr')! })
+    expect(await again.run(['-f', 'rebuilt.kdr', 'markup'])).toBe(0)
+    expect(again.stdout).toBe(text)
+  })
+
+  it('説明文・プロパティ・バリアントも、#42 の語彙で書き出して同じものに戻る', async () => {
+    const h = harness({ 'a.xml': VARIANTS })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    const { text, warnings, original, rebuilt } = await roundTrip(h, 'a.kdr')
+    expect(warnings).toBe('')
+    expect(documentDifferences(original, rebuilt)).toEqual([])
+    expect(text).toContain('<component-set id="buttons" name="Button" description="主な操作のボタン"')
+    expect(text).toContain('variant="種類=標準, 大きさ=大" description="大きいボタン"')
+    expect(text).toMatch(/<instance id="[^"]+" of="icon" prop="アイコン" prop.visible="アイコンを出す"\/>/)
+    // 入れ子の差し替えは、差し替える前の名前では見つからないので、元の側の id で指す
+    expect(text).toMatch(/<override node="[A-Za-z0-9]{12}" of="star"\/>/)
+  })
+
+  it('文字・名前の特殊な文字、パス、グラデーション、入れ子の項目、画像（--assets）も元に戻る', async () => {
+    const h = harness({ 'p.png': PNG })
+    const made = await h.run([
+      'new', 'A "B" <C>',
+      '+', 'add', 'frame', '--name', 'Root', '--id', 'root', '--width', '300', '--height', '200',
+      '+', 'add', 'image', '--src', 'p.png', '--parent', 'root', '--id', 'img', '--x', '10', '--y', '10', '--width', '40',
+      '+', 'add', 'path', '--name', 'Curve', '--id', 'curve', '--d', 'M0 0 C 20 40 60 40 80 0', '--parent', 'root',
+      '+', 'add', 'path', '--name', 'Tri', '--id', 'tri', '--points', '0,0 50,10 30,60', '--closed', '--parent', 'root',
+      '+', 'set', 'tri', 'radius=4', 'rotation=15',
+      '+', 'add', 'text', '--name', '[下書き]', '--id', 't1', '--text', '  前に空白\n<&> 2 行目', '--parent', 'root',
+      '+', 'add', 'text', '--name', 'Plain', '--id', 't2', '--text', 'a < b & c', '--parent', 'root',
+      '+', 'add', 'rect', '--name', 'G', '--id', 'g', '--width', '40', '--height', '40', '--parent', 'root',
+      '+', 'gradient', 'linear', 'g', '--colors', '#ff0000,#0000ff',
+      '+', 'set', 'g', 'constraints.horizontal=center', 'opacity=0.5', 'shadow.blur=4',
+      '-o', 'a.kdr',
+    ])
+    expect(h.stderr).toBe('')
+    expect(made).toBe(0)
+    const { text, warnings, original, rebuilt } = await roundTrip(h, 'a.kdr', ['--assets', 'assets'])
+    expect(warnings).toBe('')
+    expect(documentDifferences(original, rebuilt)).toEqual([])
+    expect(text).toContain('<text id="t2" name="Plain">a &lt; b &amp; c</text>')
+    expect(text).toContain('text="  前に空白&#10;&lt;&amp;&gt; 2 行目"')
+    expect(text).toContain('constraints.horizontal="center"')
+    expect(text).toMatch(/<image id="img" src="assets\/[0-9a-f]+\.png"/)
+    expect([...h.fs.keys()].some((path) => path.startsWith('assets/'))).toBe(true)
+  })
+
+  it('表せずに落としたものと、作り直すと元と違うところは、標準エラーに知らせる', async () => {
+    const h = harness({ 'p.png': PNG })
+    expect(
+      await h.run([
+        'new', 'D',
+        '+', 'add', 'image', '--src', 'p.png', '--id', 'img',
+        '+', 'add', 'frame', '--name', 'Comp', '--id', 'comp', '--x', '100', '--width', '30', '--height', '30', '+', 'component', 'comp',
+        '+', 'add', 'frame', '--name', 'Holder', '--id', 'holder', '--x', '200', '--width', '30', '--height', '30',
+        '+', 'instance', 'Comp', '--id', 'nest', '--parent', 'holder', '+', 'component', 'holder',
+        '+', 'prop-add', 'holder', 'instance', 'nest', '--name', '差し替え', '+', 'prop-prefer', 'holder', '差し替え', 'Comp',
+        '+', 'instance', 'Comp', '--id', 'i1', '--x', '300', '+', 'flip', 'horizontal', 'i1',
+        '-o', 'a.kdr',
+      ]),
+    ).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', 'markup'])).toBe(0)
+    expect(h.stderr).toMatch(/書き出せないもの: 画像 Image（img）（--assets でフォルダを指定すると書き出せる）/)
+    expect(h.stderr).toMatch(/書き出せないもの: 元 Holder（holder） のプロパティ 差し替え の差し替えの候補/)
+    expect(h.stderr).toMatch(/書き出せないもの: インスタンス Comp（i1） の裏返し/)
+    expect(h.stderr).toMatch(/作り直すと元と違う: Image（img） がない/)
+    expect(h.stdout).not.toContain('<image')
+  })
+
+  it('どんな kdr でも、書き出したものは build できる（親が自動で並べないのに残った fill、書き出さない画像への上書き、文字の null、ページをまたいで同じ id の元）', async () => {
+    const cases: string[][] = [
+      ['new', 'D', '+', 'add', 'frame', '--id', 'h', '--name', 'H', '--width', '200', '--height', '200', '+', 'auto-layout', 'h', '+', 'add', 'rect', '--id', 'a', '--parent', 'h', '+', 'layout-fill', 'width', 'a', '+', 'auto-layout', 'h', '--off'],
+      ['new', 'D', '+', 'add', 'rect', '--id', 'r', '+', 'set', 'r', 'width=fill'],
+      ['new', 'D', '+', 'add', 'frame', '--name', 'Card', '--id', 'card', '--width', '100', '--height', '100', '+', 'add', 'image', '--src', 'p.png', '--id', 'img', '--parent', 'Card', '--name', 'Pic', '+', 'component', 'card', '+', 'instance', 'Card', '--id', 'i1', '--x', '200', '+', 'set', 'i1/Pic', 'visible=false'],
+      ['new', 'D', '+', 'add', 'text', '--name', 'null', '--id', 't1', '--text', 'null'],
+      ['new', 'D', '+', 'add', 'frame', '--id', 'c', '--name', 'C', '--width', '50', '--height', '50', '+', 'component', 'c', '+', 'instance', 'c', '--id', 'i1', '--x', '100', '+', 'page-add', 'P2', '+', 'add', 'frame', '--id', 'c', '--name', 'C2', '--width', '60', '--height', '60', '+', 'component', 'c', '+', 'instance', 'C2', '--id', 'i2', '--x', '100'],
+    ]
+    for (const args of cases) {
+      const h = harness({ 'p.png': PNG })
+      expect(await h.run([...args, '-o', 'a.kdr']), args.join(' ')).toBe(0)
+      expect(await h.run(['-f', 'a.kdr', 'markup']), args.join(' ')).toBe(0)
+      expect(h.stderr, args.join(' ')).not.toMatch(/build し直せません/)
+      h.fs.set('out.xml', encode(h.stdout))
+      expect(await h.run(['build', 'out.xml', '-o', 'b.kdr']), args.join(' ')).toBe(0)
+    }
+  })
+
+  it('ノードを指定すると、そのノードと子孫を place で置ける形で書き出す', async () => {
+    const h = harness({ 'sample.kdr': readFileSync('docs/examples/sample.kdr') })
+    expect(await h.run(['-f', 'sample.kdr', 'markup', 'Header'])).toBe(0)
+    expect(h.stdout).toMatch(/^<frame id="[^"]+" name="Header" layout="row"/)
+    // 根の「親いっぱいに伸ばす」は、置く先で決まるので数値にする
+    expect(h.stdout.split('\n')[0]).toContain('width="375"')
+    expect(h.stderr).toMatch(/Header（[^)]+）の親いっぱいに伸ばす大きさ/)
+    h.fs.set('header.xml', encode(h.stdout))
+    expect(await h.run(['new', 'X', '+', 'place', 'header.xml', '-o', 'x.kdr'])).toBe(0)
+    expect(byName(await h.doc('x.kdr'), 'Heading')).toMatchObject({ text: '今日のタスク' })
   })
 })
 

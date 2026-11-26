@@ -39,7 +39,10 @@ describe('values', () => {
     expect(parseValue('12', 0, 'x')).toBe(12)
     expect(parseValue('true', false, 'visible')).toBe(true)
     expect(parseValue('123', 'abc', 'text')).toBe('123')
-    expect(parseValue('null', '#fff', 'fill')).toBeNull()
+    expect(parseValue('null', null, 'fill')).toBeNull()
+    // 文字の項目は書いたまま（JSON や null として読まない）
+    expect(parseValue('null', 'abc', 'name')).toBe('null')
+    expect(parseValue('[下書き]', 'abc', 'name')).toBe('[下書き]')
     expect(parseValue('{"a":1}', null, 'shadow')).toEqual({ a: 1 })
     expect(() => parseValue('x', 0, 'x')).toThrow(/数値/)
     expect(() => parseValue('yes', true, 'visible')).toThrow(/true か false/)

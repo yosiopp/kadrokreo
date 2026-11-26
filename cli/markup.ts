@@ -23,7 +23,7 @@ import { KdrError, MAX_DEPTH, kdrFile, parseKdr } from '../src/document/kdr.ts'
 import { pathFromPoints } from '../src/document/path.ts'
 import { polygonSize } from '../src/document/polygon.ts'
 import { sha256Hex } from '../src/document/sha256.ts'
-import type { Asset, AssetId, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, SceneNode } from '../src/document/types.ts'
+import type { Asset, AssetId, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, PathNode, SceneNode } from '../src/document/types.ts'
 import { type VariantProps, formatVariantName, isVariantSet, parseVariantName, propValue, variantSetOf, variantsIn } from '../src/document/variants.ts'
 import { alignVariantProperties, setInstanceProperty } from '../src/editor/componentProperties.ts'
 import { canHoldInstance, listComponents, componentName, nestedInstanceOf, sameJson, swapNestedInstance, syncComponents } from '../src/editor/components.ts'
@@ -565,7 +565,18 @@ function buildElement(
         const closed = closedAttribute?.value === 'true'
         if (d && points) throw fail(points.line, 'd と points は一緒に指定できません')
         if (d) created = { ...guard(scope, d.line, () => pathFromData(d.value, closed, 'd')), fills: [], strokes: [] }
-        else if (points) {
+        else if (points?.value.trim().startsWith('[')) {
+          // kdr の頂点そのもの（枠に対する割合。kdr markup が、d では元と同じ形に戻らないときに書く）。大きさは width / height で決める
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(points.value)
+          } catch {
+            throw fail(points.line, 'points: JSON として読めません')
+          }
+          if (!Array.isArray(parsed) || parsed.length < 2) throw fail(points.line, 'points: 頂点は 2 つ以上です')
+          for (const axis of ['width', 'height']) if (!attribute(axis)) throw fail(element.line, `points を JSON で書くときは ${axis} が要ります`)
+          created = { ...createPath({ x: 0, y: 0, width: 1, height: 1, points: parsed as PathNode['points'] }, closed), fills: [], strokes: [] }
+        } else if (points) {
           const vertices = guard(scope, points.line, () => points.value.trim().split(/\s+/).map((part) => point(part, 'points')))
           if (vertices.length < 2) throw fail(points.line, 'points: 頂点は 2 つ以上です')
           created = { ...createPath(pathFromPoints(vertices), closed), fills: [], strokes: [] }

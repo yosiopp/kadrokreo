@@ -183,6 +183,8 @@ export function orderAssignments<T extends readonly [string, string]>(assignment
 const READONLY = new Set(['id', 'type', 'parentId', 'children', 'component'])
 
 export function parseValue(raw: string, current: unknown, key: string): unknown {
+  // 文字の項目（名前・文言・書体名など）は、書いたままの文字にする（「[下書き]」のような名前を JSON として読まない。null を取る文字の項目はないので、「null」もそのまま）
+  if (typeof current === 'string') return raw
   const trimmed = raw.trim()
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
