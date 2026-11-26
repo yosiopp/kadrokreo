@@ -1,6 +1,7 @@
 import { KDR_VERSION } from '../src/document/kdr.ts'
 import { UsageError } from './args.ts'
 import { COMMANDS, type Command } from './commands.ts'
+import { CHECKS } from './commands/lint.ts'
 import { EXAMPLES, EXAMPLE_DOCUMENT, EXAMPLE_MARKUP } from './examples.ts'
 
 // kdr --help（全体）、kdr help コマンド / kdr コマンド --help（1 つ）、kdr docs（エージェント向けの全体のリファレンス、Markdown）。
@@ -140,12 +141,13 @@ export function docs(): string {
     '- コード: `css`・`html`（`--format html|react|css-modules|tailwind|vue`）',
     '- 書き出し: `png` と `svg-out` はファイルへ書き、書いたパスを標準エラーへ知らせる。`--to -` なら標準出力へ（ほかの標準出力への出力とは一緒にできない）',
     '- 集計: `colors`・`text-styles`・`shadows`（viewer の「このページの色・文字・影」と同じ数え方。見えない色・隠れた色は数えない）。1 行に値と使われている数のタブ区切り。`--json` なら値（`color` / 書式の項目 / `shadow`）・`value`（表示用の書き方）・`count`・`nodes`（`{"page": ページの id, "id": ノードの id}` の配列）を持つオブジェクトの配列',
+    '- 検査: `lint`（下の「検査（lint）」）。1 行に `id<TAB>検査の名前<TAB>説明`、`--json` は `check`・`page`・`id`・`name`・`message` の配列',
     '- 違い: `diff 前.kdr 後.kdr`（ほかのコマンドとはつなげない）。1 行に `+`（増えた）`-`（消えた）`~`（変わった）・種類・名前・id、変わったノードは続く行に `項目: 前 → 後`。ノードはページごとに `# ページ名  id` の見出しの下。`--json` なら `different`・`document`・`pages`・`nodes`・`components`・`assets`・`fonts` を持つ JSON（違いが無くても出す）',
     '',
     '## 終了コードとエラー',
     '',
     '- `0` 成功、`1` エラー（ファイルが読めない・kdr が壊れている・値が kdr の決まりに合わない `fill=red` など）、`2` 使い方の誤り（不明なコマンドやオプション、引数の不足、ノードが見つからない・名前があいまい、入出力の組み合わせの誤り）',
-    '- `diff` は違いがあれば `1`、無ければ `0`。見つけたものと失敗を見分けられるよう、`diff` を含む実行の失敗はすべて `2`',
+    '- `diff` は違いがあれば、`lint` は見つかれば `1`、無ければ `0`。見つけたものと失敗を見分けられるよう、`diff`・`lint` を含む実行の失敗はすべて `2`',
     '- エラーは標準エラーに `kdr: コマンド: 内容` の 1 行で出る。使い方の誤りなら続けて `（使い方は kdr --help）`。エラーのときは何も書き出さない（`-w` でも元のファイルはそのまま）',
     '- 成功しても標準エラーに知らせ（`kdr: PNG を書き出しました: …`、SVG の取り込みで落としたもの）が出ることがある。結果は終了コードで判断する',
     '- 値はコマンドごとに kdr の決まりで確かめるので、壊れた kdr は書き出さない（`fill=red` などはエラー。色は `#rrggbb`）',
@@ -216,6 +218,15 @@ export function docs(): string {
     '- **エラー**: 知らない要素・属性、値の誤り、閉じ忘れは `kdr: build: design.xml:12: fill="red": …` のようにファイルと行番号を付けて標準エラーに出し、何も書き出さない（終了コード 1）',
     '- **標準入力**: ファイル名の代わりに `-` と書くと、マークアップを標準入力から読む（`node make.mjs | kdr build - -o a.kdr`、`kdr -f a.kdr -w place - < part.xml`）。エラーの場所は `-:12:`、画像の `src` は今のディレクトリから数える。`place -` のときは、入力の kdr を `-f` のファイルで渡す',
     '- 繰り返しや変数はない。同じ形はコンポーネントとインスタンスで表すか、マークアップを作る側（スクリプトなど）で繰り返し、`build -` に渡す。コメントは `<!-- … -->`',
+    '',
+    '## 検査（lint）',
+    '',
+    '`kdr -f design.kdr lint` は、ドキュメント全体（全ページ）を次の検査にかけ、見つけたものを 1 行に `id<TAB>検査の名前<TAB>説明` で出す（ノードはページごとに `# ページ名  id` の見出しの下。書体のようにノードの無いものは id が `-` で、見出しの前）。`--json` なら `check`・`page`・`id`・`name`・`message` を持つオブジェクトの配列。',
+    '見つかれば終了コード `1`、無ければ何も出さず `0`（`--json` は `[]`）。`--only` / `--skip` に検査の名前を `,` でつないで、動かす検査を選ぶ。インスタンスの中身（元の写し）は、元の側で 1 度だけ検査する（`low-contrast` だけは、背景が置いた場所で変わるのでインスタンスの中も見る）。',
+    '',
+    ...CHECKS.map((check) => `- \`${check.name}\`: ${check.description}${check.needs ? `（\`--${check.needs}\` を指定したときだけ）` : ''}`),
+    '',
+    '`--palette` は `#rrggbb` を `,` でつないだ並びか、色を書いたファイル（JSON・CSS など、中の `#rrggbb` を拾う）。',
     '',
     '## 例が前提にするドキュメント',
     '',

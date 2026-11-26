@@ -71,6 +71,7 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | `info` / `ls [ノード] [--all] [--json]` / `get ノード [項目]` / `find 文字列` / `bounds ノード` | 調べる（`get パス d` は形を SVG の path の d で出す） |
 | `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の `document.json` の中身、コンポーネントの一覧。`css` と `html` は `--format html\|react\|css-modules\|tailwind\|vue` で viewer のコードの形式と同じものを出す |
 | `colors [ノード…] [--all] [--color hex\|rgb\|hsl] [--json]` / `text-styles [ノード…] [--all] [--json]` / `shadows [ノード…] [--all] [--color hex\|rgb\|hsl] [--json]` | 使われている色・文字の書式・影と、使われている数。viewer のインスペクトの「このページの色・文字・影」と同じ数え方（非表示・不透明度 0・マスクのもの、不透明な塗りの下に隠れた色は数えない）・同じ順。いまのページ、`--all` なら全ページを足し合わせ、ノードを指定すればその中だけ。`--json` は使っているノードの id も出す |
+| `lint [--only 検査,…] [--skip 検査,…] [--grid N] [--palette 色,…\|ファイル] [--target-size N] [--target-name 正規表現] [--json]` | 直したほうがよい所を検査する。見つかれば終了コード 1。下の「[検査する（lint）](#検査するlint)」 |
 | `diff 前.kdr 後.kdr [--json]` | 2 つの kdr の違い（増えた・消えた・変わったノードと変わった項目の前後の値、ページ・コンポーネント・画像・書体の増減）。下の「[2 つの kdr の違いを見る](#2-つの-kdr-の違いを見る)」 |
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
 | `font-add 書体ファイル [--family 書体名]` / `font-rm 書体名 [--weight 太さ] [--italic]` | 書体ファイル（TTF / OTF / WOFF / WOFF2）を kdr に埋め込む・外す。書体名・太さ・斜体はファイルから読む（`--family` で書体名を変えられる）。テキストの `fontFamily` に書体名を書くと、その書体で描かれる（`png` も）。再配布できる書体だけを入れる |
@@ -98,6 +99,47 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 
 すべてのコマンドの説明は `kdr --help`、1 つだけなら `kdr help add`（`kdr add --help` も同じ）で、例も出る。
 `kdr docs` は、呼び方・ノードの指定・出力の形・終了コード・すべてのコマンドと例をまとめたリファレンスを Markdown で出す（[AI エージェントから使う](#ai-エージェントから使う)）。
+
+## 検査する（lint）
+
+`kdr -f design.kdr lint` は、ドキュメント全体（全ページ）の直したほうがよい所を検査する。受け渡しの前の確認や、CI での自動チェックに使う。
+
+```sh
+kdr -f design.kdr lint                                   # 見つけたものを 1 行ずつ。見つかれば終了コード 1
+kdr -f design.kdr lint --json                            # スクリプト向け
+kdr -f design.kdr lint --skip hidden,default-name        # 検査を止める（--only なら選んだものだけ）
+kdr -f design.kdr lint --grid 4 --palette colors.json    # 余白の刻みと色の一覧も確かめる
+```
+
+```text
+- unused-font  "Brand" 700: どのテキストでも使われていない書体
+# Page 1  p1
+r3  default-name  rect "Rectangle 1": 作ったときの名前のまま
+btn  small-target  frame "Button": 押す対象が 30×30（44×44 より小さい）
+```
+
+1 行は `id<TAB>検査の名前<TAB>説明`（上の例は見やすくするため空白で並べた）。ノードはページごとの見出しの下に出し、書体のようにノードの無いものは id を `-` にして見出しの前に出す。
+`--json` は `check`・`page`・`id`・`name`・`message` を持つオブジェクトの配列。見つからなければ何も出さず（`--json` は `[]`）終了コード `0`、読めないなどの失敗は `2`。
+
+検査の一覧:
+
+| 検査 | 見つけるもの |
+| --- | --- |
+| `default-name` | 作ったときの名前のままのレイヤー（`Rectangle 1`・`Frame`・`Text 3` など。マスクの `Mask group`、SVG の `Group`、ブーリアン演算の `合体` なども） |
+| `empty-text` | 中身が空（空白だけ）のテキスト |
+| `hidden` | 非表示のまま残っているノード（中身は 1 つずつ出さない。コンポーネントの表示のプロパティに結んだものは除く） |
+| `zero-size` | 幅か高さが 0 の図形・フレーム・画像（直線・パス・テキストは、幅も高さも 0 のときだけ） |
+| `out-of-frame` | 中身を切り抜くフレーム（入れ子ならどれか）の外に出て、見えないノード |
+| `low-contrast` | テキストと背景のコントラスト比が WCAG の AA の基準（4.5:1、大きな文字は 3:1）に届かないもの。求め方は viewer のインスペクトのコントラスト比と同じで、背景が 1 色に決まらない（画像の上など）ものは出さない。背景は置いた場所で変わるので、インスタンスの中のテキストも見る |
+| `missing-main` | 元のコンポーネントが無くなったインスタンス |
+| `unused-component` | どこからも使われていないコンポーネントの元（バリアントは、まとまりのどれかが使われていれば使われているとみなす） |
+| `unused-font` | どのテキストの描画にも使われていない、埋め込んだ書体（書体名・太さごと。描画と同じく、テキストの書体の指定の先頭の名前と太さで選ぶ） |
+| `small-target` | 押す対象（名前が `--target-name` の正規表現に合うフレーム・インスタンス。既定 `button\|btn\|link\|ボタン\|リンク`、大文字と小文字は区別しない）で、幅か高さが `--target-size`（既定 44）より小さいもの |
+| `off-grid` | 間隔・余白・角丸が `--grid N` の倍数でないもの（0 と、両端に揃えて意味の無い間隔は除く）（`--grid` を指定したときだけ） |
+| `off-palette` | `--palette` の色の一覧に無い塗り・線の色（描かれるものだけ。非表示・不透明度 0・マスクの中やブーリアン演算の材料は除く。影の色も除く）（`--palette` を指定したときだけ） |
+
+- インスタンスの中身（元の写し）は、元の側で 1 度だけ検査する（同じものをインスタンスの数だけ出さない）。背景が置いた場所で変わる `low-contrast` だけは、インスタンスの中のテキストも見る
+- `--palette` は `#rrggbb` を `,` でつないだ並び（`--palette "#5b4cf5,#ffffff"`）か、色を書いたファイル（JSON・CSS など。中の `#rrggbb` を拾う）
 
 ## 2 つの kdr の違いを見る
 

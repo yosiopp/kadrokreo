@@ -26,6 +26,7 @@ import {
 } from './commands/components.ts'
 import { add, dup, svg } from './commands/create.ts'
 import { diff } from './commands/diff.ts'
+import { lint } from './commands/lint.ts'
 import { colors, shadows, textStyles } from './commands/styles.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
 import { boolean, flatten, join, mask, outlineStroke, outlineText, split, textPath } from './commands/paths.ts'
@@ -58,6 +59,7 @@ const commands: Command[] = [
   textStyles,
   shadows,
   diff,
+  lint,
   // export
   png,
   svgOut,

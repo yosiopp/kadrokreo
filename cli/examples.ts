@@ -93,6 +93,11 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr diff old.kdr demo.kdr   # 違いが無ければ何も出さない（終了コード 0）。違いがあれば 1',
     'kdr diff old.kdr demo.kdr --json',
   ],
+  lint: [
+    'kdr -f demo.kdr lint   # 見つかれば終了コード 1',
+    'kdr -f demo.kdr lint --skip small-target,hidden --json',
+    'kdr -f demo.kdr lint --only off-grid,off-palette --grid 4 --palette "#5b4cf5,#ffffff,#f5f5ff"',
+  ],
   png: [
     'kdr -f demo.kdr png   # ページ全体を「Demo - Page 1.png」へ',
     'kdr -f demo.kdr png Card --scale 2 --to card.png',
