@@ -38,6 +38,9 @@ npm run kdr -- --help   # コマンドライン（npm link すれば kdr --help�
 
 `npm run capture` と `npm run bench` は `check` に入れていない。性能の計測の結果の控えは [`docs/bench/`](docs/bench/) にある。
 
+単体テストには、種を固定した乱数で壊れた入力を作るファズテストが入っている（kdr 全体は `src/editor/kdrFuzz.test.ts`、圧縮・tar・画像の見出しは `src/document/decoderFuzz.test.ts`、書体は `src/document/fontFuzz.test.ts`）。
+後ろの 2 つは、落ちるとメッセージに種の番号が出る。`fuzz` の `only` にその番号を渡すと、その 1 件だけを流せる（道具は `src/document/testFuzz.ts`）。
+
 ## ソースからイメージをビルドする
 
 公開しているイメージ（`ghcr.io/yosiopp/kadrokreo`）の代わりに、手元のソースからビルドしたイメージも同じように使える。
