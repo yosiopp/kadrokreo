@@ -62,15 +62,25 @@ function inkOf(data, width, height, ratio) {
 }
 
 /**
- * 2 つの範囲がほぼ同じか（端は tolerance px 以内）。画素の数は 25% 以内（SVG を透明なキャンバスに描いた絵は、
- * 字の縁が背景と混ざらず赤のまま残るので多めに出る）。装飾の線は、上端・下端とも 1.5px 以内（線の位置と太さは、ブラウザは書体の情報から決める）
+ * 2 つの範囲がほぼ同じか。どれも左揃えなので、左端と縦の中心は tolerance px 以内、幅・高さは 8%（か tolerance + 1 px）以内、
+ * 画素の数は 25% 以内（SVG を透明なキャンバスに描いた絵は、字の縁が背景と混ざらず赤のまま残るので多めに出る）。
+ * 装飾の線は、文字の範囲の縦の中心からの位置で、上端・下端とも 2px 以内。
+ * Linux の Chrome では、SVG を画像として描くときの書体が Canvas と違い、文字の送り幅と字の高さが少しずれる
+ * （線に沿う 10 字で幅が 6px、字の位置が 2.5px ほど。macOS ではほぼ同じ）ので、大きさは割合で、線は文字からの位置で見る
  */
 function sameInk(a, b, tolerance = 3) {
-  const near = (key) => Math.abs(a[key] - b[key]) <= tolerance
+  const middle = (box) => (box.top + box.bottom) / 2
+  const size = (box, from, to) => box[to] - box[from]
+  const near = (x, y, slack) => Math.abs(x - y) <= slack
   const rule = a.rule === null || b.rule === null
     ? a.rule === b.rule
-    : Math.abs(a.rule.top - b.rule.top) <= 1.5 && Math.abs(a.rule.bottom - b.rule.bottom) <= 1.5
-  return near('left') && near('top') && near('right') && near('bottom') && Math.abs(a.count - b.count) <= b.count * 0.25 && rule
+    : near(a.rule.top - middle(a), b.rule.top - middle(b), 2) && near(a.rule.bottom - middle(a), b.rule.bottom - middle(b), 2)
+  return near(a.left, b.left, tolerance) &&
+    near(middle(a), middle(b), tolerance) &&
+    near(size(a, 'left', 'right'), size(b, 'left', 'right'), Math.max(tolerance + 1, size(b, 'left', 'right') * 0.08)) &&
+    near(size(a, 'top', 'bottom'), size(b, 'top', 'bottom'), Math.max(tolerance + 1, size(b, 'top', 'bottom') * 0.08)) &&
+    Math.abs(a.count - b.count) <= b.count * 0.25 &&
+    rule
 }
 
 async function canvasInk(page) {
