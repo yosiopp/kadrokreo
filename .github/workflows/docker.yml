@@ -1,6 +1,10 @@
-# Docker イメージのビルド確認と、GHCR への公開。
-# - verify: すべての push（main・v* タグ）と PR で、イメージを作り、viewer・--editor・kdr コマンドが動くか確かめ、起動したイメージを相手に e2e を流す
-# - publish: main への push と v* タグの push のときだけ、verify が通ってから ghcr.io/yosiopp/kadrokreo（フォークでは ghcr.io/<フォークの持ち主>/kadrokreo） に push する
+# Docker イメージのビルド確認と、GHCR への公開。イメージは linux/amd64 と linux/arm64 の 2 つを、それぞれのアーキテクチャのランナーで作る
+# （Dockerfile が build 段から node 本体とネイティブのバイナリを写すので、build 段も対象のアーキテクチャで動かす。エミュレーションは遅いので使わない）。
+# - verify: すべての push（main・v* タグ）と PR で、アーキテクチャごとにイメージを作り、viewer・--editor・kdr コマンドが動くか確かめる。
+#   amd64 では、起動したイメージを相手に e2e も流す
+# - push: main への push と v* タグの push のときだけ、verify が通ってから、アーキテクチャごとのイメージをタグなし（digest だけ）で
+#   ghcr.io/yosiopp/kadrokreo（フォークでは ghcr.io/<フォークの持ち主>/kadrokreo）に push する
+# - publish: push の 2 つを 1 つの manifest にまとめ、タグを付ける
 # - release: v* タグの push のときだけ、publish が終わってから GitHub Releases を作る（本文は scripts/release-notes.sh）
 name: Docker
 
@@ -19,7 +23,19 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # e2e は amd64 だけ。配信するファイルと nginx の設定はアーキテクチャによらず、ブラウザはランナーの側で動く
+          - arch: amd64
+            runner: ubuntu-24.04
+            e2e: true
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            e2e: false
+    name: verify (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,14 +47,25 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # キャッシュはアーキテクチャごとに分ける（同じ scope だと互いに上書きする）
       - name: イメージを作る
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          platforms: linux/${{ matrix.arch }}
           load: true
           tags: kadrokreo:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: イメージと中の node が、ランナーと同じアーキテクチャになっている
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(docker image inspect kadrokreo:ci --format '{{.Architecture}}')" = "$ARCH"
+          # コンテナの中の node が名乗るアーキテクチャ（amd64 は x64）
+          case "$ARCH" in amd64) expected=x64 ;; *) expected=$ARCH ;; esac
+          test "$(docker run --rm --entrypoint node kadrokreo:ci -p process.arch)" = "$expected"
 
       - name: viewer と --editor が HTTP で応答する
         run: |
@@ -60,6 +87,7 @@ jobs:
           docker logs kdr-viewer 2>&1 | grep 'serving viewer mode'
           docker logs kdr-editor 2>&1 | grep 'serving editor mode'
 
+      # png は @napi-rs/canvas のネイティブのバイナリ（アーキテクチャごとに別のパッケージ）で描くので、どちらのアーキテクチャでも確かめる
       - name: イメージの kdr コマンドで kdr と PNG を作れ、docs と help を出せる
         run: |
           docker run --rm kadrokreo:ci kdr new + add rect --name Box > demo.kdr
@@ -77,26 +105,30 @@ jobs:
       # nginx の配信の設定と CSP、本番のビルドだけで起きる退行はここでしか拾えない（CSP 違反はコンソールエラーになり、e2e が落ちる）。
       # Node・Chrome・書体の用意は ci.yml と同じ
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.e2e
         with:
           node-version: 24
           cache: npm
 
       - name: Chrome と日本語の書体
+        if: matrix.e2e
         run: |
           google-chrome --version
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
 
-      - run: npm ci
+      - if: matrix.e2e
+        run: npm ci
 
       - name: イメージの viewer と editor を相手に e2e を流す
+        if: matrix.e2e
         env:
           VIEWER_URL: http://localhost:8091
           EDITOR_URL: http://localhost:8092
         run: npm run e2e
 
       - name: e2e の出力を残す（失敗したとき）
-        if: failure()
+        if: failure() && matrix.e2e
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-out-image
@@ -108,23 +140,87 @@ jobs:
         if: always()
         run: docker rm -f kdr-viewer kdr-editor || true
 
-  publish:
+  # アーキテクチャごとのイメージを、タグを付けずに digest だけで push する（タグは publish が manifest にまとめてから付ける）
+  push:
     needs: verify
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    name: push (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    # マトリクスのジョブの出力は名前ごとにまとまるので、アーキテクチャの名前で分けて出す
     outputs:
-      digest: ${{ steps.push.outputs.digest }}
+      amd64: ${{ steps.digest.outputs.amd64 }}
+      arm64: ${{ steps.digest.outputs.arm64 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # main → edge、v1.2.3 のタグ → 1.2.3・1.2・latest、どちらも sha-<短い sha>
+      # イメージに付けるラベル（リポジトリ・リビジョンなど）。タグは publish で付けるので、ここでは使わない
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kadrokreo
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # イメージの名前は小文字でないといけない（フォークの持ち主の名前に大文字があっても通るように）
+      - id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kadrokreo" >> "$GITHUB_OUTPUT"
+
+      # verify と同じ GHA キャッシュを使うので、ほとんど作り直さない
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - id: digest
+        env:
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          test -n "$DIGEST"
+          echo "$ARCH=$DIGEST" >> "$GITHUB_OUTPUT"
+
+  # 2 つのアーキテクチャのイメージを 1 つの manifest にまとめ、タグを付ける。イメージは作り直さない
+  publish:
+    needs: push
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # main → edge、v1.2.3 のタグ → 1.2.3・1.2・latest、どちらも sha-<短い sha>。
+      # 説明などの注釈は、まとめた manifest（index）に付ける
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
         with:
           images: ghcr.io/${{ github.repository_owner }}/kadrokreo
           flavor: latest=false
@@ -141,16 +237,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # verify と同じ GHA キャッシュを使うので、ほとんど作り直さない
-      - id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # まとめた manifest の digest を release に渡す（リリースの本文に載せる）
+      - id: manifest
+        name: manifest をまとめてタグを付ける
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+          DIGEST_AMD64: ${{ needs.push.outputs.amd64 }}
+          DIGEST_ARM64: ${{ needs.push.outputs.arm64 }}
+        run: |
+          test -n "$DIGEST_AMD64"
+          test -n "$DIGEST_ARM64"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kadrokreo"
+          args=()
+          while IFS= read -r tag; do args+=(--tag "$tag"); done < <(jq -r '.tags[]' <<< "$META_JSON")
+          while IFS= read -r annotation; do args+=(--annotation "$annotation"); done < <(jq -r '.annotations[]' <<< "$META_JSON")
+          docker buildx imagetools create "${args[@]}" "$image@$DIGEST_AMD64" "$image@$DIGEST_ARM64"
+          first=$(jq -r '.tags[0]' <<< "$META_JSON")
+          docker buildx imagetools inspect "$first"
+          # 2 つのアーキテクチャが入っているか
+          platforms=$(docker buildx imagetools inspect "$first" --raw | jq -r '[.manifests[].platform | .os + "/" + .architecture] | join(" ")')
+          case " $platforms " in *" linux/amd64 "*) ;; *) echo "linux/amd64 がありません: $platforms"; exit 1 ;; esac
+          case " $platforms " in *" linux/arm64 "*) ;; *) echo "linux/arm64 がありません: $platforms"; exit 1 ;; esac
+          digest=$(docker buildx imagetools inspect "$first" --format '{{json .Manifest}}' | jq -r .digest)
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   # イメージの push が終わってから作るので、本文のリンク先のイメージは必ず存在する
   release:
