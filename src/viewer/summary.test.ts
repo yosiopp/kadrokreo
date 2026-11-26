@@ -141,12 +141,16 @@ describe('summarizePage', () => {
       text({ id: 'b', fontSize: 14, text: '別の文言' }),
       text({ id: 'c', fontSize: 32, fontWeight: 700, lineHeight: 1.2 }),
       text({ id: 'd', fontSize: 14, fontWeight: 700 }),
+      // 字間が違えば別の設定
+      text({ id: 'e', fontSize: 14, letterSpacing: 2 }),
     )
     expect(summarizePage(scene).textStyles).toEqual([
-      { fontFamily: 'sans-serif', fontSize: 32, fontWeight: 700, lineHeight: 1.2, count: 1, nodes: ['c'] },
-      { fontFamily: 'sans-serif', fontSize: 14, fontWeight: 700, lineHeight: 1.5, count: 1, nodes: ['d'] },
-      { fontFamily: 'sans-serif', fontSize: 14, fontWeight: 400, lineHeight: 1.5, count: 2, nodes: ['a', 'b'] },
+      { fontFamily: 'sans-serif', fontSize: 32, fontWeight: 700, lineHeight: 1.2, letterSpacing: 0, count: 1, nodes: ['c'] },
+      { fontFamily: 'sans-serif', fontSize: 14, fontWeight: 700, lineHeight: 1.5, letterSpacing: 0, count: 1, nodes: ['d'] },
+      { fontFamily: 'sans-serif', fontSize: 14, fontWeight: 400, lineHeight: 1.5, letterSpacing: 0, count: 2, nodes: ['a', 'b'] },
+      { fontFamily: 'sans-serif', fontSize: 14, fontWeight: 400, lineHeight: 1.5, letterSpacing: 2, count: 1, nodes: ['e'] },
     ])
+    expect(inspectPage(sceneOf(text({ fontSize: 14, letterSpacing: 1.5 })))[1].rows[0].value).toBe('400 14px/1.5 sans-serif; letter-spacing: 1.5px')
   })
 })
 

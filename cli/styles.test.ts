@@ -117,12 +117,19 @@ describe('colors / text-styles / shadows', () => {
     expect(h.stdout).toBe('400 20px/1.2 sans-serif\t2\n400 10px/1.2 sans-serif\t1\n')
     expect(await h.run(argv('-f s.kdr text-styles --json'))).toBe(0)
     expect(JSON.parse(h.stdout)).toEqual([
-      { fontFamily: 'sans-serif', fontSize: 20, fontWeight: 400, lineHeight: 1.2, value: '400 20px/1.2 sans-serif', count: 2, nodes: expect.any(Array) },
+      { fontFamily: 'sans-serif', fontSize: 20, fontWeight: 400, lineHeight: 1.2, letterSpacing: 0, value: '400 20px/1.2 sans-serif', count: 2, nodes: expect.any(Array) },
     ])
     expect(await h.run(argv('-f s.kdr shadows --all --color rgb'))).toBe(0)
     expect(h.stdout).toBe('0 4px 8px rgba(0, 0, 0, 0.25)\t2\n')
     expect(await h.run(argv('-f s.kdr shadows --json'))).toBe(0)
     expect(JSON.parse(h.stdout)[0]).toMatchObject({ shadow: { type: 'drop-shadow', blur: 8, y: 4 }, value: '0 4px 8px rgba(0, 0, 0, 0.25)', count: 1 })
+  })
+
+  it('字間が違えば別の書式として数え、letter-spacing を添える', async () => {
+    const h = harness()
+    expect(await h.run(argv('new + add text --text a fontSize=12 + add text --text b fontSize=12 letterSpacing=1.5 -o t.kdr'))).toBe(0)
+    expect(await h.run(argv('-f t.kdr text-styles'))).toBe(0)
+    expect(h.stdout).toBe('400 12px/1.2 sans-serif\t1\n400 12px/1.2 sans-serif; letter-spacing: 1.5px\t1\n')
   })
 
   it('何も無ければ何も出さず（--json は空の配列）、誤った指定はエラー', async () => {

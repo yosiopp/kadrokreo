@@ -35,7 +35,8 @@ import { getImage } from './images.ts'
 import { drawBlurred } from './blur.ts'
 import { FRAME_LABEL_FONT, FRAME_LABEL_HEIGHT, frameLabelPose } from './labels.ts'
 import { isPathText } from '../document/textPath.ts'
-import { applyFont, fontBox, layoutPathText, layoutText, wrapWidth } from './text.ts'
+import { applyFont, fillSpaced, fontBox, layoutPathText, layoutText, wrapWidth } from './text.ts'
+import { decorationLine } from '../document/textWrap.ts'
 import type { Viewport } from './viewport.ts'
 
 export type RenderOptions = {
@@ -432,10 +433,25 @@ function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
   // 線に沿うテキストは、文字ごとに線の上へ置く（基線を線に乗せ、線の向きに回す）
   const glyphs = isPathText(node) ? layoutPathText(ctx, node) : null
   const lines = glyphs ? [] : layoutText(ctx, node)
+  const spacing = node.letterSpacing
+  // 装飾の線は文字と同じ塗り・同じ形の扱い（影・切り抜き）にするので、文字と一緒に描く
+  const decoration = decorationLine(node)
+  /** 装飾の線を、基線の左端 (x, y) から長さ length だけ method で描く */
+  const rule = (c: CanvasRenderingContext2D, method: 'fillText' | 'strokeText', x: number, y: number, length: number) => {
+    if (!decoration || length <= 0) return
+    const top = y + decoration.offset - decoration.thickness / 2
+    if (method === 'fillText') c.fillRect(x, top, length, decoration.thickness)
+    else c.strokeRect(x, top, length, decoration.thickness)
+  }
   /** 全部の文字を method で描く。c の書体・textBaseline は設定してあること */
   const put = (c: CanvasRenderingContext2D, method: 'fillText' | 'strokeText') => {
     if (!glyphs) {
-      lines.forEach((line, i) => c[method](line.text, (width - line.width) * align, lineHeight * i + baseline))
+      lines.forEach((line, i) => {
+        const x = (width - line.width) * align
+        const y = lineHeight * i + baseline
+        fillSpaced(c, method, line.text, x, y, spacing)
+        rule(c, method, x, y, line.width)
+      })
       return
     }
     const m = c.getTransform()
@@ -443,6 +459,8 @@ function textShape(ctx: CanvasRenderingContext2D, node: TextNode) {
       c.translate(glyph.x, glyph.y)
       c.rotate(glyph.angle)
       c[method](glyph.text, 0, 0)
+      // 線に沿う文字の装飾は、文字ごとに送り幅（字間を含む）の分だけ引く
+      rule(c, method, 0, 0, glyph.advance)
       c.setTransform(m)
     }
   }
@@ -538,7 +556,7 @@ export function bandLines(node: TextNode): number[] {
     let width = 0
     for (const char of paragraph) {
       if (lines.length >= limit) break
-      const advance = (char.charCodeAt(0) >= 0x3000 ? 1 : HALF_WIDTH) * node.fontSize
+      const advance = (char.charCodeAt(0) >= 0x3000 ? 1 : HALF_WIDTH) * node.fontSize + node.letterSpacing
       if (wrapAt !== null && width + advance > wrapAt && width > 0) {
         lines.push(width)
         width = 0

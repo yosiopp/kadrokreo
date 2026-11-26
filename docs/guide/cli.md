@@ -75,7 +75,7 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
 | `font-add 書体ファイル [--family 書体名]` / `font-rm 書体名 [--weight 太さ] [--italic]` | 書体ファイル（TTF / OTF / WOFF / WOFF2）を kdr に埋め込む・外す。書体名・太さ・斜体はファイルから読む（`--family` で書体名を変えられる）。テキストの `fontFamily` に書体名を書くと、その書体で描かれる（`png` も）。再配布できる書体だけを入れる |
 | `add 種類 …` | `rect` `ellipse` `frame` `text`（`--text`）`line`（`--from x,y --to x,y`）`path`（`--points "x,y …" [--closed]` か、曲線を含めるなら SVG の path の `--d "M0 0 C…"`。`M` のまとまりが複数なら穴のあるパス）`image`（`--src 画像`。PNG・JPEG・WebP・GIF、32MB・6,400 万画素まで） |
-| `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`sizing.width=fill`、`maxWidth=320`、`constraints.horizontal=end`、`fill=null` で外す）。`fill` / `stroke` / `shadow` は、単色の塗り・線と最初の影の略記（`shadow.spread=4` で影の広がり）。`blur=8` / `backgroundBlur=8` でレイヤー・背景のぼかし（`null` で外す）、`blendMode=multiply` でノードの描画モード。`cornerRadius=8,8,0,0` で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは `radius=8` で全部の輪郭（穴など 2 つ目以降も）の頂点の角を丸める（頂点ごとなら `radius=8,0,8` と、`get ノード d` の順の通し番号で並べる）。特定の輪郭だけなら `radius.N=8`（`N` は 0 から数えた輪郭の番号で、0 が最初の輪郭。`radius.1=4,0,4,0` のように頂点ごとも可）。破線は `dash=4,2`（線の長さ・間隔。`dash=null` で実線）、破線のずれは `dashOffset=2`、線の角の形は `join=round`（`miter` `round` `bevel`）。端の形は `endCap=arrow`（`none` `round` `square` `arrow` `circle` `diamond`）、印の大きさは `capSize=16`。配列は `fills=[…]` と JSON で書くか、`fills.0.color=#ff0000` のように番号でつなぐ。大きさの決め方は `width=fill`（親いっぱい）・`width=hug`（中身に合わせる）・数値（その大きさで固定）、行の高さは `lineHeight=1.5`（倍率）か `lineHeight=24px`。フレームは `layout=row`（`column`）で自動で並べ（余白も間隔も 0 から。今の子の位置から余白を逆算するのは `auto-layout`）、並べ方は `gap=8` `padding="12 40"`（1〜4 個。CSS と同じ順）`align=center` `justify=space-between` のように `layout.` を付けずに書ける |
+| `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`sizing.width=fill`、`maxWidth=320`、`constraints.horizontal=end`、`fill=null` で外す）。`fill` / `stroke` / `shadow` は、単色の塗り・線と最初の影の略記（`shadow.spread=4` で影の広がり）。`blur=8` / `backgroundBlur=8` でレイヤー・背景のぼかし（`null` で外す）、`blendMode=multiply` でノードの描画モード。`cornerRadius=8,8,0,0` で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは `radius=8` で全部の輪郭（穴など 2 つ目以降も）の頂点の角を丸める（頂点ごとなら `radius=8,0,8` と、`get ノード d` の順の通し番号で並べる）。特定の輪郭だけなら `radius.N=8`（`N` は 0 から数えた輪郭の番号で、0 が最初の輪郭。`radius.1=4,0,4,0` のように頂点ごとも可）。破線は `dash=4,2`（線の長さ・間隔。`dash=null` で実線）、破線のずれは `dashOffset=2`、線の角の形は `join=round`（`miter` `round` `bevel`）。端の形は `endCap=arrow`（`none` `round` `square` `arrow` `circle` `diamond`）、印の大きさは `capSize=16`。配列は `fills=[…]` と JSON で書くか、`fills.0.color=#ff0000` のように番号でつなぐ。大きさの決め方は `width=fill`（親いっぱい）・`width=hug`（中身に合わせる）・数値（その大きさで固定）、行の高さは `lineHeight=1.5`（倍率）か `lineHeight=24px`、字間は `letterSpacing=2`（px）か `letterSpacing=0.05em`（その時点の文字の大きさで px に直す）、文字の装飾は `textDecoration=underline`（`line-through` で取り消し線、`none` で外す）。フレームは `layout=row`（`column`）で自動で並べ（余白も間隔も 0 から。今の子の位置から余白を逆算するのは `auto-layout`）、並べ方は `gap=8` `padding="12 40"`（1〜4 個。CSS と同じ順）`align=center` `justify=space-between` のように `layout.` を付けずに書ける |
 | `gradient [linear\|radial\|conic] ノード… [--colors 色,色@50%,色…] [--stop N=色[@位置],…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r\|rx,ry] [--focus fx,fy] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N \| --add]` | グラデーションの塗りにする（3 色以上、位置は 0〜1 か %。`#ff000000` のような `#rrggbbaa`・`#rgba` の色は最後の桁が色ごとの透明度）。直線は `--angle` か始点・終点（`--from` / `--to`）、円形の `--angle` は楕円を回す角度、`--focus` は焦点（中心からのずれを半径に対する割合で）、角度（conic）は `--center` と `--angle`（最初の色の向き）。`--blend multiply` で塗りの描画モード。ふつうはいちばん上の塗りを置き換え、`--index` で何番目か（0 が一番下）、`--add` で上に重ねる。`--stroke` なら線。`--hidden` でその塗りを隠す。`--colors` を省くと今の色のまま種類や向きだけ変える。`--stop 1=#ff0000` は N 番目（0 が最初、-1 が最後）の色だけを変える（`0=@20%` なら位置だけ。カンマで区切っていくつでも）。種類を省くと今のグラデーションの種類のまま変える。塗り・影を隠すだけなら `set ノード fills.0.visible=false`、内側の影は `set ノード shadow.type=inner-shadow` |
 | `rm` / `mv (--parent フレーム \| --root)` / `order front\|back\|forward\|backward` / `dup` | 削除、親の付け替え、重なり順、複製 |
 | `boolean union\|subtract\|intersect\|exclude ノード… [--keep [--strokes]]` / `flatten ノード…` | ブーリアン演算（合体・差し引き・交差・除外）。矩形・楕円・パスの塗りの形と、kdr に埋め込んだ書体のテキストの文字の形にかけ、最も背面のものを引き継いだ 1 つのパス（`fillRule=evenodd`）にする。差し引きは最も背面のものから残りを引く。`--keep` なら元の図形を子に残すブーリアン演算のノードにまとめる（演算は `set ノード booleanOperation=intersect` で変えられる）。`--strokes` を付けると元の図形の線の外形も演算に含める（`set ノード booleanIncludeStrokes=true` でも変えられる）。`flatten` はそのノードを結果のパスに焼き込む |
@@ -257,44 +257,17 @@ kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほか�
 
 | 書くもの | 決まり |
 | --- | --- |
-| 要素 | `<frame>` `<rect>` `<ellipse>` `<text>` `<image src="…">` `<line from="x,y" to="x,y">` `<path d="M0 0 L…">`（か `points="x,y x,y …" closed="true"`）、`<component>`（コンポーネントの元になるフレーム）、`<component-set>`（バリアントのまとまり）、`<instance of="元の id か名前">` |
-| 親子と重なり順 | 入れ子が親子、書いた順が重なり順（先に書いたものが背面。自動で並べるフレームでは並ぶ順）。子を持てるのは `<frame>` `<component>` `<component-set>` |
+| 要素 | `<frame>` `<rect>` `<ellipse>` `<text>` `<image src="…">` `<line from="x,y" to="x,y">` `<path d="M0 0 L…">`（か `points="x,y x,y …" closed="true"`）、`<component>`（コンポーネントの元になるフレーム）、`<instance of="元の id か名前">` |
+| 親子と重なり順 | 入れ子が親子、書いた順が重なり順（先に書いたものが背面。自動で並べるフレームでは並ぶ順）。子を持てるのは `<frame>` と `<component>` |
 | 属性 | `set` の「名前=値」と同じ（`name` `fill` `stroke` `cornerRadius` `opacity` `fontSize` `shadow.blur` …）。書く順は問わない |
 | 書かなかった項目 | 「なし」から始まる（塗りなし・線なし・余白 0・間隔 0）。`add` や editor で作るときの灰色の塗り・余白 10 は付かない。テキストだけは黒・16px の sans-serif |
 | 並べ方 | `layout="row\|column"` で子を自動で並べ、`gap` `padding`（`"16"` `"12 40"` `"12 40 24"` `"1 2 3 4"`。CSS と同じ順）`align` `justify` `wrap` で決める |
 | 大きさ | `width` / `height` は、数値（固定）・`fill`（親いっぱいに伸ばす。自動で並べるフレームの子だけ）・`hug`（中身に合わせる。自動で並べるフレームとテキストの幅だけ。省いたときもこれ）。`<rect>` `<ellipse>` と、並べない `<frame>` には大きさを書く。`<image>` は省くと画像の大きさ。テキストは `width` を書くとその幅で折り返す |
 | 位置 | `x` `y` を書くのは、並べないフレームの子・ページ直下のもの・並びから外したもの（`layoutPositioning="absolute"`）だけ。ほかは並べ直しが決める |
-| テキスト | 要素の中身に書く（前後の空白と行ごとの字下げは除く。途中の改行は改行になる）。`<` と `&` は `&lt;` `&amp;`。空白をそのまま残すなら `text="…"` の属性に。行の高さは `lineHeight="1.5"`（倍率）か `"24px"` |
+| テキスト | 要素の中身に書く（前後の空白と行ごとの字下げは除く。途中の改行は改行になる）。`<` と `&` は `&lt;` `&amp;`。空白をそのまま残すなら `text="…"` の属性に。行の高さは `lineHeight="1.5"`（倍率）か `"24px"`、字間は `letterSpacing="2"`（px）か `"0.05em"`、装飾は `textDecoration="underline"`（`line-through`） |
 | 画像 | `src` は、マークアップのファイルからの相対パス |
 | コンポーネント | `<instance of="…">` の元は、マークアップの中の `<component>` の `id`、なければ `name` で探す（`place` は今の kdr の元からも探す）。中身を変えるのは `<override node="レイヤー名" text="…" fill="…" visible="false"/>`。同じ名前がいくつもあれば `node="親/子"` か、元の側で付けた `id` で指す。入れ子のインスタンスの差し替えは `<override node="…" of="別の元"/>`。`<instance>` 自身に書けるのは名前・位置・回転・表示・不透明度、`width="fill"` / `height="fill"`、塗りと線で、ほかは元で決まる |
-| 説明文・プロパティ・バリアント | 説明文は `<component description="…">`。プロパティは元の中のノードに `prop="名前"`（`<text>` なら文言、`<instance>` なら差し替え）か `prop.visible="名前"`（表示）を書いて結ぶ。インスタンスでの値は `<override prop="名前" value="…"/>`。バリアントは `<component-set>` の直下に `<component variant="種類=大, 状態=標準">` を並べ、`<instance of="まとまり" variant="種類=大">` で選ぶ（下の例） |
 | id | 省ける。省くと木の道筋（名前と、同じ名前の兄弟の中での順）から決まる。後で `set` などから指すノードには `id` を書いておく |
-
-コンポーネントの説明文・プロパティ・バリアントも、マークアップに書ける:
-
-```xml
-<component name="Icon" id="icon" width="16" height="16" fill="#5b4cf5"/>
-<component-set name="Button" description="主な操作に使うボタン" layout="row" gap="8">
-  <component variant="種類=標準, 大きさ=大" description="ふつうはこれ" layout="row" gap="4" padding="8 16" fill="#5b4cf5">
-    <instance of="icon" name="Icon" prop.visible="アイコンを出す"/>
-    <text name="Label" fill="#ffffff" prop="文言">OK</text>
-  </component>
-  <component variant="種類=標準, 大きさ=小" layout="row" gap="4" padding="4 8" fill="#5b4cf5">
-    <instance of="icon" name="Icon"/>
-    <text name="Label" fontSize="12" fill="#ffffff">OK</text>
-  </component>
-</component-set>
-
-<instance of="Button" variant="大きさ=小">
-  <override prop="文言" value="送信"/>
-  <override prop="アイコンを出す" value="false"/>
-</instance>
-```
-
-- `prop="名前"` は `<text>` なら文言、`<instance>` なら差し替えのプロパティ、`prop.visible="名前"` はどのノードでも表示のプロパティとして結ぶ。同じ名前を別のノードにも書けば結び足し、元がバリアントなら、まとまりのほかのバリアントにも同じ名前で足す（結ぶのはレイヤー名のたどり方が同じノード）
-- `variant` に書かなかったプロパティは、`of` で指したバリアント（まとまりを指したなら最初のバリアント）に近いものを選ぶ。入れ子のインスタンスの差し替え `<override node="…" of="…" variant="…"/>` でも選べる
-- 差し替えの候補（`prop-prefer`）とプロパティの並べ替え（`prop-order`）は、`build` に `+` でつなぐ
-- ないプロパティ名・ないバリアントの値・同じ組み合わせのバリアントなども、行番号つきのエラーになる
 
 - 知らない要素・属性、値の誤り、閉じ忘れは、`kdr: build: design.xml:12: fill="red": …` のようにファイルと行番号を付けて知らせ、何も書き出さない
 - 繰り返しや変数はない。同じ形はコンポーネントとインスタンスで表すか、マークアップを作る側（スクリプトなど）で繰り返す

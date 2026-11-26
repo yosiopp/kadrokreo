@@ -19,6 +19,14 @@ const fonts: EmbeddedFont[] = [
 
 afterEach(() => setOutlineFonts([], {}))
 
+/** 輪郭の頂点の向きの面積（符号つき） */
+function area(contour: Contour): number {
+  return contour.vertices.reduce((sum, a, i) => {
+    const b = contour.vertices[(i + 1) % contour.vertices.length]
+    return sum + a.x * b.y - b.x * a.y
+  }, 0)
+}
+
 /** 輪郭ごとの囲む矩形（四捨五入） */
 function boxes(contours: readonly Contour[]) {
   return contours.map((contour) => {
@@ -72,6 +80,41 @@ describe('textOutline', () => {
     expect(boxes(wrapped.contours).map(([, y]) => y)).toEqual([10, 10, 110, 110])
     const flipped = textOutline(text({ fontFamily: 'Kdr Test', text: 'A', fontSize: 100, lineHeight: 1, width: 100, height: 100, flipX: true }))!
     expect(boxes(flipped.contours)).toEqual([[45, 10, 50, 70]])
+  })
+
+  it('字間を文字ごとに足し、装飾の線を字の外側の輪郭と同じ向きの矩形で足す', () => {
+    setOutlineFonts(fonts, assets)
+    // 字間 10: 2 文字目は 60 + 10 だけ右。行の幅は (60 + 10) × 2 = 140。下線の中心は基線 90 から 11 下、太さ 6
+    const style = { fontFamily: 'Kdr Test', text: 'AA', fontSize: 100, lineHeight: 1.2, width: 200, letterSpacing: 10 }
+    const underlined = textOutline(text({ ...style, textDecoration: 'underline' }))!
+    expect(boxes(underlined.contours)).toEqual([
+      [5, 20, 50, 70],
+      [75, 20, 50, 70],
+      [0, 98, 140, 6],
+    ])
+    // 取り消し線は基線から 28 上
+    expect(boxes(textOutline(text({ ...style, textDecoration: 'line-through' }))!.contours)[2]).toEqual([0, 59, 140, 6])
+    expect(textOutline(text({ ...style, textDecoration: 'none' }))!.contours).toHaveLength(2)
+    // TrueType（glyf）と CFF で外側の輪郭の向きが逆でも、線の向きを字に揃える（nonzero で重なりが抜けない）
+    for (const fontWeight of [400, 700]) {
+      const [glyph, , rule] = textOutline(text({ ...style, fontWeight, textDecoration: 'underline' }))!.contours
+      expect(Math.sign(area(rule))).toBe(Math.sign(area(glyph)))
+    }
+  })
+
+  it('線に沿う文字は、字間を送り幅に足し、装飾の線を文字ごとに引く', () => {
+    setOutlineFonts(fonts, assets)
+    const node = text({
+      fontFamily: 'Kdr Test', text: 'AA', fontSize: 100, width: 400, height: 1, letterSpacing: 20, textDecoration: 'underline',
+      textPath: { points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], closed: false, startOffset: 0 },
+    })
+    const outline = textOutline(node)!
+    // 文字 2 つと、送り幅（60 + 20）の長さの線 2 本。線は基線（線の上 y = 0）から 11 下が中心
+    expect(boxes(outline.contours).filter(([, , , h]) => h === 6)).toEqual([
+      [0, 8, 80, 6],
+      [80, 8, 80, 6],
+    ])
+    expect(boxes(outline.contours).filter(([, , , h]) => h === 70).map(([x]) => x)).toEqual([5, 85])
   })
 
   it('書体に無い文字は除いて数える。太さはいちばん近い書体を使う', () => {

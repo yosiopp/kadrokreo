@@ -5,13 +5,12 @@ import { BOOLEAN_OPERATION_LABELS, booleanParts, drawnNode, isBooleanNode } from
 import { type MaskNode, clipsByOutline, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
 import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
-import { CONTRAST_AA, CONTRAST_AAA, CONTRAST_AAA_LARGE, CONTRAST_AA_LARGE, formatRatio, textContrast } from './contrast.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
 import { cssFontFamily } from './fontFamily.ts'
 import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
-import type { Asset, AssetId, AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow } from '../document/types.ts'
+import type { Asset, AssetId, AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow, TextNode } from '../document/types.ts'
 import { isPassThroughFrame, passThroughFade } from '../document/passThrough.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
@@ -26,6 +25,7 @@ export type InspectSection = { title: string; rows: InspectRow[] }
 const DIRECTIONS = { horizontal: '横', vertical: '縦' }
 const JUSTIFY = { start: '先頭', center: '中央', end: '末尾', 'space-between': '均等' }
 const TEXT_ALIGN = { left: '左', center: '中央', right: '右' }
+const TEXT_DECORATION = { underline: '下線', 'line-through': '取り消し線' }
 
 /** 自動で並べるフレームの揃え方を CSS の flex の値に */
 const FLEX_JUSTIFY = { start: 'flex-start', center: 'center', end: 'flex-end', 'space-between': 'space-between' } as const
@@ -40,6 +40,11 @@ export const DEFAULT_CODE_STYLE: CodeStyle = { unit: 'px', remBase: 16, color: '
 /** 小数 2 桁まで。計算で出る細かい端数は見せない */
 function num(value: number): string {
   return String(tidy(value))
+}
+
+/** 字間（px と、文字の大きさに対する em） */
+function letterSpacingText(node: TextNode): string {
+  return `${num(node.letterSpacing)}px（${num(node.letterSpacing / node.fontSize)}em）`
 }
 
 function percent(ratio: number): string {
@@ -111,6 +116,8 @@ export function inspectNode(
       { label: '書体', value: node.fontFamily },
       { label: 'サイズ', value: num(node.fontSize) },
       { label: '太さ', value: String(node.fontWeight) },
+      node.letterSpacing !== 0 && { label: '字間', value: letterSpacingText(node) },
+      node.textDecoration !== 'none' && { label: '装飾', value: TEXT_DECORATION[node.textDecoration] },
       { label: 'パスに沿う', value: `始まり ${percent(node.textPath.startOffset)}・${node.textPath.closed ? '閉じた線' : '開いた線'}` },
       { label: '行揃え', value: TEXT_ALIGN[node.textAlign] },
       { label: 'CSS', value: '線に沿う文字は CSS で表せないので、HTML では SVG の textPath で書いている' },
@@ -125,6 +132,8 @@ export function inspectNode(
         label: '行の高さ',
         value: `${num(node.lineHeight)}（${num(node.fontSize * node.lineHeight)}px）`,
       },
+      node.letterSpacing !== 0 && { label: '字間', value: letterSpacingText(node) },
+      node.textDecoration !== 'none' && { label: '装飾', value: TEXT_DECORATION[node.textDecoration] },
       { label: '行揃え', value: TEXT_ALIGN[node.textAlign] },
       {
         label: '折り返し',
@@ -193,8 +202,6 @@ export function inspectNode(
   }
 
   if ('fills' in node) add('塗り', paintRows(node.fills))
-
-  if (node.type === 'text') add('コントラスト', contrastRows(scene, node.id, hex))
 
   if ('strokes' in node && hasStroke(node)) {
     add('線', [
@@ -540,6 +547,9 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     add('font-family', cssFontFamily(node.fontFamily))
     add('font-size', px(node.fontSize))
     add('font-weight', String(node.fontWeight))
+    if (node.letterSpacing !== 0) add('letter-spacing', px(node.letterSpacing))
+    // 線に沿う文字の装飾は、svg の中の text に属性で書く（CSS の text-decoration は svg の中の文字へ伝わらない。markup.ts）
+    if (node.textDecoration !== 'none' && node.textPath === null) add('text-decoration', node.textDecoration)
     // 線に沿う文字は SVG の textPath で並べる（markup.ts）ので、行の高さ・行揃えは CSS に書かない
     if (node.textPath === null) {
       add('line-height', num(node.lineHeight))
@@ -856,25 +866,4 @@ function svgDataUrl(svg: string): string {
 /** グラデーションの角度を CSS の角度（90° ずらす）に直し、0〜360 に収める */
 function cssDegrees(deg: number): number {
   return (((deg + 90) % 360) + 360) % 360
-}
-
-/**
- * テキストと背景のコントラスト比（contrast.ts）。文字と背景は合成した後の色。グラデーションの上などで組がいくつもあるときは、
- * いちばん低い比の組を出し、基準もそれで判定する
- */
-function contrastRows(scene: Scene, id: NodeId, hex: (color: string) => string): InspectRow[] {
-  const result = textContrast(scene, id)
-  if (result === null) return []
-  if (result.kind === 'unknown') return [{ label: '比', value: `求められない（${result.reason}）` }]
-  const { lowest, highest, large } = result
-  const level = (ok: boolean, need: number) => `${ok ? '満たす' : '満たさない'}（${need}:1 以上）`
-  return [
-    { label: '文字', value: hex(lowest.text), color: lowest.text },
-    { label: '背景', value: result.overWhite ? `${hex(lowest.background)}（後ろが透けている所は白の地として）` : hex(lowest.background), color: lowest.background },
-    { label: '比', value: result.varies ? `いちばん低い所で ${formatRatio(lowest.ratio)}（高い所で ${formatRatio(highest.ratio)}）` : formatRatio(lowest.ratio) },
-    { label: '文字の大きさ', value: large ? '大きな文字（24px 以上か、太字で 18.66px 以上）' : 'ふつうの文字' },
-    { label: 'AA', value: level(result.aa, large ? CONTRAST_AA_LARGE : CONTRAST_AA) },
-    { label: 'AAA', value: level(result.aaa, large ? CONTRAST_AAA_LARGE : CONTRAST_AAA) },
-    result.varies && { label: '求め方', value: 'グラデーションは、止めの間も含めた全体の色のうち、いちばん低い比で判定している' },
-  ].filter((row) => row !== false)
 }

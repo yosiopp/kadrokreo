@@ -748,6 +748,41 @@ describe('テキスト', () => {
   })
 })
 
+describe('字間と文字の装飾', () => {
+  it('letter-spacing（px・em・normal）と text-decoration を、変換の拡大をかけてテキスト全体の書式にする', () => {
+    const result = convert(
+        '<svg><text y="20" letter-spacing="2" text-decoration="underline" transform="scale(2)">A</text>' +
+          '<text y="40" font-size="20" style="letter-spacing: 0.1em; text-decoration: line-through red">B</text>' +
+          '<g letter-spacing="3" text-decoration="underline"><text y="60" letter-spacing="normal" text-decoration="none">C</text></g>' +
+          '<text y="80" font-size="32" letter-spacing="0.1rem">D</text></svg>',
+    )
+    const [spaced, em, group] = children(result) as [TextNode, TextNode, FrameNode]
+    const normal = children(result, group)[0]
+    expect(spaced).toMatchObject({ letterSpacing: 4, textDecoration: 'underline' })
+    expect(em).toMatchObject({ letterSpacing: 2, textDecoration: 'line-through' })
+    // 字間は normal で 0 に戻るが、先祖から伝わった装飾は none では消えない（CSS と同じ）
+    expect(normal).toMatchObject({ letterSpacing: 0, textDecoration: 'underline' })
+    // rem はルートの文字の大きさ（16px）で直す
+    expect(children(result)[3]).toMatchObject({ letterSpacing: 1.6 })
+  })
+
+  it('先祖の g に書いたものも受け継ぐ。一部の文字だけのもの・上線は知らせて落とす', () => {
+    const inherited = convert('<svg><g letter-spacing="1.5" text-decoration="underline"><text y="20">A</text></g></svg>')
+    expect(children(inherited, children(inherited)[0] as FrameNode)[0]).toMatchObject({ letterSpacing: 1.5, textDecoration: 'underline' })
+    const partial = convert('<svg><text y="20">A <tspan text-decoration="underline">B</tspan></text><text y="40" text-decoration="overline">C</text></svg>')
+    expect(children(partial).map((node) => (node as TextNode).textDecoration)).toEqual(['none', 'none'])
+    expect(labels(partial)).toEqual(['一部の文字だけの字間・装飾（テキスト全体の書式にした）', '文字の上線（text-decoration: overline）'])
+  })
+
+  it('textPath に書いたものは、中の文字の全部にかかるので、線に沿うテキストの書式にする', () => {
+    const result = convert(
+      '<svg><defs><path id="g" d="M0 50 H200"/></defs><text font-size="20"><textPath href="#g" letter-spacing="2" text-decoration="underline">Along</textPath></text></svg>',
+    )
+    expect(children(result)[0]).toMatchObject({ letterSpacing: 2, textDecoration: 'underline', textPath: { startOffset: 0 } })
+    expect(labels(result)).toEqual([])
+  })
+})
+
 describe('textPath', () => {
   it('text の中の textPath は、href の図形の線に沿うテキストにする', () => {
     const result = convert(

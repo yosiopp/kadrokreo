@@ -97,6 +97,8 @@ export const text = (patch: Partial<TextNode> = {}): TextNode => ({
   fontWeight: 400,
   textAlign: 'left',
   lineHeight: 1.5,
+  letterSpacing: 0,
+  textDecoration: 'none',
   textPath: null,
   flipX: false,
   flipY: false,

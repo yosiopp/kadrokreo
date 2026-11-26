@@ -294,6 +294,16 @@ export type TextNode = BaseNode &
   /** 行の高さ。fontSize に対する倍率 */
   lineHeight: number
   /**
+   * 字間（px。CSS の letter-spacing と同じ）。文字（書記素のまとまり）ごとに、その後ろへ足す。行の最後の文字の後ろにも足すので、
+   * 行の幅・折り返し・中身に合わせる大きさに効く。負の値は詰める。0 は書体のまま
+   */
+  letterSpacing: number
+  /**
+   * 文字の装飾（CSS の text-decoration-line と同じ）。underline は下線、line-through は取り消し線。線の色は文字の塗り、
+   * 長さは行の幅（字間を含む）。線に沿う文字では文字ごとに線を引く。1 つのテキストの一部だけには付けられない
+   */
+  textDecoration: 'none' | 'underline' | 'line-through'
+  /**
    * 文字を沿わせる線（SVG の textPath）。null ならふつうに行に並べる。
    * 沿わせるときは改行を空白として 1 行に並べ、折り返し・行の高さ・大きさの決め方（sizing）は効かない。枠は線を囲む矩形で、線と一緒に伸縮する
    */
@@ -443,6 +453,9 @@ export type Override = {
   fontSize?: number
   fontFamily?: string
   fontWeight?: number
+  /** 字間・文字の装飾（TextNode と同じ）。行の高さ・行揃えは段落の書式なので上書きできない */
+  letterSpacing?: number
+  textDecoration?: TextNode['textDecoration']
   /** 画像の差し替え。ドキュメントの assets にあるもの */
   assetId?: AssetId
   /** テキスト・画像の裏返し（Flippable と同じ） */

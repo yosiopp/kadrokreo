@@ -314,6 +314,13 @@ describe('nodeMarkup', () => {
     expect(nodeMarkup(sceneOf(path), 'path', { style: { format: 'react' } }).html).toContain('stopColor="#ff0000"')
   })
 
+  it('線に沿う文字の装飾は、svg の中の text の属性に書く', () => {
+    const along = text({ textDecoration: 'line-through', textPath: { points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], closed: false, startOffset: 0 } })
+    expect(nodeMarkup(sceneOf(along), 'text').html).toContain('<text fill="currentColor" text-decoration="line-through"><textPath')
+    expect(nodeMarkup(sceneOf(along), 'text', { style: { format: 'react' } }).html).toContain('textDecoration="line-through"')
+    expect(nodeMarkup(sceneOf({ ...along, textDecoration: 'none' }), 'text').html).not.toContain('decoration')
+  })
+
   it('単位を rem にできる', () => {
     expect(nodeMarkup(sceneOf(rect()), 'rect', { style: { unit: 'rem' } }).css).toContain('width: 6.25rem;')
   })

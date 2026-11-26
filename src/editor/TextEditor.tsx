@@ -66,6 +66,8 @@ export function TextEditor({ scene, camera, id, selectAll, onInput, onDone }: Pr
         fontFamily: node.fontFamily,
         fontWeight: node.fontWeight,
         textAlign: node.textAlign,
+        letterSpacing: node.letterSpacing * viewport.zoom,
+        textDecoration: node.textDecoration === 'none' ? undefined : node.textDecoration,
         color: solidColor(node.fills) ?? (node.fills[0] ? paintColor(node.fills[0]) : 'transparent'),
       }}
       onChange={(event) => onInput(event.target.value)}

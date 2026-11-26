@@ -71,6 +71,7 @@ import {
 //   mask の中身が図形 1 つで塗りがグラデーションか mask-type: alpha なら、その図形を明るさ・不透明度のマスクに（paintedMask）、
 //   中身にテキスト・画像・グループがあれば、中身のノード（いくつもならまとめたフレーム）をその絵で透かすマスクにする（pictureMask）。
 // - <text> の中の <textPath> は、href が指す図形の最初の輪郭を写した、線に沿うテキスト（TextNode.textPath）にする。
+// - letter-spacing と text-decoration（下線・取り消し線）は、text（と先祖）に書いたものをテキスト全体の字間・装飾にする。中の tspan だけに付けたもの・上線は知らせて落とす。
 // - <image> は data URI の PNG / JPEG / WebP / GIF を画像のノードに、SVG（data:image/svg+xml）を別の文書として変換したフレームにする（外部の URL は読まない）。
 // - <text> と <image> にかかる変換が裏返していれば、左右の裏返し（flipX）と回転にする（上下の裏返しは左右の裏返し + 180° の回転）。
 // - 図形の filter は、feDropShadow か kadrokreo の書き出しと同じ並びの影（落ち影・内側の影）だけを効果にする（filters.ts）。
@@ -136,6 +137,10 @@ type Inherited = {
   fontFamily: string
   fontWeight: string
   textAnchor: string
+  /** letter-spacing（ユーザー単位。em はその要素の font-size で直してある） */
+  letterSpacing: number
+  /** text-decoration（下線・取り消し線。CSS では受け継がないが、子孫の文字に線が引かれるので受け継ぐ扱いにする） */
+  textDecoration: TextNode['textDecoration']
   visible: boolean
   /** stroke-linecap。開いたパスの両端の形になる */
   lineCap: string
@@ -173,6 +178,8 @@ const ROOT_INHERITED: Inherited = {
   fontFamily: 'sans-serif',
   fontWeight: 'normal',
   textAnchor: 'start',
+  letterSpacing: 0,
+  textDecoration: 'none',
   visible: true,
   lineCap: 'butt',
   lineJoin: 'miter',
@@ -437,9 +444,31 @@ class Converter {
         : parseLength(fontSize)
       if (size !== null && Number.isFinite(size) && size > 0) next.fontSize = size
     }
+    const letterSpacing = get('letter-spacing')
+    if (letterSpacing !== undefined) {
+      // rem は parseLength が読む（ルートの文字の大きさ 16px）ので、em だけを要素の文字の大きさで直す
+      const em = letterSpacing.endsWith('em') && !letterSpacing.endsWith('rem')
+      const spacing = letterSpacing === 'normal' ? 0 : em ? next.fontSize * parseFloat(letterSpacing) : parseLength(letterSpacing)
+      if (spacing !== null && Number.isFinite(spacing)) next.letterSpacing = spacing
+    }
+    const decoration = get('text-decoration-line') ?? get('text-decoration')
+    if (decoration !== undefined) next.textDecoration = this.decorationOf(decoration, parent.textDecoration)
     const visibility = get('visibility')
     if (visibility !== undefined) next.visible = visibility === 'visible'
     return next
+  }
+
+  /** text-decoration の値（線の種類のほか、色・太さ・形を並べてよい）を、文字の装飾にする。上線は表せないので知らせて落とす */
+  private decorationOf(value: string, parent: TextNode['textDecoration']): TextNode['textDecoration'] {
+    const words = value.toLowerCase().split(/\s+/)
+    if (words.includes('overline')) this.warn('文字の上線（text-decoration: overline）')
+    if (words.includes('underline')) {
+      if (words.includes('line-through')) this.warn('下線と取り消し線の両方（下線だけにした）')
+      return 'underline'
+    }
+    if (words.includes('line-through')) return 'line-through'
+    // none は先祖から伝わった装飾を消さない（CSS と同じ）
+    return parent
   }
 
   // ── 要素 ──
@@ -1419,6 +1448,7 @@ class Converter {
       fontFamily: inherited.fontFamily,
       fontWeight: fontWeightOf(inherited.fontWeight),
       textAlign: anchor,
+      ...this.textStyleOf(element, inherited, scale),
     }
     const size = this.options.measureText(node)
     node = { ...node, ...size }
@@ -1447,6 +1477,22 @@ class Converter {
     node = { ...node, fills: this.paint(inherited.fill, inherited.fillOpacity, inherited, matrix, userBox, node) }
     if (inherited.stroke.trim() !== 'none') this.warn('文字の線（stroke）')
     return [this.add(node)]
+  }
+
+  /**
+   * text の字間と装飾。text（と、その先祖）に書いたものを使い、中の tspan などで一部の文字だけに付けたものは知らせて落とす
+   * （1 つのテキストの一部だけの書式は持てないため）
+   */
+  private textStyleOf(element: SvgElement, inherited: Inherited, scale: number): Pick<TextNode, 'letterSpacing' | 'textDecoration'> {
+    const partial = (nodes: SvgNode[]): boolean =>
+      nodes.some((child) => {
+        if (typeof child === 'string') return false
+        // textPath は中の文字の全部を包むので、そこに書いたものは全体の書式（受け継いで pathText が読む）
+        const declared = child.name === 'textPath' ? {} : this.declared(child)
+        return ['letter-spacing', 'text-decoration', 'text-decoration-line'].some((name) => declared[name] !== undefined) || partial(child.children)
+      })
+    if (partial(element.children)) this.warn('一部の文字だけの字間・装飾（テキスト全体の書式にした）')
+    return { letterSpacing: tidy(inherited.letterSpacing * scale), textDecoration: inherited.textDecoration }
   }
 
   /**
@@ -1490,6 +1536,7 @@ class Converter {
       fontFamily: inherited.fontFamily,
       fontWeight: fontWeightOf(inherited.fontWeight),
       textAlign: anchor,
+      ...this.textStyleOf(element, this.inherit(textPath, inherited), scale),
       name: element.attributes.id ?? lines.join(' ').slice(0, 40),
       visible: inherited.visible,
       opacity: this.opacityOf(element),

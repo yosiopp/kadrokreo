@@ -959,6 +959,8 @@ function applyOverride<N extends SceneNode>(node: N, values: Override | undefine
     if (values.fontSize !== undefined) patch.fontSize = values.fontSize
     if (values.fontFamily !== undefined) patch.fontFamily = values.fontFamily
     if (values.fontWeight !== undefined) patch.fontWeight = values.fontWeight
+    if (values.letterSpacing !== undefined) patch.letterSpacing = values.letterSpacing
+    if (values.textDecoration !== undefined) patch.textDecoration = values.textDecoration
   }
   if (values.assetId !== undefined && node.type === 'image') patch.assetId = values.assetId
   if (node.type === 'text' || node.type === 'image') {
@@ -977,6 +979,7 @@ function sameTextStyle(a: TextNode, b: TextNode): boolean {
     a.fontFamily === b.fontFamily &&
     a.fontWeight === b.fontWeight &&
     a.lineHeight === b.lineHeight &&
+    a.letterSpacing === b.letterSpacing &&
     a.sizing.width === b.sizing.width &&
     a.minWidth === b.minWidth &&
     a.maxWidth === b.maxWidth &&

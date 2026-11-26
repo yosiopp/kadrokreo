@@ -1,15 +1,16 @@
 import type { Size } from '../document/geometry.ts'
 import type { TextNode, TextPath } from '../document/types.ts'
 import { type PlacedGlyph, pathTextClusters, placeOnPath } from '../document/textPath.ts'
-import { hugHeight, hugWidth, wrapLine, wrapWidth } from '../document/textWrap.ts'
+import { graphemes } from '../document/textWrap.ts'
+import { hugHeight, hugWidth, spacedMeasure, wrapLine, wrapWidth } from '../document/textWrap.ts'
 
 export { breakUnits, hugHeight, hugWidth, wrapLine, wrapWidth } from '../document/textWrap.ts'
 
 export type FontStyle = Pick<TextNode, 'fontSize' | 'fontFamily' | 'fontWeight'>
-export type TextStyle = FontStyle & Pick<TextNode, 'text' | 'sizing' | 'width' | 'lineHeight' | 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight'> &
+export type TextStyle = FontStyle & Pick<TextNode, 'text' | 'sizing' | 'width' | 'lineHeight' | 'letterSpacing' | 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight'> &
   Partial<Pick<TextNode, 'height' | 'textPath'>>
 
-/** 行の文字列と描画幅。折り返した行の幅には、行末にぶら下がった空白を含めない */
+/** 行の文字列と描画幅（字間を含む）。折り返した行の幅には、行末にぶら下がった空白を含めない */
 export type TextLine = { text: string; width: number }
 
 // 書体の指定ごとに、実際に代入する文字列（fontFamily が不正なら太さと大きさだけの指定）。
@@ -106,7 +107,7 @@ export function layoutText(ctx: CanvasRenderingContext2D, style: TextStyle): Tex
   const cached = layoutCache.get(style)
   if (cached) return cached
   const wrapAt = wrapWidth(style)
-  const key = `${style.fontWeight}\u0000${style.fontSize}\u0000${style.fontFamily}\u0000${wrapAt}\u0000${style.text}`
+  const key = `${style.fontWeight}\u0000${style.fontSize}\u0000${style.fontFamily}\u0000${style.letterSpacing}\u0000${wrapAt}\u0000${style.text}`
   const shared = contentCache.get(key)
   if (shared) {
     layoutCache.set(style, shared)
@@ -114,7 +115,8 @@ export function layoutText(ctx: CanvasRenderingContext2D, style: TextStyle): Tex
   }
 
   applyFont(ctx, style)
-  const measure = (text: string) => ctx.measureText(text).width
+  // 字間は ctx.letterSpacing に頼らず足す（描画は ctx に字間を設定して描くが、測るときは設定していない。fillSpaced）
+  const measure = spacedMeasure((text: string) => ctx.measureText(text).width, style.letterSpacing)
   const paragraphs = style.text.split('\n')
   const lines = wrapAt === null
     ? paragraphs.map((text) => ({ text, width: measure(text) }))
@@ -169,7 +171,51 @@ export function layoutPathText(ctx: CanvasRenderingContext2D, node: TextNode & {
     }
     advances.push(advance)
   }
-  const placed = placeOnPath(node, clusters, starts, advances, pen)
+  // 字間は文字ごとの送り幅に足す（ブラウザの SVG の textPath も、字間を足した送り幅で文字を置く）
+  const spacing = node.letterSpacing
+  const placed = spacing === 0
+    ? placeOnPath(node, clusters, starts, advances, pen)
+    : placeOnPath(node, clusters, starts.map((start, i) => start + spacing * i), advances.map((advance) => advance + spacing), pen + spacing * clusters.length)
   pathCache.set(node, placed)
   return placed
+}
+
+/** ctx.letterSpacing を使えるか（使えない環境では、文字のまとまりごとに描く） */
+function hasLetterSpacing(ctx: CanvasRenderingContext2D): boolean {
+  return 'letterSpacing' in ctx
+}
+
+/** 字間を足して描くとき、先頭から測って字詰めを含める文字のまとまりの数の上限（超えた分は送り幅を足していく） */
+const SPACED_PREFIX_LIMIT = 200
+
+/**
+ * 1 行を字間（px）を足して描く。layoutText の行の幅（字間を含む）と同じ位置に文字を置く。
+ * ctx.letterSpacing を使える環境ではそれで描き（字詰めも合字もそのまま）、使えなければ文字のまとまりごとに、先頭からの幅に字間を足した位置へ描く
+ */
+export function fillSpaced(
+  ctx: CanvasRenderingContext2D,
+  method: 'fillText' | 'strokeText',
+  text: string,
+  x: number,
+  y: number,
+  letterSpacing: number,
+): void {
+  if (letterSpacing === 0) {
+    ctx[method](text, x, y)
+    return
+  }
+  if (hasLetterSpacing(ctx)) {
+    ctx.letterSpacing = `${letterSpacing}px`
+    ctx[method](text, x, y)
+    ctx.letterSpacing = '0px'
+    return
+  }
+  let prefix = ''
+  let pen = 0
+  graphemes(text).forEach((cluster, i) => {
+    const start = i < SPACED_PREFIX_LIMIT ? ctx.measureText(prefix).width : pen
+    ctx[method](cluster, x + start + letterSpacing * i, y)
+    if (i < SPACED_PREFIX_LIMIT) prefix += cluster
+    pen = start + ctx.measureText(cluster).width
+  })
 }

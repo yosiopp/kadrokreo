@@ -141,6 +141,14 @@ describe('書き出す範囲（getPaintedBounds）', () => {
     expect(textInkBox(node, [{ text: 'a' }, { text: 'b' }])).toEqual({ x: 0, y: 0, width: 100, height: 48 })
   })
 
+  it('字間を大きく詰めて行の幅が負になっても、左へ描かれる文字を範囲に含める。線に沿う文字は字間の分だけ広げる', () => {
+    // 左揃えで幅 -110 の行は、x = 0 から左へ 110 描く
+    expect(textInkBox(text({ width: 1, height: 24 }), [{ text: 'abcdefghij', width: -110 }])).toEqual({ x: -110, y: 0, width: 111, height: 24 })
+    const along = text({ width: 200, height: 100, fontSize: 16, textPath: { points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], closed: false, startOffset: 0 } })
+    expect(textInkBox(along, [])).toEqual({ x: -16, y: -16, width: 232, height: 132 })
+    expect(textInkBox({ ...along, letterSpacing: 60 }, [])).toEqual({ x: -76, y: -76, width: 352, height: 252 })
+  })
+
   it('パスの鋭い角は、線のつなぎ目（マイター）の先まで含める。太さの 10 倍を超える角はベベルなので数えない', () => {
     const stroke = { type: 'solid' as const, color: '#000000', opacity: 1, visible: true, blendMode: 'normal' as const }
     // 頂点 (50, 0) の角は辺どうしが約 53° で、つなぎ目は 5 / sin(26.6°) ≒ 11.2 だけ上へとがる

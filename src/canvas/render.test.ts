@@ -8,6 +8,7 @@ function text(fields: Partial<TextNode>): TextNode {
     text: '',
     fontSize: 10,
     lineHeight: 1,
+    letterSpacing: 0,
     width: 100,
     height: 10,
     maxWidth: null,
@@ -20,6 +21,8 @@ describe('bandLines（ごく小さい文字の帯）', () => {
   it('字の数で長さを見積もる。半角は文字の大きさの 0.55 倍、全角は 1 倍', () => {
     expect(bandLines(text({ text: 'abcd' }))).toEqual([22])
     expect(bandLines(text({ text: 'あい' }))).toEqual([20])
+    // 字間は 1 文字ごとに足す
+    expect(bandLines(text({ text: 'あい', letterSpacing: 3 }))).toEqual([26])
   })
   it('折り返す幅を超えたら次の行にし、枠に収まる行の数までにする', () => {
     expect(bandLines(text({ text: 'あいうえお', width: 25, height: 20 }))).toEqual([20, 20])

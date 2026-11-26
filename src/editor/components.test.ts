@@ -408,7 +408,7 @@ describe('インスタンスごとの上書き', () => {
     ids.reduce((next, id) => {
       const node = next.nodes[id]
       if (node?.type !== 'text') return next
-      return updateNode(next, id, { width: node.text.length * node.fontSize, height: node.fontSize })
+      return updateNode(next, id, { width: node.text.length * (node.fontSize + node.letterSpacing), height: node.fontSize })
     }, scene)
 
   it('写しの文言・色・表示を変えると、そのインスタンスの上書きになる', () => {
@@ -541,6 +541,24 @@ describe('インスタンスごとの上書き', () => {
     // 「OK」の 2 文字 × 30
     expect(edited.pages[0].nodes[labelCopy]).toMatchObject({ fontSize: 30, fontWeight: 700, width: 60, height: 30 })
     expect(edited.pages[0].nodes[label.id]).toMatchObject({ fontSize: 16, fontWeight: 400 })
+  })
+
+  it('字間・文字の装飾を上書きすると、同期しても残り、字間は大きさを測り直す', () => {
+    const { doc, label, instanceId } = withInstance()
+    const labelCopy = frameOf(doc.pages[0], instanceId).children[1]
+    const edited = edit(
+      doc,
+      (page) => fitText(updateNode(page, labelCopy, { letterSpacing: 4, textDecoration: 'underline' }), [labelCopy]),
+      fitText,
+    )
+    expect(overridesOf(edited, instanceId)).toEqual({ [label.id]: { letterSpacing: 4, textDecoration: 'underline' } })
+    // 「OK」の 2 文字 × (16 + 4)
+    expect(edited.pages[0].nodes[labelCopy]).toMatchObject({ letterSpacing: 4, textDecoration: 'underline', width: 40 })
+    expect(edited.pages[0].nodes[label.id]).toMatchObject({ letterSpacing: 0, textDecoration: 'none' })
+    expect(syncComponents(edited, fitText)).toBe(edited)
+    // 元の字間を変えても、上書きした写しはそのまま
+    const mainChanged = syncComponents(updatePage(edited, edited.pages[0].id, (page) => updateNode(page, label.id, { letterSpacing: 1, textDecoration: 'line-through' })), fitText)
+    expect(mainChanged.pages[0].nodes[labelCopy]).toMatchObject({ letterSpacing: 4, textDecoration: 'underline' })
   })
 
   it('写しの画像を差し替えると上書きになる', () => {

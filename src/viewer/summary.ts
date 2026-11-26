@@ -1,3 +1,4 @@
+import { tidy } from '../document/geometry.ts'
 import { isMaskNode } from '../document/mask.ts'
 import type { Shadow, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
 import { hasStroke, isShadow, shownPaints } from '../document/paint.ts'
@@ -9,7 +10,7 @@ import { type CodeStyle, DEFAULT_CODE_STYLE, type InspectSection, shadowCss } fr
 
 /** count は使われている数（塗りと線の両方に使えば 2）、nodes は使っているノード（重ねない） */
 export type ColorUse = { color: string; count: number; nodes: NodeId[] }
-export type TextStyleUse = Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight'> & {
+export type TextStyleUse = Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight' | 'letterSpacing'> & {
   count: number
   nodes: NodeId[]
 }
@@ -80,8 +81,8 @@ export function summarizePage(scene: Scene): {
     if (node.type === 'text') {
       countPaints(node.fills)
       const key = textStyleKey(node)
-      const { fontFamily, fontSize, fontWeight, lineHeight } = node
-      const style = textStyles.get(key) ?? { fontFamily, fontSize, fontWeight, lineHeight, count: 0, nodes: [] }
+      const { fontFamily, fontSize, fontWeight, lineHeight, letterSpacing } = node
+      const style = textStyles.get(key) ?? { fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, count: 0, nodes: [] }
       style.count++
       style.nodes.push(node.id)
       textStyles.set(key, style)
@@ -110,9 +111,9 @@ export function summarizePage(scene: Scene): {
 
 // 同じものとして数える決まりと並べ方。CLI（colors・text-styles・shadows）が、ページをまたいで足し合わせるときにも使う
 
-/** 同じ文字の書式として数える項目 */
-export function textStyleKey(text: Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight'>): string {
-  return [text.fontFamily, text.fontSize, text.fontWeight, text.lineHeight].join('\n')
+/** 同じ文字の書式として数える項目（字間も含める） */
+export function textStyleKey(text: Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight' | 'letterSpacing'>): string {
+  return [text.fontFamily, text.fontSize, text.fontWeight, text.lineHeight, text.letterSpacing].join('\n')
 }
 
 /** 同じ影として数える項目 */
@@ -126,14 +127,19 @@ export const compareColorUses = (a: ColorUse, b: ColorUse) => b.count - a.count 
 
 /** 文字は大きい順 */
 export const compareTextStyleUses = (a: TextStyleUse, b: TextStyleUse) =>
-  b.fontSize - a.fontSize || b.fontWeight - a.fontWeight || a.fontFamily.localeCompare(b.fontFamily) || a.lineHeight - b.lineHeight
+  b.fontSize - a.fontSize || b.fontWeight - a.fontWeight || a.fontFamily.localeCompare(b.fontFamily) || a.lineHeight - b.lineHeight ||
+  a.letterSpacing - b.letterSpacing
 
 /** 影は使われている数の多い順。同じ数なら、ぼかしの大きい（強い）順 */
 export const compareShadowUses = (a: ShadowUse, b: ShadowUse) => b.count - a.count || b.shadow.blur - a.shadow.blur
 
-/** 文字の書式を、CSS の font にそのまま書ける形で */
-export function textStyleCss(text: Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight'>): string {
-  return `${text.fontWeight} ${text.fontSize}px/${text.lineHeight} ${cssFontFamily(text.fontFamily)}`
+/**
+ * 文字の書式を、CSS の font にそのまま書ける形で。字間は font に書けないので、0 でなければ `; letter-spacing: Npx` を添える
+ * （font の値の後ろに ; で続けて書けば、そのまま CSS の宣言になる）
+ */
+export function textStyleCss(text: Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight' | 'letterSpacing'>): string {
+  const spacing = text.letterSpacing === 0 ? '' : `; letter-spacing: ${tidy(text.letterSpacing)}px`
+  return `${text.fontWeight} ${text.fontSize}px/${text.lineHeight} ${cssFontFamily(text.fontFamily)}${spacing}`
 }
 
 /** summarizePage の結果を、パネルに出す形にする。文字は、CSS の font にそのまま書ける形で出す */

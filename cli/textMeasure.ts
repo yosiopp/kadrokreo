@@ -1,5 +1,6 @@
 import type { NodeId, Scene, TextNode } from '../src/document/types.ts'
 import { hugHeight, hugWidth, wrapLine, wrapWidth } from '../src/canvas/text.ts'
+import { spacedMeasure } from '../src/document/textWrap.ts'
 import { patchNodes } from '../src/editor/operations/tree.ts'
 
 // Node には Canvas がないので、文字の幅は字ごとのおおよその値で見積もる。
@@ -34,7 +35,7 @@ function charWidth(char: string, mono: boolean): number {
   return OTHER_WIDTH / 1000
 }
 
-type Style = Pick<TextNode, 'text' | 'fontSize' | 'fontWeight' | 'fontFamily' | 'sizing' | 'width' | 'lineHeight' | 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight'> &
+type Style = Pick<TextNode, 'text' | 'fontSize' | 'fontWeight' | 'fontFamily' | 'sizing' | 'width' | 'lineHeight' | 'letterSpacing' | 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight'> &
   Partial<Pick<TextNode, 'height' | 'textPath'>>
 
 export function estimateTextWidth(text: string, fontSize: number, fontWeight: number, fontFamily = 'sans-serif'): number {
@@ -46,7 +47,8 @@ export function estimateTextWidth(text: string, fontSize: number, fontWeight: nu
 
 /** canvas/text.ts の layoutText と同じ決まりで、見積もった幅を使って行に分ける（SVG の書き出しのテキスト） */
 export function estimateTextLines(style: Style): { text: string; width: number }[] {
-  const measure = (text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily)
+  // 字間は描画（canvas/text.ts の layoutText）と同じく、文字のまとまりごとに足す
+  const measure = spacedMeasure((text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily), style.letterSpacing)
   const paragraphs = style.text.split('\n')
   const wrapAt = wrapWidth(style)
   return (wrapAt === null ? paragraphs : paragraphs.flatMap((paragraph) => wrapLine(paragraph, wrapAt, measure))).map((text) => ({ text, width: measure(text.trimEnd()) }))
@@ -56,7 +58,8 @@ export function estimateTextLines(style: Style): { text: string; width: number }
 export function estimateTextSize(style: Style): { width: number; height: number } {
   // 線に沿うテキストの枠は線を囲む矩形で、中身では決まらない
   if (style.textPath && style.height !== undefined) return { width: style.width, height: style.height }
-  const measure = (text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily)
+  // 字間は描画（canvas/text.ts の layoutText）と同じく、文字のまとまりごとに足す
+  const measure = spacedMeasure((text: string) => estimateTextWidth(text, style.fontSize, style.fontWeight, style.fontFamily), style.letterSpacing)
   const paragraphs = style.text.split('\n')
   const wrapAt = wrapWidth(style)
   const lines = wrapAt === null

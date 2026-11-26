@@ -140,6 +140,8 @@ export const OVERRIDE_LABELS: Record<keyof Override, string> = {
   fontSize: '文字の大きさ',
   fontFamily: '書体',
   fontWeight: '太さ',
+  letterSpacing: '字間',
+  textDecoration: '文字の装飾',
   assetId: '画像',
   flipX: '左右の裏返し',
   flipY: '上下の裏返し',

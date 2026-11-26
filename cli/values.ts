@@ -15,6 +15,7 @@ import { UsageError } from './args.ts'
 // cornerRadius=0,8,8,0（角丸を 4 隅ばらばらに。左上・右上・右下・左下の順）、dash=4,2（破線。null で実線）、radius=8（パスの全部の輪郭の頂点の角の丸め。頂点ごとなら全部の輪郭の通し番号の順にカンマで並べる）、
 // radius.1=8（N 番目の輪郭だけ。0 が最初の輪郭 points、1 からが contours）、
 // width=fill / height=hug（大きさの決め方 sizing。数値なら、その大きさで固定にする）、lineHeight=24px（px で書いた行の高さを fontSize に対する倍率に直す）、
+// letterSpacing=0.05em（em で書いた字間を px に直す。px は 2px でも 2 でも同じ）、
 // フレームの layout=row|column（自動で並べる。余白も間隔も 0 から始める）と、並べ方の項目（gap=8 padding="12 40" align=center など。layout.gap=8 と同じ）。
 // 同じ語彙を、マークアップ（kdr build / place。markup.ts）の属性にも使う。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
@@ -134,6 +135,7 @@ const DIRECTIONS: Record<string, AutoLayout['direction']> = { row: 'horizontal',
  *   layout=row|column   フレームを自動で並べる（すでに並べていれば向きだけ変える）。余白も間隔も 0 から始め、大きさは中身に合わせる
  *   width=fill|hug      大きさの決め方（sizing）。数値なら、その大きさで固定にする（テキストの高さはいつも中身で決まる）
  *   lineHeight=24px     行の高さを px で（fontSize に対する倍率に直す）
+ *   letterSpacing=0.05em  字間を em で（その時点の fontSize を掛けて px に直す。あとで fontSize を変えても px のまま）。2px は 2 と同じ
  */
 function expandSizing(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): Record<string, unknown> | null {
   const value = raw.trim()
@@ -159,11 +161,17 @@ function expandSizing(node: SceneNode, path: string, raw: string, draft: Record<
     if (value.length === 2 || !Number.isFinite(px) || !(px > 0) || !(fontSize > 0)) throw new UsageError(`${path}: 24px のように正の数で指定してください: ${raw}`)
     return { lineHeight: px / fontSize }
   }
+  if (path === 'letterSpacing' && node.type === 'text' && /(px|em)$/i.test(value)) {
+    const amount = Number(value.slice(0, -2))
+    if (value.length === 2 || !Number.isFinite(amount)) throw new UsageError(`${path}: 2px や 0.05em のように数で指定してください: ${raw}`)
+    const fontSize = (Object.hasOwn(draft, 'fontSize') ? draft.fontSize : node.fontSize) as number
+    return { letterSpacing: /em$/i.test(value) ? amount * fontSize : amount }
+  }
   return null
 }
 
 /**
- * ほかの値の読み方を決める項目を先にする（layout=row があれば gap= などより先、fontSize= は lineHeight=24px より先）。
+ * ほかの値の読み方を決める項目を先にする（layout=row があれば gap= などより先、fontSize= は lineHeight=24px や letterSpacing=0.05em より先）。
  * ほかは書いた順のまま
  */
 export function orderAssignments<T extends readonly [string, string]>(assignments: readonly T[]): T[] {

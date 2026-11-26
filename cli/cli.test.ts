@@ -131,6 +131,24 @@ describe('kadrokreo CLI', () => {
     expect(nodeByName(await h.doc('a.kdr'), 'Text').width).toBe(100)
   })
 
+  it('字間（px か em）と文字の装飾を set で変え、字間で大きさを測り直す', async () => {
+    const h = harness()
+    await h.run(argv('new + add text --text あいう fontSize=20 -o a.kdr'))
+    // em はその時点の fontSize を掛けて px に直す。fontSize= を後に書いても先に読む。3 文字 × (20 + 2)
+    expect(await h.run(argv('-f a.kdr -w set Text letterSpacing=0.1em textDecoration=underline fontSize=20'))).toBe(0)
+    expect(nodeByName(await h.doc('a.kdr'), 'Text')).toMatchObject({ letterSpacing: 2, textDecoration: 'underline', width: 66 })
+    await h.run(argv('-f a.kdr -w set Text letterSpacing=-1px textDecoration=line-through'))
+    expect(nodeByName(await h.doc('a.kdr'), 'Text')).toMatchObject({ letterSpacing: -1, textDecoration: 'line-through', width: 57 })
+    await h.run(argv('-f a.kdr -w set Text letterSpacing=0 textDecoration=none'))
+    expect(nodeByName(await h.doc('a.kdr'), 'Text')).toMatchObject({ letterSpacing: 0, textDecoration: 'none', width: 60 })
+    const bad = harness()
+    await bad.run(argv('new + add text --text a -o a.kdr'))
+    expect(await bad.run(argv('-f a.kdr set Text textDecoration=overline'))).not.toBe(0)
+    expect(bad.stderr).toContain('textDecoration')
+    expect(await bad.run(argv('-f a.kdr set Text letterSpacing=emem'))).not.toBe(0)
+    expect(bad.stderr).toContain('letterSpacing')
+  })
+
   it('直線・パス・画像を足す', async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 40, 0, 0, 0, 20])
     const h = harness({ 'a.png': png })

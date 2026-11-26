@@ -1,13 +1,14 @@
 import type { Bounds, Point } from './geometry.ts'
 import { type Vertex, pathFromPoints, pathPoints, roundCorners } from './path.ts'
 import type { SceneNode, TextNode, TextPath } from './types.ts'
+import { graphemes } from './textWrap.ts'
 
 // テキストを線に沿わせる置き方（SVG の textPath と同じ）。描画（canvas/text.ts）・文字の形（textOutline.ts）が使い、
 // SVG の書き出しは <textPath> に任せる（ブラウザも同じ決まりで置くので、同じ見た目になる）。決まり:
 // - 文字（書記素のまとまり）ごとに送り幅を測り、送り幅の真ん中が線のどこに来るかで位置と向きを決める。基線を線に乗せる
 // - 並べ始める位置は線の長さ × startOffset。行揃えは、その位置に並び全体の始まり・真ん中・終わりを合わせる（text-anchor）
 // - 真ん中が線の外（始まりより前、終わりより後）に出た文字は描かない。閉じた線でも折り返さない（ブラウザの実装に合わせる）
-// - 改行は空白として 1 行に並べる
+// - 改行は空白として 1 行に並べる。字間（letterSpacing）は文字ごとの送り幅に足す
 
 /** 線に沿うテキストか。沿うテキストは折り返さず、枠は線を囲む矩形で、大きさは中身で決まらない */
 export function isPathText(node: SceneNode): node is TextNode & { textPath: TextPath } {
@@ -24,12 +25,9 @@ export function pathTextString(text: string): string {
   return text.replace(/\r\n|\r|\n/g, ' ')
 }
 
-const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null
-
 /** 1 つずつ置く文字のまとまり（書記素。結合文字や絵文字の並びを分けない） */
 export function pathTextClusters(text: string): string[] {
-  const line = pathTextString(text)
-  return segmenter ? Array.from(segmenter.segment(line), (part) => part.segment) : Array.from(line)
+  return graphemes(pathTextString(text))
 }
 
 /** 線に置いた 1 文字。index は clusters の番号、x / y は基線の左端（ノードの座標系）、angle はその向き（ラジアン。右が 0 で時計回り） */
@@ -153,8 +151,9 @@ export function placeOnPath(
  * 線に沿うテキストが描かれうる範囲（ノードの座標系）。文字は線から上へ字の高さ、下へ字の下がりの分だけ出て、
  * 線の端の近くでは送り幅の半分だけ線の外に出るので、文字の大きさの分だけ枠を広げる
  */
-export function pathTextBox(node: Pick<TextNode, 'width' | 'height' | 'fontSize'>): Bounds {
-  const margin = node.fontSize
+export function pathTextBox(node: Pick<TextNode, 'width' | 'height' | 'fontSize' | 'letterSpacing'>): Bounds {
+  // 字間は送り幅に足すので、端の文字（とその装飾の線）はその半分だけさらに線の外へ出る
+  const margin = node.fontSize + Math.max(0, node.letterSpacing)
   return { x: -margin, y: -margin, width: node.width + margin * 2, height: node.height + margin * 2 }
 }
 

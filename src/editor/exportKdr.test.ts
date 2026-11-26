@@ -387,6 +387,8 @@ describe('parseKdr', () => {
       fontWeight: 400,
       textAlign: 'left',
       lineHeight: 1.2,
+      letterSpacing: 0,
+      textDecoration: 'none',
       textPath: null,
       flipX: false,
       flipY: false,
@@ -708,6 +710,20 @@ describe('parseKdr', () => {
     expect(() => parseOne(text('line'))).toThrow('textPath')
   })
 
+  it('字間と文字の装飾を検証し、既定値（0・なし）なら書き出しで省く', () => {
+    const text = (patch: Record<string, unknown>) => rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif', ...patch })
+    expect(parseOne(text({ letterSpacing: 2.5, textDecoration: 'underline' }))).toMatchObject({ letterSpacing: 2.5, textDecoration: 'underline' })
+    expect(parseOne(text({ letterSpacing: -1, textDecoration: 'line-through' }))).toMatchObject({ letterSpacing: -1, textDecoration: 'line-through' })
+    expect(roundTrip(text({ letterSpacing: 2, textDecoration: 'underline' }))).toMatchObject({ letterSpacing: 2, textDecoration: 'underline' })
+    const plain = roundTrip(text({ letterSpacing: 0, textDecoration: 'none' }))
+    expect(plain).not.toHaveProperty('letterSpacing')
+    expect(plain).not.toHaveProperty('textDecoration')
+    expect(() => parseOne(text({ letterSpacing: '2px' }))).toThrow('letterSpacing')
+    expect(() => parseOne(text({ letterSpacing: Infinity }))).toThrow('letterSpacing')
+    expect(() => parseOne(text({ textDecoration: 'overline' }))).toThrow('textDecoration')
+    expect(() => parseOne(text({ textDecoration: true }))).toThrow('textDecoration')
+  })
+
   it('テキストの太さは 100〜900 の 100 刻み', () => {
     const text = (fontWeight: unknown) => rawNode({ type: 'text', text: 'a', fontSize: 16, fontFamily: 'serif', fontWeight })
     expect(parseOne(text(500))).toMatchObject({ fontWeight: 500 })
@@ -867,6 +883,7 @@ describe('parseKdr', () => {
       n5: { strokeDashes: [4, 2], strokeDashOffset: 1.5 },
       n6: { strokeDashes: [] },
       n7: { flipX: true, flipY: false },
+      n8: { letterSpacing: -0.5, textDecoration: 'underline' },
     }
     expect(parseOne(withOverrides(overrides))).toMatchObject({ component: { id: 'c1', role: 'instance', overrides } })
     // 知らない項目は捨てる。省けば上書きなし
@@ -883,6 +900,8 @@ describe('parseKdr', () => {
     expect(() => parseOne(withOverrides({ n1: { visible: 'no' } }))).toThrow('overrides.n1.visible')
     expect(() => parseOne(withOverrides({ n1: { flipX: 'yes' } }))).toThrow('overrides.n1.flipX')
     expect(() => parseOne(withOverrides({ n1: { flipY: 0 } }))).toThrow('overrides.n1.flipY')
+    expect(() => parseOne(withOverrides({ n1: { letterSpacing: '1' } }))).toThrow('overrides.n1.letterSpacing')
+    expect(() => parseOne(withOverrides({ n1: { textDecoration: 'blink' } }))).toThrow('overrides.n1.textDecoration')
     expect(() => parseOne(withOverrides({ n1: { strokeDashes: [-1] } }))).toThrow('overrides.n1.strokeDashes')
     expect(() => parseOne(withOverrides({ n1: { strokeDashOffset: null } }))).toThrow('overrides.n1.strokeDashOffset')
     // 入れ子のインスタンスの差し替え。差し替え先のコンポーネントは、ファイルになくても読める（同期で無視される）

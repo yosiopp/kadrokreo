@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { type TextStyle, breakUnits, layoutText, measureText, wrapLine } from './text.ts'
+import { type TextStyle, breakUnits, fillSpaced, layoutText, measureText, wrapLine } from './text.ts'
+import { decorationLine, graphemeCount, spacedMeasure } from '../document/textWrap.ts'
 
 // 半角は幅 1、全角は幅 2 として数える
 const measure = (text: string) =>
@@ -124,6 +125,7 @@ describe('measureText（中身に合わせる幅の上限）', () => {
     fontFamily: 'sans-serif',
     fontWeight: 400,
     lineHeight: 1,
+    letterSpacing: 0,
     sizing: { width: 'hug', height: 'hug' },
     width: 0,
     minWidth: null,
@@ -144,6 +146,16 @@ describe('measureText（中身に合わせる幅の上限）', () => {
     expect(measureText(ctx, style({ maxWidth: 200 }))).toEqual({ width: 110, height: 10 })
   })
 
+  it('字間は文字ごとに（最後の文字の後ろにも）足し、幅と折り返しに効く', () => {
+    expect(measureText(ctx, style({ letterSpacing: 2 }))).toEqual({ width: 132, height: 10 })
+    expect(measureText(ctx, style({ letterSpacing: -2 }))).toEqual({ width: 88, height: 10 })
+    // 1 文字 14 なら「aaa bbb」は 98 で上限 100 に入る（行末の空白ははみ出してよい）。15 なら 105 で入らない
+    expect(layoutText(ctx, style({ letterSpacing: 4, maxWidth: 100 })).map((line) => line.text)).toEqual(['aaa bbb ', 'ccc'])
+    expect(layoutText(ctx, style({ letterSpacing: 5, maxWidth: 100 })).map((line) => line.text)).toEqual(['aaa ', 'bbb ', 'ccc'])
+    // 字間の違うテキストを、同じ中身の行分けとして使い回さない。行の幅は行末の空白を除いて字間を含む
+    expect(layoutText(ctx, style({ letterSpacing: 3, maxWidth: 100 })).map((line) => line.width)).toEqual([91, 39])
+  })
+
   it('下限より狭ければ下限まで広げる。上限より長い 1 語ははみ出し、幅は上限のまま', () => {
     expect(measureText(ctx, style({ text: 'ab', minWidth: 50 }))).toEqual({ width: 50, height: 10 })
     expect(measureText(ctx, style({ text: 'abcdefgh', maxWidth: 40 })).width).toBe(40)
@@ -158,6 +170,7 @@ describe('measureText（高さの下限・上限）', () => {
     fontFamily: 'sans-serif',
     fontWeight: 400,
     lineHeight: 1,
+    letterSpacing: 0,
     sizing: { width: 'hug', height: 'hug' },
     width: 0,
     minWidth: null,
@@ -189,6 +202,7 @@ describe('layoutText（中身で覚える）', () => {
       fontFamily: 'sans-serif',
       fontWeight: 400,
       lineHeight: 1,
+      letterSpacing: 0,
       sizing: { width: 'fixed', height: 'hug' },
       width: 70,
       minWidth: null,
@@ -204,5 +218,47 @@ describe('layoutText（中身で覚える）', () => {
     // 折り返す幅が違えば測り直す
     expect(layoutText(ctx, style({ width: 200 })).map((line) => line.text)).toEqual(['shared layout'])
     expect(calls).toBeGreaterThan(measured)
+  })
+})
+
+describe('字間と装飾の線', () => {
+  it('字間は文字のまとまり（書記素）ごとに数える', () => {
+    expect(graphemeCount('abc')).toBe(3)
+    expect(graphemeCount('日本語')).toBe(3)
+    // 結合文字・肌の色を変えた絵文字・旗は 1 つ
+    expect(graphemeCount('e\u0301👍🏽🇯🇵')).toBe(3)
+    const measure = spacedMeasure((text) => text.length * 10, 1.5)
+    expect(measure('ab')).toBe(23)
+    expect(spacedMeasure(measure, 0)).toBe(measure)
+  })
+
+  it('装飾の線の位置と太さは文字の大きさから決め、細くても 1px は引く', () => {
+    expect(decorationLine({ fontSize: 100, textDecoration: 'none' })).toBeNull()
+    expect(decorationLine({ fontSize: 100, textDecoration: 'underline' })).toEqual({ offset: 11, thickness: 6 })
+    expect(decorationLine({ fontSize: 100, textDecoration: 'line-through' })).toEqual({ offset: expect.closeTo(-28), thickness: 6 })
+    expect(decorationLine({ fontSize: 10, textDecoration: 'underline' })?.thickness).toBe(1)
+  })
+
+  it('ctx.letterSpacing があればそれで 1 回で描いて戻し、なければ文字ごとに字間を足した位置へ描く', () => {
+    const calls: string[] = []
+    const fake = (withSpacing: boolean) => {
+      const ctx: Record<string, unknown> = {
+        measureText: (text: string) => ({ width: text.length * 10 }),
+        fillText: (text: string, x: number) => calls.push(`${text}@${x}:${String(ctx.letterSpacing)}`),
+      }
+      if (withSpacing) ctx.letterSpacing = '0px'
+      return ctx as unknown as CanvasRenderingContext2D
+    }
+    const native = fake(true)
+    fillSpaced(native, 'fillText', 'ab', 5, 0, 3)
+    expect(calls).toEqual(['ab@5:3px'])
+    expect(native.letterSpacing).toBe('0px')
+    calls.length = 0
+    fillSpaced(fake(false), 'fillText', 'a👍🏽b', 5, 0, 3)
+    // 先頭からの幅（字詰めを含む）に字間を足す。絵文字は 4 つの UTF-16 の単位なので幅 40
+    expect(calls).toEqual(['a@5:undefined', '👍🏽@18:undefined', 'b@61:undefined'])
+    calls.length = 0
+    fillSpaced(fake(false), 'fillText', 'ab', 5, 0, 0)
+    expect(calls).toEqual(['ab@5:undefined'])
   })
 })

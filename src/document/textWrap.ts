@@ -24,6 +24,47 @@ export function hugHeight(style: Pick<TextNode, 'minHeight' | 'maxHeight'>, cont
   return Math.max(style.minHeight ?? 0, Math.min(style.maxHeight ?? Infinity, content))
 }
 
+const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null
+
+/** 文字のまとまり（書記素。結合文字や絵文字の並びを分けない）。字間はこの単位ごとに足し、線に沿う文字はこの単位で置く */
+export function graphemes(text: string): string[] {
+  return segmenter ? Array.from(segmenter.segment(text), (part) => part.segment) : Array.from(text)
+}
+
+/** 文字のまとまりの数。ASCII の印字できる文字だけなら数えるだけ（行分けで何度も呼ぶので、分けずに済ませる） */
+export function graphemeCount(text: string): number {
+  return /^[\x20-\x7e]*$/.test(text) ? text.length : graphemes(text).length
+}
+
+/**
+ * 字間（letterSpacing）を含めて測る関数。文字のまとまりごとに、その後ろへ字間を足す（CSS の letter-spacing と同じく最後の文字の後ろにも）。
+ * まとまりの数は足し算になるので、行分け（wrapLine）の幅の見積もりもそのまま使える
+ */
+export function spacedMeasure(measure: (text: string) => number, letterSpacing: number): (text: string) => number {
+  return letterSpacing === 0 ? measure : (text) => measure(text) + letterSpacing * graphemeCount(text)
+}
+
+/** 文字の装飾の線の位置と太さ。offset は基線から線の中心までの下向きの距離（取り消し線は負）、thickness は線の太さ（px） */
+export type DecorationLine = { offset: number; thickness: number }
+
+/** 下線の中心の、基線から下への距離（文字の大きさに対する割合。よく使う書体の下線の位置のおおよそ） */
+const UNDERLINE_OFFSET = 0.11
+/** 取り消し線の中心の、基線から上への距離（文字の大きさに対する割合。欧文の小文字の真ん中くらい） */
+const LINE_THROUGH_OFFSET = 0.28
+/** 線の太さ（文字の大きさに対する割合）。細くても 1px は引く */
+const DECORATION_THICKNESS = 0.06
+
+/**
+ * 装飾の線（描画・文字のアウトライン化が同じ値を使う）。装飾がなければ null。
+ * 位置と太さは書体によらず文字の大きさから決める（書体の下線の情報は、Canvas からも OS の書体からも読めないため）
+ */
+export function decorationLine(node: Pick<TextNode, 'fontSize' | 'textDecoration'>): DecorationLine | null {
+  if (node.textDecoration === 'none') return null
+  const thickness = Math.max(1, node.fontSize * DECORATION_THICKNESS)
+  const offset = node.fontSize * (node.textDecoration === 'underline' ? UNDERLINE_OFFSET : -LINE_THROUGH_OFFSET)
+  return { offset, thickness }
+}
+
 // 空白の並び / 途中で切らない語（英単語など）/ どこでも切れる 1 文字（かな・漢字・全角記号など）
 const TOKENS = /\s+|[^\s　-ヿ㐀-鿿豈-﫿＀-￯]+|./gsu
 

@@ -138,6 +138,7 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w set Arrow radius=6',
     'kdr -f demo.kdr -w set card layout=column gap=8 padding="12 16" + set btn btn2 width=fill   # 自動で並べ、子を幅いっぱいに',
     'kdr -f demo.kdr -w set btn/Label fontSize=16 lineHeight=24px',
+    'kdr -f demo.kdr -w set btn/Label letterSpacing=0.05em textDecoration=underline',
   ],
   gradient: [
     'kdr -f demo.kdr -w gradient linear Box --colors "#5b4cf5,#ffffff" --angle 90',

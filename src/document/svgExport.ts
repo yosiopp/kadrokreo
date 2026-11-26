@@ -25,6 +25,7 @@ import type {
   TextPath,
 } from './types.ts'
 import { isPathText, pathTextString, textPathVertices } from './textPath.ts'
+import { wrapWidth } from './textWrap.ts'
 
 // ノードを SVG ファイルにする（viewer・editor・CLI の「SVG に書き出し」）。ドキュメントは変えない。
 // 描画（canvas/render.ts）と同じ見た目になるように書く:
@@ -46,7 +47,7 @@ import { isPathText, pathTextString, textPathVertices } from './textPath.ts'
 // - テキストの影は text に filter で付ける（落ち影は一番下の塗り、内側の影は一番上の塗り）。画像の影は、枠の形の黒い要素に影だけを出す filter を付けて、画像の下（内側の影は上）に置く。
 // - 角度のグラデーションは SVG にないので、扇形を並べた pattern で近似する（svgShapes.ts の gradientDef）。
 // - 隠した塗り・線・効果（visible が false）は書かない。
-// - テキストは text と、行ごとの tspan。線に沿うテキストは、線を定義の path に置いて text の中の textPath で指す。行の区切り（折り返し）は呼び出し側が渡す（ブラウザは Canvas で、CLI は見積もりで測る）。
+// - テキストは text と、行ごとの tspan。字間と文字の装飾は text の letter-spacing・text-decoration（装飾の線の位置・太さはブラウザが書体から決めるので、描画と少しずれうる）。線に沿うテキストは、線を定義の path に置いて text の中の textPath で指す。行の区切り（折り返し）は呼び出し側が渡す（ブラウザは Canvas で、CLI は見積もりで測る）。
 //   kdr に埋め込んだ書体（options.fonts）を使うテキストがあれば、その書体のファイルをそのまま @font-face の data URI で style に入れる（使う書体だけ。fontFace.ts）。
 //   埋め込んでいない書体は名前だけを書く（OS の書体は再配布できないものが多いため）。1 行目の基線は、呼び出し側がフォントの実際の高さ（textMetrics）を
 //   渡せば描画と同じ位置に、渡さなければ SVG の取り込みと同じ見積もり（文字の上 0.9・下 0.22）で置く。
@@ -513,12 +514,17 @@ class SvgWriter {
     const baseline = textBaseline(node, (this.options.textMetrics ?? estimateTextMetrics)(node))
     const anchor = { left: '', center: ' text-anchor="middle"', right: ' text-anchor="end"' }[node.textAlign]
     const x = tidy(node.width * alignFactor(node.textAlign))
+    // 折り返した行の行末の空白は描画ではぶら下がるだけだが、xml:space="preserve" の SVG では装飾の線が空白の下にも引かれるので、装飾があれば落とす
+    const trim = node.textDecoration !== 'none' && wrapWidth(node) !== null
     const spans = lines
-      .map((line, i) => `<tspan x="${x}" y="${tidy(baseline + lineHeight * i)}">${escapeXml(line.text)}</tspan>`)
+      .map((line, i) => `<tspan x="${x}" y="${tidy(baseline + lineHeight * i)}">${escapeXml(trim ? line.text.trimEnd() : line.text)}</tspan>`)
       .join('')
     const font =
       ` font-family="${escapeXml(node.fontFamily)}" font-size="${tidy(node.fontSize)}"` +
-      `${node.fontWeight === 400 ? '' : ` font-weight="${node.fontWeight}"`}${anchor}`
+      `${node.fontWeight === 400 ? '' : ` font-weight="${node.fontWeight}"`}${anchor}` +
+      // 字間・装飾はブラウザの letter-spacing・text-decoration に任せる（取り込み直すと同じ項目に戻る）
+      `${node.letterSpacing === 0 ? '' : ` letter-spacing="${tidy(node.letterSpacing)}"`}` +
+      `${node.textDecoration === 'none' ? '' : ` text-decoration="${node.textDecoration}"`}`
     // 文字の落ち影は一番下の塗りに、内側の影は一番上の塗りに付ける（塗りが 1 つなら両方を 1 つの filter に）。
     // 描画モードのある影は、黒い文字に影だけを出す filter を付けた要素（carrier）に分ける
     const { drop, inner, dropRuns, innerRuns } = planShadows(node.effects)

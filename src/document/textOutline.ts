@@ -4,7 +4,7 @@ import { type GlyphCommand, type OutlineFont, hasWoff2Decoder, parseOutlineFont,
 import { alignFactor } from './paint.ts'
 import type { Contour, Vertex } from './path.ts'
 import { isPathText, pathTextClusters, placeOnPath } from './textPath.ts'
-import { wrapLine, wrapWidth } from './textWrap.ts'
+import { type DecorationLine, decorationLine, graphemes, spacedMeasure, wrapLine, wrapWidth } from './textWrap.ts'
 import type { Asset, AssetId, EmbeddedFont, TextNode } from './types.ts'
 
 // テキストの文字の形（輪郭）。kdr に埋め込んだ書体（document.fonts）のファイルから字の輪郭を読み、テキストの行分けに合わせて並べる。
@@ -15,6 +15,7 @@ import type { Asset, AssetId, EmbeddedFont, TextNode } from './types.ts'
 //   Canvas も同じ書体で測るので、ほとんどの場合は同じ行に分かれる（合字などの置き換えはしないので、そこだけ幅がずれうる）。
 // - 基線は描画（render.ts の textShape）と同じ式で、上下の高さは書体の hhea（USE_TYPO_METRICS なら OS/2 の typo）から取る。
 // - 書体の太さは CSS と同じ選び方（いちばん近い太さ）。書体に無い太さを太字に見せかける描き方（合成の太字）は再現しない。
+// - 字間と装飾の線は描画と同じ式（textWrap.ts の spacedMeasure・decorationLine）。装飾の線は矩形の輪郭として足す。
 // - 書体に無い文字は描画では OS の書体で補われるが、ここでは形を作れないので除く（数を missing で返す）。
 //
 // どの書体ファイルを使えるかは、ドキュメントを開いたとき・書体を足し外ししたときに setOutlineFonts で知らせる
@@ -136,7 +137,8 @@ export function textOutline(node: TextNode): TextOutline | null {
 function buildOutline(node: TextNode, font: OutlineFont): TextOutline {
   if (isPathText(node)) return buildPathOutline(node, font)
   const scale = node.fontSize / font.unitsPerEm
-  const measure = measureWith(font, scale)
+  const spacing = node.letterSpacing
+  const measure = spacedMeasure(measureWith(font, scale), spacing)
   const wrapAt = wrapWidth(node)
   const paragraphs = node.text.split('\n')
   const lines = wrapAt === null
@@ -149,28 +151,78 @@ function buildOutline(node: TextNode, font: OutlineFont): TextOutline {
   const align = alignFactor(node.textAlign)
   const flip = flipMatrix(node)
   const contours: Contour[] = []
+  const rules: Contour[] = []
+  const decoration = decorationLine(node)
   let missing = 0
   lines.forEach((line, row) => {
     const originY = lineHeight * row + baseline
-    let pen = (node.width - line.width) * align
+    const left = (node.width - line.width) * align
+    let pen = left
     let previous = -1
-    for (const char of line.text) {
-      const glyph = font.glyphIndex(char.codePointAt(0)!)
-      if (previous >= 0) pen += font.kerning(previous, glyph) * scale
-      previous = glyph
-      if (glyph === 0 && !isSpace(char)) missing++
-      else {
-        const originX = pen
-        const point = (x: number, y: number) => {
-          const p = { x: originX + x * scale, y: originY - y * scale }
-          return flip ? applyMatrix(flip, p) : p
+    // 字間は文字のまとまり（書記素）ごとに、その後ろへ足す（描画と同じ）
+    for (const cluster of spacing === 0 ? [line.text] : graphemes(line.text)) {
+      for (const char of cluster) {
+        const glyph = font.glyphIndex(char.codePointAt(0)!)
+        if (previous >= 0) pen += font.kerning(previous, glyph) * scale
+        previous = glyph
+        if (glyph === 0 && !isSpace(char)) missing++
+        else {
+          const originX = pen
+          const point = (x: number, y: number) => {
+            const p = { x: originX + x * scale, y: originY - y * scale }
+            return flip ? applyMatrix(flip, p) : p
+          }
+          contours.push(...glyphContours(font.glyphPath(glyph), point))
         }
-        contours.push(...glyphContours(font.glyphPath(glyph), point))
+        pen += font.advance(glyph) * scale
       }
-      pen += font.advance(glyph) * scale
+      pen += spacing
     }
+    if (decoration && line.width > 0) rules.push(ruleContour(decoration, left, originY, line.width, 0, (p) => (flip ? applyMatrix(flip, p) : p)))
   })
-  return { contours, missing }
+  return { contours: withRules(contours, rules), missing }
+}
+
+/**
+ * 装飾の線の矩形の輪郭。基線の左端 (x, y) から、向き angle（ラジアン）へ長さ length。to はノードの座標系に直す変換（裏返し）
+ */
+function ruleContour(decoration: DecorationLine, x: number, y: number, length: number, angle: number, to: (p: { x: number; y: number }) => { x: number; y: number }): Contour {
+  const cos = Math.cos(angle)
+  const sin = Math.sin(angle)
+  const top = decoration.offset - decoration.thickness / 2
+  const bottom = top + decoration.thickness
+  const at = (u: number, v: number) => to({ x: x + u * cos - v * sin, y: y + u * sin + v * cos })
+  return { vertices: [at(0, top), at(length, top), at(length, bottom), at(0, bottom)], closed: true }
+}
+
+/** 輪郭の向きの面積（符号つき） */
+function signedArea(contour: Contour): number {
+  let area = 0
+  const v = contour.vertices
+  for (let i = 0; i < v.length; i++) {
+    const a = v[i]
+    const b = v[(i + 1) % v.length]
+    area += a.x * b.y - b.x * a.y
+  }
+  return area / 2
+}
+
+/**
+ * 字の輪郭に装飾の線を足す。nonzero で塗るので、線の向きを字の外側の輪郭（いちばん大きい輪郭）と揃える
+ * （逆向きだと、下線が字の下がり（g や p）と重なった所が抜ける。書体の形式で外側の輪郭の向きが違う）
+ */
+function withRules(contours: Contour[], rules: Contour[]): Contour[] {
+  if (rules.length === 0) return contours
+  let outer = 0
+  for (const contour of contours) {
+    const area = signedArea(contour)
+    if (Math.abs(area) > Math.abs(outer)) outer = area
+  }
+  const oriented = rules.map((rule) => {
+    const area = signedArea(rule)
+    return outer !== 0 && Math.sign(area) !== Math.sign(outer) ? { ...rule, vertices: rule.vertices.toReversed() } : rule
+  })
+  return [...contours, ...oriented]
 }
 
 /** 線に沿うテキストの文字の形。描画（canvas/text.ts の layoutPathText）と同じく、文字のまとまりごとに線の上へ置く */
@@ -200,9 +252,14 @@ function buildPathOutline(node: TextNode & { textPath: NonNullable<TextNode['tex
   }
   const flip = flipMatrix(node)
   const contours: Contour[] = []
+  const rules: Contour[] = []
+  const decoration = decorationLine(node)
   let missing = 0
-  const placed = placeOnPath(node, clusters, starts, advances, pen)
+  // 字間は文字ごとの送り幅に足す（描画の layoutPathText と同じ）
+  const spacing = node.letterSpacing
+  const placed = placeOnPath(node, clusters, starts.map((start, i) => start + spacing * i), advances.map((advance) => advance + spacing), pen + spacing * clusters.length)
   for (const glyph of placed) {
+    if (decoration && glyph.advance > 0) rules.push(ruleContour(decoration, glyph.x, glyph.y, glyph.advance, glyph.angle, (p) => (flip ? applyMatrix(flip, p) : p)))
     const run = runs[glyph.index]
     const cos = Math.cos(glyph.angle)
     const sin = Math.sin(glyph.angle)
@@ -220,7 +277,7 @@ function buildPathOutline(node: TextNode & { textPath: NonNullable<TextNode['tex
       contours.push(...glyphContours(font.glyphPath(item.glyph), point))
     }
   }
-  return { contours, missing }
+  return { contours: withRules(contours, rules), missing }
 }
 
 /** 字の輪郭の命令を、頂点の並び（2 次曲線は 3 次に直す）にする */

@@ -26,6 +26,8 @@ export const OVERRIDE_KEYS = [
   'fontSize',
   'fontFamily',
   'fontWeight',
+  'letterSpacing',
+  'textDecoration',
   'assetId',
   'flipX',
   'flipY',

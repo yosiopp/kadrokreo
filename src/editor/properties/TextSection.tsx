@@ -16,6 +16,12 @@ const FONT_FAMILIES = [
   { value: 'monospace', label: '等幅' },
 ]
 
+const TEXT_DECORATIONS: [TextNode['textDecoration'], string][] = [
+  ['none', 'なし'],
+  ['underline', '下線'],
+  ['line-through', '取り消し線'],
+]
+
 const TEXT_ALIGNMENTS: { value: TextNode['textAlign']; label: string }[] = [
   { value: 'left', label: '左寄せ' },
   { value: 'center', label: '中央寄せ' },
@@ -95,6 +101,22 @@ export function TextSection({ ctx, onAddFonts }: { ctx: PanelContext; onAddFonts
         value={mapValue(fontWeight, String)}
         options={optionsOf(FONT_WEIGHT_LABELS)}
         onChange={(weight) => apply({ fontWeight: Number(weight) })}
+      />
+      <NumberField
+        label="字間（px）"
+        overridden={overridden.has('letterSpacing')}
+        value={common(texts.map((n) => n.letterSpacing))}
+        min={-100}
+        max={1000}
+        step={0.1}
+        onCommit={(letterSpacing) => apply({ letterSpacing })}
+      />
+      <SelectField
+        label="装飾"
+        overridden={overridden.has('textDecoration')}
+        value={common(texts.map((n) => n.textDecoration))}
+        options={TEXT_DECORATIONS}
+        onChange={(textDecoration) => apply({ textDecoration: textDecoration as TextNode['textDecoration'] })}
       />
       {!inner && onPath && (
         <>

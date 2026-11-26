@@ -203,6 +203,26 @@ describe('png', () => {
     expect(image.at(68, Math.round((top + bottom) / 2))).toEqual([0, 0, 0, 255])
   })
 
+  it('字間を文字ごとに足して描き、下線を文字の幅いっぱいに引く', async () => {
+    const h = harness()
+    h.fs.set('box.ttf', testFontBytes({ family: 'PngBox' }))
+    // 字の四角は x が 5〜55（送り幅 60）。字間 20 で 2 字目は 85〜135、行の幅は (60 + 20) × 2 = 160。
+    // 行の高さ 120・上下の高さ 80 / 20 なので基線は 90、下線は中心 101・太さ 6（98〜104）
+    const setup = 'new Demo + font-add box.ttf + add text --name T --text AB fontSize=100 lineHeight=1.2 fontFamily=PngBox fill=#000000 letterSpacing=20 textDecoration=underline -o in.kdr'
+    expect(await h.run(setup)).toBe(0)
+    expect(await h.run('-f in.kdr png T --to t.png')).toBe(0)
+    const image = await pixels(h.fs.get('t.png')!)
+    // 枠の幅は CLI の見積もり（書体を読まない）で決まるので、描いた線の長さ（書体で測る）で確かめる
+    expect(image.at(165, 101)[3]).toBe(0)
+    // 1 字目と 2 字目の間（55〜85）は、字の高さでは描かれず、下線の高さでは描かれる
+    expect(image.at(70, 60)[3]).toBe(0)
+    expect(image.at(90, 60)).toEqual([0, 0, 0, 255])
+    expect(image.at(70, 101)).toEqual([0, 0, 0, 255])
+    expect(image.at(155, 101)).toEqual([0, 0, 0, 255])
+    expect(image.at(70, 96)[3]).toBe(0)
+    expect(image.at(70, 106)[3]).toBe(0)
+  })
+
   it('png はドキュメントを変えないので、kdr を書き出さない', async () => {
     const h = harness()
     await h.run(SETUP)

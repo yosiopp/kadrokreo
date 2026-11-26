@@ -20,6 +20,7 @@ import type {
   SceneNode,
   Sizing,
   Constraint,
+  TextNode,
   TextPath,
 } from './types.ts'
 import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from './imageInfo.ts'
@@ -339,6 +340,8 @@ const DEFAULTS = {
   fontWeight: 400,
   textAlign: 'left',
   lineHeight: 1.2,
+  letterSpacing: 0,
+  textDecoration: 'none',
   textPath: null,
   fit: 'cover',
   positionX: 0.5,
@@ -471,6 +474,8 @@ function parseNode(
         fontWeight: optional('fontWeight', fontWeight),
         textAlign: optional('textAlign', (v, p) => oneOf(v, ['left', 'center', 'right'] as const, p)),
         lineHeight: optional('lineHeight', size),
+        letterSpacing: optional('letterSpacing', number),
+        textDecoration: optional('textDecoration', textDecoration),
         textPath: optional('textPath', (v, p) => (v === null ? null : parseTextPath(v, p))),
         flipX: optional('flipX', boolean),
         flipY: optional('flipY', boolean),
@@ -652,6 +657,8 @@ function parseOverrides(value: unknown, path: string, assets: AssetContext): Rec
     if (Object.hasOwn(raw, 'fontSize')) override.fontSize = size(raw.fontSize, at('fontSize'))
     if (Object.hasOwn(raw, 'fontFamily')) override.fontFamily = fontFamily(raw.fontFamily, at('fontFamily'))
     if (Object.hasOwn(raw, 'fontWeight')) override.fontWeight = fontWeight(raw.fontWeight, at('fontWeight'))
+    if (Object.hasOwn(raw, 'letterSpacing')) override.letterSpacing = number(raw.letterSpacing, at('letterSpacing'))
+    if (Object.hasOwn(raw, 'textDecoration')) override.textDecoration = textDecoration(raw.textDecoration, at('textDecoration'))
     if (Object.hasOwn(raw, 'flipX')) override.flipX = boolean(raw.flipX, at('flipX'))
     if (Object.hasOwn(raw, 'flipY')) override.flipY = boolean(raw.flipY, at('flipY'))
     if (Object.hasOwn(raw, 'assetId')) {
@@ -827,6 +834,10 @@ export const BLEND_MODES = [
 
 function blendMode(value: unknown, path: string): BlendMode {
   return oneOf(value, BLEND_MODES, path)
+}
+
+function textDecoration(value: unknown, path: string): TextNode['textDecoration'] {
+  return oneOf(value, ['none', 'underline', 'line-through'] as const, path)
 }
 
 function fontWeight(value: unknown, path: string): number {

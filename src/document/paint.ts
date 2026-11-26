@@ -263,8 +263,9 @@ export function textInkBox(node: TextNode, lines: readonly { text: string; width
   let right = node.width
   for (const line of lines) {
     const x = (node.width - line.width!) * align
-    left = Math.min(left, x)
-    right = Math.max(right, x + line.width!)
+    // 字間を大きく詰めると行の幅が負になり、文字は x より左へ描かれる
+    left = Math.min(left, x, x + line.width!)
+    right = Math.max(right, x, x + line.width!)
   }
   return { x: left, y: 0, width: right - left, height }
 }

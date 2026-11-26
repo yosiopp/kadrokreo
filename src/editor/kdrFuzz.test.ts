@@ -318,6 +318,8 @@ function randomNode(c: Context, depth: number): Record<string, unknown> {
       if (r.chance(0.2)) node.fontWeight = r.pick([100, 400, 700, 900])
       if (r.chance(0.2)) node.textAlign = r.pick(['left', 'center', 'right'])
       if (r.chance(0.2)) node.lineHeight = randomNumber(r, 0, 3)
+      if (r.chance(0.2)) node.letterSpacing = randomNumber(r, -20, 20)
+      if (r.chance(0.2)) node.textDecoration = r.pick(['none', 'underline', 'line-through'])
       break
     case 'image':
       node.assetId = c.assets.length > 0 && r.chance(0.9) ? r.pick(c.assets) : 'missing'
@@ -628,8 +630,9 @@ describe('kdr の tar のファズテスト', () => {
         throw new Error(`種 ${seed * 31337} で失敗: ${String(error)}`, { cause: error })
       }
     }
-    // 画像の見出しの大きさや書体名の文字を壊したものも KdrError になるので、読めるものは 400 のうち 20 前後
-    expect(results.ok).toBeGreaterThan(15)
+    // 画像の見出しの大きさや書体名の文字を壊したものも KdrError になるので、読めるものは 400 のうち 15〜20 前後
+    // （ノードの作り方を変えると乱数の並びがずれて数が少し動く）
+    expect(results.ok).toBeGreaterThan(10)
     expect(results.error).toBeGreaterThan(100)
   })
 

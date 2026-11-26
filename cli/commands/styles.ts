@@ -102,7 +102,7 @@ export const textStyles: Command = {
   name: 'text-styles',
   kind: 'query',
   usage: usage('text-styles', false),
-  summary: `${SCOPE}テキストの書式（書体・大きさ・太さ・行の高さ）を、大きい順に CSS の font の形で出す${COUNT}`,
+  summary: `${SCOPE}テキストの書式（書体・大きさ・太さ・行の高さ・字間）を、大きい順に CSS の font の形で出す（字間があれば ; letter-spacing: Npx を添える）${COUNT}`,
   flags: ['all', 'json'],
   run({ session, print }, step) {
     checkStep(step, { options: ['all', 'json'] })

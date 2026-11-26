@@ -266,7 +266,7 @@ function escapeJsx(text: string): string {
 
 
 /**
- * 線に沿うテキストの SVG の中身（線の path を defs に置き、textPath で指す）。文字の色は CSS の color を currentColor で使う。
+ * 線に沿うテキストの SVG の中身（線の path を defs に置き、textPath で指す）。文字の色は CSS の color を currentColor で使い、字間も CSS から受け継ぐ。
  * 置き方は SVG の書き出し（document/svgExport.ts）と同じ
  */
 function pathTextSvg(node: TextNode & { textPath: TextPath }, name: string, jsx: boolean, vue: boolean): string {
@@ -276,5 +276,7 @@ function pathTextSvg(node: TextNode & { textPath: TextPath }, name: string, jsx:
   const offset = node.textPath.startOffset === 0 ? '' : ` startOffset="${tidy(node.textPath.startOffset * 100)}%"`
   const line = pathTextString(node.text)
   const text = jsx || vue ? escapeJsx(line) : escapeHtml(line)
-  return `<defs><path id="${id}" d="${d}"${jsx ? ' />' : '/>'}</defs><text fill="currentColor"${anchor}><textPath href="#${id}"${offset}>${text}</textPath></text>`
+  // 字間はクラスの CSS（letter-spacing）を受け継ぐ。装飾（text-decoration）は svg の中の文字へは伝わらないので、text に書く
+  const decoration = node.textDecoration === 'none' ? '' : ` ${jsx ? 'textDecoration' : 'text-decoration'}="${node.textDecoration}"`
+  return `<defs><path id="${id}" d="${d}"${jsx ? ' />' : '/>'}</defs><text fill="currentColor"${anchor}${decoration}><textPath href="#${id}"${offset}>${text}</textPath></text>`
 }

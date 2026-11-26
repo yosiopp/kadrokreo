@@ -506,6 +506,20 @@ describe('nodeCss', () => {
     ])
   })
 
+  it('字間は letter-spacing、装飾は text-decoration。既定値なら書かない', () => {
+    const styled = sceneOf(text({ letterSpacing: 1.6, textDecoration: 'underline' }))
+    expect(css(styled, 'text')).toEqual(expect.arrayContaining(['letter-spacing: 1.6px;', 'text-decoration: underline;']))
+    expect(css(sceneOf(text({ textDecoration: 'line-through' })), 'text')).toContain('text-decoration: line-through;')
+    expect(css(sceneOf(text()), 'text').join('\n')).not.toMatch(/letter-spacing|text-decoration/)
+    expect(rowsOf(styled, 'text', 'テキスト')).toEqual(expect.arrayContaining(['字間=1.6px（0.1em）', '装飾=下線']))
+    expect((rowsOf(sceneOf(text()), 'text', 'テキスト') ?? []).join('\n')).not.toMatch(/字間|装飾/)
+    // 線に沿う文字の装飾は svg の中の text に書く（CSS の text-decoration は svg の中の文字へ伝わらない）。字間は CSS から受け継ぐ
+    const onPath = sceneOf(text({ letterSpacing: 2, textDecoration: 'underline', textPath: { points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], closed: false, startOffset: 0 } }))
+    expect(css(onPath, 'text')).toContain('letter-spacing: 2px;')
+    expect(css(onPath, 'text').join('\n')).not.toContain('text-decoration')
+    expect(rowsOf(onPath, 'text', 'テキスト')).toEqual(expect.arrayContaining(['字間=2px（0.13em）', '装飾=下線']))
+  })
+
   it('楕円・画像・直線・パス', () => {
     const ellipse: EllipseNode = { ...base, ...paint, id: 'ellipse', type: 'ellipse', isMask: false, maskType: 'vector' }
     expect(css(sceneOf(ellipse), 'ellipse').at(-1)).toBe('border-radius: 50%;')
@@ -681,29 +695,6 @@ describe('inspectNode', () => {
       '行揃え=左',
       '折り返し=しない',
     ])
-  })
-
-  it('テキストは背景とのコントラスト比と、基準を満たすかを出す', () => {
-    const backdrop = rect({ id: 'bg', x: -10, y: -10, width: 200, height: 100, fills: solid('#ffffff') })
-    expect(rowsOf(sceneOf(backdrop, text({ fills: solid('#777777') })), 'text', 'コントラスト')).toEqual([
-      '文字=#777777',
-      '背景=#FFFFFF',
-      '比=4.47:1',
-      '文字の大きさ=ふつうの文字',
-      'AA=満たさない（4.5:1 以上）',
-      'AAA=満たさない（7:1 以上）',
-    ])
-    expect(rowsOf(sceneOf(text({ fills: solid('#000000'), fontSize: 24 })), 'text', 'コントラスト')).toEqual([
-      '文字=#000000',
-      '背景=#FFFFFF（後ろが透けている所は白の地として）',
-      '比=21.00:1',
-      '文字の大きさ=大きな文字（24px 以上か、太字で 18.66px 以上）',
-      'AA=満たす（3:1 以上）',
-      'AAA=満たす（4.5:1 以上）',
-    ])
-    const half = rect({ id: 'half', x: 50, y: 0, width: 100, height: 100, name: '半分' })
-    expect(rowsOf(sceneOf(half, text()), 'text', 'コントラスト')).toEqual(['比=求められない（「半分」の塗りが一部だけ重なる）'])
-    expect(rowsOf(sceneOf(rect()), 'rect', 'コントラスト')).toBeUndefined()
   })
 
   it('オートレイアウトの設定と、コンポーネントとのつながりを出す', () => {

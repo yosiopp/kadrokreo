@@ -284,6 +284,29 @@ describe('SVG の書き出しを取り込みで読み戻す', () => {
     expectSameBounds(scene, 'Sub', imported, sub.id, origin)
   })
 
+  it('字間と装飾は letter-spacing・text-decoration で書き、読み戻すと同じ値に戻る。既定値なら書かない', () => {
+    const spaced = named(createText({ x: 0, y: 0, width: 0, height: 0 }, 'Link'), 'Link', { letterSpacing: 1.5, textDecoration: 'underline' })
+    const struck = named(createText({ x: 0, y: 40, width: 0, height: 0 }, 'Old'), 'Old', { letterSpacing: -0.5, textDecoration: 'line-through' })
+    const plain = named(createText({ x: 0, y: 80, width: 0, height: 0 }, 'Plain'), 'Plain')
+    const { svg, byName, warnings } = roundTrip(sceneOf(spaced, struck, plain))
+    expect(svg).toContain(' letter-spacing="1.5" text-decoration="underline"')
+    expect(svg).toContain(' letter-spacing="-0.5" text-decoration="line-through"')
+    expect(svg.match(/letter-spacing/g)).toHaveLength(2)
+    expect(warnings).toEqual([])
+    expect(byName('Link')).toMatchObject({ letterSpacing: 1.5, textDecoration: 'underline' })
+    expect(byName('Old')).toMatchObject({ letterSpacing: -0.5, textDecoration: 'line-through' })
+    expect(byName('Plain')).toMatchObject({ letterSpacing: 0, textDecoration: 'none' })
+  })
+
+  it('装飾のある折り返した行は、行末の空白を落として書く（空白の下に線を引かない）', () => {
+    const node = named(createText({ x: 0, y: 0, width: 60, height: 40 }, 'hello world'), 'Wrap', { sizing: { width: 'fixed', height: 'hug' } })
+    const lines = () => [{ text: 'hello ' }, { text: 'world' }]
+    const scene = (patch: Partial<TextNode>) => ({ nodes: { Wrap: { ...node, ...patch } }, rootIds: ['Wrap'] })
+    expect(exportSvg(scene({ textDecoration: 'underline' }), ['Wrap'], { assets: {}, textLines: lines })).toContain('>hello</tspan>')
+    // 装飾がなければ今までどおり
+    expect(exportSvg(scene({}), ['Wrap'], { assets: {}, textLines: lines })).toContain('>hello </tspan>')
+  })
+
   it('線に沿うテキストは textPath で書き、読み戻すと同じ線・始まり・揃え・位置に戻る', () => {
     const k = 0.5522847498
     const along = named(createText({ x: 0, y: 0, width: 0, height: 0 }, 'Along\nthe <path>'), 'Along', {
