@@ -34,6 +34,13 @@ docker run --rm -p 8080:80 ghcr.io/yosiopp/kadrokreo --editor   # editor モー�
 
 http://localhost:8080 を開く。
 
+viewer で開くファイルが手元になければ、サンプルの [`docs/examples/sample.kdr`](docs/examples/sample.kdr)（タスク管理アプリのスマホ画面と、その部品のコンポーネント）を保存して、
+「kdr を開く」で選ぶかウィンドウへドロップする。図形を押すと大きさ・色・CSS が、画面のフレームを選ぶと HTML + CSS・React・Vue のコードが出る（[viewer の使い方](docs/guide/viewer.md)）。
+
+```sh
+curl -LO https://github.com/yosiopp/kadrokreo/raw/main/docs/examples/sample.kdr
+```
+
 kdr ファイルを調べたり組み立てたりする `kdr` コマンドも、同じイメージから使える。
 
 ```sh

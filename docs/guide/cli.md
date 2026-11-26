@@ -250,3 +250,15 @@ kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほか�
 
 - [`docs/examples/wireframe.xml`](../examples/wireframe.xml): 1 つのマークアップ（`kdr build docs/examples/wireframe.xml -o 出力.kdr`）
 - [`docs/examples/wireframe.sh`](../examples/wireframe.sh): コマンドを順に並べたスクリプト（リポジトリの置き場所で `sh docs/examples/wireframe.sh 出力.kdr`。`kdr` が PATH になければ、リポジトリの `cli/kadrokreo.ts` を使う）
+
+## 例: viewer で開くサンプル
+
+[viewer](viewer.md#サンプルを開く) ですぐ開けるサンプル [`docs/examples/sample.kdr`](../examples/sample.kdr) は、マークアップ [`docs/examples/sample.xml`](../examples/sample.xml) から作っている
+（タスク管理アプリのスマホ画面。色・角丸・影、オートレイアウト、コンポーネントとインスタンス、入れ子のインスタンスの上書きの書き方の見本にもなる）。
+
+```sh
+kdr build docs/examples/sample.xml -o docs/examples/sample.kdr          # 作り直す
+kdr build docs/examples/sample.xml + png Screen --to screen.png -o sample.kdr   # 画面を PNG でも確かめる
+```
+
+同じマークアップからは同じ中身の kdr ができるので、マークアップを書き換えたら、置いてある `sample.kdr` も作り直して一緒に入れる。

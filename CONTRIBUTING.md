@@ -41,6 +41,9 @@ npm run kdr -- --help   # コマンドライン（npm link すれば kdr --help�
 単体テストには、種を固定した乱数で壊れた入力を作るファズテストが入っている（kdr 全体は `src/editor/kdrFuzz.test.ts`、圧縮・tar・画像の見出しは `src/document/decoderFuzz.test.ts`、書体は `src/document/fontFuzz.test.ts`）。
 後ろの 2 つは、落ちるとメッセージに種の番号が出る。`fuzz` の `only` にその番号を渡すと、その 1 件だけを流せる（道具は `src/document/testFuzz.ts`）。
 
+viewer で開くサンプル `docs/examples/sample.kdr` が元の `docs/examples/sample.xml` とずれると（マークアップを書き換えた、kdr の形式を変えた）、単体テストが知らせる。
+`./cli/kadrokreo.ts build docs/examples/sample.xml -o docs/examples/sample.kdr` で作り直して一緒に入れる。
+
 ## ソースからイメージをビルドする
 
 公開しているイメージ（`ghcr.io/yosiopp/kadrokreo`）の代わりに、手元のソースからビルドしたイメージも同じように使える。
@@ -81,6 +84,7 @@ e2e/            ブラウザでの動作確認とキャプチャ
 bench/          性能の計測（大きな kdr の生成と Node での計測は cli/bench/）
 scripts/        check:viewer、リリースの本文（release-notes.sh）など
 docs/guide/     ユーザーズガイド
+docs/examples/  kdr コマンドの例と、viewer で開くサンプル（sample.kdr は sample.xml から作る）
 plugins/kdr/    配布する skill（kdr を Docker 越しに使う）。.claude-plugin/marketplace.json でマーケットプレイスにしている
 ```
 

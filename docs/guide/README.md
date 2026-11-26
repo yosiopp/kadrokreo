@@ -26,7 +26,7 @@ docker run --rm -p 8080:80 ghcr.io/yosiopp/kadrokreo --editor   # editor モー�
 docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" ghcr.io/yosiopp/kadrokreo kdr --help   # kdr コマンド（「コマンドライン」）
 ```
 
-http://localhost:8080 を開く。
+http://localhost:8080 を開く。開く kdr ファイルが手元になければ、[サンプル](viewer.md#サンプルを開く)を使う。
 
 イメージは GitHub Container Registry の `ghcr.io/yosiopp/kadrokreo`。タグは `latest`（最新のリリース）が既定で、版を固定するなら `0.1.0`（`0.1` で 0.1 系の最新）、main の最新の状態は `edge`。
 ソースから手元でビルドしたイメージ（`docker build -t kadrokreo .`、[CONTRIBUTING.md](../../CONTRIBUTING.md#ソースからイメージをビルドする)）も同じように使える。このガイドの例の `ghcr.io/yosiopp/kadrokreo` を `kadrokreo` に読み替える。

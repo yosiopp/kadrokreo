@@ -281,6 +281,27 @@ describe('kdr build', () => {
     expect(byName(doc, 'Tab4')).toMatchObject({ x: 307, y: 12 })
   })
 
+  it('docs/examples/sample.kdr は、sample.xml から作ったものと同じ中身で、今の version で開ける', async () => {
+    const example = (name: string) => new Uint8Array(readFileSync(new URL(`../docs/examples/${name}`, import.meta.url)))
+    const h = harness({ 'sample.xml': example('sample.xml') })
+    expect(await h.run(['build', 'sample.xml', '-o', 'sample.kdr'])).toBe(0)
+    // gzip の結果は実装によって変わりうるので、展開した中身（tar）で比べる
+    const tar = async (bytes: Uint8Array<ArrayBuffer>) =>
+      new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
+    const same = Buffer.compare(await tar(example('sample.kdr')), await tar(new Uint8Array(h.fs.get('sample.kdr')!))) === 0
+    expect(same, '置いてある sample.kdr が sample.xml とずれている。kdr build docs/examples/sample.xml -o docs/examples/sample.kdr で作り直す').toBe(true)
+
+    // viewer の見どころ（オートレイアウト・コンポーネントのインスタンス・入れ子のインスタンス）が入っている
+    const doc = await decodeKdr(new Blob([example('sample.kdr')]))
+    expect(doc.name).toBe('kadrokreo サンプル')
+    const nodes = doc.pages[0].nodes
+    expect(nodes.screen).toMatchObject({ width: 375, height: 812, layout: { direction: 'vertical' } })
+    expect(nodes.task3).toMatchObject({ width: 343, component: { role: 'instance', id: (nodes.task as FrameNode).component!.id } })
+    const mains = Object.values(nodes).filter((node) => node.type === 'frame' && node.component?.role === 'main')
+    expect(mains.map((node) => node.name).sort()).toEqual(['Button', 'Tag', 'TaskItem'])
+    expect(Object.values(nodes).filter((node) => node.type === 'text' && node.text === '共有')).toHaveLength(1)
+  })
+
   it('書き間違いは「ファイル:行」を付けたエラーにし、何も書き出さない', async () => {
     const cases: [string, RegExp][] = [
       ['<kdr><page>\n<rect width="10" height="10" fill="red"/></page></kdr>', /^kdr: build: a\.xml:2: fill="red": .*#rrggbb/],

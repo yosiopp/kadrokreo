@@ -1,0 +1,82 @@
+<!--
+  viewer ですぐ開けるサンプル（sample.kdr）の元。タスク管理アプリのスマホ画面（375×812）と、その部品（コンポーネント）。
+    kdr build docs/examples/sample.xml -o docs/examples/sample.kdr
+  このファイルを変えたら、上のコマンドで sample.kdr を作り直す（同じマークアップからは同じ中身の kdr ができる。ずれていれば npm test が知らせる）。
+  見どころ: 画面はオートレイアウトで並べ、タスクの行とボタンはコンポーネントのインスタンス（文言・色だけを変えている）。
+  タスクの行の中のタグも、入れ子のインスタンス。画像と書体は入れていない（図形とテキストだけ）。
+-->
+<kdr name="kadrokreo サンプル">
+  <page name="タスクの画面">
+    <!-- 画面: 上からヘッダー・進み具合のカード・タスクの一覧・ボタン。一覧は余った高さいっぱいに伸ばす -->
+    <frame name="Screen" id="screen" x="0" y="0" width="375" height="812" fill="#f4f4f8" layout="column" clipContent="true">
+      <frame name="Header" width="fill" layout="row" padding="56 16 16" align="center" justify="space-between">
+        <frame name="Titles" layout="column" gap="4">
+          <text name="Date" fontSize="13" fontWeight="700" fill="#8a8aa0">11 月 27 日（金）</text>
+          <text name="Heading" fontSize="28" fontWeight="700" fill="#16161d">今日のタスク</text>
+        </frame>
+        <ellipse name="Avatar" width="40" height="40" fill="#a99fff" stroke="#ffffff" strokeWidth="2"/>
+      </frame>
+
+      <frame name="Body" width="fill" height="fill" layout="column" gap="12" padding="0 16">
+        <frame name="Progress" width="fill" fill="#5b4cf5" cornerRadius="16" layout="column" gap="12" padding="16" shadow.y="6" shadow.blur="16" shadow.color="#5b4cf5" shadow.opacity="0.3">
+          <text name="ProgressLabel" fontSize="13" fontWeight="700" fill="#d9d5ff">進み具合</text>
+          <text name="ProgressValue" fontSize="20" fontWeight="700" fill="#ffffff">3 件のうち 1 件が完了</text>
+          <frame name="Track" width="fill" height="8" fill="#7d70f7" cornerRadius="4" clipContent="true">
+            <rect name="Bar" x="0" y="0" width="104" height="8" fill="#ffffff" cornerRadius="4"/>
+          </frame>
+        </frame>
+
+        <text name="ListTitle" fontSize="13" fontWeight="700" fill="#8a8aa0">やること</text>
+        <instance of="task" id="task1" name="Task 1" width="fill">
+          <override node="Check" fill="#5b4cf5" stroke="#5b4cf5"/>
+          <override node="Title" text="ワイヤーフレームを描く" fill="#8a8aa0"/>
+          <override node="Due" text="完了"/>
+        </instance>
+        <instance of="task" id="task2" name="Task 2" width="fill">
+          <override node="Title" text="部品をコンポーネントにする"/>
+          <override node="Due" text="今日 15:00 まで"/>
+          <override node="TagLabel" text="整理"/>
+        </instance>
+        <instance of="task" id="task3" name="Task 3" width="fill">
+          <override node="Title" text="実装する人に kdr を渡す"/>
+          <override node="Due" text="今日 18:00 まで"/>
+          <override node="TagLabel" text="共有"/>
+        </instance>
+      </frame>
+
+      <frame name="Footer" width="fill" layout="column" padding="16 16 32">
+        <instance of="button" id="add" name="AddButton" width="fill">
+          <override node="ButtonLabel" text="タスクを追加"/>
+        </instance>
+      </frame>
+    </frame>
+
+    <!-- 部品（コンポーネントの元）。画面の右に並べる -->
+    <frame name="Components" x="455" y="0" fill="#f4f4f8" cornerRadius="16" layout="column" gap="20" padding="24">
+      <text name="ComponentsTitle" fontSize="13" fontWeight="700" fill="#8a8aa0">コンポーネント</text>
+      <component name="Tag" id="tag" fill="#ecebff" cornerRadius="12" layout="row" padding="4 10" align="center">
+        <text name="TagLabel" fontSize="12" fontWeight="700" fill="#5b4cf5">デザイン</text>
+      </component>
+      <component name="TaskItem" id="task" width="343" fill="#ffffff" stroke="#e6e6ee" cornerRadius="12" layout="row" gap="12" padding="14 16" align="center">
+        <ellipse name="Check" width="22" height="22" stroke="#c9c9d6" strokeWidth="2"/>
+        <frame name="Texts" width="fill" layout="column" gap="4">
+          <text name="Title" fontSize="15" fontWeight="700" fill="#16161d">タスクの名前</text>
+          <text name="Due" fontSize="12" fill="#8a8aa0">期限</text>
+        </frame>
+        <instance of="tag" name="Tag"/>
+      </component>
+      <component name="Button" id="button" width="343" fill="#16161d" cornerRadius="12" layout="row" padding="14" justify="center" align="center">
+        <text name="ButtonLabel" fontSize="16" fontWeight="700" fill="#ffffff">ボタン</text>
+      </component>
+    </frame>
+
+    <!-- viewer で試すことの案内 -->
+    <frame name="Guide" x="455" y="320" width="391" fill="#16161d" cornerRadius="16" layout="column" gap="10" padding="24">
+      <text name="GuideTitle" fontSize="15" fontWeight="700" fill="#ffffff">viewer で試すこと</text>
+      <text name="Guide1" width="fill" fontSize="13" fill="#d9d5ff" lineHeight="1.6">1. 図形を押すと、右に大きさ・色・CSS が出る</text>
+      <text name="Guide2" width="fill" fontSize="13" fill="#d9d5ff" lineHeight="1.6">2. 選んだまま別の図形に重ねると、間隔が出る</text>
+      <text name="Guide3" width="fill" fontSize="13" fill="#d9d5ff" lineHeight="1.6">3. 画面のタスクの行を選ぶと、元のコンポーネントと違えている項目が出る</text>
+      <text name="Guide4" width="fill" fontSize="13" fill="#d9d5ff" lineHeight="1.6">4. Screen を選ぶと、画面 1 枚分の HTML + CSS が出る（形式で React・Vue に切り替え）</text>
+    </frame>
+  </page>
+</kdr>
