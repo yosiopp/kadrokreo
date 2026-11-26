@@ -147,6 +147,10 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w set btn/Label fontSize=16 lineHeight=24px',
     'kdr -f demo.kdr -w set btn/Label letterSpacing=0.05em textDecoration=underline',
   ],
+  replace: [
+    'kdr -f demo.kdr -w replace OK 送信',
+    'kdr -f demo.kdr -w replace ok Send --ignore-case --all-pages',
+  ],
   gradient: [
     'kdr -f demo.kdr -w gradient linear Box --colors "#5b4cf5,#ffffff" --angle 90',
     'kdr -f demo.kdr -w gradient radial Dot --colors "#ffffff,#a99fff@30%,#5b4cf5" --center 50%,50% --radius 50%',

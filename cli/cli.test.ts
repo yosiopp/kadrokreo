@@ -553,6 +553,88 @@ describe('kadrokreo CLI', () => {
     expect(Object.values(instance.component?.role === 'instance' ? instance.component.overrides : {})).toEqual([{ text: 'Cancel' }])
   })
 
+  it('replace はテキストの内容を探して置き換え、置き換えたノードと件数を標準エラーに出す。大きさと自動の並びは測り直す', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add frame --name Card --id card layout=column + add text --parent card --name A --id a --text ログインする' +
+        ' + add text --name B --id b --text ログイン/ログイン + add rect --name ログイン --id r' +
+        ' + page-add Second + add text --name C --id c --text ログイン -o a.kdr',
+    ))
+    const before = await h.doc('a.kdr')
+    expect(before.pages[0].nodes.a).toMatchObject({ width: 96 })
+    expect(await h.run(argv('-f a.kdr -w replace ログイン サインイン'))).toBe(0)
+    // レイヤーの一覧と同じ順（上にあるものから）。道筋は find と同じ
+    expect(h.stderr).toBe('kdr: Page 1\tb\tB\t2 か所\nkdr: Page 1\ta\tCard/A\t1 か所\nkdr: 2 個のテキストの 3 か所を置き換えました\n')
+    let doc = await h.doc('a.kdr')
+    // 「サインインする」は 7 文字 × 16。中身に合わせるフレームも広がる。レイヤー名と、ほかのページは変えない
+    expect(doc.pages[0].nodes.a).toMatchObject({ text: 'サインインする', width: 112 })
+    expect(doc.pages[0].nodes.card).toMatchObject({ width: 112 })
+    expect(doc.pages[0].nodes.b).toMatchObject({ text: 'サインイン/サインイン', name: 'B' })
+    expect(doc.pages[0].nodes.r).toMatchObject({ name: 'ログイン' })
+    expect(doc.pages[1].nodes.c).toMatchObject({ text: 'ログイン' })
+    // --all-pages で全部のページ
+    const all = harness(Object.fromEntries(h.fs))
+    expect(await all.run(argv('-f a.kdr -w replace ログイン サインイン --all-pages'))).toBe(0)
+    expect(all.stderr).toBe('kdr: Second\tc\tC\t1 か所\nkdr: 1 個のテキストの 1 か所を置き換えました\n')
+    doc = await all.doc('a.kdr')
+    expect(doc.pages[1].nodes.c).toMatchObject({ text: 'サインイン' })
+  })
+
+  it('replace は文字列そのままで探し（正規表現にしない）、--ignore-case で大文字と小文字を区別しない。見つからなければ変えない', async () => {
+    const h = harness()
+    await h.run(['new', '+', 'add', 'text', '--id', 't', '--text', 'Price $1 (a.b) LOGIN login', '-o', 'a.kdr'])
+    const text = async () => ((await h.doc('a.kdr')).pages[0].nodes.t as TextNode).text
+    await h.run(argv('-f a.kdr -w replace login x'))
+    expect(await text()).toBe('Price $1 (a.b) LOGIN x')
+    await h.run(argv('-f a.kdr -w replace login y --ignore-case'))
+    expect(await text()).toBe('Price $1 (a.b) y x')
+    // 探す文字列の記号も、置き換える文字列の $ も、そのままの文字
+    await h.run(argv('-f a.kdr -w replace (a.b) $&'))
+    expect(await text()).toBe('Price $1 $& y x')
+    // 置き換える文字列は空でもよい（消す）
+    await h.run(['-f', 'a.kdr', '-w', 'replace', ' $&', ''])
+    expect(await text()).toBe('Price $1 y x')
+    const none = harness(Object.fromEntries(h.fs))
+    expect(await none.run(argv('-f a.kdr replace nothing z -o b.kdr'))).toBe(0)
+    expect(none.stderr).toBe('kdr: replace: 「nothing」を含むテキストはありません\n')
+    expect(((await none.doc('b.kdr')).pages[0].nodes.t as TextNode).text).toBe('Price $1 y x')
+    const bad = harness(Object.fromEntries(h.fs))
+    expect(await bad.run(['-f', 'a.kdr', 'replace', '', 'z'])).not.toBe(0)
+    expect(bad.stderr).toContain('探す文字列が空です')
+    expect(await bad.run(argv('-f a.kdr replace only'))).not.toBe(0)
+    expect(bad.stderr).toContain('置き換える文字列を指定してください')
+  })
+
+  it('replace でコンポーネントの元を置き換えるとインスタンスにも伝わり、写しで上書きした文言は上書きを置き換える', async () => {
+    const h = harness()
+    await h.run(argv(
+      'new + add frame --name Button --id btn + add text --parent btn --name Label --id label --text ログイン + component btn' +
+        ' + instance Button --id i1 --y 100 + instance Button --id i2 --y 200 + set i2/Label text=ログインして' +
+        ' + page-add Second + instance Button --id i3 + page 1 -o a.kdr',
+    ))
+    expect(await h.run(argv('-f a.kdr -w replace ログイン サインイン'))).toBe(0)
+    const doc = await h.doc('a.kdr')
+    const page = doc.pages[0].nodes
+    const copy = (id: string, nodes = page) => nodes[(nodes[id] as FrameNode).children[0]] as TextNode
+    const overrides = (id: string, nodes = page) => ((nodes[id] as FrameNode).component as { overrides: unknown }).overrides
+    expect(page.label).toMatchObject({ text: 'サインイン' })
+    // 上書きしていない写しは元に合わせて変わり、上書きにはならない
+    expect(copy('i1').text).toBe('サインイン')
+    expect(overrides('i1')).toEqual({})
+    expect(copy('i2').text).toBe('サインインして')
+    expect(overrides('i2')).toEqual({ label: { text: 'サインインして' } })
+    // ほかのページのインスタンスにも、元から伝わる
+    expect(copy('i3', doc.pages[1].nodes).text).toBe('サインイン')
+    expect(overrides('i3', doc.pages[1].nodes)).toEqual({})
+    // 元がページの外にあるとき、写しの文字だけを置き換えると上書きになる（editor で写しを打ち直したときと同じ）
+    const other = harness(Object.fromEntries(h.fs))
+    expect(await other.run(argv('-f a.kdr -w page Second + replace サインイン ログイン'))).toBe(0)
+    const after = (await other.doc('a.kdr')).pages
+    expect(copy('i3', after[1].nodes).text).toBe('ログイン')
+    expect(overrides('i3', after[1].nodes)).toEqual({ label: { text: 'ログイン' } })
+    expect(after[0].nodes.label).toMatchObject({ text: 'サインイン' })
+  })
+
   it('css・html の --format で React・CSS Modules・Tailwind・Vue の形にする', async () => {
     const h = harness()
     await h.run(argv('new + add frame --id f --name Card --width 40 --height 30 + add rect --parent f --name Box --width 10 --height 10 -o a.kdr'))

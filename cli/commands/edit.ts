@@ -1,4 +1,7 @@
+import { layerOrder } from '../../src/document/layers.ts'
+import type { NodeId, Page, Scene } from '../../src/document/types.ts'
 import { type ReorderDirection, reorderNodes } from '../../src/editor/operations/arrange.ts'
+import { updatePage } from '../../src/editor/operations/document.ts'
 import { moveNode, patchNodes, removeNodes } from '../../src/editor/operations/tree.ts'
 import { refitPath } from '../../src/editor/pathEdit.ts'
 import { UsageError } from '../args.ts'
@@ -6,7 +9,7 @@ import { estimateTextSize } from '../textMeasure.ts'
 import { buildPatch } from '../values.ts'
 import { type Command, checkStep, flag, numberOption, option, positional } from './common.ts'
 
-// ノードを変えるコマンド（設定・削除・親の付け替え・重なり順）
+// ノードを変えるコマンド（設定・文言の置き換え・削除・親の付け替え・重なり順）
 
 const TEXT_KEYS = new Set(['text', 'fontSize', 'fontFamily', 'fontWeight', 'lineHeight', 'letterSpacing', 'sizing', 'width', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'])
 
@@ -84,4 +87,71 @@ export const order: Command = {
     const ids = session.resolveAll(step.positionals.slice(1))
     session.apply((page) => reorderNodes(page, ids, direction))
   },
+}
+
+export const replace: Command = {
+  name: 'replace',
+  kind: 'edit',
+  usage: 'replace 探す文字列 置き換える文字列 [--all-pages] [--ignore-case]',
+  summary:
+    'テキストの内容から文字列を探し、すべて置き換える（文字列そのままで探す。レイヤー名は変えない）。既定はいまのページだけで大文字と小文字を区別し、--all-pages で全部のページ、--ignore-case で区別しない。' +
+    '置き換えたノード（ページ・id・道筋・件数）と合計を標準エラーに出す。大きさは測り直す。コンポーネントの元を置き換えるとインスタンスにも伝わり、写しで上書きした文言はその上書きを置き換える',
+  flags: ['all-pages', 'ignore-case'],
+  run({ session, warn }, step) {
+    checkStep(step, { positionals: 2, options: ['all-pages', 'ignore-case'] })
+    const search = positional(step, 0, '探す文字列')
+    const replacement = positional(step, 1, '置き換える文字列')
+    if (search === '') throw new UsageError('replace: 探す文字列が空です')
+    const pattern = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flag(step, 'ignore-case') ? 'giu' : 'gu')
+    const pages = flag(step, 'all-pages') ? session.document.pages : [session.page]
+    const found = pages.map((page) => ({ page, hits: textMatches(page, pattern) })).filter(({ hits }) => hits.length > 0)
+    if (found.length === 0) {
+      warn(`replace: 「${search}」を含むテキストはありません`)
+      return
+    }
+    const targets = new Map(found.map(({ page, hits }) => [page.id, hits.map((hit) => hit.id)]))
+    session.applyDocument((doc) =>
+      [...targets].reduce(
+        (next, [pageId, ids]) =>
+          updatePage(next, pageId, (page) =>
+            patchNodes(page, ids, (node) => {
+              if (node.type !== 'text') return null
+              // 置き換える文字列の $ を特別扱いしないよう、関数で返す
+              const text = node.text.replace(pattern, () => replacement)
+              return { text, ...estimateTextSize({ ...node, text }) }
+            }),
+          ),
+        doc,
+      ),
+    )
+    const lines = found.flatMap(({ page, hits }) => hits.map((hit) => `${page.name}\t${hit.id}\t${namePath(page, hit.id)}\t${hit.count} か所`))
+    const total = found.reduce((sum, { hits }) => sum + hits.reduce((n, hit) => n + hit.count, 0), 0)
+    const nodes = found.reduce((sum, { hits }) => sum + hits.length, 0)
+    for (const line of lines) warn(line)
+    warn(`${nodes} 個のテキストの ${total} か所を置き換えました`)
+  },
+}
+
+/** 文字列を含むテキストと、その数（レイヤーの一覧と同じ順） */
+function textMatches(page: Page, pattern: RegExp): { id: NodeId; count: number }[] {
+  const hits: { id: NodeId; count: number }[] = []
+  const visit = (parentId: NodeId | null) => {
+    for (const id of layerOrder(page, parentId)) {
+      const node = page.nodes[id]
+      if (node.type === 'text') {
+        const count = node.text.match(pattern)?.length ?? 0
+        if (count > 0) hits.push({ id, count })
+      }
+      visit(id)
+    }
+  }
+  visit(null)
+  return hits
+}
+
+/** レイヤー名を親からつないだ道筋（find と同じ形） */
+function namePath(scene: Scene, id: NodeId): string {
+  const names: string[] = []
+  for (let current: NodeId | null = id; current !== null; current = scene.nodes[current].parentId) names.unshift(scene.nodes[current].name)
+  return names.join('/')
 }
