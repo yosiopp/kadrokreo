@@ -1,5 +1,5 @@
 // kdr help コマンド・kdr docs に出す例。コマンドの名前ごとに並べる。
-// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と icon.svg・photo.png・font.ttf）がある場所で、そのまま動く。
+// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と icon.svg・photo.png・font.ttf、EXAMPLE_MARKUP の design.xml・part.xml）がある場所で、そのまま動く。
 // cli/help.test.ts が、すべてのコマンドに例があること・すべての例が終了コード 0 で動くことを確かめる。
 // パイプやリダイレクト（| > <）は使わない（1 回の kdr の実行で完結させる）。
 
@@ -17,10 +17,45 @@ export const EXAMPLE_DOCUMENT = [
   '-o demo.kdr',
 ]
 
+/**
+ * build / place の例が読むマークアップ（docs の「マークアップ」の節にもこのまま載せる）。
+ * design.xml は全体（最上位が <kdr>）、part.xml は木の一部（demo.kdr の元 Button を使う）
+ */
+export const EXAMPLE_MARKUP: Readonly<Record<'design.xml' | 'part.xml', string>> = {
+  'design.xml': `<kdr name="Demo">
+  <page name="Page 1">
+    <!-- 入れ子が親子、書いた順が重なり順（自動で並べるフレームでは並ぶ順） -->
+    <frame name="Card" id="card" width="320" fill="#f5f5ff" cornerRadius="12" layout="column" gap="12" padding="16">
+      <text name="Title" fontSize="18" fontWeight="700">タイトル</text>
+      <text name="Body" width="fill" fill="#666666" lineHeight="24px">説明文は、親の幅いっぱいで折り返す。</text>
+      <component name="Button" id="btn" fill="#5b4cf5" cornerRadius="8" layout="row" padding="8 16">
+        <text name="Label" fill="#ffffff">OK</text>
+      </component>
+      <instance of="btn" name="Secondary" fill="#888888">
+        <override node="Label" text="Cancel"/>
+      </instance>
+    </frame>
+  </page>
+</kdr>
+`,
+  'part.xml': `<frame name="Row" id="row" layout="row" gap="8" align="center">
+  <ellipse name="Mark" width="12" height="12" fill="#00aaff"/>
+  <text name="Caption" fontSize="12">元は今の kdr から探す</text>
+  <instance of="Button">
+    <override node="Label" text="追加"/>
+  </instance>
+</frame>
+`,
+}
+
 export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   new: [
     'kdr new Demo -o demo.kdr',
     'kdr new Demo + add frame --name Screen --width 375 --height 812 fill=#ffffff -o screen.kdr',
+  ],
+  build: [
+    'kdr build design.xml -o design.kdr',
+    'kdr build design.xml + set btn fill=#222222 + png Card --to card.png -o design.kdr   # 続けてほかのコマンドをつなげる',
   ],
   info: ['kdr -f demo.kdr info'],
   ls: [
@@ -78,6 +113,10 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w add frame --name Row --id row --y 300 --width 320 --height 48 + add ellipse --parent @ --width 24 --height 24',
   ],
   svg: ['kdr -f demo.kdr -w svg icon.svg --parent card --x 280 --y 16 --name Icon'],
+  place: [
+    'kdr -f demo.kdr -w place part.xml --parent card --x 16 --y 120',
+    'kdr -f demo.kdr -w place part.xml --y 300 + set @ opacity=0.5   # ページ直下に置いて、置いたものを @ で指す',
+  ],
   set: [
     'kdr -f demo.kdr -w set Box fill=#00ff00 cornerRadius=8',
     'kdr -f demo.kdr -w set Box Dot shadow.blur=8 shadow.y=4 opacity=0.8',
@@ -86,6 +125,8 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w set Card cornerRadius=16,16,0,0 blur=4',
     'kdr -f demo.kdr -w set Box fills.0.opacity=0.5 constraints.horizontal=end',
     'kdr -f demo.kdr -w set Arrow radius=6',
+    'kdr -f demo.kdr -w set card layout=column gap=8 padding="12 16" + set btn btn2 width=fill   # 自動で並べ、子を幅いっぱいに',
+    'kdr -f demo.kdr -w set btn/Label fontSize=16 lineHeight=24px',
   ],
   gradient: [
     'kdr -f demo.kdr -w gradient linear Box --colors "#5b4cf5,#ffffff" --angle 90',

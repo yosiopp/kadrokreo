@@ -25,6 +25,19 @@ const cli = (args, input) => execFileSync(process.execPath, [CLI, ...args], { in
   const example = execFileSync('sh', [path.join(__dirname, '..', 'docs', 'examples', 'wireframe.sh'), wireframePath], { stdio: ['ignore', 'pipe', 'inherit'] }).toString()
   check('docs/examples/wireframe.sh が動く', example.includes('"リストの項目 3"') && example.includes('Screen"  screen  0,0 375×812'))
 
+  // 同じ画面を 1 つのマークアップで書いた例（kdr build）からは、同じ見た目の kdr ができ、作り直しても同じバイト列になる
+  const markupPath = path.join(OUT, 'wireframe-markup.kdr')
+  const markupXml = path.join(__dirname, '..', 'docs', 'examples', 'wireframe.xml')
+  cli(['build', markupXml, '-o', markupPath])
+  const pngOf = (file) => cli(['-f', file, 'png', '--to', '-'])
+  const scriptPng = pngOf(wireframePath)
+  const markupPng = pngOf(markupPath)
+  fs.writeFileSync(path.join(OUT, 'cli-wireframe-markup.png'), markupPng)
+  check('docs/examples/wireframe.xml を build した kdr が、wireframe.sh のものと同じ絵になる', scriptPng.length > 1000 && scriptPng.equals(markupPng), `${scriptPng.length} / ${markupPng.length}`)
+  const first = fs.readFileSync(markupPath)
+  cli(['build', markupXml, '-o', markupPath])
+  check('同じマークアップからは同じバイト列の kdr ができる', first.equals(fs.readFileSync(markupPath)))
+
   // 整列・回転・上書きの反映・元の差し替え・バリアントのコマンドで作ったものも、CLI で読み直せる
   const morePath = path.join(OUT, 'cli-more.kdr')
   cli(['-f', kdrPath, '-o', morePath, 'variant-add', 'btn', '--id', 'btn-big', '種類=大',
@@ -61,6 +74,13 @@ const cli = (args, input) => execFileSync(process.execPath, [CLI, ...args], { in
   await viewer.waitForSelector('.inspect-layer:has(.layer-name:text-is("TabBar"))')
   const wireNames = await viewer.locator('.inspect-layer .layer-name').allTextContents()
   check('ワイヤーフレームの例を viewer で開ける', ['Screen', 'Header', 'Content', 'ListItem', 'TabBar'].every((name) => wireNames.includes(name)), wireNames.join())
+  // マークアップから作ったものも viewer で開ける
+  await viewer.locator('input[type=file]').setInputFiles(markupPath)
+  await viewer.waitForSelector('.inspect-layer:has(.layer-name:text-is("ButtonLabel"))')
+  const markupNames = await viewer.locator('.inspect-layer .layer-name').allTextContents()
+  check('マークアップから作った kdr を viewer で開ける', ['Screen', 'Header', 'Content', 'ListItem', 'TabBar'].every((name) => markupNames.includes(name)), markupNames.join())
+  await viewer.locator('input[type=file]').setInputFiles(wireframePath)
+  await viewer.waitForSelector('.inspect-layer:has(.layer-name:text-is("TabBar"))')
   await viewer.screenshot({ path: path.join(OUT, 'cli-wireframe.png') })
 
   // CLI の png は viewer の「ページを PNG に」と同じ名前・大きさ・絵になる（描画は同じ render.ts。違いは書体の細部だけ）

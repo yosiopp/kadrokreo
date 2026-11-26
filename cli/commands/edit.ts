@@ -15,7 +15,7 @@ export const set: Command = {
   kind: 'edit',
   assignments: true,
   usage: 'set ノード… 名前=値…',
-  summary: '設定を変える（例: fill=#ff0000 cornerRadius=8 shadow.blur=4 text=こんにちは constraints.horizontal=end）。null で塗りなどを外す。fill・stroke・shadow は、いちばん上の塗り・線と最初の影の略記（shadow.spread=4 で広がり）。blur=8 / backgroundBlur=8 はレイヤー・背景のぼかし（null で外す）、blendMode=multiply はノードの描画モード。cornerRadius=8,8,0,0 で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは radius=8 で全部の輪郭の頂点の角を丸める（頂点ごとなら 8,0,8 と通し番号の順に）。radius.1=8 なら 2 つ目の輪郭だけ（0 が最初の輪郭）。端の形は startCap / endCap=none|round|square|arrow|circle|diamond、印の大きさは capSize=16。破線は dash=4,2（null で実線）、そのずれは dashOffset=2、線の角の形は join=miter|round|bevel',
+  summary: '設定を変える（例: fill=#ff0000 cornerRadius=8 shadow.blur=4 text=こんにちは constraints.horizontal=end）。null で塗りなどを外す。fill・stroke・shadow は、いちばん上の塗り・線と最初の影の略記（shadow.spread=4 で広がり）。blur=8 / backgroundBlur=8 はレイヤー・背景のぼかし（null で外す）、blendMode=multiply はノードの描画モード。cornerRadius=8,8,0,0 で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは radius=8 で全部の輪郭の頂点の角を丸める（頂点ごとなら 8,0,8 と通し番号の順に）。radius.1=8 なら 2 つ目の輪郭だけ（0 が最初の輪郭）。端の形は startCap / endCap=none|round|square|arrow|circle|diamond、印の大きさは capSize=16。破線は dash=4,2（null で実線）、そのずれは dashOffset=2、線の角の形は join=miter|round|bevel。大きさの決め方は width=fill|hug（数値なら、その大きさで固定）、行の高さは lineHeight=1.5（倍率）か 24px。フレームは layout=row|column で自動で並べ（余白も間隔も 0 から）、並べ方を gap=8 padding="12 40"（1〜4 個、CSS と同じ順）align=center justify=space-between で決める',
   run({ session }, step) {
     checkStep(step, { assignments: true })
     if (step.assignments.length === 0) throw new UsageError('set: 「名前=値」を指定してください')

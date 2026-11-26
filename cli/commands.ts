@@ -28,6 +28,7 @@ import { add, dup, svg } from './commands/create.ts'
 import { mv, order, rm, set } from './commands/edit.ts'
 import { boolean, flatten, join, mask, outlineStroke, outlineText, split, textPath } from './commands/paths.ts'
 import { gradient } from './commands/paints.ts'
+import { build, place } from './commands/markup.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
 import { fontAdd, fontRm } from './commands/fonts.ts'
 import { css, html, json, png, svgOut } from './commands/output.ts'
@@ -40,6 +41,7 @@ export type { Command } from './commands/common.ts'
 const commands: Command[] = [
   // source
   newDocument,
+  build,
   // query
   info,
   ls,
@@ -65,6 +67,7 @@ const commands: Command[] = [
   // edit: ノード
   add,
   svg,
+  place,
   set,
   gradient,
   rm,

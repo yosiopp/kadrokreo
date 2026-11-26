@@ -355,8 +355,8 @@ const DEFAULTS = {
   booleanIncludeStrokes: false,
 } as const
 
-/** オートレイアウトの省略できる項目 */
-const LAYOUT_DEFAULTS = {
+/** オートレイアウトの省略できる項目と、省略したときの値（余白も間隔もなし） */
+export const LAYOUT_DEFAULTS = {
   direction: 'horizontal',
   gap: 0,
   paddingTop: 0,

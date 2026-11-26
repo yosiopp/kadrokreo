@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { COMMANDS } from './commands.ts'
-import { EXAMPLES, EXAMPLE_DOCUMENT, splitExample } from './examples.ts'
+import { EXAMPLES, EXAMPLE_DOCUMENT, EXAMPLE_MARKUP, splitExample } from './examples.ts'
 import { type IO, run } from './run.ts'
 import { testFontBytes } from '../src/document/testFont.ts'
 
@@ -60,6 +60,7 @@ async function exampleFiles(): Promise<Map<string, Uint8Array>> {
     ['photo.png', PNG],
     ['icon.svg', SVG],
     ['font.ttf', testFontBytes()],
+    ...Object.entries(EXAMPLE_MARKUP).map(([name, text]) => [name, new TextEncoder().encode(text)] as [string, Uint8Array]),
   ])
 }
 
@@ -104,6 +105,14 @@ describe('kdr help / docs', () => {
     const h = harness()
     await h.run(['docs'])
     for (const text of ['-v "$PWD:/work"', '--user "$(id -u):$(id -g)"', '`-t` は付けない', 'ghcr.io/yosiopp/kadrokreo kdr', 'ls --json', '`2` 使い方の誤り', 'png']) {
+      expect(h.stdout).toContain(text)
+    }
+  })
+
+  it('docs はマークアップの書き方と、例のマークアップを載せる', async () => {
+    const h = harness()
+    await h.run(['docs'])
+    for (const text of ['## マークアップ（build・place）', 'layout="row|column"', '<override node=', 'design.xml:12:', ...Object.values(EXAMPLE_MARKUP)]) {
       expect(h.stdout).toContain(text)
     }
   })

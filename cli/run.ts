@@ -4,11 +4,12 @@ import { createDocument } from '../src/editor/operations/document.ts'
 import { type Step, UsageError, parseArgs } from './args.ts'
 import { COMMANDS, type Command } from './commands.ts'
 import { docs, help } from './help.ts'
+import { MarkupError } from './markup.ts'
 import { Session } from './session.ts'
 
 // コマンドラインの本体。入出力は IO に任せるので、テストではメモリ上で動かせる。
 //
-// 入力: 先頭が new なら新しいドキュメント。そうでなければ -f のファイル、なければ標準入力（端末でないとき）。
+// 入力: 先頭が new・build なら新しいドキュメント。そうでなければ -f のファイル、なければ標準入力（端末でないとき）。
 // 出力: -o のファイル（'-' は標準出力）か、-w なら入力のファイル。どちらもなければ、
 //       ドキュメントを変えたときだけ標準出力へ（端末なら書き出さずにエラー）。
 // コマンドの文字の出力（ls など）は標準出力へ。kdr と同時に標準出力へは出せない。
@@ -77,7 +78,7 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
   })
   const plan = convert ? { source: false } : checkPlan(commands, steps, global, io)
 
-  // new は、ここで作った空のドキュメントを置き換える
+  // new・build は、ここで作った空のドキュメントを置き換える
   const session = new Session(
     plan.source ? createDocument() : await decodeKdr(new Blob([await readInput(global.file, io)])),
   )
@@ -95,7 +96,7 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
     try {
       await commands[i].run(ctx, step)
     } catch (error) {
-      if (error instanceof UsageError || error instanceof KdrError) {
+      if (error instanceof UsageError || error instanceof KdrError || error instanceof MarkupError) {
         error.message = `${step.name}: ${error.message.replace(new RegExp(`^${step.name}: `), '')}`
       }
       throw error
@@ -114,9 +115,9 @@ async function execute(argv: readonly string[], io: IO): Promise<void> {
 function checkPlan(commands: readonly Command[], steps: readonly Step[], global: { file: string | null; out: string | null; write: boolean }, io: IO) {
   const source = commands[0].kind === 'source'
   if (commands.slice(1).some((command) => command.kind === 'source')) {
-    throw new UsageError('new はコマンドの先頭にだけ置けます')
+    throw new UsageError('new・build はコマンドの先頭にだけ置けます')
   }
-  if (source && global.file !== null) throw new UsageError('new と -f は一緒に指定できません')
+  if (source && global.file !== null) throw new UsageError(`${commands[0].name} と -f は一緒に指定できません`)
   if (global.write) {
     if (global.out !== null) throw new UsageError('-o と -w は一緒に指定できません')
     if (global.file === null || global.file === '-') throw new UsageError('-w には -f で入力のファイルを指定してください')

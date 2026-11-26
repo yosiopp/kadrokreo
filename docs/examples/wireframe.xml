@@ -1,0 +1,51 @@
+<!--
+  kdr build で、スマホ画面（375×812）のワイヤーフレームを作る例。wireframe.sh と同じ画面を、1 つのマークアップで書いたもの。
+    kdr build docs/examples/wireframe.xml -o wireframe.kdr
+  入れ子が親子、書いた順が重なり順（自動で並べるフレームでは並ぶ順）。位置と大きさは書かず、並べ方（layout・padding・gap）と
+  大きさの決め方（width / height の 数値・fill・省略 = 中身に合わせる）で決める。
+  リストの行は <component> にして、<instance> ごとに文言だけを変えている。
+-->
+<kdr name="スマホ ワイヤーフレーム">
+  <page name="Page 1">
+    <frame name="Screen" id="screen" width="375" height="812" fill="#ffffff" layout="column">
+      <frame name="StatusBar" width="fill" height="44" fill="#e5e5e5"/>
+
+      <!-- ヘッダー: 戻る・タイトル・アイコン -->
+      <frame name="Header" width="fill" fill="#ffffff" layout="row" padding="16" align="center" justify="space-between">
+        <text name="Back" fontSize="16">‹ 戻る</text>
+        <text name="Title" fontSize="17" fontWeight="700">タイトル</text>
+        <rect name="MenuIcon" width="24" height="24" fill="#cccccc"/>
+      </frame>
+
+      <!-- 本文: 余った高さいっぱいに伸ばす -->
+      <frame name="Content" width="fill" height="fill" fill="#ffffff" layout="column" gap="12" padding="16">
+        <rect name="Hero" width="fill" height="180" fill="#d9d9d9" cornerRadius="8"/>
+        <text name="Heading" fontSize="22" fontWeight="700">見出しが入ります</text>
+        <text name="Body" width="fill" fontSize="14" fill="#666666" lineHeight="1.5">説明文が入ります。2 行から 3 行くらいの文章を想定しています。</text>
+
+        <!-- リストの 1 行をコンポーネントにして、インスタンスを並べる -->
+        <component name="ListItem" id="item" width="fill" fill="#f2f2f2" cornerRadius="8" layout="row" gap="12" padding="12" align="center">
+          <ellipse name="Avatar" width="40" height="40" fill="#cccccc"/>
+          <text name="Label" fontSize="15">リストの項目 1</text>
+        </component>
+        <instance of="item" id="item2" width="fill">
+          <override node="Label" text="リストの項目 2"/>
+        </instance>
+        <instance of="item" id="item3" width="fill">
+          <override node="Label" text="リストの項目 3"/>
+        </instance>
+
+        <frame name="Button" width="fill" fill="#333333" cornerRadius="8" layout="row" padding="14" justify="center">
+          <text name="ButtonLabel" fontSize="16" fontWeight="700" fill="#ffffff">次へ</text>
+        </frame>
+      </frame>
+
+      <frame name="TabBar" width="fill" fill="#e5e5e5" layout="row" padding="12 40 24" justify="space-between">
+        <rect name="Tab1" width="28" height="28" fill="#999999"/>
+        <rect name="Tab2" width="28" height="28" fill="#cccccc"/>
+        <rect name="Tab3" width="28" height="28" fill="#cccccc"/>
+        <rect name="Tab4" width="28" height="28" fill="#cccccc"/>
+      </frame>
+    </frame>
+  </page>
+</kdr>

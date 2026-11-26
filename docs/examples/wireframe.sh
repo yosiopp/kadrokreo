@@ -3,6 +3,7 @@
 #   sh docs/examples/wireframe.sh [出力.kdr]     （省略すると wireframe.kdr）
 # 画面は上から ステータスバー・ヘッダー・本文・タブバー。どれもオートレイアウトで並べ、本文は余った高さいっぱいに伸ばす。
 # リストの行はコンポーネントにして、インスタンスごとに文言だけを変えている。
+# 同じ画面を 1 つのマークアップで書いたものが wireframe.xml（kdr build docs/examples/wireframe.xml -o 出力.kdr）。
 # kdr が PATH になければ（npm link していなければ）、リポジトリの cli/kadrokreo.ts を使う。
 set -e
 OUT=${1:-wireframe.kdr}

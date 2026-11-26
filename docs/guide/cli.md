@@ -15,7 +15,7 @@ kdr [-f 入力.kdr] [-o 出力.kdr | -w] コマンド 引数… [+ コマンド 
 ```
 
 - `+` だけの引数でコマンドを区切ると、1 回の実行で左から順に実行する
-- 入力は `-f`（省略すると標準入力）、先頭が `new` なら新しいドキュメント
+- 入力は `-f`（省略すると標準入力）、先頭が `new` か `build` なら新しいドキュメント
 - 出力は `-o`、`-w` なら入力のファイルへ上書き。どちらもなく、ドキュメントを変えたときは kdr を標準出力へ出すので、パイプでつなげられる
 - `ls` などの文字の出力は標準出力へ出る（kdr と同時に標準出力へは出せないので、そのときは `-o` を指定する）
 - ノードは id、レイヤー名、`親/子` の道筋（名前か id を `/` でつなぐ）、`@`（直前に作ったノード）で指す
@@ -67,12 +67,13 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | コマンド | 内容 |
 | --- | --- |
 | `new [名前]` | 新しいドキュメント（先頭にだけ置ける） |
+| `build マークアップ.xml` / `place マークアップ.xml [--parent フレーム] [--index N] [--x N --y N]` | ノードの木を XML で書いたマークアップから、新しいドキュメントを作る（先頭にだけ置ける）／今のページに木の一部を足す。書き方は下の「[マークアップで組み立てる](#マークアップで組み立てる)」 |
 | `info` / `ls [ノード] [--all] [--json]` / `get ノード [項目]` / `find 文字列` / `bounds ノード` | 調べる（`get パス d` は形を SVG の path の d で出す） |
 | `css ノード` / `html ノード [--standalone]` / `json [--pretty]` / `components` | viewer のインスペクトと同じ CSS・HTML、kdr の `document.json` の中身、コンポーネントの一覧。`css` と `html` は `--format html\|react\|css-modules\|tailwind\|vue` で viewer のコードの形式と同じものを出す |
 | `page ページ` / `page-add 名前` / `page-rename 名前` / `page-rm [ページ]` / `doc-name 名前` | ページとドキュメント |
 | `font-add 書体ファイル [--family 書体名]` / `font-rm 書体名 [--weight 太さ] [--italic]` | 書体ファイル（TTF / OTF / WOFF / WOFF2）を kdr に埋め込む・外す。書体名・太さ・斜体はファイルから読む（`--family` で書体名を変えられる）。テキストの `fontFamily` に書体名を書くと、その書体で描かれる（`png` も）。再配布できる書体だけを入れる |
 | `add 種類 …` | `rect` `ellipse` `frame` `text`（`--text`）`line`（`--from x,y --to x,y`）`path`（`--points "x,y …" [--closed]` か、曲線を含めるなら SVG の path の `--d "M0 0 C…"`。`M` のまとまりが複数なら穴のあるパス）`image`（`--src 画像`。PNG・JPEG・WebP・GIF、32MB・6,400 万画素まで） |
-| `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`sizing.width=fill`、`maxWidth=320`、`constraints.horizontal=end`、`fill=null` で外す）。`fill` / `stroke` / `shadow` は、単色の塗り・線と最初の影の略記（`shadow.spread=4` で影の広がり）。`blur=8` / `backgroundBlur=8` でレイヤー・背景のぼかし（`null` で外す）、`blendMode=multiply` でノードの描画モード。`cornerRadius=8,8,0,0` で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは `radius=8` で全部の輪郭（穴など 2 つ目以降も）の頂点の角を丸める（頂点ごとなら `radius=8,0,8` と、`get ノード d` の順の通し番号で並べる）。特定の輪郭だけなら `radius.N=8`（`N` は 0 から数えた輪郭の番号で、0 が最初の輪郭。`radius.1=4,0,4,0` のように頂点ごとも可）。破線は `dash=4,2`（線の長さ・間隔。`dash=null` で実線）、破線のずれは `dashOffset=2`、線の角の形は `join=round`（`miter` `round` `bevel`）。端の形は `endCap=arrow`（`none` `round` `square` `arrow` `circle` `diamond`）、印の大きさは `capSize=16`。配列は `fills=[…]` と JSON で書くか、`fills.0.color=#ff0000` のように番号でつなぐ |
+| `set ノード… 名前=値…` | 設定を変える（`fill=#ff0000`、`shadow.blur=4`、`layout.gap=8`、`sizing.width=fill`、`maxWidth=320`、`constraints.horizontal=end`、`fill=null` で外す）。`fill` / `stroke` / `shadow` は、単色の塗り・線と最初の影の略記（`shadow.spread=4` で影の広がり）。`blur=8` / `backgroundBlur=8` でレイヤー・背景のぼかし（`null` で外す）、`blendMode=multiply` でノードの描画モード。`cornerRadius=8,8,0,0` で角丸を 4 隅ばらばらに（左上・右上・右下・左下）。パスは `radius=8` で全部の輪郭（穴など 2 つ目以降も）の頂点の角を丸める（頂点ごとなら `radius=8,0,8` と、`get ノード d` の順の通し番号で並べる）。特定の輪郭だけなら `radius.N=8`（`N` は 0 から数えた輪郭の番号で、0 が最初の輪郭。`radius.1=4,0,4,0` のように頂点ごとも可）。破線は `dash=4,2`（線の長さ・間隔。`dash=null` で実線）、破線のずれは `dashOffset=2`、線の角の形は `join=round`（`miter` `round` `bevel`）。端の形は `endCap=arrow`（`none` `round` `square` `arrow` `circle` `diamond`）、印の大きさは `capSize=16`。配列は `fills=[…]` と JSON で書くか、`fills.0.color=#ff0000` のように番号でつなぐ。大きさの決め方は `width=fill`（親いっぱい）・`width=hug`（中身に合わせる）・数値（その大きさで固定）、行の高さは `lineHeight=1.5`（倍率）か `lineHeight=24px`。フレームは `layout=row`（`column`）で自動で並べ（余白も間隔も 0 から。今の子の位置から余白を逆算するのは `auto-layout`）、並べ方は `gap=8` `padding="12 40"`（1〜4 個。CSS と同じ順）`align=center` `justify=space-between` のように `layout.` を付けずに書ける |
 | `gradient [linear\|radial\|conic] ノード… [--colors 色,色@50%,色…] [--stop N=色[@位置],…] [--angle 度] [--from x,y --to x,y] [--center x,y] [--radius r\|rx,ry] [--focus fx,fy] [--opacity 0〜1] [--blend 描画モード] [--hidden] [--stroke] [--index N \| --add]` | グラデーションの塗りにする（3 色以上、位置は 0〜1 か %。`#ff000000` のような `#rrggbbaa`・`#rgba` の色は最後の桁が色ごとの透明度）。直線は `--angle` か始点・終点（`--from` / `--to`）、円形の `--angle` は楕円を回す角度、`--focus` は焦点（中心からのずれを半径に対する割合で）、角度（conic）は `--center` と `--angle`（最初の色の向き）。`--blend multiply` で塗りの描画モード。ふつうはいちばん上の塗りを置き換え、`--index` で何番目か（0 が一番下）、`--add` で上に重ねる。`--stroke` なら線。`--hidden` でその塗りを隠す。`--colors` を省くと今の色のまま種類や向きだけ変える。`--stop 1=#ff0000` は N 番目（0 が最初、-1 が最後）の色だけを変える（`0=@20%` なら位置だけ。カンマで区切っていくつでも）。種類を省くと今のグラデーションの種類のまま変える。塗り・影を隠すだけなら `set ノード fills.0.visible=false`、内側の影は `set ノード shadow.type=inner-shadow` |
 | `rm` / `mv (--parent フレーム \| --root)` / `order front\|back\|forward\|backward` / `dup` | 削除、親の付け替え、重なり順、複製 |
 | `boolean union\|subtract\|intersect\|exclude ノード… [--keep [--strokes]]` / `flatten ノード…` | ブーリアン演算（合体・差し引き・交差・除外）。矩形・楕円・パスの塗りの形と、kdr に埋め込んだ書体のテキストの文字の形にかけ、最も背面のものを引き継いだ 1 つのパス（`fillRule=evenodd`）にする。差し引きは最も背面のものから残りを引く。`--keep` なら元の図形を子に残すブーリアン演算のノードにまとめる（演算は `set ノード booleanOperation=intersect` で変えられる）。`--strokes` を付けると元の図形の線の外形も演算に含める（`set ノード booleanIncludeStrokes=true` でも変えられる）。`flatten` はそのノードを結果のパスに焼き込む |
@@ -196,8 +197,56 @@ alias kdr='docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" ghcr.io
 exec docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" ghcr.io/yosiopp/kadrokreo kdr "$@"
 ```
 
+## マークアップで組み立てる
+
+画面をまるごと組み立てるときは、`add` を 1 つずつ並べる代わりに、ノードの木を XML のマークアップに書いて `kdr build` に渡せる。
+1 回の実行で kdr になり、同じマークアップからは同じ id・同じバイト列の kdr ができる（作り直しても viewer のリンクが変わらない）。
+
+```xml
+<kdr name="Demo">
+  <page name="Page 1">
+    <frame name="Card" id="card" width="320" fill="#f5f5ff" cornerRadius="12" layout="column" gap="12" padding="16">
+      <text name="Title" fontSize="18" fontWeight="700">タイトル</text>
+      <text name="Body" width="fill" fill="#666666" lineHeight="24px">説明文は、親の幅いっぱいで折り返す。</text>
+      <component name="Button" id="btn" fill="#5b4cf5" cornerRadius="8" layout="row" padding="8 16">
+        <text name="Label" fill="#ffffff">OK</text>
+      </component>
+      <instance of="btn" name="Secondary" fill="#888888">
+        <override node="Label" text="Cancel"/>
+      </instance>
+    </frame>
+  </page>
+</kdr>
+```
+
+```sh
+kdr build design.xml -o design.kdr                    # 全体を作る（最上位は <kdr>、その下に <page>）
+kdr -f design.kdr -w place part.xml --parent card     # 今の kdr に、木の一部を足す（最上位は <frame> などノードの要素 1 つ）
+kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほかのコマンドをつなげる
+```
+
+| 書くもの | 決まり |
+| --- | --- |
+| 要素 | `<frame>` `<rect>` `<ellipse>` `<text>` `<image src="…">` `<line from="x,y" to="x,y">` `<path d="M0 0 L…">`（か `points="x,y x,y …" closed="true"`）、`<component>`（コンポーネントの元になるフレーム）、`<instance of="元の id か名前">` |
+| 親子と重なり順 | 入れ子が親子、書いた順が重なり順（先に書いたものが背面。自動で並べるフレームでは並ぶ順）。子を持てるのは `<frame>` と `<component>` |
+| 属性 | `set` の「名前=値」と同じ（`name` `fill` `stroke` `cornerRadius` `opacity` `fontSize` `shadow.blur` …）。書く順は問わない |
+| 書かなかった項目 | 「なし」から始まる（塗りなし・線なし・余白 0・間隔 0）。`add` や editor で作るときの灰色の塗り・余白 10 は付かない。テキストだけは黒・16px の sans-serif |
+| 並べ方 | `layout="row\|column"` で子を自動で並べ、`gap` `padding`（`"16"` `"12 40"` `"12 40 24"` `"1 2 3 4"`。CSS と同じ順）`align` `justify` `wrap` で決める |
+| 大きさ | `width` / `height` は、数値（固定）・`fill`（親いっぱいに伸ばす。自動で並べるフレームの子だけ）・`hug`（中身に合わせる。自動で並べるフレームとテキストの幅だけ。省いたときもこれ）。`<rect>` `<ellipse>` と、並べない `<frame>` には大きさを書く。`<image>` は省くと画像の大きさ。テキストは `width` を書くとその幅で折り返す |
+| 位置 | `x` `y` を書くのは、並べないフレームの子・ページ直下のもの・並びから外したもの（`layoutPositioning="absolute"`）だけ。ほかは並べ直しが決める |
+| テキスト | 要素の中身に書く（前後の空白と行ごとの字下げは除く。途中の改行は改行になる）。`<` と `&` は `&lt;` `&amp;`。空白をそのまま残すなら `text="…"` の属性に。行の高さは `lineHeight="1.5"`（倍率）か `"24px"` |
+| 画像 | `src` は、マークアップのファイルからの相対パス |
+| コンポーネント | `<instance of="…">` の元は、マークアップの中の `<component>` の `id`、なければ `name` で探す（`place` は今の kdr の元からも探す）。中身を変えるのは `<override node="レイヤー名" text="…" fill="…" visible="false"/>`。同じ名前がいくつもあれば `node="親/子"` か、元の側で付けた `id` で指す。入れ子のインスタンスの差し替えは `<override node="…" of="別の元"/>`。`<instance>` 自身に書けるのは名前・位置・回転・表示・不透明度、`width="fill"` / `height="fill"`、塗りと線で、ほかは元で決まる |
+| id | 省ける。省くと木の道筋（名前と、同じ名前の兄弟の中での順）から決まる。後で `set` などから指すノードには `id` を書いておく |
+
+- 知らない要素・属性、値の誤り、閉じ忘れは、`kdr: build: design.xml:12: fill="red": …` のようにファイルと行番号を付けて知らせ、何も書き出さない
+- 繰り返しや変数はない。同じ形はコンポーネントとインスタンスで表すか、マークアップを作る側（スクリプトなど）で繰り返す
+- 英数字の幅は見積もりなので（上の「注意」）、実際の書体のほうが広いと、中身に合わせた枠から文字が少しはみ出すことがある
+
 ## 例: ワイヤーフレームを組み立てる
 
-まとまった例として、スマホ画面（375×812）のワイヤーフレームを組み立てるスクリプトを [`docs/examples/wireframe.sh`](../examples/wireframe.sh) に置いている
-（リポジトリの置き場所で `sh docs/examples/wireframe.sh 出力.kdr`。`kdr` が PATH になければ、リポジトリの `cli/kadrokreo.ts` を使う）。
+まとまった例として、スマホ画面（375×812）のワイヤーフレームを 2 通りの書き方で置いている。どちらからも同じ画面ができる。
 オートレイアウトで区画を並べ、リストの行をコンポーネントにしてインスタンスで増やす、という組み立て方の見本になっている。
+
+- [`docs/examples/wireframe.xml`](../examples/wireframe.xml): 1 つのマークアップ（`kdr build docs/examples/wireframe.xml -o 出力.kdr`）
+- [`docs/examples/wireframe.sh`](../examples/wireframe.sh): コマンドを順に並べたスクリプト（リポジトリの置き場所で `sh docs/examples/wireframe.sh 出力.kdr`。`kdr` が PATH になければ、リポジトリの `cli/kadrokreo.ts` を使う）

@@ -6,6 +6,8 @@
 // （背景のぼかしや角度のグラデーションを書き出したツールがこの形を使う）。HTML は解釈しない。
 // style の中身（CSS）は文字として写し、変換が単純なセレクタだけを読む。
 
+import { readXml } from '../xml.ts'
+
 export type SvgNode = SvgElement | string
 
 export type SvgElement = {
@@ -137,27 +139,13 @@ export function parseSvgDom(source: string): SvgElement {
 
 // ── Node: 自前の小さな XML の読み取り ──
 
-const ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" }
-
-function decode(text: string): string {
-  return text.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (whole, body: string) => {
-    if (body[0] === '#') {
-      const code = body[1] === 'x' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10)
-      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole
-    }
-    return ENTITIES[body] ?? whole
-  })
-}
-
-const ATTRIBUTE = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/y
-
 /**
  * DOMParser のない環境用の、SVG に要る分だけの XML の読み取り。要素・属性・文字・CDATA・コメント・処理命令を読み、
- * 定義済みの 5 つの実体と文字参照だけを展開する。閉じタグの食い違いはエラーにする
+ * 定義済みの 5 つの実体と文字参照だけを展開する（読み取りそのものは ../xml.ts）。閉じタグの食い違いはエラーにする
  */
 export function parseSvgXml(source: string): SvgElement {
   checkSource(source)
-  const text = source.replace(/^﻿/, '')
+  const text = source.replace(/^\uFEFF/, '')
   const top: SvgElement = { name: '#document', attributes: {}, children: [] }
   const stack: SvgElement[] = [top]
   // 中身を写さない要素の中にいる間の深さ（0 なら写す）
@@ -166,95 +154,54 @@ export function parseSvgXml(source: string): SvgElement {
   let foreign: ForeignContent | null = null
   let foreignElements = 0
   let count = 0
-  let i = 0
   const current = () => stack[stack.length - 1]
-  const pushText = (value: string) => {
-    if (opaque > 0 && foreign && value.trim() !== '') foreign.other = true
-    if (opaque === 0 && stack.length > 1 && value !== '') current().children.push(value)
-  }
 
-  while (i < text.length) {
-    const lt = text.indexOf('<', i)
-    if (lt < 0) {
-      pushText(decode(text.slice(i)))
-      break
-    }
-    if (lt > i) pushText(decode(text.slice(i, lt)))
-    if (text.startsWith('<!--', lt)) {
-      const end = text.indexOf('-->', lt + 4)
-      if (end < 0) throw new SvgParseError('コメントが閉じていません')
-      i = end + 3
-    } else if (text.startsWith('<![CDATA[', lt)) {
-      const end = text.indexOf(']]>', lt + 9)
-      if (end < 0) throw new SvgParseError('CDATA が閉じていません')
-      pushText(text.slice(lt + 9, end))
-      i = end + 3
-    } else if (text.startsWith('<?', lt)) {
-      const end = text.indexOf('?>', lt + 2)
-      if (end < 0) throw new SvgParseError('処理命令が閉じていません')
-      i = end + 2
-    } else if (text.startsWith('<!', lt)) {
-      const end = text.indexOf('>', lt + 2)
-      if (end < 0) throw new SvgParseError('宣言が閉じていません')
-      i = end + 1
-    } else if (text[lt + 1] === '/') {
-      const end = text.indexOf('>', lt + 2)
-      if (end < 0) throw new SvgParseError('閉じタグが閉じていません')
-      const name = text.slice(lt + 2, end).trim()
-      if (stack.length <= 1 || (opaque === 0 && current().name !== localName(name))) {
-        throw new SvgParseError(`閉じタグが合いません: ${name}`)
-      }
-      if (opaque > 0) {
-        opaque--
-        if (opaque === 0) {
-          stack.pop()
-          foreign = null
+  readXml(
+    text,
+    {
+      text(value) {
+        if (opaque > 0 && foreign && value.trim() !== '') foreign.other = true
+        if (opaque === 0 && stack.length > 1 && value !== '') current().children.push(value)
+      },
+      close(name) {
+        if (stack.length <= 1 || (opaque === 0 && current().name !== localName(name))) {
+          throw new SvgParseError(`閉じタグが合いません: ${name}`)
         }
-      } else stack.pop()
-      i = end + 1
-    } else {
-      const nameMatch = /[^\s/>]+/y
-      nameMatch.lastIndex = lt + 1
-      const found = nameMatch.exec(text)
-      if (!found) throw new SvgParseError('要素の名前がありません')
-      const rawName = found[0]
-      let j = nameMatch.lastIndex
-      const attributes: Record<string, string> = {}
-      for (;;) {
-        while (j < text.length && /\s/.test(text[j])) j++
-        if (text[j] === '>' || text.startsWith('/>', j)) break
-        ATTRIBUTE.lastIndex = j
-        const attribute = ATTRIBUTE.exec(text)
-        if (!attribute) throw new SvgParseError(`属性が読めません: <${rawName}>`)
-        attributes[attribute[1]] = decode(attribute[2] ?? attribute[3])
-        j = ATTRIBUTE.lastIndex
-      }
-      const selfClosing = text.startsWith('/>', j)
-      i = j + (selfClosing ? 2 : 1)
-      if (opaque > 0) {
-        if (foreign) {
-          if (++foreignElements > MAX_FOREIGN_ELEMENTS) foreign.other = true
-          else readForeignStyle(foreign, attributes.style)
+        if (opaque > 0) {
+          opaque--
+          if (opaque === 0) {
+            stack.pop()
+            foreign = null
+          }
+        } else stack.pop()
+      },
+      open({ name: rawName, attributes, selfClosing }) {
+        if (opaque > 0) {
+          if (foreign) {
+            if (++foreignElements > MAX_FOREIGN_ELEMENTS) foreign.other = true
+            else readForeignStyle(foreign, attributes.style)
+          }
+          if (!selfClosing) opaque++
+          return
         }
-        if (!selfClosing) opaque++
-        continue
-      }
-      if (++count > MAX_ELEMENTS) throw new SvgParseError('SVG の要素が多すぎます')
-      if (stack.length > MAX_DEPTH) throw new SvgParseError('SVG の入れ子が深すぎます')
-      if (stack.length === 1 && top.children.length > 0) throw new SvgParseError('最上位の要素が 2 つあります')
-      const element: SvgElement = { name: localName(rawName), attributes, children: [] }
-      if (element.name === 'foreignObject') element.foreign = emptyForeign()
-      current().children.push(element)
-      if (!selfClosing) {
-        stack.push(element)
-        if (OPAQUE.has(element.name)) {
-          opaque = 1
-          foreign = element.foreign ?? null
-          foreignElements = 0
+        if (++count > MAX_ELEMENTS) throw new SvgParseError('SVG の要素が多すぎます')
+        if (stack.length > MAX_DEPTH) throw new SvgParseError('SVG の入れ子が深すぎます')
+        if (stack.length === 1 && top.children.length > 0) throw new SvgParseError('最上位の要素が 2 つあります')
+        const element: SvgElement = { name: localName(rawName), attributes, children: [] }
+        if (element.name === 'foreignObject') element.foreign = emptyForeign()
+        current().children.push(element)
+        if (!selfClosing) {
+          stack.push(element)
+          if (OPAQUE.has(element.name)) {
+            opaque = 1
+            foreign = element.foreign ?? null
+            foreignElements = 0
+          }
         }
-      }
-    }
-  }
+      },
+    },
+    { fail: (message) => new SvgParseError(message) },
+  )
   if (stack.length > 1) throw new SvgParseError(`閉じていない要素があります: ${current().name}`)
   const root = top.children.find((child): child is SvgElement => typeof child !== 'string')
   if (!root || root.name !== 'svg') throw new SvgParseError('svg 要素がありません')

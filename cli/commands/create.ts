@@ -1,7 +1,7 @@
 import { IMAGE_MIME_TYPES, KDR_MAX_ASSET_BYTES } from '../../src/document/kdr.ts'
 import { pathFromContours, pathFromPoints } from '../../src/document/path.ts'
 import { PathDataError, parsePathData } from '../../src/document/pathData.ts'
-import type { NodeId, SceneNode } from '../../src/document/types.ts'
+import type { Asset, NodeId, PathNode, SceneNode } from '../../src/document/types.ts'
 import {
   createEllipse,
   createFrame,
@@ -76,20 +76,11 @@ async function buildNode(ctx: Context, step: Step, type: NodeType): Promise<Scen
         return createImage(box, asset)
       }
       if (file === undefined) throw new UsageError('add image: --src で画像ファイルを指定してください')
-      const bytes = await ctx.readFile(file)
-      const info = readImageInfo(bytes)
-      if (!info || !IMAGE_MIME_TYPES.includes(info.mime)) {
-        throw new UsageError(`${file}: PNG・JPEG・WebP・GIF の画像ではありません`)
-      }
-      // kdr の読み込みと同じ上限（ファイルの大きさと画素数）
-      if (bytes.byteLength > KDR_MAX_ASSET_BYTES) {
-        throw new UsageError(`${file}: 画像が大きすぎます（${KDR_MAX_ASSET_BYTES / 1024 / 1024}MB まで）`)
-      }
-      if (isImageTooLarge(info)) throw new UsageError(`${file}: ${IMAGE_TOO_LARGE_MESSAGE}`)
+      const { asset: read, info } = await readImageFile(ctx.readFile, file)
       // 同じ画像がすでにあれば、新しいアセットを作らずにそれを使う
       let assetId = ''
       ctx.session.applyDocument((doc) => {
-        const added = addOrReuseAsset(doc, { mime: info.mime, bytes: new Uint8Array(bytes) }, createId)
+        const added = addOrReuseAsset(doc, read, createId)
         assetId = added.assetId
         return added.document
       })
@@ -102,20 +93,38 @@ async function buildNode(ctx: Context, step: Step, type: NodeType): Promise<Scen
   }
 }
 
+/** 画像ファイルを読み、kdr に入れられる画像か（種類・ファイルの大きさ・画素数。kdr の読み込みと同じ上限）を確かめる */
+export async function readImageFile(
+  readFile: Context['readFile'],
+  file: string,
+): Promise<{ asset: Asset; info: { width: number; height: number } }> {
+  const bytes = await readFile(file)
+  const info = readImageInfo(bytes)
+  if (!info || !IMAGE_MIME_TYPES.includes(info.mime)) {
+    throw new UsageError(`${file}: PNG・JPEG・WebP・GIF の画像ではありません`)
+  }
+  if (bytes.byteLength > KDR_MAX_ASSET_BYTES) {
+    throw new UsageError(`${file}: 画像が大きすぎます（${KDR_MAX_ASSET_BYTES / 1024 / 1024}MB まで）`)
+  }
+  if (isImageTooLarge(info)) throw new UsageError(`${file}: ${IMAGE_TOO_LARGE_MESSAGE}`)
+  return { asset: { mime: info.mime, bytes: new Uint8Array(bytes) }, info }
+}
+
 /**
  * SVG の path の d から作るパス（曲線を含められる）。座標は親の座標系。Z か --closed で閉じた形。
- * M で始まるまとまりが複数あれば、2 つ目以降は同じパスの輪郭（穴など。塗る範囲は fillRule で決まる）になる
+ * M で始まるまとまりが複数あれば、2 つ目以降は同じパスの輪郭（穴など。塗る範囲は fillRule で決まる）になる。
+ * label はエラーの頭に付ける、指定した場所の呼び名
  */
-function pathFromData(d: string, close: boolean): SceneNode {
+export function pathFromData(d: string, close: boolean, label = 'add path: --d'): PathNode {
   let subpaths
   try {
     subpaths = parsePathData(d)
   } catch (error) {
-    if (error instanceof PathDataError) throw new UsageError(`add path: --d: ${error.message}`)
+    if (error instanceof PathDataError) throw new UsageError(`${label}: ${error.message}`)
     throw error
   }
   if (subpaths.length === 0 || subpaths.some((subpath) => subpath.vertices.length < 2)) {
-    throw new UsageError('add path: 頂点は輪郭ごとに 2 つ以上です')
+    throw new UsageError(`${label}: 頂点は輪郭ごとに 2 つ以上です`)
   }
   const shape = pathFromContours(subpaths.map((subpath) => ({ vertices: subpath.vertices, closed: subpath.closed || close })))
   return { ...createPath(shape, shape.closed), contours: shape.contours }
@@ -141,6 +150,11 @@ async function runAdd(ctx: Context, step: Step): Promise<void> {
   node = { ...node, ...(id === undefined ? {} : { id }), ...(name === undefined ? {} : { name }) }
   // 名前=値 は、作ったノードへ set と同じ決まりで当てる
   node = { ...node, ...buildPatch(node, step.assignments) } as SceneNode
+  // layout=row|column は大きさを中身に合わせるが、--width / --height で決めた向きは固定のまま
+  if (node.type === 'frame' && node.layout) {
+    const fixed = (axis: 'width' | 'height') => (node.sizing[axis] === 'hug' && option(step, axis) !== undefined ? 'fixed' : node.sizing[axis])
+    node = { ...node, sizing: { width: fixed('width'), height: fixed('height') } }
+  }
   if (node.type === 'text') node = { ...node, ...estimateTextSize(node) }
 
   const created = node

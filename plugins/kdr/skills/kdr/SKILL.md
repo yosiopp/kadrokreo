@@ -35,5 +35,6 @@ docker run --rm ghcr.io/yosiopp/kadrokreo kdr docs
 ## 進め方
 
 1. 調べる: `kdr -f a.kdr ls`（木）、`ls --json`、`get ノード`（設定の JSON）、`find 文字`
-2. 変える: `kdr -f a.kdr -w set ノード 名前=値…`、`add`、`instance` など。作るノードには `--id` を付け、その id で指すと確実
+2. 変える: `kdr -f a.kdr -w set ノード 名前=値…`、`add`、`instance` など。作るノードには `--id` を付け、その id で指すと確実。
+   画面をまるごと組み立てるときは、ノードの木を XML のマークアップに書いて `kdr build 設計.xml -o a.kdr`（今の kdr に足すなら `place`）。書き方は `kdr docs` の「マークアップ」
 3. 確かめる: `get` で値を、`png ノード --to 出力.png` を書き出して画像で見た目を確かめる（SVG なら `svg-out ノード --to -` を読む）
