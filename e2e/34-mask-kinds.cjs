@@ -5,7 +5,7 @@ const zlib = require('zlib')
 const { execFileSync } = require('child_process')
 
 // テキスト・画像・フレームのマスクを、viewer の描画（PNG）と SVG の書き出しが同じ見た目で書くことを、画素で見比べて確かめる
-const { OUT, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, VIEWER, check, finish, crashed, watchErrors, blankPage } = require('./harness.cjs')
 
 /** 幅 w・高さ h の RGBA の PNG。pixel(x, y) が [r, g, b, a] を返す */
 function png(w, h, pixel) {
@@ -89,7 +89,9 @@ execFileSync('node', [path.join(__dirname, '..', 'cli', 'kadrokreo.ts'),
 
   // PNG と、ブラウザが描いた SVG を同じ大きさで比べる。points はページの座標（PNG の拡大率を掛ける）
   const points = { imageInside: [260, 50], imageTransparent: [290, 50], imageCorner: [203, 23], alphaShown: [230, 140], alphaHidden: [290, 140], lumWhite: [60, 170], lumGray: [140, 170] }
-  const result = await viewer.evaluate(async ({ png, svg, points }) => {
+  // SVG を <img> に入れて描かせるのは、何も読み込んでいないページで（アプリのページは CSP が blob: の画像を止める）
+  const blank = await blankPage(context, errors)
+  const result = await blank.evaluate(async ({ png, svg, points }) => {
     const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], { type: 'image/png' }))
     const read = (draw) => {
       const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d')

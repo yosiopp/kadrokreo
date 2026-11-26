@@ -4,7 +4,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, servesSource } = require('./harness.cjs')
 const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
 
 ;(async () => {
@@ -128,47 +128,52 @@ const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
   check('kdr を開くボタンでも SVG を選べる', accepts.some((a) => a.includes('.kdr') && a.includes('.svg')), accepts.join(' | '))
 
   // ── 書き出した SVG を取り込み直しても、テキストが上下にずれない（基線と上端をブラウザで測った書体の高さで行き来する） ──
-  const drift = await page.evaluate(async () => {
-    const { svgMarkup } = await import('/src/canvas/exportSvg.ts')
-    const { measureTextNode } = await import('/src/canvas/measure.ts')
-    const { getAbsoluteBounds } = await import('/src/document/geometry.ts')
-    const { convertSvgText } = await import('/src/editor/importSvg.ts')
-    const { createFrame, createText } = await import('/src/editor/nodes.ts')
-    const { convertSvg } = await import('/src/editor/svg/convert.ts')
-    const { parseSvgDom } = await import('/src/editor/svg/xml.ts')
-    const cases = [
-      ['One', 'Hello', { fontSize: 16 }],
-      ['Two', 'A\nBB\nCCC', { fontSize: 20, lineHeight: 1.5 }],
-      ['Three', 'Left\nRight', { fontSize: 48, lineHeight: 1, textAlign: 'right', fontWeight: 700 }],
-      ['Four', 'x\ny', { fontSize: 11, lineHeight: 2.25, textAlign: 'center', fontFamily: 'serif' }],
-      ['Five', '日本語\nかな', { fontSize: 30, lineHeight: 1.3 }],
-    ]
-    const frame = { ...createFrame({ x: 0, y: 0, width: 400, height: 600 }), id: 'F', name: 'F', children: [] }
-    const nodes = { F: frame }
-    cases.forEach(([name, text, patch], i) => {
-      const node = { ...createText({ x: 10 + i * 3, y: 20 + i * 110, width: 0, height: 0 }, text), ...patch, id: name, name, parentId: 'F' }
-      nodes[name] = { ...node, ...measureTextNode(node) }
-      frame.children.push(name)
-    })
-    const scene = { nodes, rootIds: ['F'] }
-    const svg = svgMarkup(scene, {}, ['F'])
-    const measure = (fragment) => {
-      const back = { nodes: fragment.nodes, rootIds: fragment.rootIds }
-      return cases.map(([name]) => {
-        const node = Object.values(back.nodes).find((n) => n.type === 'text' && n.name === name)
-        return { name, dy: getAbsoluteBounds(back, node.id).y - getAbsoluteBounds(scene, name).y, lineHeight: node.lineHeight, expected: nodes[name].lineHeight }
+  // ソースの関数を page から直接呼ぶので、開発サーバーが相手のときだけ確かめる（配布するイメージはソースを配信しない）
+  if (await servesSource(page)) {
+    const drift = await page.evaluate(async () => {
+      const { svgMarkup } = await import('/src/canvas/exportSvg.ts')
+      const { measureTextNode } = await import('/src/canvas/measure.ts')
+      const { getAbsoluteBounds } = await import('/src/document/geometry.ts')
+      const { convertSvgText } = await import('/src/editor/importSvg.ts')
+      const { createFrame, createText } = await import('/src/editor/nodes.ts')
+      const { convertSvg } = await import('/src/editor/svg/convert.ts')
+      const { parseSvgDom } = await import('/src/editor/svg/xml.ts')
+      const cases = [
+        ['One', 'Hello', { fontSize: 16 }],
+        ['Two', 'A\nBB\nCCC', { fontSize: 20, lineHeight: 1.5 }],
+        ['Three', 'Left\nRight', { fontSize: 48, lineHeight: 1, textAlign: 'right', fontWeight: 700 }],
+        ['Four', 'x\ny', { fontSize: 11, lineHeight: 2.25, textAlign: 'center', fontFamily: 'serif' }],
+        ['Five', '日本語\nかな', { fontSize: 30, lineHeight: 1.3 }],
+      ]
+      const frame = { ...createFrame({ x: 0, y: 0, width: 400, height: 600 }), id: 'F', name: 'F', children: [] }
+      const nodes = { F: frame }
+      cases.forEach(([name, text, patch], i) => {
+        const node = { ...createText({ x: 10 + i * 3, y: 20 + i * 110, width: 0, height: 0 }, text), ...patch, id: name, name, parentId: 'F' }
+        nodes[name] = { ...node, ...measureTextNode(node) }
+        frame.children.push(name)
       })
-    }
-    return {
-      after: measure(convertSvgText(svg, 'export').fragment),
-      // 直す前の取り込み（書体の高さを見積もる）
-      before: measure(convertSvg(parseSvgDom(svg), { name: 'export', measureText: measureTextNode }).fragment),
-    }
-  })
-  const show = (rows) => rows.map((r) => `${r.name} ${r.dy.toFixed(2)}`).join(', ')
-  check('書き出した SVG を取り込み直すと、テキストの上下の位置が 0.5px 以内で揃う（複数行・行の高さ・行揃え・大きさ・書体）',
-    drift.after.every((r) => Math.abs(r.dy) <= 0.5), `直したもの: ${show(drift.after)} / 見積もり: ${show(drift.before)}`)
-  check('複数行のテキストは行の高さも読み戻す', drift.after.filter((r) => r.name !== 'One').every((r) => Math.abs(r.lineHeight - r.expected) < 0.001), JSON.stringify(drift.after.map((r) => r.lineHeight)))
+      const scene = { nodes, rootIds: ['F'] }
+      const svg = svgMarkup(scene, {}, ['F'])
+      const measure = (fragment) => {
+        const back = { nodes: fragment.nodes, rootIds: fragment.rootIds }
+        return cases.map(([name]) => {
+          const node = Object.values(back.nodes).find((n) => n.type === 'text' && n.name === name)
+          return { name, dy: getAbsoluteBounds(back, node.id).y - getAbsoluteBounds(scene, name).y, lineHeight: node.lineHeight, expected: nodes[name].lineHeight }
+        })
+      }
+      return {
+        after: measure(convertSvgText(svg, 'export').fragment),
+        // 直す前の取り込み（書体の高さを見積もる）
+        before: measure(convertSvg(parseSvgDom(svg), { name: 'export', measureText: measureTextNode }).fragment),
+      }
+    })
+    const show = (rows) => rows.map((r) => `${r.name} ${r.dy.toFixed(2)}`).join(', ')
+    check('書き出した SVG を取り込み直すと、テキストの上下の位置が 0.5px 以内で揃う（複数行・行の高さ・行揃え・大きさ・書体）',
+      drift.after.every((r) => Math.abs(r.dy) <= 0.5), `直したもの: ${show(drift.after)} / 見積もり: ${show(drift.before)}`)
+    check('複数行のテキストは行の高さも読み戻す', drift.after.filter((r) => r.name !== 'One').every((r) => Math.abs(r.lineHeight - r.expected) < 0.001), JSON.stringify(drift.after.map((r) => r.lineHeight)))
+  } else {
+    console.log('skip 書き出した SVG の取り込み直し（ソースの関数を呼ぶ確認。開発サーバーが相手のときだけ）')
+  }
 
   // ── viewer は SVG を受け付けない（kdr として開こうとしてエラー） ──
   const viewer = await context.newPage()
@@ -180,7 +185,10 @@ const SAMPLE = path.join(__dirname, 'fixtures', 'sample.svg')
   await viewer.waitForSelector('.app-message')
   check('viewer は SVG を開かない', (await viewer.evaluate(() => window.svgPwned)) === undefined)
 
-  check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
+  // CSP を付けた配信（配布するイメージ）では、DOMParser が SVG の on* 属性を読んだ時点で「インラインのイベントハンドラを止めた」とコンソールに出る。
+  // 属性を読んだ時点の検査で、ハンドラが動こうとしたわけではない（動いていないことは上の svgPwned で確かめている）ので、これは数えない
+  const unexpected = errors.filter((message) => !message.includes('Executing inline event handler violates the following Content Security Policy'))
+  check('コンソールエラーなし（CSP が止めたと知らせる on* 属性の分は除く）', unexpected.length === 0, unexpected.join(' | '))
   await browser.close()
   finish()
 })().catch(crashed)

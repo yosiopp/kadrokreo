@@ -4,7 +4,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, rowFinder } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, rowFinder, blankPage } = require('./harness.cjs')
 
 const SOURCE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -72,7 +72,7 @@ async function canvasInk(page) {
   return inkOf(data, width, height, ratio)
 }
 
-/** SVG をブラウザで描いた絵の文字の範囲（2 倍で描いて CSS ピクセルに直す） */
+/** SVG をブラウザで描いた絵の文字の範囲（2 倍で描いて CSS ピクセルに直す）。page は何も読み込んでいないページ（アプリのページは CSP が blob: の画像を止める） */
 async function svgInk(page, text) {
   const { data, width, height } = await page.evaluate(async (svg) => {
     const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
@@ -123,8 +123,10 @@ async function svgInk(page, text) {
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   const drawn = await canvasInk(page)
-  const fromSvg = await svgInk(page, exported)
-  const original = await svgInk(page, SOURCE)
+  const blank = await blankPage(context, errors)
+  const fromSvg = await svgInk(blank, exported)
+  const original = await svgInk(blank, SOURCE)
+  await blank.close()
   await page.locator('.canvas-view').screenshot({ path: path.join(OUT, '40-text-path.png') })
   check('書き出した SVG は textPath で書く', exported.includes('<textPath href="#kdr-text-path-') && exported.includes('startOffset="50%"'))
   check('キャンバスの文字は、書き出した SVG をブラウザで描いた文字と同じ範囲に並ぶ', drawn.count > 300 && sameInk(drawn, fromSvg),

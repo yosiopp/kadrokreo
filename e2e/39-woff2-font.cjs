@@ -9,7 +9,7 @@ const { testFontBytes, toWoff2 } = require('../src/document/testFont.ts')
 // WOFF2 の書体ファイル: editor で取り込み（書体名・太さはファイルから読む）、アウトライン化し、kdr・viewer・PNG・SVG でも同じ書体で描かれる。
 // viewer では WOFF2 を戻す処理を遅れて読み込むので、テキストを入れたブーリアン演算の結果が、読み込んだあとに文字の形で描かれることも見る。
 // テスト用の書体は、どの字も送り幅 0.6em・高さ 0.7em の黒い四角（src/document/testFont.ts）。glyf / loca / hmtx を変換した WOFF2 にする
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, blankPage } = require('./harness.cjs')
 
 const fontPath = path.join(OUT, 'kdr-test.woff2')
 fs.writeFileSync(fontPath, toWoff2(testFontBytes({ family: 'Kdr Woff2', weight: 300 }), (data) => zlib.brotliCompressSync(data)))
@@ -110,12 +110,12 @@ function inkOf(page, base64, mime) {
   await viewer.waitForSelector('.canvas-view canvas')
   await viewer.waitForTimeout(500)
   const [pngDownload] = await Promise.all([viewer.waitForEvent('download'), viewer.locator('button:text-is("ページを PNG に")').click()])
-  const png = await inkOf(viewer, (await fs.promises.readFile(await pngDownload.path())).toString('base64'), 'image/png')
+  // 画像を <img> に入れて描かせるのは、何も読み込んでいないページで（アプリのページは CSP が blob: の画像を止める）
+  const blank = await blankPage(context, errors)
+  const png = await inkOf(blank, (await fs.promises.readFile(await pngDownload.path())).toString('base64'), 'image/png')
   check('viewer の PNG の書き出しも WOFF2 の書体で描く', png.width === 96 && png.ink > 0.4, JSON.stringify(png))
   const [svgDownload] = await Promise.all([viewer.waitForEvent('download'), viewer.locator('button:text-is("SVG に")').first().click()])
   const svg = await fs.promises.readFile(await svgDownload.path(), 'utf8')
-  const blank = await context.newPage()
-  watchErrors(blank, errors, 'blank: ')
   const svgInk = await inkOf(blank, Buffer.from(svg).toString('base64'), 'image/svg+xml')
   check('SVG に WOFF2 のまま @font-face が入り、書体のないページでも WOFF2 の書体で表示される',
     svg.includes(`src: url("data:font/woff2;base64,${fs.readFileSync(fontPath).toString('base64')}") format("woff2");`) && svgInk.ink > 0.4,
@@ -128,7 +128,7 @@ function inkOf(page, base64, mime) {
   await booleanViewer.locator('input[type=file]').setInputFiles(booleanPath)
   await booleanViewer.waitForSelector('.canvas-view canvas')
   const [booleanPng] = await Promise.all([booleanViewer.waitForEvent('download'), booleanViewer.locator('button:text-is("ページを PNG に")').click()])
-  const holes = await inkOf(booleanViewer, (await fs.promises.readFile(await booleanPng.path())).toString('base64'), 'image/png')
+  const holes = await inkOf(blank, (await fs.promises.readFile(await booleanPng.path())).toString('base64'), 'image/png')
   // 穴なら 4 × 24 × 28 の分だけ黒が減る（12,000 のうち 2,688）
   check('viewer で、WOFF2 の書体のテキストを差し引いたブーリアン演算が文字の形の穴になる', holes.width === 200 && holes.ink > 0.7 && holes.ink < 0.85, JSON.stringify(holes))
   await booleanViewer.screenshot({ path: path.join(OUT, '39-woff2-boolean-viewer.png') })

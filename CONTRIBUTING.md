@@ -106,7 +106,8 @@ GitHub Actions（`.github/`）:
 
 - `workflows/ci.yml`（main への push と PR）: `npm ci` → `npm test` → `npm run lint` → `npm run check:version` → `npm run build` → `npm run check:viewer` → `npm run e2e`。
   ランナーの Google Chrome を使い、日本語の描画のために `fonts-noto-cjk` を入れる。失敗したら `e2e/out/` を artifact `e2e-out` に上げる。
-- `workflows/docker.yml`: イメージを作って viewer・editor・`kdr` コマンドが動くかを確かめ（`verify`）、push のときだけ GHCR に上げる（`publish`。main → `edge`、`v*` タグ → semver と `latest`）。
+- `workflows/docker.yml`: イメージを作って viewer・editor・`kdr` コマンドが動くかを確かめ、起動したイメージを相手に e2e を流す（`verify`。`ci.yml` の e2e は開発サーバーが相手なので、
+  nginx の配信の設定と CSP を通した確認はここだけ。失敗したら `e2e/out/` を artifact `e2e-out-image` に上げる）。push のときだけ GHCR に上げる（`publish`。main → `edge`、`v*` タグ → semver と `latest`）。
   `v*` タグのときは、イメージを上げた後に GitHub Releases も作る（`release`。本文は前のタグからのコミットの一覧と、イメージの pull・起動コマンド）。
 - `dependabot.yml`: npm と GitHub Actions の更新を週 1 回。
 - ワークフローの外部の action は、タグではなくコミットの SHA で指す（`uses: actions/checkout@<sha> # vX.Y.Z`）。action を足すときも同じ形にする。SHA とコメントの版は Dependabot が上げる。

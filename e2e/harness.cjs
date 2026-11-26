@@ -34,6 +34,28 @@ function watchErrors(page, errors, prefix = '') {
   page.on('console', (m) => m.type() === 'error' && errors.push(prefix + m.text()))
 }
 
+/**
+ * 何も読み込んでいないページ。書き出した SVG や画像を <img> に入れてブラウザに描かせるときは、アプリのページでなくここで行う。
+ * 配布するイメージは CSP で blob: や data: の画像を止めているので、アプリのページの <img> では読めない
+ * （Blob を createImageBitmap に渡すのは止められないので、PNG の画素を読むだけならアプリのページでもよい）
+ */
+async function blankPage(context, errors) {
+  const page = await context.newPage()
+  watchErrors(page, errors, 'blank: ')
+  return page
+}
+
+/**
+ * 相手が Vite の開発サーバーか（ソースのモジュールを /src/… から読めるか）。配布するイメージ（nginx）は index.html を返すので false。
+ * ソースの関数を page から直接呼ぶ確認は、開発サーバーのときだけ行う
+ */
+function servesSource(page) {
+  return page.evaluate(async () => {
+    const response = await fetch('/src/main.tsx')
+    return response.ok && !(response.headers.get('content-type') ?? '').includes('text/html')
+  })
+}
+
 /** editor が自動保存した（IndexedDB の）ドキュメント */
 function savedDocument(page) {
   return page.evaluate(() => new Promise((resolve, reject) => {
@@ -86,4 +108,4 @@ function rowFinder(page, { originals = false, first = false } = {}) {
   }
 }
 
-module.exports = { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder, rowFinder }
+module.exports = { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, blankPage, servesSource, savedDocument, pointer, fieldFinder, rowFinder }

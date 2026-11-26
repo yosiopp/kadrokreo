@@ -2,7 +2,7 @@ const { chromium } = require('playwright-core')
 const path = require('path')
 const fs = require('fs')
 
-const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument, pointer, fieldFinder, blankPage } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -181,7 +181,9 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
   const selectionSvgPath = path.join(OUT, 'export-selection.svg')
   await selectionSvg.saveAs(selectionSvgPath)
   const svgText = fs.readFileSync(selectionSvgPath, 'utf8')
-  const svgPixels = await page.evaluate(async (text) => {
+  // <img> に入れて描かせるのは、何も読み込んでいないページで（アプリのページは CSP が blob: の画像を止める）
+  const blank = await blankPage(context, errors)
+  const svgPixels = await blank.evaluate(async (text) => {
     const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }))
     const img = new Image(); img.src = url; await img.decode()
     const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
@@ -190,6 +192,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
     const at = (x, y) => [...ctx.getImageData(x, y, 1, 1).data]
     return { width: canvas.width, height: canvas.height, top: at(100, 2), bottom: at(100, 97) }
   }, svgText)
+  await blank.close()
   check('選択したものを SVG に書き出せる（ブラウザで開くと PNG と同じ向きのグラデーション）',
     selectionSvg.suggestedFilename() === 'Rectangle 1.svg' && svgText.includes('<linearGradient') &&
       svgPixels.width === 200 && svgPixels.height === 100 && reddish(svgPixels.top) && bluish(svgPixels.bottom),

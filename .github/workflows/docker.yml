@@ -1,5 +1,5 @@
 # Docker イメージのビルド確認と、GHCR への公開。
-# - verify: すべての push（main・v* タグ）と PR で、イメージを作り、viewer・--editor・kdr コマンドが動くか確かめる
+# - verify: すべての push（main・v* タグ）と PR で、イメージを作り、viewer・--editor・kdr コマンドが動くか確かめ、起動したイメージを相手に e2e を流す
 # - publish: main への push と v* タグの push のときだけ、verify が通ってから ghcr.io/yosiopp/kadrokreo（フォークでは ghcr.io/<フォークの持ち主>/kadrokreo） に push する
 # - release: v* タグの push のときだけ、publish が終わってから GitHub Releases を作る（本文は scripts/release-notes.sh）
 name: Docker
@@ -72,6 +72,37 @@ jobs:
           # PNG の先頭 8 バイト（\x89PNG\r\n\x1a\n）
           test "$(head -c 8 demo.png | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a
           docker image inspect kadrokreo:ci --format 'イメージの大きさ: {{.Size}}'
+
+      # ここから下は、起動したままの 2 つのコンテナを相手にした e2e。ci.yml の e2e は Vite の開発サーバーが相手なので、
+      # nginx の配信の設定と CSP、本番のビルドだけで起きる退行はここでしか拾えない（CSP 違反はコンソールエラーになり、e2e が落ちる）。
+      # Node・Chrome・書体の用意は ci.yml と同じ
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Chrome と日本語の書体
+        run: |
+          google-chrome --version
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      - run: npm ci
+
+      - name: イメージの viewer と editor を相手に e2e を流す
+        env:
+          VIEWER_URL: http://localhost:8091
+          EDITOR_URL: http://localhost:8092
+        run: npm run e2e
+
+      - name: e2e の出力を残す（失敗したとき）
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-out-image
+          path: e2e/out/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: 後片付け
         if: always()

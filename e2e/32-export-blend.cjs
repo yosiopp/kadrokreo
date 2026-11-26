@@ -4,7 +4,7 @@ const fs = require('fs')
 const { execFileSync } = require('child_process')
 
 // 影ごとの描画モードと半透明の通過のフレームを、SVG の書き出しが描画（PNG）と同じ見た目で書くことを、画素で見比べて確かめる
-const { OUT, VIEWER, check, finish, crashed, watchErrors } = require('./harness.cjs')
+const { OUT, VIEWER, check, finish, crashed, watchErrors, blankPage } = require('./harness.cjs')
 
 // 青い背景の上に、乗算の赤い落ち影の白い四角（Drop）、乗算の黄色い内側の影の灰色の四角（Inner）、
 // 半透明（50%）の通過のフレーム（Group。中に乗算の黄色 A と差の白 B が重ならずに並ぶ）、落ち影が 2 つの白い四角（Two。右に赤、左に緑）。
@@ -56,7 +56,9 @@ execFileSync('node', [path.join(__dirname, '..', 'cli', 'kadrokreo.ts'),
   // PNG と、ブラウザが描いた SVG を同じ大きさで比べる。points はページの座標（PNG の拡大率を掛ける）
   const points = { drop: [115, 95], inner: [150, 50], passMultiply: [285, 50], passDifference: [355, 50], first: [130, 150], second: [10, 150],
     clipMultiply: [290, 125], clipOutside: [340, 125], clipDeep: [230, 160], clipDeepOutside: [230, 190] }
-  const result = await viewer.evaluate(async ({ png, svg, points }) => {
+  // SVG を <img> に入れて描かせるのは、何も読み込んでいないページで（アプリのページは CSP が blob: の画像を止める）
+  const blank = await blankPage(context, errors)
+  const result = await blank.evaluate(async ({ png, svg, points }) => {
     const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], { type: 'image/png' }))
     const read = (draw) => {
       const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d')
