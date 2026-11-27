@@ -4,9 +4,11 @@ import { drawnNode } from '../document/booleanNode.ts'
 import { withoutHidden } from '../document/paint.ts'
 import { dataUri, escapeXml as escapeHtml, pathSvg } from '../document/svgShapes.ts'
 import { embeddedFontFaces, fontFaceRule, fontFileName, usedFontFaces } from '../document/fontFace.ts'
-import type { Asset, AssetId, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode, TextPath, VariableId } from '../document/types.ts'
+import type { Asset, AssetId, CodeComponent, DesignDocument, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode, TextPath, VariableId } from '../document/types.ts'
 import { boundVariables } from '../document/variables.ts'
 import { variablesCss } from './tokens.ts'
+import { isInstance } from '../document/component.ts'
+import { type CodeArg, type CodeCall, codeCall } from '../document/codeComponent.ts'
 import { contoursData } from '../document/path.ts'
 import { isPathText, pathTextString, textPathVertices } from '../document/textPath.ts'
 import { formatColor } from './colors.ts'
@@ -19,6 +21,8 @@ import { camelClass, componentName, jsxStyle, parseDeclarations, tailwindClasses
 // Vue なら、HTML と同じ木を <template> に、CSS を <style scoped> に入れた単一ファイルコンポーネント（.vue）にする。
 // テキストが kdr に埋め込んだ書体（fonts）を使っていれば、CSS の先頭に @font-face を置く。url は画像と同じく、
 // コピー用は書体ファイルの名前（viewer の「書体ファイルを保存」で保存して置く前提。fontFileName）、保存する HTML ファイルは data URI で埋め込む。
+// React・Vue では、実装側の部品の対応（CodeComponent）を持つコンポーネントのインスタンスを、中身の代わりに部品の呼び出しにし、import を先頭に置く
+// （document を渡したときだけ。document/codeComponent.ts）。親の中での置き方は、置き方だけの CSS を持つ div で包んで表す。
 
 /**
  * html は形式が React などなら JSX のコード、Vue なら .vue ファイルの全体。css は、その形式で別に CSS が要らなければ空文字
@@ -58,9 +62,16 @@ export function nodeCode(scene: Scene, id: NodeId, options: Partial<CodeStyle> =
 export function nodeMarkup(
   scene: Scene,
   id: NodeId,
-  options: { style?: Partial<CodeStyle>; assets?: Record<AssetId, Asset>; images?: ImageSource; fonts?: readonly EmbeddedFont[] } = {},
+  options: {
+    style?: Partial<CodeStyle>
+    assets?: Record<AssetId, Asset>
+    images?: ImageSource
+    fonts?: readonly EmbeddedFont[]
+    /** インスタンスの元を探すドキュメント。渡すと、React・Vue で実装側の部品の対応を使う */
+    document?: DesignDocument
+  } = {},
 ): Markup {
-  const { style = {}, assets = {}, images = 'file', fonts = [] } = options
+  const { style = {}, assets = {}, images = 'file', fonts = [], document } = options
   const format = style.format ?? DEFAULT_CODE_STYLE.format
   const jsx = format !== 'html' && format !== 'vue'
   // 選んだノードを根にした木として扱う
@@ -76,6 +87,22 @@ export function nodeMarkup(
   const texts: TextNode[] = []
   /** 色をつないだ変数（style.variables があるとき、その定義を CSS の先頭に書く） */
   const variables = new Set<VariableId>()
+  /** 呼び出した部品の import（出てきた順）。同じ名前の別の部品は、ローカルの名前を変えて読み込む */
+  const imports: CodeImport[] = []
+  /** 部品をコードの中で呼ぶ名前（import の別名を当てたもの）。必要なら import に足す */
+  function localName(code: CodeComponent): string {
+    const [exported, ...rest] = code.name.split('.')
+    const tail = rest.map((part) => `.${part}`).join('')
+    // import の場所がなければ、書いた名前のまま（読み込まない）
+    if (code.from === '') return code.name
+    const found = imports.find((entry) => entry.from === code.from && entry.exported === exported && entry.defaultExport === code.defaultExport)
+    if (found) return found.local + tail
+    let local = exported
+    for (let count = 2; imports.some((entry) => entry.local === local); count++) local = `${exported}${count}`
+    imports.push({ from: code.from, exported, local, defaultExport: code.defaultExport })
+    return local + tail
+  }
+  const calls = document !== undefined && format !== 'html'
 
   function className(node: SceneNode): string {
     const base = slug(node.name) || node.type
@@ -106,7 +133,73 @@ export function nodeMarkup(
     }
   }
 
+  /** 部品の呼び出し。親の中での置き方があれば、その CSS だけを持つ div で包む */
+  function visitCall(node: SceneNode, call: CodeCall, depth: number) {
+    const indent = '  '.repeat(depth)
+    const placement = parseDeclarations(nodeCss(tree, node.id, style, assets))
+      // 子を absolute で置く基準の position: relative は、部品の中身のためのものなので移さない
+      .filter(([property, value]) => PLACEMENT.has(property) && !(property === 'position' && value !== 'absolute'))
+    if (placement.length === 0) {
+      lines.push(...callLines(call, indent))
+      return
+    }
+    const name = className(node)
+    const css = placement.map(([property, value]) => `${property}: ${value};`).join('\n')
+    if (format !== 'react' && format !== 'tailwind') rules.push(`.${name} {\n${css.replace(/^/gm, '  ')}\n}`)
+    lines.push(`${indent}<div ${attribute(name, css)}>`, ...callLines(call, `${indent}  `), `${indent}</div>`)
+  }
+
+  /** 部品の呼び出しの行。使った部品を imports に足す */
+  function callLines(call: CodeCall, indent: string): string[] {
+    const tag = localName(call.code)
+    const attrs: string[] = []
+    const inner: string[] = []
+    for (const arg of call.args) {
+      if (arg.prop === 'children') inner.push(...childLines(arg, `${indent}  `))
+      else if (arg.value.kind === 'element' && !jsx) inner.push(`${indent}  <template #${arg.prop}><${localName(arg.value.code)} /></template>`)
+      else attrs.push(propAttribute(arg))
+    }
+    const open = `${indent}<${tag}${attrs.map((attr) => ` ${attr}`).join('')}`
+    if (inner.length === 0) return [`${open} />`]
+    return [`${open}>`, ...inner, `${indent}</${tag}>`]
+  }
+
+  /** props の 1 つ。JSX は文字列に " や { } などを含めば式（JSON の文字列）にし、Vue は文字参照にする。真偽値は true なら名前だけ */
+  function propAttribute(arg: CodeArg): string {
+    const { prop, value } = arg
+    switch (value.kind) {
+      case 'string':
+        if (!jsx) return `${prop}="${escapeHtml(value.text)}"`
+        return /["{}<>&\\\n\r]/.test(value.text) ? `${prop}={${JSON.stringify(value.text)}}` : `${prop}="${value.text}"`
+      case 'boolean':
+        if (value.value) return prop
+        return jsx ? `${prop}={false}` : `:${prop}="false"`
+      default:
+        // Vue の差し替えは名前付きスロットにするので、ここに来るのは JSX だけ
+        return `${prop}={<${localName(value.code)} />}`
+    }
+  }
+
+  /** children に写した値（文字は文字参照にし、改行は br。部品は要素） */
+  function childLines(arg: CodeArg, indent: string): string[] {
+    switch (arg.value.kind) {
+      case 'string':
+        return [`${indent}${escapeJsx(arg.value.text).replace(/\n/g, jsx ? '<br />' : '<br>')}`]
+      case 'element':
+        return [`${indent}<${localName(arg.value.code)} />`]
+      default:
+        return [`${indent}${jsx ? `{${arg.value.value}}` : String(arg.value.value)}`]
+    }
+  }
+
   function visit(source: SceneNode, depth: number) {
+    if (calls && isInstance(source)) {
+      const call = codeCall(document, tree, source)
+      if (call) {
+        visitCall(source, call, depth)
+        return
+      }
+    }
     // ブーリアン演算のノードは、結果の形のパス（svg）として書く
     const node = drawnNode(tree, source)
     if (style.variables) for (const variable of boundVariables(node)) variables.add(variable)
@@ -174,18 +267,58 @@ export function nodeMarkup(
       : faces.map((font) => fontFaceRule(font, assets[font.assetId].mime, fontFileName(font, assets[font.assetId].mime))).join('\n')
   const tokens = style.variables ? variablesCss(style.variables, variables, style.color) : ''
   const css = [fontCss, tokens, ...rules].filter((rule) => rule !== '').join('\n\n')
+  const importLines = importStatements(imports)
   if (format === 'vue') {
     // <style> を閉じられないようにする（中身は信頼できない入力の kdr から作る）
     const scoped = css.replace(/</g, '\\3c ')
-    return { html: ['<template>', ...lines, '</template>', '', '<style scoped>', scoped, '</style>'].join('\n'), css: '' }
+    const script = importLines.length === 0 ? [] : ['<script setup>', ...importLines, '</script>', '']
+    return { html: [...script, '<template>', ...lines, '</template>', '', '<style scoped>', scoped, '</style>'].join('\n'), css: '' }
   }
   if (!jsx) return { html: lines.join('\n'), css }
   // JSX は、レイヤー名を名前にしたコンポーネントにする
-  const component = componentName(slug(root.name))
-  const head = format === 'css-modules' ? [`import styles from './${component}.module.css'`, ''] : []
+  // 読み込んだ部品・styles と同じ名前にならないようにする（インスタンスを選ぶと、ふつうは部品と同じ名前になる）
+  const taken = new Set([...imports.map((entry) => entry.local), ...(format === 'css-modules' ? ['styles'] : [])])
+  const base = componentName(slug(root.name))
+  let component = base
+  for (let count = 2; taken.has(component); count++) component = `${base}${count === 2 ? 'View' : `View${count - 1}`}`
+  const head = [...importLines, ...(format === 'css-modules' ? [`import styles from './${component}.module.css'`] : [])]
+  if (head.length > 0) head.push('')
   const code = [...head, `export function ${component}() {`, '  return (', ...lines, '  )', '}'].join('\n')
   // React の style・Tailwind はクラスの CSS を持たないので、css は @font-face と変数の定義だけ（使わなければ空）
   return { html: code, css }
+}
+
+/** 部品の呼び出しで、包む div に移す親の中での置き方の CSS（伸ばす向きの大きさは部品の中までは届かない。手がかりとしての表示） */
+// 不透明度・描画モード・マスク（clip-path）もインスタンス自身の見た目なので、包む div に移す
+const PLACEMENT = new Set(['position', 'left', 'right', 'top', 'bottom', 'flex', 'align-self', 'transform', 'opacity', 'mix-blend-mode', 'clip-path'])
+
+/** 読み込む部品。local はコードの中で呼ぶ名前（exported と違えば別名で読み込む） */
+type CodeImport = { from: string; exported: string; local: string; defaultExport: boolean }
+
+/** 部品の import 文。同じ場所からの名前付きの export は 1 行にまとめる（その場所の最初の部品の位置に） */
+function importStatements(imports: readonly CodeImport[]): string[] {
+  const lines: string[] = []
+  const named = new Map<string, string[]>()
+  for (const entry of imports) {
+    if (entry.defaultExport) {
+      lines.push(`import ${entry.local} from ${quote(entry.from)}`)
+      continue
+    }
+    const spec = entry.local === entry.exported ? entry.exported : `${entry.exported} as ${entry.local}`
+    const names = named.get(entry.from)
+    if (names) names.push(spec)
+    else {
+      named.set(entry.from, [spec])
+      lines.push(`\0${entry.from}`)
+    }
+  }
+  return lines.map((line) => (line.startsWith('\0') ? `import { ${named.get(line.slice(1))!.join(', ')} } from ${quote(line.slice(1))}` : line))
+}
+
+/** JS の文字列リテラル（単一引用符） */
+function quote(text: string): string {
+  // < は \x3c にする（Vue の <script setup> を </script> で閉じられないように）
+  return `'${text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/</g, '\\x3c')}'`
 }
 
 /**

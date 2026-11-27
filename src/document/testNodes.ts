@@ -80,6 +80,7 @@ export const frame = (patch: Partial<FrameNode> = {}): FrameNode => ({
   layout: null,
   component: null,
   setDescription: '',
+  setCode: null,
   booleanOperation: null,
   booleanIncludeStrokes: false,
   layoutGrids: [],

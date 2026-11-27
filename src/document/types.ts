@@ -406,6 +406,11 @@ export type ComponentLink =
       description: string
       /** コンポーネントのプロパティ。名前は main の中で一意 */
       properties: ComponentProperty[]
+      /**
+       * 実装側の部品（viewer のコードで、インスタンスをこの部品の呼び出しとして出す）。null なら対応なし（中身を展開する）。
+       * バリアント（まとまりの中の元）では使わず、まとまりのフレームの setCode を使う
+       */
+      code: CodeComponent | null
     }
   | {
       id: string
@@ -447,6 +452,31 @@ export type ComponentProperty = {
    * ほかのコンポーネントも選べる。instance 以外では意味はない。ないコンポーネントは無視する
    */
   preferred: string[]
+}
+
+/**
+ * コンポーネントに対応する、実装側の部品（React・Vue のコンポーネント）。viewer のコード（document/codeComponent.ts）が、
+ * インスタンスを `<name props…>` の呼び出しと import として出す
+ */
+export type CodeComponent = {
+  /** 部品の名前（JSX・Vue のタグ名）。英大文字で始まる識別子か、. でつないだもの（UI.Button。import するのは先頭の UI） */
+  name: string
+  /** import の場所（モジュールの指定子）。空なら import を書かない */
+  from: string
+  /** true なら既定の export（import Button from …）、false なら名前付き（import { Button } from …） */
+  defaultExport: boolean
+  /** プロパティから props への読み替え。property は一意。ここにないプロパティは、名前から props の名前を作る */
+  props: CodeProp[]
+}
+
+/** コンポーネントのプロパティ（バリアントのプロパティも）から、部品の props への読み替え */
+export type CodeProp = {
+  /** コンポーネントのプロパティの名前。バリアントのプロパティなら `プロパティ=値` のプロパティの側 */
+  property: string
+  /** 写す先の props の名前。'children' なら中身（Vue は既定のスロット）にする。空なら写さない */
+  prop: string
+  /** バリアントのプロパティの値の読み替え（kdr の値 → props の値）。ここにない値はそのまま。ほかの種類では意味はない */
+  values: Record<string, string>
 }
 
 /**
@@ -502,6 +532,11 @@ export type FrameNode = BaseNode &
      * （document/variants.ts の isVariantSet）でなければ意味はない。バリアントそれぞれの説明は component.description
      */
     setDescription: string
+    /**
+     * バリアントのまとまりに対応する実装側の部品。null なら対応なし。このフレームがバリアントのまとまりでなければ意味はない。
+     * まとまりの中のバリアントのインスタンスは、これだけを使う（バリアントの component.code は使わない）
+     */
+    setCode: CodeComponent | null
     /**
      * ブーリアン演算のノード（既存のデザインツールの boolean operation）にするときの演算。null なら普通のフレーム。
      * 演算のノードは子を描かず、表示している子（矩形・楕円・パス・画像の枠・フレームの枠・入れ子の演算のノード。テキストは入らない）の形に

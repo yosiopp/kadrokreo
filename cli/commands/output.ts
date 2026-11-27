@@ -45,6 +45,7 @@ export const html: Command = {
       style,
       assets: session.document.assets,
       images: standalone ? 'embed' : 'file',
+      document: session.document,
     })
     if (standalone) print(standaloneHtml(session.page.nodes[id].name, markup).trimEnd())
     else if (format === 'html') print(`<style>\n${markup.css}\n</style>\n${markup.html}`)

@@ -93,6 +93,7 @@ kdr -f demo2.kdr -w variant-prop-order big サイズ 0 + variant-value-order big
 | `override-push ノード…` / `override-reset ノード…` | インスタンスの上書きを元に反映する・捨てて元に戻す |
 | `variant-add 元 [プロパティ=値…]` / `variant インスタンス… プロパティ=値…` | バリアントを増やす・インスタンスのバリアントを選ぶ（プロパティ名は日本語でもよい） |
 | `variant-prop-add まとまり 名前 [値]` / `variant-prop-rename まとまり 名前 新しい名前` / `variant-prop-rm まとまり 名前` / `variant-value-rename まとまり プロパティ 値 新しい値` / `variant-prop-order まとまり 名前 位置` / `variant-value-order まとまり プロパティ 値 位置` | バリアントのプロパティを足す・名前を変える・消す、値の名前を変える、プロパティ・値を並べ替える（位置は 0 が先頭。値の順はまとまりの中のバリアントの並び順なので、値を並べ替えるとバリアントの並びが変わる。すべてのバリアントの名前を書き換える。まとまりの代わりに中のバリアントを指してもよい） |
+| `code 元\|まとまり 部品名 [--from import の場所] [--default]` / `code-prop 元\|まとまり プロパティ props名 [値=props値 …]` | 実装側の部品の対応（viewer と `html` の React・Vue のコードで、インスタンスを部品の呼び出しにする）。props名を `children` にすると中身、`""` なら写さない。`code-prop … --reset` で名前から作る扱いに戻し、`code … ""` で外す |
 | `describe 元\|まとまり 説明文` / `prop-add 元 text\|boolean\|instance ノード… [--name 名前]` / `prop インスタンス… 名前=値…` | コンポーネント（またはバリアントのまとまり）の説明文、プロパティを作って元の中のノードに結ぶ、インスタンスのプロパティの値を決める |
 | `prop-rename 元 名前 新しい名前` / `prop-order 元 名前 位置` / `prop-prefer 元 名前 [候補の元…]` / `prop-rm 元 名前` / `prop-align まとまり` | 元のプロパティの名前を変える・並べ替える（0 が先頭）・差し替えの候補を決める・消す（元がバリアントなら、まとまりのすべてのバリアントで揃える）、揃っていないバリアントのプロパティを一度に揃える |
 | `svg ファイル.svg [--parent フレーム] [--x N --y N]` | SVG を図形のノードに変換して置く（表せずに落としたものは標準エラーに出る） |
@@ -355,6 +356,7 @@ kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほか�
 | 画像 | `src` は、マークアップのファイルからの相対パス |
 | コンポーネント | `<instance of="…">` の元は、マークアップの中の `<component>` の `id`、なければ `name` で探す（`place` は今の kdr の元からも探す）。中身を変えるのは `<override node="レイヤー名" text="…" fill="…" visible="false"/>`。同じ名前がいくつもあれば `node="親/子"` か、元の側で付けた `id` で指す。入れ子のインスタンスの差し替えは `<override node="…" of="別の元"/>`。`<instance>` 自身に書けるのは名前・位置・回転・表示・不透明度、`width="fill"` / `height="fill"`、塗りと線で、ほかは元で決まる |
 | 説明文・プロパティ・バリアント | 説明文は `<component description="…">`。プロパティは元の中のノードに `prop="名前"`（`<text>` なら文言、`<instance>` なら差し替え）か `prop.visible="名前"`（表示）を書いて結ぶ。インスタンスでの値は `<override prop="名前" value="…"/>`。バリアントは `<component-set>` の直下に `<component variant="種類=大, 状態=標準">` を並べ、`<instance of="まとまり" variant="種類=大">` で選ぶ（下の例） |
+| 実装の部品 | `<component code="Button" code-from="@/ui" code-default="true">`（`<component-set>` にも）。props の読み替えはその中に `<code-prop property="大きさ" prop="size"><code-value of="大" to="lg"/></code-prop>` |
 | id | 省ける。省くと木の道筋（名前と、同じ名前の兄弟の中での順）から決まる。後で `set` などから指すノードには `id` を書いておく |
 
 コンポーネントの説明文・プロパティ・バリアントも、マークアップに書ける:

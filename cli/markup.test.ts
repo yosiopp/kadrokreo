@@ -812,3 +812,110 @@ describe('set / add の大きさと並べ方の略記', () => {
     expect(await bad.run(['new', '+', 'add', 'text', 'lineHeight=px', '-o', 'b.kdr'])).toBe(2)
   })
 })
+
+describe('実装側の部品の対応（code・code-prop・html）', () => {
+  const LINKED = VARIANTS.replace(
+    '<component name="Star" id="star" width="16" height="16" fill="#00ff00"/>',
+    '<component name="Star" id="star" width="16" height="16" fill="#00ff00" code="StarIcon" code-from="@/icons"/>',
+  ).replace(
+    '<component-set name="Button" id="buttons" description="主な操作のボタン" layout="row" gap="8">',
+    `<component-set name="Button" id="buttons" description="主な操作のボタン" layout="row" gap="8" code="Button" code-from="@/ui">
+        <code-prop property="種類" prop="variant"><code-value of="標準" to="primary"/><code-value of="控えめ" to="quiet"/></code-prop>
+        <code-prop property="大きさ" prop="size"/>
+        <code-prop property="文言" prop="children"/>
+        <code-prop property="アイコンを出す" prop="showIcon"/>
+        <code-prop property="アイコン" prop="icon"/>`,
+  )
+
+  it('マークアップで書いた対応が kdr に入り、markup で同じ形に書き出して戻る', async () => {
+    const h = harness({ 'a.xml': LINKED })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    const doc = await h.doc('a.kdr')
+    expect(byName<FrameNode>(doc, 'Button').setCode).toEqual({
+      name: 'Button',
+      from: '@/ui',
+      defaultExport: false,
+      props: [
+        { property: '種類', prop: 'variant', values: { 標準: 'primary', 控えめ: 'quiet' } },
+        { property: '大きさ', prop: 'size', values: {} },
+        { property: '文言', prop: 'children', values: {} },
+        { property: 'アイコンを出す', prop: 'showIcon', values: {} },
+        { property: 'アイコン', prop: 'icon', values: {} },
+      ],
+    })
+    expect(await h.run(['-f', 'a.kdr', 'markup'])).toBe(0)
+    expect(h.stderr).toBe('')
+    expect(h.stdout).toContain('<code-prop property="種類" prop="variant">\n          <code-value of="標準" to="primary"/>')
+    h.fs.set('out.xml', encode(h.stdout))
+    expect(await h.run(['build', 'out.xml', '-o', 'rebuilt.kdr'])).toBe(0)
+    expect(documentDifferences(doc, await h.doc('rebuilt.kdr'))).toEqual([])
+  })
+
+  it('html --format react / vue で、インスタンスを部品の呼び出しにする', async () => {
+    const h = harness({ 'a.xml': LINKED })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', 'html', 'Screen', '--format', 'react'])).toBe(0)
+    expect(h.stdout).toContain("import { Button } from '@/ui'\nimport { StarIcon } from '@/icons'")
+    expect(h.stdout).toContain('<Button variant="quiet" size="大" showIcon={false}>')
+    expect(h.stdout).toContain('やめる')
+    expect(h.stdout).toContain('<Button variant="primary" size="大" icon={<StarIcon />} showIcon>')
+    expect(h.stdout).not.toContain('class')
+    const vue = harness({ 'a.kdr': h.fs.get('a.kdr')! })
+    expect(await vue.run(['-f', 'a.kdr', 'html', 'b4', '--format', 'vue'])).toBe(0)
+    expect(vue.stdout).toContain(
+      ["<script setup>", "import { Button } from '@/ui'", "import { StarIcon } from '@/icons'", '</script>', '', '<template>', '  <Button variant="primary" size="大" showIcon>', '    <template #icon><StarIcon /></template>', '    OK', '  </Button>'].join('\n'),
+    )
+  })
+
+  it('code と code-prop で対応を書き、バリアントを指せばまとまりに書く。"" と --reset で外す', async () => {
+    const h = harness({ 'a.xml': VARIANTS })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(
+      await h.run([
+        '-f', 'a.kdr', '-o', 'b.kdr',
+        'code', 'large', 'Button', '--from', './Button.vue', '--default',
+        '+', 'code-prop', 'buttons', '種類', 'variant', '標準=primary',
+        '+', 'code-prop', 'buttons', '大きさ', '',
+        '+', 'code', 'icon', 'Icon',
+      ]),
+    ).toBe(0)
+    const doc = await h.doc('b.kdr')
+    expect(byName<FrameNode>(doc, 'Button').setCode).toEqual({
+      name: 'Button',
+      from: './Button.vue',
+      defaultExport: true,
+      props: [
+        { property: '種類', prop: 'variant', values: { 標準: 'primary' } },
+        { property: '大きさ', prop: '', values: {} },
+      ],
+    })
+    const icon = byName<FrameNode>(doc, 'Icon')
+    expect(icon.component?.role === 'main' && icon.component.code).toMatchObject({ name: 'Icon', from: '' })
+    expect(await h.run(['-f', 'b.kdr', '-o', 'c.kdr', 'code-prop', 'buttons', '大きさ', '--reset', '+', 'code', 'icon', ''])).toBe(0)
+    const reset = await h.doc('c.kdr')
+    expect(byName<FrameNode>(reset, 'Button').setCode?.props.map((prop) => prop.property)).toEqual(['種類'])
+    const resetIcon = byName<FrameNode>(reset, 'Icon')
+    expect(resetIcon.component?.role === 'main' && resetIcon.component.code).toBe(null)
+  })
+
+  it('書き間違いは行を付けて知らせる', async () => {
+    const h = harness({
+      'a.xml': '<kdr name="x"><page name="p">\n<component name="A" width="10" height="10" code="1A"/>\n</page></kdr>',
+      'b.xml': '<kdr name="x"><page name="p">\n<frame name="F" width="10" height="10">\n<code-prop property="a"/>\n</frame>\n</page></kdr>',
+      'c.xml': '<kdr name="x"><page name="p">\n<component name="A" width="10" height="10" code-from="x"/>\n</page></kdr>',
+    })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).not.toBe(0)
+    expect(h.stderr).toContain('a.xml:2: code="1A"')
+    expect(await h.run(['build', 'b.xml', '-o', 'b.kdr'])).not.toBe(0)
+    expect(h.stderr).toContain('b.xml:3: <code-prop> は <component> か <component-set> の中にだけ書けます')
+    expect(await h.run(['build', 'c.xml', '-o', 'c.kdr'])).not.toBe(0)
+    expect(h.stderr).toContain('c.xml:2: code-from・code-default・<code-prop> を書くときは')
+    expect(await h.run(['-f', 'a.kdr', 'code', 'x', 'B'])).not.toBe(0)
+    const v = harness({ 'a.xml': VARIANTS })
+    expect(await v.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await v.run(['-f', 'a.kdr', 'code', 'buttons', 'Button', '+', 'code-prop', 'buttons', '文言', 'v-html'])).not.toBe(0)
+    expect(v.stderr).toContain('v- で始まる名前')
+    expect(await v.run(['-f', 'a.kdr', 'code', 'buttons', 'Button', '--from', 'a\nb'])).not.toBe(0)
+    expect(v.stderr).toContain('--from に使えない文字')
+  })
+})

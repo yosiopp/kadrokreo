@@ -23,7 +23,8 @@ import { KdrError, MAX_DEPTH, kdrFile, parseKdr } from '../src/document/kdr.ts'
 import { pathFromPoints } from '../src/document/path.ts'
 import { polygonSize } from '../src/document/polygon.ts'
 import { sha256Hex } from '../src/document/sha256.ts'
-import type { Asset, AssetId, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, PathNode, SceneNode } from '../src/document/types.ts'
+import { MAX_CODE_LENGTH, isCodeFrom, isCodeName, isCodePropName } from '../src/document/codeComponent.ts'
+import type { Asset, AssetId, CodeComponent, CodeProp, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, PathNode, SceneNode } from '../src/document/types.ts'
 import { type VariantProps, formatVariantName, isVariantSet, parseVariantName, propValue, variantSetOf, variantsIn } from '../src/document/variants.ts'
 import { alignVariantProperties, setInstanceProperty } from '../src/editor/componentProperties.ts'
 import { canHoldInstance, listComponents, componentName, nestedInstanceOf, sameJson, swapNestedInstance, syncComponents } from '../src/editor/components.ts'
@@ -54,6 +55,8 @@ export type MarkupElement = {
   text: string
   /** 空白でない文字が最初に出てきた行。なければ null */
   textLine: number | null
+  /** <component> / <component-set> の中に書いた <code-prop>（実装側の部品の props の読み替え）。ノードの子とは分けて持つ */
+  codeProps?: MarkupElement[]
 }
 
 /** 読めるマークアップの大きさ（文字数）と要素の数 */
@@ -100,7 +103,13 @@ export function parseMarkup(source: string, file: string): MarkupElement {
           text: '',
           textLine: null,
         }
-        stack.at(-1)!.children.push(element)
+        const parent = stack.at(-1)!
+        if (name === 'code-prop') {
+          if (parent.name !== 'component' && parent.name !== 'component-set') {
+            throw fail(line, '<code-prop> は <component> か <component-set> の中にだけ書けます')
+          }
+          ;(parent.codeProps ??= []).push(element)
+        } else parent.children.push(element)
         if (!selfClosing) stack.push(element)
       },
       close(name, offset) {
@@ -272,11 +281,58 @@ function textContent(element: MarkupElement): string {
   return lines.join('\n')
 }
 
+/** 実装側の部品の属性（<component> と <component-set> に書く） */
+const CODE_ATTRIBUTES = ['code', 'code-from', 'code-default']
+
+/**
+ * <component> / <component-set> の実装側の部品。code（部品名）・code-from（import の場所）・code-default（既定の export）と、
+ * 中に書いた <code-prop property="…" prop="…"><code-value of="kdr の値" to="props の値"/></code-prop>。code がなければ null
+ */
+function codeOfElement(fail: Fail, element: MarkupElement): CodeComponent | null {
+  const attribute = (name: string) => element.attributes.find((candidate) => candidate.name === name)
+  const name = attribute('code')
+  if (!name) {
+    const stray = attribute('code-from') ?? attribute('code-default') ?? element.codeProps?.[0]
+    if (stray) throw fail(stray.line, 'code-from・code-default・<code-prop> を書くときは、code（部品名）も書きます')
+    return null
+  }
+  if (!isCodeName(name.value)) throw fail(name.line, `code="${name.value}": 部品名は英大文字で始まる識別子か、. でつないだもの（200 文字まで）です`)
+  const from = attribute('code-from')
+  if (from && !isCodeFrom(from.value)) throw fail(from.line, 'code-from: 使えない文字があるか、長すぎます（200 文字まで）')
+  const defaultAttribute = attribute('code-default')
+  if (defaultAttribute && defaultAttribute.value !== 'true' && defaultAttribute.value !== 'false') {
+    throw fail(defaultAttribute.line, `code-default="${defaultAttribute.value}": true か false を指定してください`)
+  }
+  const props: CodeProp[] = []
+  for (const prop of element.codeProps ?? []) {
+    checkAttributes(fail, prop, ['property', 'prop'])
+    if (prop.textLine !== null) throw fail(prop.textLine, '<code-prop> の中に文字は書けません')
+    const property = prop.attributes.find((candidate) => candidate.name === 'property')
+    if (!property) throw fail(prop.line, '<code-prop> には property（コンポーネントのプロパティの名前）が要ります')
+    if (props.some((other) => other.property === property.value)) throw fail(property.line, `property="${property.value}": 同じプロパティの <code-prop> が 2 つあります`)
+    const target = prop.attributes.find((candidate) => candidate.name === 'prop')?.value ?? ''
+    if (target !== '' && !isCodePropName(target)) throw fail(prop.line, `prop="${target}": props の名前は英字で始まる識別子です（v- で始まる名前・key・ref・is・slot は使えません）`)
+    if (property.value.length > MAX_CODE_LENGTH) throw fail(property.line, 'property: 長すぎます（200 文字まで）')
+    const values: [string, string][] = []
+    for (const value of prop.children) {
+      if (value.name !== 'code-value') throw fail(value.line, `<code-prop> の中に書けるのは <code-value> だけです: <${value.name}>`)
+      checkAttributes(fail, value, ['of', 'to'])
+      const of = value.attributes.find((candidate) => candidate.name === 'of')
+      const to = value.attributes.find((candidate) => candidate.name === 'to')
+      if (!of || !to) throw fail(value.line, '<code-value> には of（kdr の値）と to（props の値）が要ります')
+      if (of.value.length > MAX_CODE_LENGTH || to.value.length > MAX_CODE_LENGTH) throw fail(value.line, '<code-value>: 値が長すぎます（200 文字まで）')
+      values.push([of.value, to.value])
+    }
+    props.push({ property: property.value, prop: target, values: Object.fromEntries(values) })
+  }
+  return { name: name.value, from: from?.value ?? '', defaultExport: defaultAttribute?.value === 'true', props }
+}
+
 /** ノードの属性のうち、種類ごとに自分で読むもの（残りは buildPatch に渡す） */
 const STRUCTURAL: Record<(typeof NODE_ELEMENTS)[number], readonly string[]> = {
   frame: ['id'],
-  component: ['id', 'description', 'variant'],
-  'component-set': ['id', 'description'],
+  component: ['id', 'description', 'variant', ...CODE_ATTRIBUTES],
+  'component-set': ['id', 'description', ...CODE_ATTRIBUTES],
   instance: ['id', 'of', 'variant'],
   rect: ['id'],
   ellipse: ['id'],
@@ -533,7 +589,7 @@ function buildElement(
         break
       case 'component': {
         const description = attribute('description')?.value ?? ''
-        created = { ...createFrame(at), fills: [], component: { id: scope.componentIds.get(element)!, role: 'main', description, properties: [] } }
+        created = { ...createFrame(at), fills: [], component: { id: scope.componentIds.get(element)!, role: 'main', description, properties: [], code: codeOfElement(fail, element) } }
         const variant = variantName(scope, element, parent)
         if (variant !== null) created = { ...created, name: variant }
         break
@@ -545,7 +601,7 @@ function buildElement(
         if (!element.children.some((child) => child.name === 'component')) {
           throw fail(element.line, '<component-set> には、バリアントの <component variant="…"> が 1 つ以上要ります')
         }
-        created = { ...createFrame(at), fills: [], setDescription: attribute('description')?.value ?? '' }
+        created = { ...createFrame(at), fills: [], setDescription: attribute('description')?.value ?? '', setCode: codeOfElement(fail, element) }
         break
       }
       case 'line': {

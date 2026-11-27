@@ -5,6 +5,8 @@ import type {
   BlendMode,
   ColorStop,
   ComponentLink,
+  CodeComponent,
+  CodeProp,
   ComponentProperty,
   DesignDocument,
   Effect,
@@ -33,6 +35,7 @@ import { applyVariables, isAlias } from './variables.ts'
 import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from './imageInfo.ts'
 import { EMBEDDED_FAMILY_FORBIDDEN, FONT_EXTENSIONS, FONT_MIME_TYPES, MAX_EMBEDDED_FAMILY_LENGTH, fontMime } from './fontFile.ts'
 import { TarError, readTar, type TarEntry } from './tar.ts'
+import { MAX_CODE_LENGTH, isCodeFrom, isCodeName, isCodePropName } from './codeComponent.ts'
 
 // kdr ファイルの実体は、次のファイルを tar にまとめて gzip で圧縮した 1 つのファイル（中身は `tar xzf` で取り出せる）:
 //   document.json              { format: 'kadrokreo', version: 17, document: { name, collections?: [変数のコレクション, …], pages: [{ id, name, modes?, guides?: [{ axis, position }, …], children: [ノード, …] }], fonts?: [書体, …] } }
@@ -573,6 +576,7 @@ const DEFAULTS = {
   layout: null,
   component: null,
   setDescription: '',
+  setCode: null,
   booleanOperation: null,
   booleanIncludeStrokes: false,
   layoutGrids: [],
@@ -741,6 +745,7 @@ function parseNode(
         layout,
         component: optional('component', (v, p) => (v === null ? null : parseComponent(v, p, assets))),
         setDescription: optional('setDescription', string),
+        setCode: optional('setCode', (v, p) => (v === null ? null : parseCode(v, p))),
         booleanOperation: booleanOperation(),
         booleanIncludeStrokes: optional('booleanIncludeStrokes', boolean),
         layoutGrids: optional('layoutGrids', layoutGrids),
@@ -844,12 +849,62 @@ function parseComponent(value: unknown, path: string, assets: AssetContext): Com
     if (new Set(properties.map((property) => property.name)).size !== properties.length) {
       throw new KdrError(`${path}.properties: プロパティの名前が重複しています`)
     }
-    return { id, role, description, properties }
+    const code = link.code === undefined || link.code === null ? null : parseCode(link.code, `${path}.code`)
+    return { id, role, description, properties, code }
   }
   const overrides = link.overrides === undefined ? {} : parseOverrides(link.overrides, `${path}.overrides`, assets)
   const flipX = link.flipX === undefined ? false : boolean(link.flipX, `${path}.flipX`)
   const flipY = link.flipY === undefined ? false : boolean(link.flipY, `${path}.flipY`)
   return { id, role, overrides, flipX, flipY }
+}
+
+/** 実装側の部品。名前・props の名前はコードにそのまま書くので、決まった文字だけを許す */
+function parseCode(value: unknown, path: string): CodeComponent {
+  const raw = record(value, path)
+  const text = (v: unknown, at: string) => {
+    const t = string(v, at)
+    if (t.length > MAX_CODE_LENGTH) throw new KdrError(`${at}: 長すぎます（${MAX_CODE_LENGTH} 文字まで）`)
+    return t
+  }
+  const name = text(raw.name, `${path}.name`)
+  if (!isCodeName(name)) throw new KdrError(`${path}.name: 部品の名前に使えない文字があります`)
+  const from = raw.from === undefined ? '' : text(raw.from, `${path}.from`)
+  if (!isCodeFrom(from)) throw new KdrError(`${path}.from: import の場所に使えない文字があります`)
+  const defaultExport = raw.defaultExport === undefined ? false : boolean(raw.defaultExport, `${path}.defaultExport`)
+  const props = raw.props === undefined ? [] : array(raw.props, `${path}.props`).map((rawProp, i): CodeProp => {
+    const at = `${path}.props[${i}]`
+    const prop = record(rawProp, at)
+    const property = text(prop.property, `${at}.property`)
+    const target = prop.prop === undefined ? '' : text(prop.prop, `${at}.prop`)
+    if (target !== '' && !isCodePropName(target)) throw new KdrError(`${at}.prop: props の名前に使えない文字があります`)
+    // キーは信頼できない入力なので、Object.fromEntries で自分の項目として作る（__proto__ でも原型を変えない）
+    const values = prop.values === undefined ? {} : Object.fromEntries(
+      Object.entries(record(prop.values, `${at}.values`)).map(([key, v]) => [text(key, `${at}.values`), text(v, `${at}.values.${key}`)]),
+    )
+    return { property, prop: target, values }
+  })
+  if (new Set(props.map((prop) => prop.property)).size !== props.length) {
+    throw new KdrError(`${path}.props: プロパティの名前が重複しています`)
+  }
+  return { name, from, defaultExport, props }
+}
+
+/** ファイルに書く実装側の部品。既定の値（空・false）の項目は書かない */
+function codeFile(code: CodeComponent): Record<string, unknown> {
+  return {
+    name: code.name,
+    ...(code.from === '' ? {} : { from: code.from }),
+    ...(code.defaultExport ? { defaultExport: true } : {}),
+    ...(code.props.length === 0
+      ? {}
+      : {
+          props: code.props.map(({ property, prop, values }) => ({
+            property,
+            ...(prop === '' ? {} : { prop }),
+            ...(Object.keys(values).length === 0 ? {} : { values }),
+          })),
+        }),
+  }
 }
 
 /** コンポーネントのプロパティ。結んだノードがあるかは確かめない（ないノードは使うときに無視する） */
@@ -1178,16 +1233,18 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
     }
     // 元の説明文とプロパティは、空なら書かない
     if (out.component && (out.component as ComponentLink).role === 'main') {
-      const { description, properties, ...link } = out.component as Extract<ComponentLink, { role: 'main' }>
+      const { description, properties, code, ...link } = out.component as Extract<ComponentLink, { role: 'main' }>
       out.component = {
         ...link,
         ...(description === '' ? {} : { description }),
+        ...(code === null ? {} : { code: codeFile(code) }),
         // 差し替えの候補（preferred）も、空なら書かない
         ...(properties.length === 0
           ? {}
           : { properties: properties.map(({ preferred, ...property }) => (preferred.length === 0 ? property : { ...property, preferred })) }),
       }
     }
+    if (out.setCode) out.setCode = codeFile(out.setCode as CodeComponent)
     if (node.children.length > 0) out.children = node.children.map((childId) => nodeFile(scene, childId))
   }
   return out

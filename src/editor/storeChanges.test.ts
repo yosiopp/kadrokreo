@@ -221,7 +221,7 @@ describe('変わったノードだけを見る後始末', () => {
           break
         case 11: {
           // フレームを元にする（元が増える。コンポーネントの id を両方のストアで揃えるので、makeComponent と同じ形を先に作る）
-          const component = { id: `c${index}`, role: 'main' as const, description: '', properties: [] }
+          const component = { id: `c${index}`, role: 'main' as const, description: '', properties: [], code: null }
           step = (store) =>
             store.applyDocument(
               onPage((scene) => {

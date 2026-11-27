@@ -10,6 +10,8 @@ import {
   moveComponentProperty,
   removeComponentProperty,
   renameComponentProperty,
+  setCodeProp,
+  setComponentCode,
   setComponentDescription,
   setInstanceProperty,
   setPreferredComponents,
@@ -18,7 +20,7 @@ import {
 import { createInstance, makeComponent, pushOverrides, swapNestedInstance, syncComponents } from './components.ts'
 import { addVariant } from './variants.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
-import { createDocument, updatePage } from './operations/document.ts'
+import { createDocument, createPage, updatePage } from './operations/document.ts'
 import { insertNode, updateNode } from './operations/tree.ts'
 
 /** ボタン（ラベル・印・入れ子のアイコン）の元と、そのインスタンス。アイコンの元は丸と四角の 2 つ */
@@ -367,5 +369,55 @@ describe('インスタンスでのプロパティの値', () => {
     const { doc, pageId, instanceId } = withProperties()
     expect(setInstanceProperty(doc, pageId, instanceId, '文言', true)).toBe(doc)
     expect(setInstanceProperty(doc, pageId, instanceId, 'ない', 'x')).toBe(doc)
+  })
+})
+
+describe('実装の部品（setComponentCode / setCodeProp）', () => {
+  function withMain() {
+    const page = insertNode(createPage(), { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), id: 'm' })
+    return makeComponent(page, 'm')
+  }
+  const codeOf = (page: { nodes: Record<string, unknown> }) => ((page.nodes.m as MainNode).component.code)
+
+  it('部品名で対応を作り、ほかの項目を変え、空の名前で外す。形の合わない名前・import の場所は入れない', () => {
+    let page = setComponentCode(withMain(), 'm', { name: 'Button' })
+    expect(codeOf(page)).toEqual({ name: 'Button', from: '', defaultExport: false, props: [] })
+    page = setComponentCode(page, 'm', { from: '@/ui', defaultExport: true })
+    expect(codeOf(page)).toMatchObject({ name: 'Button', from: '@/ui', defaultExport: true })
+    expect(setComponentCode(page, 'm', { name: '1x' })).toBe(page)
+    expect(setComponentCode(page, 'm', { from: 'a\nb' })).toBe(page)
+    expect(setComponentCode(page, 'm', { from: '@/ui' })).toBe(page)
+    expect(codeOf(setComponentCode(page, 'm', { name: '' }))).toBe(null)
+    // 元でもまとまりでもないノードには入れない
+    const plain = insertNode(createPage(), { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), id: 'f' })
+    expect(setComponentCode(plain, 'f', { name: 'X' })).toBe(plain)
+  })
+
+  it('長すぎるプロパティ名・値の読み替えは入れない。元をバリアントにすると、部品はまとまりへ移る', () => {
+    const page = setComponentCode(withMain(), 'm', { name: 'Button' })
+    expect(setCodeProp(page, 'm', 'a'.repeat(201), { prop: 'x' })).toBe(page)
+    expect(setCodeProp(page, 'm', 'a', { prop: 'x', values: { b: 'c'.repeat(201) } })).toBe(page)
+    let doc = createDocument()
+    doc = updatePage(doc, doc.pages[0].id, () => ({ ...page, id: doc.pages[0].id }))
+    const { document } = addVariant(doc, doc.pages[0].id, 'm')
+    const scene = document.pages[0]
+    const set = scene.nodes[scene.nodes.m.parentId!] as FrameNode
+    expect(set.setCode).toMatchObject({ name: 'Button' })
+    expect((scene.nodes.m as MainNode).component.code).toBe(null)
+  })
+
+  it('読み替えを足し・置き換え・消す。並びは保ち、kdr の値と同じ値の読み替えと空の値は書かない', () => {
+    let page = setComponentCode(withMain(), 'm', { name: 'Button' })
+    const unlinked = withMain()
+    expect(setCodeProp(unlinked, 'm', 'a', { prop: 'x' })).toBe(unlinked)
+    page = setCodeProp(page, 'm', 'a', { prop: 'x' })
+    page = setCodeProp(page, 'm', 'b', { prop: 'y', values: { 大: 'lg', 小: '小', 中: '' } })
+    page = setCodeProp(page, 'm', 'a', { prop: 'children' })
+    expect(codeOf(page)!.props).toEqual([
+      { property: 'a', prop: 'children', values: {} },
+      { property: 'b', prop: 'y', values: { 大: 'lg' } },
+    ])
+    expect(setCodeProp(page, 'm', 'a', { prop: 'x y' })).toBe(page)
+    expect(codeOf(setCodeProp(page, 'm', 'a', null))!.props.map((prop) => prop.property)).toEqual(['b'])
   })
 })

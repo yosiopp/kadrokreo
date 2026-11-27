@@ -53,6 +53,7 @@ function box(id: string, parentId: string | null, x: number, y: number, rotation
     layout: null,
     component: null,
     setDescription: '',
+    setCode: null,
     booleanOperation: null,
     booleanIncludeStrokes: false,
     layoutGrids: [],

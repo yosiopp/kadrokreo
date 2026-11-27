@@ -250,7 +250,7 @@ export function InspectPanel({
   // 中身のあるフレームは、子孫までまとめた HTML（形式が React なら JSX、Vue なら .vue ファイル）と CSS も出す
   const markup =
     node.type === 'frame' && node.children.length > 0
-      ? nodeMarkup(page, node.id, { style: codeStyle, assets: document.assets, fonts: document.fonts })
+      ? nodeMarkup(page, node.id, { style: codeStyle, assets: document.assets, fonts: document.fonts, document })
       : null
   // コピー用の CSS の @font-face が指す書体ファイル（保存して HTML の隣に置く）
   const faces = nodeFontFaces(page, node.id, document.fonts, document.assets)

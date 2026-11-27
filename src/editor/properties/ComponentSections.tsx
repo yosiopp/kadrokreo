@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { type InstanceNode, type MainNode, derivedId, findMain, isInstance, isMain } from '../../document/component.ts'
 import { canBindProperty, enclosingMainNode, instanceProperties } from '../../document/componentProperties.ts'
-import type { ComponentProperty, Page } from '../../document/types.ts'
+import type { CodeComponent, ComponentProperty, NodeId, Page } from '../../document/types.ts'
+import { propMapping } from '../../document/codeComponent.ts'
 import {
   type VariantProperty,
   isBooleanProperty,
@@ -21,6 +22,8 @@ import {
   moveComponentProperty,
   removeComponentProperty,
   renameComponentProperty,
+  setCodeProp,
+  setComponentCode,
   setComponentDescription,
   setInstanceProperty,
   setPreferredComponents,
@@ -241,6 +244,22 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
               onCommit={(next) => store.apply((base) => setVariantSetDescription(base, variantSet.id, next))}
             />
           )}
+          {variantSet.type === 'frame' && (
+            <CodeComponentFields
+              ctx={ctx}
+              holderId={variantSet.id}
+              code={variantSet.setCode}
+              properties={[
+                ...variantProperties(page, variantSet.id).map((property) => ({
+                  name: property.name,
+                  values: isBooleanProperty(property) ? null : property.values,
+                })),
+                ...[...new Set(variantsIn(page, variantSet.id).flatMap((variant) => variant.component.properties.map((property) => property.name)))].map(
+                  (name) => ({ name, values: null }),
+                ),
+              ]}
+            />
+          )}
         </Section>
       )}
 
@@ -283,6 +302,14 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
                 onCommit={(next) => store.apply((base) => setComponentDescription(base, single.id, next))}
               />
               <MainPropertiesList ctx={ctx} main={single as MainNode} />
+              {!variantMainSet && (
+                <CodeComponentFields
+                  ctx={ctx}
+                  holderId={single.id}
+                  code={single.component.code}
+                  properties={single.component.properties.map((property) => ({ name: property.name, values: null }))}
+                />
+              )}
               <button type="button" onClick={() => addInstance(single.component!.id)}>
                 インスタンスを作る
               </button>
@@ -378,6 +405,73 @@ export function ComponentSections({ ctx }: { ctx: PanelContext }) {
 
       {single && <PropertyBindingSection ctx={ctx} />}
     </>
+  )
+}
+
+/**
+ * 実装側の部品（viewer の React・Vue のコードで、インスタンスをこの部品の呼び出しにする）。部品名を空にすると対応を外す。
+ * プロパティごとに写す props の名前（空なら写さない。読み替えがなければ名前から作ったもの）と、バリアントの値の読み替え。
+ * properties の values は、文字の値を取るバリアントのプロパティの値（ほかは null）
+ */
+function CodeComponentFields({
+  ctx,
+  holderId,
+  code,
+  properties,
+}: {
+  ctx: PanelContext
+  holderId: NodeId
+  code: CodeComponent | null
+  properties: { name: string; values: string[] | null }[]
+}) {
+  const { store } = ctx
+  return (
+    <div className="code-component" aria-label="実装の部品">
+      <h4 className="section-title">実装の部品</h4>
+      <TextField label="部品名" value={code?.name ?? ''} onCommit={(name) => store.apply((base) => setComponentCode(base, holderId, { name: name.trim() }))} />
+      {code === null ? (
+        <p className="section-note">React・Vue のコードで、インスタンスをこの名前の部品の呼び出しとして出します。</p>
+      ) : (
+        <>
+          <TextField label="import の場所" value={code.from} onCommit={(from) => store.apply((base) => setComponentCode(base, holderId, { from: from.trim() }))} />
+          <CheckField
+            label="既定の export"
+            value={code.defaultExport}
+            onChange={(defaultExport) => store.apply((base) => setComponentCode(base, holderId, { defaultExport }))}
+          />
+          {properties.map(({ name, values }) => {
+            const mapping = propMapping(code, name)
+            const explicit = code.props.some((prop) => prop.property === name)
+            const put = (next: { prop: string; values: Record<string, string> } | null) => store.apply((base) => setCodeProp(base, holderId, name, next))
+            return (
+              <div key={name} className="variant-property-block">
+                <div className="variant-property">
+                  <TextField label={`${name} →`} value={mapping.prop} onCommit={(prop) => put({ prop: prop.trim(), values: mapping.values })} />
+                  {explicit && (
+                    <button type="button" title="読み替えを消して、プロパティの名前から作った props の名前に戻す" aria-label={`${name} の読み替えを消す`} onClick={() => put(null)}>
+                      ×
+                    </button>
+                  )}
+                </div>
+                {values && (
+                  <ul className="variant-values" aria-label={`${name} の値の読み替え`}>
+                    {values.map((value) => (
+                      <li key={value}>
+                        <TextField
+                          label={`${value} →`}
+                          value={Object.hasOwn(mapping.values, value) ? mapping.values[value] : value}
+                          onCommit={(to) => put({ prop: mapping.prop, values: { ...mapping.values, [value]: to.trim() } })}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )
+          })}
+        </>
+      )}
+    </div>
   )
 }
 

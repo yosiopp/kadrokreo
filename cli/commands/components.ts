@@ -27,7 +27,11 @@ import {
   setComponentDescription,
   setPreferredComponents,
   setInstanceProperty,
+  componentCodeOf,
+  setCodeProp,
+  setComponentCode,
 } from '../../src/editor/componentProperties.ts'
+import { MAX_CODE_LENGTH, isCodeFrom, isCodeName, isCodePropName } from '../../src/document/codeComponent.ts'
 import { updatePage } from '../../src/editor/operations/document.ts'
 import { updateNode } from '../../src/editor/operations/tree.ts'
 import {
@@ -44,7 +48,7 @@ import {
 import { type Step, UsageError } from '../args.ts'
 import { type Session, checkNewId, renameNodeId } from '../session.ts'
 import { fitTextEstimated } from '../textMeasure.ts'
-import { type Command, checkStep, numberOption, option, positional } from './common.ts'
+import { type Command, checkStep, flag, numberOption, option, positional } from './common.ts'
 
 // コンポーネントのコマンド
 
@@ -274,6 +278,68 @@ export const describe_: Command = {
       throw new UsageError(`describe: ${step.positionals[0]} はコンポーネントの元でもバリアントのまとまりでもありません`)
     }
     session.apply((page) => setComponentDescription(page, id, text))
+  },
+}
+
+/** 実装側の部品を持たせる先。バリアントを指したら、そのまとまり */
+function codeHolder(session: Session, selector: string, name: string): NodeId {
+  const id = session.resolveOne(selector)
+  const set = variantSetOf(session.page, id)
+  const holder = set?.id ?? id
+  if (componentCodeOf(session.page, holder) === undefined) {
+    throw new UsageError(`${name}: ${selector} はコンポーネントの元でもバリアントのまとまりでもありません`)
+  }
+  return holder
+}
+
+export const code: Command = {
+  name: 'code',
+  kind: 'edit',
+  usage: 'code 元|まとまり 部品名 [--from import の場所] [--default]',
+  summary:
+    'コンポーネントの元（バリアントならまとまり）に実装側の部品を対応させる。viewer と html の React・Vue のコードで、インスタンスがこの部品の呼び出しと import になる。--default は既定の export（import X from …）。部品名を "" にすると外す',
+  flags: ['default'],
+  run({ session }, step) {
+    checkStep(step, { options: ['from', 'default'], positionals: 2 })
+    const id = codeHolder(session, positional(step, 0, '元'), step.name)
+    const name = step.positionals[1]
+    if (name === '') {
+      session.apply((page) => setComponentCode(page, id, { name: '' }))
+      return
+    }
+    if (!isCodeName(name)) throw new UsageError(`code: 部品名は英大文字で始まる識別子か、. でつないだもの（200 文字まで）です: ${name}`)
+    const from = option(step, 'from') ?? ''
+    if (!isCodeFrom(from)) throw new UsageError('code: --from に使えない文字（制御文字）があるか、長すぎます（200 文字まで）')
+    session.apply((page) => setComponentCode(page, id, { name, from, defaultExport: flag(step, 'default') }))
+  },
+}
+
+export const codeProp: Command = {
+  name: 'code-prop',
+  kind: 'edit',
+  usage: 'code-prop 元|まとまり プロパティ props名 [値=props値 …] | code-prop 元|まとまり プロパティ --reset',
+  summary:
+    '実装側の部品で、コンポーネントのプロパティ（バリアントのプロパティも）を写す props の名前と、バリアントの値の読み替えを決める。props名が children なら中身、"" なら写さない。--reset で名前から作る扱いに戻す（Has Icon → hasIcon）',
+  flags: ['reset'],
+  assignments: 'any',
+  run({ session }, step) {
+    const reset = flag(step, 'reset')
+    checkStep(step, { options: ['reset'], positionals: reset ? 2 : 3, assignments: !reset })
+    const id = codeHolder(session, positional(step, 0, '元'), step.name)
+    if (!componentCodeOf(session.page, id)) throw new UsageError(`code-prop: 先に code で部品名を決めてください`)
+    const property = step.positionals[1]
+    if (reset) {
+      session.apply((page) => setCodeProp(page, id, property, null))
+      return
+    }
+    const prop = step.positionals[2]
+    if (prop !== '' && !isCodePropName(prop)) {
+      throw new UsageError(`code-prop: props の名前は英字で始まる識別子です（v- で始まる名前・key・ref・is・slot は使えません）: ${prop}`)
+    }
+    if ([property, ...step.assignments.flat()].some((text) => text.length > MAX_CODE_LENGTH)) {
+      throw new UsageError(`code-prop: プロパティの名前か値が長すぎます（${MAX_CODE_LENGTH} 文字まで）`)
+    }
+    session.apply((page) => setCodeProp(page, id, property, { prop, values: Object.fromEntries(step.assignments) }))
   },
 }
 

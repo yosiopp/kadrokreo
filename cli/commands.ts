@@ -3,6 +3,8 @@ import { align, distribute, flip, rotate } from './commands/arrange.ts'
 import {
   component,
   describe_,
+  code,
+  codeProp,
   detach,
   instance,
   overridePush,
@@ -132,6 +134,8 @@ const commands: Command[] = [
   variantValueRename,
   variantValueOrder,
   describe_,
+  code,
+  codeProp,
   propAdd,
   propRename,
   propOrder,

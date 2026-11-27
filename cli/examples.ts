@@ -256,6 +256,11 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   'variant-value-order': ['kdr -f demo.kdr -w variant-add Button --id big 種類=大 + variant-value-order big 種類 大 0'],
   'variant-value-rename': ['kdr -f demo.kdr -w variant-add Button --id big 種類=大 + variant-value-rename big 種類 大 特大'],
   describe: ['kdr -f demo.kdr -w describe Button "主な操作に使うボタン"'],
+  code: ['kdr -f demo.kdr -w code Button Button --from @/components/ui', 'kdr -f demo.kdr -w code Button ""'],
+  'code-prop': [
+    'kdr -f demo.kdr -w code Button Button --from @/components/ui + prop-add Button text btn/Label --name 文言 + code-prop Button 文言 children',
+    'kdr -f demo.kdr -w code Button Button + code-prop Button 種類 variant 標準=primary',
+  ],
   'prop-add': [
     'kdr -f demo.kdr -w prop-add Button text btn/Label --name 文言',
     'kdr -f demo.kdr -w prop-add Button boolean btn/Label --name ラベルを出す',

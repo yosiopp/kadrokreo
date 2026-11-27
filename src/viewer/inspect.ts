@@ -11,8 +11,9 @@ import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
 import { cssFontFamily } from './fontFamily.ts'
 import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
+import { codeOfComponent } from '../document/codeComponent.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
-import type { Asset, AssetId, AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow, TextNode, VariableCollection, VariableId } from '../document/types.ts'
+import type { Asset, AssetId, AutoLayout, CodeComponent, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow, TextNode, VariableCollection, VariableId } from '../document/types.ts'
 import { isPassThroughFrame, passThroughFade } from '../document/passThrough.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
@@ -292,6 +293,7 @@ export function inspectNode(
       set !== null && set.setDescription !== '' && { label: 'まとまりの説明', value: set.setDescription },
       ...variantRows(node.name),
       node.component.description !== '' && { label: '説明', value: node.component.description },
+      node.component.code !== null && { label: '実装の部品', value: codeText(node.component.code) },
     ])
     add(
       'プロパティ',
@@ -315,6 +317,7 @@ export function inspectNode(
       { label: '種類', value: 'バリアントのまとまり' },
       ...variantProperties(scene, node.id).map(({ name, values }) => ({ label: name, value: values.join(' / ') })),
       node.type === 'frame' && node.setDescription !== '' && { label: '説明', value: node.setDescription },
+      node.type === 'frame' && node.setCode !== null && { label: '実装の部品', value: codeText(node.setCode) },
     ])
     add('プロパティ', sharedPropertyRows(scene, node.id))
   }
@@ -330,6 +333,8 @@ export function inspectNode(
       // バリアントのインスタンスは、まとまりの名前と、選んでいるプロパティの値
       ...(main === null ? [] : variantInstanceRows(main.page, main.node)),
       own && main !== null && main.node.component.description !== '' && { label: '説明', value: main.node.component.description },
+      // 実装側の部品の対応があれば（コードでは、この部品の呼び出しになる）
+      own && codeRow(codeOfComponent(doc, instance.component.id)),
       // 中身を元から鏡に映していれば（写しの位置や向きは映した値で出る）
       own && (instance.component.flipX || instance.component.flipY) && { label: '中身の裏返し', value: flipText(instance.component) },
       // 中身は、そのノード自身が元と違えている項目だけを出す。インスタンス全体の分は、下の一覧で出す
@@ -913,4 +918,14 @@ function contrastRows(scene: Scene, id: NodeId, hex: (color: string) => string):
     { label: 'AAA', value: level(result.aaa, large ? CONTRAST_AAA_LARGE : CONTRAST_AAA) },
     result.varies && { label: '求め方', value: 'グラデーションは、止めの間も含めた全体の色のうち、いちばん低い比で判定している' },
   ].filter((row) => row !== false)
+}
+
+/** 実装側の部品の名前と import の場所（「Button（@/ui）」。既定の export なら書き添える） */
+function codeText(code: CodeComponent): string {
+  if (code.from === '') return code.name
+  return `${code.name}（${code.from}${code.defaultExport ? '・既定の export' : ''}）`
+}
+
+function codeRow(code: CodeComponent | null) {
+  return code !== null && { label: '実装の部品', value: codeText(code) }
 }

@@ -344,7 +344,7 @@ function randomNode(c: Context, depth: number): Record<string, unknown> {
         const id = r.chance(0.5) && c.components.length > 0 ? r.pick(c.components) : `c${c.counter++}`
         c.components.push(id)
         node.component = r.chance(0.5)
-          ? { id, role: 'main', description: '', properties: [] }
+          ? { id, role: 'main', description: '', properties: [], code: null }
           : { id, role: 'instance', ...(r.chance(0.5) ? { overrides: { [r.pick(ID_POOL)]: { text: 'x', visible: false, ...(r.chance(0.5) ? { componentId: r.pick(c.components) } : {}) } } } : {}) }
       }
       const count = r.int(0, 4)
@@ -794,7 +794,7 @@ describe('kdr の読み込みの極端な入力', () => {
   it('Object.prototype にある名前の id（constructor・toString など）でも読めて使える', () => {
     const ids = ['constructor', 'toString', 'hasOwnProperty', 'valueOf', 'isPrototypeOf']
     const children = [
-      { type: 'frame', id: 'constructor', name: 'Main', x: 0, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'main', description: '', properties: [] }, children: [{ type: 'text', id: 'valueOf', name: 'T', x: 0, y: 0, width: 50, height: 20, text: 'x', fontSize: 12, fontFamily: 'sans-serif' }] },
+      { type: 'frame', id: 'constructor', name: 'Main', x: 0, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'main', description: '', properties: [], code: null }, children: [{ type: 'text', id: 'valueOf', name: 'T', x: 0, y: 0, width: 50, height: 20, text: 'x', fontSize: 12, fontFamily: 'sans-serif' }] },
       { type: 'frame', id: 'hasOwnProperty', name: 'Inst', x: 200, y: 0, width: 100, height: 100, component: { id: 'toString', role: 'instance', overrides: { isPrototypeOf: { text: 'y' } } } },
     ]
     const doc = parseKdr({ format: 'kadrokreo', version: KDR_VERSION, document: { name: 'x', pages: [{ id: 'valueOf', name: 'P', children }] } })

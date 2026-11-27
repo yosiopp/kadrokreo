@@ -61,7 +61,7 @@ describe('コンポーネント', () => {
   it('フレームを元にする。フレーム以外や、すでにつながっているものは変えない', () => {
     const { doc, button, background, componentId } = fixture()
     const page = doc.pages[0]
-    expect(frameOf(page, button.id).component).toEqual({ id: componentId, role: 'main', description: '', properties: [] })
+    expect(frameOf(page, button.id).component).toEqual({ id: componentId, role: 'main', description: '', properties: [], code: null })
     expect(makeComponent(page, button.id)).toBe(page)
     expect(makeComponent(page, background.id)).toBe(page)
     expect(findMain(doc, componentId)?.node.id).toBe(button.id)

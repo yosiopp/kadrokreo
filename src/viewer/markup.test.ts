@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { solid } from '../document/paint.ts'
-import type { ImageNode, PathNode } from '../document/types.ts'
-import { base, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
+import type { CodeComponent, FrameNode, ImageNode, PathNode } from '../document/types.ts'
+import { derivedId } from '../document/component.ts'
+import { base, docOf, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
 import { nodeCode, nodeFontFaces, nodeMarkup, slug, standaloneHtml } from './markup.ts'
 
 describe('nodeMarkup', () => {
@@ -502,5 +503,128 @@ describe('nodeMarkup の書体', () => {
     expect(nodeMarkup(scene, 'frame', { assets, fonts: [], style: { format: 'react' } }).css).toBe('')
     expect(nodeFontFaces(scene, 'plain', fonts, assets)).toEqual([])
     expect(nodeFontFaces(scene, 'frame', fonts, assets)).toEqual(fonts)
+  })
+})
+
+describe('nodeMarkup の実装側の部品', () => {
+  const code = (name: string, patch: Partial<CodeComponent> = {}): CodeComponent => ({ name, from: '@/ui', defaultExport: false, props: [], ...patch })
+  const main = (id: string, name: string, componentId: string, patch: Partial<FrameNode> = {}) =>
+    frame({ id, name, parentId: 'set', children: [`${id}-label`], component: { id: componentId, role: 'main', description: '', properties: [{ name: 'Label', type: 'text', targets: [`${id}-label`], preferred: [] }], code: null }, ...patch })
+  /** まとまり（Button）に 2 つのバリアント、画面に小さい方のインスタンス */
+  function buttonScene(setCode: CodeComponent | null) {
+    const copy = derivedId('instance', 'small-label')
+    return sceneOf(
+      frame({ id: 'set', name: 'Button', children: ['large', 'small'], setCode }),
+      main('large', 'Size=Large, Disabled=false', 'cLarge'),
+      text({ id: 'large-label', parentId: 'large', text: 'OK' }),
+      main('small', 'Size=Small, Disabled=true', 'cSmall'),
+      text({ id: 'small-label', parentId: 'small', text: 'OK' }),
+      frame({ id: 'screen', name: 'Screen', children: ['instance'] }),
+      frame({ id: 'instance', name: 'Button', parentId: 'screen', x: 10, y: 20, children: [copy], component: { id: 'cSmall', role: 'instance', overrides: { 'small-label': { text: '予約する' } }, flipX: false, flipY: false } }),
+      text({ id: copy, parentId: 'instance', text: '予約する' }),
+    )
+  }
+
+  it('対応のあるインスタンスを、部品の呼び出しと import にする（置き方は div で包む）', () => {
+    const scene = buttonScene(code('Button', { props: [{ property: 'Size', prop: 'size', values: { Small: 'sm' } }, { property: 'Label', prop: 'children', values: {} }] }))
+    const { html } = nodeMarkup(scene, 'screen', { style: { format: 'react' }, document: docOf(scene) })
+    expect(html).toBe(
+      [
+        "import { Button } from '@/ui'",
+        '',
+        'export function Screen() {',
+        '  return (',
+        "    <div style={{ position: 'relative', width: 100, height: 50, background: '#ff0000', overflow: 'hidden' }}>",
+        "      <div style={{ position: 'absolute', left: 10, top: 20 }}>",
+        '        <Button size="sm" disabled>',
+        '          予約する',
+        '        </Button>',
+        '      </div>',
+        '    </div>',
+        '  )',
+        '}',
+      ].join('\n'),
+    )
+  })
+
+  it('Vue は <script setup> に既定の export の import を書き、真偽値の false は :prop にする', () => {
+    const scene = buttonScene(code('Button', { from: './Button.vue', defaultExport: true }))
+    const large = scene.nodes.instance as FrameNode
+    scene.nodes.instance = { ...large, component: { id: 'cLarge', role: 'instance', overrides: {}, flipX: false, flipY: false } }
+    const { html } = nodeMarkup(scene, 'instance', { style: { format: 'vue' }, document: docOf(scene) })
+    expect(html.split('\n').slice(0, 6)).toEqual([
+      '<script setup>',
+      "import Button from './Button.vue'",
+      '</script>',
+      '',
+      '<template>',
+      '  <Button size="Large" :disabled="false" label="OK" />',
+    ])
+  })
+
+  it('インスタンスを選ぶと、生成する関数の名前を読み込んだ部品と違える。同じ名前の別の部品は別名で読み込む。import の場所の < は書かない', () => {
+    const scene = buttonScene(code('Button'))
+    expect(nodeMarkup(scene, 'instance', { style: { format: 'react' }, document: docOf(scene) }).html).toContain('export function ButtonView() {')
+    expect(nodeMarkup(scene, 'instance', { style: { format: 'css-modules' }, document: docOf(scene) }).html).toContain('export function ButtonView() {')
+    // 小さい方だけ別の場所の Button にする（まとまりは 1 つなので、もう 1 つまとまりを作る代わりに対応のある元をもう 1 つ置く）
+    const other = { ...scene }
+    other.nodes = {
+      ...scene.nodes,
+      lone: frame({ id: 'lone', name: 'Lone', component: { id: 'cLone', role: 'main', description: '', properties: [], code: code('Button', { from: '</script>x' }) } }),
+      i2: frame({ id: 'i2', name: 'Lone', parentId: 'screen', component: { id: 'cLone', role: 'instance', overrides: {}, flipX: false, flipY: false } }),
+      screen: { ...(scene.nodes.screen as FrameNode), children: ['instance', 'i2'] },
+    }
+    const react = nodeMarkup(other, 'screen', { style: { format: 'react' }, document: docOf(other) }).html
+    expect(react).toContain("import { Button } from '@/ui'\nimport { Button as Button2 } from '\\x3c/script>x'")
+    expect(react).toContain('<Button2 />')
+    const vue = nodeMarkup(other, 'screen', { style: { format: 'vue' }, document: docOf(other) }).html
+    expect(vue.match(/<\/script>/g)).toHaveLength(1)
+  })
+
+  it('対応がなければ今までどおり中身を書く。HTML の形式と document なしでも中身を書く', () => {
+    const scene = buttonScene(null)
+    expect(nodeMarkup(scene, 'instance', { style: { format: 'react' }, document: docOf(scene) }).html).toContain('予約する</div>')
+    const linked = buttonScene(code('Button'))
+    expect(nodeMarkup(linked, 'instance', { style: { format: 'html' }, document: docOf(linked) }).html).not.toContain('<Button')
+    expect(nodeMarkup(linked, 'instance', { style: { format: 'react' } }).html).not.toContain('<Button')
+  })
+
+  it('文字列に " や { } を含めば式で書き、差し替えのプロパティは部品の要素にする。名前を作れないプロパティは書かない', () => {
+    const iconCopy = derivedId('card', 'icon')
+    const scene = sceneOf(
+      frame({ id: 'star', name: 'Star', component: { id: 'cStar', role: 'main', description: '', properties: [], code: code('StarIcon', { from: '@/icons' }) } }),
+      frame({ id: 'dot', name: 'Dot', component: { id: 'cDot', role: 'main', description: '', properties: [], code: null } }),
+      frame({
+        id: 'main',
+        name: 'Card',
+        children: ['icon', 'title'],
+        component: {
+          id: 'cCard',
+          role: 'main',
+          description: '',
+          properties: [
+            { name: 'Icon', type: 'instance', targets: ['icon'], preferred: [] },
+            { name: 'Title', type: 'text', targets: ['title'], preferred: [] },
+            { name: '強調', type: 'boolean', targets: ['title'], preferred: [] },
+          ],
+          code: code('Card'),
+        },
+      }),
+      frame({ id: 'icon', name: 'Star', parentId: 'main', component: { id: 'cDot', role: 'instance', overrides: {}, flipX: false, flipY: false } }),
+      text({ id: 'title', parentId: 'main', text: 'a "b" {c}' }),
+      frame({ id: 'card', name: 'Card', children: [iconCopy], component: { id: 'cCard', role: 'instance', overrides: { icon: { componentId: 'cStar' } }, flipX: false, flipY: false } }),
+      frame({ id: iconCopy, name: 'Star', parentId: 'card' }),
+    )
+    const { html } = nodeMarkup(scene, 'card', { style: { format: 'tailwind' }, document: docOf(scene) })
+    expect(html).toContain("import { Card } from '@/ui'\nimport { StarIcon } from '@/icons'")
+    expect(html).toContain('<Card icon={<StarIcon />} title={"a \\"b\\" {c}"} />')
+    // 差し替え先に対応がなければ、その props は書かない
+    scene.nodes.card = { ...(scene.nodes.card as FrameNode), component: { id: 'cCard', role: 'instance', overrides: {}, flipX: false, flipY: false } }
+    expect(nodeMarkup(scene, 'card', { style: { format: 'react' }, document: docOf(scene) }).html).toContain('<Card title=')
+    // Vue では差し替えの部品を名前付きスロットにする
+    scene.nodes.card = { ...(scene.nodes.card as FrameNode), component: { id: 'cCard', role: 'instance', overrides: { icon: { componentId: 'cStar' } }, flipX: false, flipY: false } }
+    expect(nodeMarkup(scene, 'card', { style: { format: 'vue' }, document: docOf(scene) }).html).toContain(
+      '  <Card title="a &quot;b&quot; {c}">\n    <template #icon><StarIcon /></template>\n  </Card>',
+    )
   })
 })

@@ -66,6 +66,11 @@ export function addVariant(
         },
       })
       if (!props) scene = updateNode(scene, mainId, { name: formatVariantName([[DEFAULT_PROPERTY, DEFAULT_VALUE]]) })
+      // 実装側の部品は、まとまりのもの（setCode）だけを使うので、元に書いてあればまとまりへ移す
+      if (main.component.code) {
+        scene = updateNode(scene, setId, { setCode: main.component.code })
+        scene = updateNode(scene, mainId, { component: { ...main.component, code: null } })
+      }
     }
 
     const source = scene.nodes[mainId]
@@ -75,7 +80,7 @@ export function addVariant(
     // 貼り付けた元はインスタンスになるので、新しいコンポーネントの元に戻す
     scene = updateNode(pasted.scene, copyId, {
       name: formatVariantName(nextVariantProps(scene, setId, props)),
-      component: { id: createId(), role: 'main', description: '', properties: [] },
+      component: { id: createId(), role: 'main', description: '', properties: [], code: null },
     })
     // プロパティはまとまりで揃えるので、複製したバリアントも同じプロパティを持ち、同じたどり方のノードに結ぶ
     scene = inheritComponentProperties(scene, mainId, copyId, doc)

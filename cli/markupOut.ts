@@ -8,7 +8,7 @@ import { type InstanceNode, type MainNode, derivedId, isInstance, isMain, owning
 import { canBindProperty } from '../src/document/componentProperties.ts'
 import { LAYOUT_DEFAULTS } from '../src/document/kdr.ts'
 import { contoursData, mapVertices, pathContours } from '../src/document/path.ts'
-import type { AutoLayout, DesignDocument, FrameNode, NodeId, Page, Paint, PathNode, SceneNode } from '../src/document/types.ts'
+import type { AutoLayout, CodeComponent, DesignDocument, FrameNode, NodeId, Page, Paint, PathNode, SceneNode } from '../src/document/types.ts'
 import { formatVariantName, isVariantSet, parseVariantName, variantsIn } from '../src/document/variants.ts'
 import { componentName, listComponents, sameJson } from '../src/editor/components.ts'
 import { createEllipse, createFrame, createImage, createPath, createRect, createText } from '../src/editor/nodes.ts'
@@ -40,7 +40,7 @@ function baseline(node: SceneNode): SceneNode {
 }
 
 /** 自分で書く項目（残りは baseline と比べて、違えば「名前=値」で書く） */
-const HANDLED = new Set(['id', 'type', 'parentId', 'children', 'component', 'name', 'x', 'y', 'width', 'height', 'sizing', 'layout', 'text', 'assetId', 'points', 'contours', 'closed'])
+const HANDLED = new Set(['id', 'type', 'parentId', 'children', 'component', 'name', 'x', 'y', 'width', 'height', 'sizing', 'layout', 'text', 'assetId', 'points', 'contours', 'closed', 'setCode'])
 
 /** インスタンスが自分で持つ項目（INSTANCE_OWN と同じ。width・height・名前・位置は別に書く） */
 const INSTANCE_OWN = ['rotation', 'visible', 'locked', 'opacity', 'blendMode'] as const
@@ -270,6 +270,21 @@ function element(ctx: Context, id: NodeId, depth: number, bindings: Map<NodeId, 
     }
     if (isMain(node) && node.component.description !== '') attributes.push(['description', node.component.description])
     if (set && node.type === 'frame' && node.setDescription !== '') attributes.push(['description', node.setDescription])
+    // 実装側の部品（元は component.code、まとまりは setCode）
+    const code = set && node.type === 'frame' ? node.setCode : isMain(node) ? node.component.code : null
+    if (code) {
+      attributes.push(['code', code.name])
+      if (code.from !== '') attributes.push(['code-from', code.from])
+      if (code.defaultExport) attributes.push(['code-default', 'true'])
+      children.push(...codePropLines(code, `${indent}  `))
+    }
+    if (node.type === 'frame' && node.setCode && !set) {
+      ctx.drops.push(
+        isVariantSet(page, node.id)
+          ? `${node.name}（${node.id}）の実装側の部品（バリアントの名前が決まった書き方でないまとまりは <frame> で書くので、build で戻らない）`
+          : `${node.name}（${node.id}）の実装側の部品（バリアントのまとまりでないフレームのもので、使われない）`,
+      )
+    }
     if (positioned(page, node)) {
       if (node.x !== 0) attributes.push(['x', String(node.x)])
       if (node.y !== 0) attributes.push(['y', String(node.y)])
@@ -302,6 +317,20 @@ function element(ctx: Context, id: NodeId, depth: number, bindings: Map<NodeId, 
   // テキストの中身は 1 行なら同じ行に
   if (node.type === 'text' && children.length === 1 && !children[0].includes('\n')) return [`${open}>${children[0].trim()}</${tag}>`]
   return [`${open}>`, ...children, `${indent}</${tag}>`]
+}
+
+/** 実装側の部品の props の読み替え（<code-prop> と <code-value>） */
+function codePropLines(code: CodeComponent, indent: string): string[] {
+  return code.props.flatMap(({ property, prop, values }) => {
+    const open = `${indent}<code-prop property="${escapeAttribute(property)}" prop="${escapeAttribute(prop)}"`
+    const entries = Object.entries(values)
+    if (entries.length === 0) return [`${open}/>`]
+    return [
+      `${open}>`,
+      ...entries.map(([of, to]) => `${indent}  <code-value of="${escapeAttribute(of)}" to="${escapeAttribute(to)}"/>`),
+      `${indent}</code-prop>`,
+    ]
+  })
 }
 
 function instanceAttributes(ctx: Context, node: InstanceNode, children: string[], depth: number, root: boolean): Attribute[] {

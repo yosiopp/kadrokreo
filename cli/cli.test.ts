@@ -787,6 +787,7 @@ describe('kadrokreo CLI', () => {
         { name: '文言', type: 'text', targets: ['label'], preferred: [] },
         { name: 'Mark', type: 'boolean', targets: ['mark'], preferred: [] },
       ],
+      code: null,
     })
     expect((nodes.i1 as FrameNode).component).toMatchObject({ overrides: { label: { text: '送信' }, mark: { visible: false } } })
 

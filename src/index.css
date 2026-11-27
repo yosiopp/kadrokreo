@@ -1423,3 +1423,11 @@ input.document-name:focus {
 .layout-grid-row .field-row .field {
   flex: 1;
 }
+
+/* 実装の部品（コンポーネントの節の中のまとまり） */
+.code-component {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}

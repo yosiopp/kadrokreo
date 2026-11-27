@@ -3,7 +3,8 @@ import { canBindProperty, type PropertyValue } from '../document/componentProper
 import { namePath, pathIndex } from '../document/componentSource.ts'
 import { findPage } from '../document/pages.ts'
 import { variantSetOf, variantsIn } from '../document/variants.ts'
-import type { ComponentProperty, DesignDocument, NodeId, Override, PageId, Scene } from '../document/types.ts'
+import { MAX_CODE_LENGTH, isCodeFrom, isCodeName, isCodePropName } from '../document/codeComponent.ts'
+import type { CodeComponent, ComponentProperty, DesignDocument, NodeId, Override, PageId, Scene } from '../document/types.ts'
 import { swapNestedInstance } from './components.ts'
 import { updatePage } from './operations/document.ts'
 import { updateNode } from './operations/tree.ts'
@@ -354,4 +355,61 @@ export function alignVariantProperties<T extends Scene>(scene: T, setId: NodeId,
     if (!same) next = setProperties(next, next.nodes[main.id] as MainNode, properties)
   }
   return next
+}
+
+/** 対応を持てるノード（元かバリアントのまとまり）の、今の対応。持てなければ undefined */
+export function componentCodeOf(scene: Scene, id: NodeId): CodeComponent | null | undefined {
+  const node = scene.nodes[id]
+  if (node?.type === 'frame' && variantsIn(scene, id).length > 0) return node.setCode
+  if (isMain(node)) return node.component.code
+  return undefined
+}
+
+function putCode<T extends Scene>(scene: T, id: NodeId, code: CodeComponent | null): T {
+  const node = scene.nodes[id]
+  if (node?.type === 'frame' && variantsIn(scene, id).length > 0) return updateNode(scene, id, { setCode: code })
+  if (isMain(node)) return updateNode(scene, id, { component: { ...node.component, code } })
+  return scene
+}
+
+/**
+ * 元かまとまり id の実装側の部品を変える。名前を空にすると対応を外す（読み替えも消える）。
+ * 名前が部品の名前の形でなければ（isCodeName）変えない。id が元でもまとまりでもなければ変えない
+ */
+export function setComponentCode<T extends Scene>(scene: T, id: NodeId, patch: Partial<Pick<CodeComponent, 'name' | 'from' | 'defaultExport'>>): T {
+  const current = componentCodeOf(scene, id)
+  if (current === undefined) return scene
+  if (patch.name === '') return current === null ? scene : putCode(scene, id, null)
+  const base: CodeComponent = current ?? { name: '', from: '', defaultExport: false, props: [] }
+  const next = { ...base, ...patch }
+  if (!isCodeName(next.name) || !isCodeFrom(next.from)) return scene
+  if (current && next.name === current.name && next.from === current.from && next.defaultExport === current.defaultExport) return scene
+  return putCode(scene, id, next)
+}
+
+/**
+ * 元かまとまり id の、プロパティ property から props への読み替えを変える。mapping が null なら読み替えを消す（名前から作る扱いに戻す）。
+ * prop は空（写さない）か props の名前の形。対応がなければ変えない。values のうち、kdr の値と同じものは書かない
+ */
+export function setCodeProp<T extends Scene>(
+  scene: T,
+  id: NodeId,
+  property: string,
+  mapping: { prop: string; values?: Record<string, string> } | null,
+): T {
+  const current = componentCodeOf(scene, id)
+  if (!current) return scene
+  const props = current.props.filter((prop) => prop.property !== property)
+  if (mapping !== null) {
+    if (mapping.prop !== '' && !isCodePropName(mapping.prop)) return scene
+    const values = Object.fromEntries(Object.entries(mapping.values ?? {}).filter(([from, to]) => to !== '' && from !== to))
+    // kdr に書ける長さを超えるもの（長いプロパティ名・値）は入れない（書き出しと自動保存の読み込みが失敗する）
+    if ([property, ...Object.keys(values), ...Object.values(values)].some((text) => text.length > MAX_CODE_LENGTH)) return scene
+    const index = current.props.findIndex((prop) => prop.property === property)
+    const entry = { property, prop: mapping.prop, values }
+    if (index === -1) props.push(entry)
+    else props.splice(index, 0, entry)
+  }
+  if (JSON.stringify(props) === JSON.stringify(current.props)) return scene
+  return putCode(scene, id, { ...current, props })
 }

@@ -66,7 +66,7 @@ export type FitText = <T extends Scene>(scene: T, ids: readonly NodeId[]) => T
 export function makeComponent<T extends Scene>(scene: T, id: NodeId): T {
   const node = scene.nodes[id]
   if (node?.type !== 'frame' || node.component) return scene
-  return updateNode(scene, id, { component: { id: createId(), role: 'main', description: '', properties: [] } })
+  return updateNode(scene, id, { component: { id: createId(), role: 'main', description: '', properties: [], code: null } })
 }
 
 /**

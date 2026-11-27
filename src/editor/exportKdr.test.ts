@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { KDR_MIN_VERSION, KDR_VERSION, KdrError, MAX_FONT_FAMILY_LENGTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
 import { solid } from '../document/paint.ts'
-import type { DesignDocument, Page } from '../document/types.ts'
+import type { CodeComponent, DesignDocument, Page } from '../document/types.ts'
 import { encodeKdr, kdrEntries } from './exportKdr.ts'
 import { fromBase64, gzipBlob, kdrBlob, pngHeader, tarGz } from '../document/testKdr.ts'
 import { sha256Hex } from '../document/sha256.ts'
@@ -916,10 +916,45 @@ describe('parseKdr', () => {
   it('コンポーネントとのつながりを検証する', () => {
     const main = rawNode({ type: 'frame', component: { id: 'c1', role: 'main' } })
     // 説明文とプロパティは省けば空
-    expect(parseOne(main)).toEqual(expect.objectContaining({ component: { id: 'c1', role: 'main', description: '', properties: [] } }))
+    expect(parseOne(main)).toEqual(expect.objectContaining({ component: { id: 'c1', role: 'main', description: '', properties: [], code: null } }))
     expect(parseOne(main)).not.toHaveProperty('component.overrides')
     expect(() => parseOne(rawNode({ type: 'frame', component: { id: 'c1', role: 'copy' } }))).toThrow('component.role')
-    expect(() => parseOne(rawNode({ type: 'frame', component: { id: '../x', role: 'main', description: '', properties: [] } }))).toThrow('component.id')
+    expect(() => parseOne(rawNode({ type: 'frame', component: { id: '../x', role: 'main', description: '', properties: [], code: null } }))).toThrow('component.id')
+  })
+
+  it('実装側の部品（元の code・まとまりの setCode）を検証し、既定の値の項目は書き出さない', () => {
+    const withCode = (code: unknown) => rawNode({ type: 'frame', component: { id: 'c1', role: 'main', code } })
+    expect(parseOne(withCode({ name: 'Button' }))).toMatchObject({ component: { code: { name: 'Button', from: '', defaultExport: false, props: [] } } })
+    const full = { name: 'UI.Button', from: '@/ui', defaultExport: true, props: [{ property: 'サイズ', prop: 'size', values: { 大: 'lg' } }, { property: '文言', prop: 'children', values: {} }] }
+    expect(parseOne(withCode(full))).toMatchObject({ component: { code: full } })
+    // prop と values は省けば空（写さない・読み替えなし）
+    expect(parseOne(withCode({ name: 'B', props: [{ property: 'a' }] }))).toMatchObject({ component: { code: { props: [{ property: 'a', prop: '', values: {} }] } } })
+    expect(() => parseOne(withCode({ name: '1Button' }))).toThrow('component.code.name')
+    expect(() => parseOne(withCode({ name: 'B<x>' }))).toThrow('component.code.name')
+    // 小文字で始まる名前は JSX では HTML の要素になり、予約語は import に書けないので断る
+    expect(() => parseOne(withCode({ name: 'button' }))).toThrow('component.code.name')
+    expect(() => parseOne(withCode({ name: 'default' }))).toThrow('component.code.name')
+    // Vue のディレクティブ（値が式として評価される）と React・Vue の特別な名前は props にできない
+    for (const prop of ['v-html', 'V-if', 'key', 'ref', 'is', 'slot', 'dangerouslySetInnerHTML']) {
+      expect(() => parseOne(withCode({ name: 'B', props: [{ property: 'a', prop }] }))).toThrow('component.code.props[0].prop')
+    }
+    expect(() => parseOne(withCode({ name: 'B', from: 'a\nb' }))).toThrow('component.code.from')
+    expect(() => parseOne(withCode({ name: 'B', defaultExport: 'yes' }))).toThrow('component.code.defaultExport')
+    expect(() => parseOne(withCode({ name: 'B', props: [{ property: 'a', prop: 'x y' }] }))).toThrow('component.code.props[0].prop')
+    expect(() => parseOne(withCode({ name: 'B', props: [{ property: 'a', values: { x: 1 } }] }))).toThrow('component.code.props[0].values.x')
+    expect(() => parseOne(withCode({ name: 'B', props: [{ property: 'a' }, { property: 'a' }] }))).toThrow('重複')
+    expect(() => parseOne(withCode({ name: 'x'.repeat(201) }))).toThrow('長すぎます')
+    // __proto__ をキーにしても原型は変わらない
+    const proto = parseOne(withCode(JSON.parse('{"name":"B","props":[{"property":"a","values":{"__proto__":"x"}}]}'))) as { component: { code: CodeComponent } }
+    const values = proto.component.code.props[0].values
+    expect(Object.hasOwn(values, '__proto__') && Object.getPrototypeOf(values) === Object.prototype).toBe(true)
+    expect(parseOne(rawNode({ type: 'frame', setCode: { name: 'Button' } }))).toMatchObject({ setCode: { name: 'Button' } })
+    expect(parseOne(rawNode({ type: 'frame' }))).toMatchObject({ setCode: null })
+    expect(() => parseOne(rawNode({ type: 'frame', setCode: { name: '' } }))).toThrow('setCode.name')
+
+    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'main' as const, description: '', properties: [], code: { name: 'B', from: '', defaultExport: false, props: [{ property: 'a', prop: '', values: {} }] } } }
+    expect(fileNode(insertNode(createPage(), frame)).component).toEqual({ id: 'c1', role: 'main', code: { name: 'B', props: [{ property: 'a' }] } })
+    expect(fileNode(insertNode(createPage(), { ...frame, component: null, setCode: { name: 'S', from: 'x', defaultExport: true, props: [] } })).setCode).toEqual({ name: 'S', from: 'x', defaultExport: true })
   })
 
   it('コンポーネントの説明文とプロパティを検証し、空なら書き出さない', () => {
@@ -943,7 +978,7 @@ describe('parseKdr', () => {
     expect(() => parseOne(withMain({ properties: [{ name: 'a', type: 'text', targets: ['../x'] }] }))).toThrow('properties[0].targets[0]')
     expect(() => parseOne(withMain({ properties: [{ name: 'a', type: 'text' }, { name: 'a', type: 'boolean' }] }))).toThrow('重複')
 
-    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'main' as const, description: '', properties: [] } }
+    const frame = { ...createFrame({ x: 0, y: 0, width: 10, height: 10 }), component: { id: 'c1', role: 'main' as const, description: '', properties: [], code: null } }
     const page = insertNode(createPage(), frame)
     expect(fileNode(page).component).toEqual({ id: 'c1', role: 'main' })
     const described = insertNode(createPage(), { ...frame, component: { ...frame.component, description: 'x', properties: [{ name: 'a', type: 'text' as const, targets: [], preferred: [] }] } })
