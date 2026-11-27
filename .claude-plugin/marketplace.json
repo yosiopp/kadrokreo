@@ -9,7 +9,7 @@
       "name": "kdr",
       "source": "./plugins/kdr",
       "description": "kdr ファイルを Docker イメージの kdr コマンドで作る・調べる・編集する・PNG / SVG に書き出すための skill",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "license": "MIT",
       "homepage": "https://github.com/yosiopp/kadrokreo",
       "repository": "https://github.com/yosiopp/kadrokreo"
