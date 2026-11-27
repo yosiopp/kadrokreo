@@ -922,6 +922,9 @@ function expectedCopies(
     locked: instance.locked,
     opacity: instance.opacity,
     blendMode: instance.blendMode,
+    // 変数のモードの指定も、置いた場所の設定としてインスタンスが持つ。まだ持っていなければ元の指定を写す
+    // （そのあとはインスタンスの指定。元の指定を後から変えても、置いたインスタンスには伝わらない）
+    modes: instance.modes ?? main.modes,
     component: { ...instance.component, overrides },
     children: main.children.map(idFor),
   }

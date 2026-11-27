@@ -9,7 +9,8 @@ import { type InstanceNode, type MainNode, derivedId, isInstance, isMain, owning
 import { canBindProperty } from '../src/document/componentProperties.ts'
 import { LAYOUT_DEFAULTS } from '../src/document/kdr.ts'
 import { contoursData, mapVertices, pathContours } from '../src/document/path.ts'
-import type { AutoLayout, CodeComponent, DesignDocument, FrameNode, NodeId, Page, Paint, PathNode, SceneNode } from '../src/document/types.ts'
+import type { AutoLayout, CodeComponent, DesignDocument, FrameNode, NodeId, Page, Paint, PathNode, SceneNode, VariableValue } from '../src/document/types.ts'
+import { isAlias } from '../src/document/variables.ts'
 import { formatVariantName, isVariantSet, parseVariantName, variantsIn } from '../src/document/variants.ts'
 import { componentName, listComponents, sameJson } from '../src/editor/components.ts'
 import { createEllipse, createFrame, createImage, createPath, createRect, createText } from '../src/editor/nodes.ts'
@@ -41,7 +42,7 @@ function baseline(node: SceneNode): SceneNode {
 }
 
 /** 自分で書く項目（残りは baseline と比べて、違えば「名前=値」で書く） */
-const HANDLED = new Set(['id', 'type', 'parentId', 'children', 'component', 'name', 'x', 'y', 'width', 'height', 'sizing', 'layout', 'text', 'assetId', 'points', 'contours', 'closed', 'setCode'])
+const HANDLED = new Set(['id', 'type', 'parentId', 'children', 'component', 'name', 'x', 'y', 'width', 'height', 'sizing', 'layout', 'text', 'assetId', 'points', 'contours', 'closed', 'setCode', 'bindings', 'modes'])
 
 /** インスタンスが自分で持つ項目（INSTANCE_OWN と同じ。width・height・名前・位置は別に書く） */
 const INSTANCE_OWN = ['rotation', 'visible', 'locked', 'opacity', 'blendMode'] as const
@@ -66,11 +67,17 @@ function escapeText(value: string): string {
   return controls(value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'))
 }
 
-/** 塗り・線を、略記の値（#rrggbb・null）にする。略記で書けなければ null */
-function paintShorthand(paints: readonly Paint[]): string | null {
+/** 変数の id から、マークアップで指す var(名前) の名前（無ければ undefined） */
+type VariableRef = (id: string) => string | undefined
+
+/** 塗り・線を、略記の値（#rrggbb・var(名前)・null）にする。略記で書けなければ null */
+function paintShorthand(paints: readonly Paint[], refs: VariableRef): string | null {
   if (paints.length === 0) return 'null'
   const [paint] = paints
-  if (paints.length === 1 && paint.type === 'solid' && paint.opacity === 1 && paint.visible && paint.blendMode === 'normal') return paint.color
+  if (paints.length === 1 && paint.type === 'solid' && paint.opacity === 1 && paint.visible && paint.blendMode === 'normal') {
+    const ref = paint.variable === undefined ? undefined : refs(paint.variable)
+    return ref === undefined ? paint.color : `var(${ref})`
+  }
   return null
 }
 
@@ -84,16 +91,16 @@ function plainValue(value: unknown): string {
 type Attribute = [string, string]
 
 /** 項目 key の値を属性にする（塗りと線は、書けるなら fill / stroke の略記。グラデーションなどは fills / strokes の JSON） */
-function fieldAttribute(key: string, value: unknown): Attribute {
+function fieldAttribute(key: string, value: unknown, refs: VariableRef): Attribute {
   if (key === 'fills' || key === 'strokes') {
-    const shorthand = paintShorthand(value as Paint[])
+    const shorthand = paintShorthand(value as Paint[], refs)
     if (shorthand !== null) return [key === 'fills' ? 'fill' : 'stroke', shorthand]
   }
   return [key, plainValue(value)]
 }
 
 /** 項目 key を baseline から変えた分の属性。入れ子の項目（constraints など）は、変えた中の項目だけを「.」でつないで書く */
-function changedAttributes(key: string, value: unknown, fallback: unknown): Attribute[] {
+function changedAttributes(key: string, value: unknown, fallback: unknown, refs: VariableRef): Attribute[] {
   if (sameJson(value, fallback)) return []
   const nested = (object: unknown) => object !== null && typeof object === 'object' && !Array.isArray(object)
   if (nested(value) && nested(fallback) && sameJson(Object.keys(value as object).sort(), Object.keys(fallback as object).sort())) {
@@ -102,12 +109,48 @@ function changedAttributes(key: string, value: unknown, fallback: unknown): Attr
     for (const [inner, innerValue] of Object.entries(value as Record<string, unknown>)) {
       if (sameJson(innerValue, from[inner])) continue
       // もう一段入れ子なら、項目ごとまとめて JSON で書く
-      if (innerValue !== null && typeof innerValue === 'object') return [fieldAttribute(key, value)]
+      if (innerValue !== null && typeof innerValue === 'object') return [fieldAttribute(key, value, refs)]
       out.push([`${key}.${inner}`, plainValue(innerValue)])
     }
     return out
   }
-  return [fieldAttribute(key, value)]
+  return [fieldAttribute(key, value, refs)]
+}
+
+/** 変数につないだ項目を、その属性の var(名前) にする（同じ属性の値は除く）。余白の 4 辺が同じ変数なら padding にまとめる */
+function withVariableRefs(attributes: Attribute[], bindings: Readonly<Record<string, string | null>> | undefined, refs: VariableRef): Attribute[] {
+  if (!bindings) return attributes
+  const entries = Object.entries(bindings).flatMap(([key, id]) => {
+    const ref = id === null ? undefined : refs(id)
+    return ref === undefined ? [] : [[key, ref] as const]
+  })
+  const sides = ['layout.paddingTop', 'layout.paddingRight', 'layout.paddingBottom', 'layout.paddingLeft']
+  const sideRefs = sides.map((side) => entries.find(([key]) => key === side)?.[1])
+  const padding = sideRefs.every((ref) => ref !== undefined && ref === sideRefs[0]) ? sideRefs[0] : undefined
+  const written = new Map<string, string>()
+  for (const [key, ref] of entries) {
+    if (padding !== undefined && sides.includes(key)) continue
+    written.set(key === 'layout.gap' ? 'gap' : key === 'layout.crossGap' ? 'crossGap' : key, `var(${ref})`)
+  }
+  if (padding !== undefined) written.set('padding', `var(${padding})`)
+  return [...attributes.filter(([name]) => !written.has(name)), ...written]
+}
+
+/** モードの指定の属性の値（コレクションの名前=モードの名前; …）。書けるものが無ければ null */
+function modesValue(doc: DesignDocument, modes: Readonly<Record<string, string>> | undefined, drops: string[]): string | null {
+  if (!modes) return null
+  const parts = Object.entries(modes).flatMap(([collectionId, modeId]) => {
+    const collection = doc.collections.find((item) => item.id === collectionId)
+    const mode = collection?.modes.find((item) => item.id === modeId)
+    if (!collection || !mode) return []
+    // 区切りの = と ; を含む名前は、この書き方では読み戻せない
+    if (/[=;]/.test(collection.name) || mode.name.includes(';')) {
+      drops.push(`モードの指定 ${collection.name}=${mode.name}（名前に = か ; があるので、build のあと mode で付ける）`)
+      return []
+    }
+    return [`${collection.name}=${mode.name}`]
+  })
+  return parts.length > 0 ? parts.join('; ') : null
 }
 
 /** 並べ方（layout）の属性。layout=row|column|grid と、既定から変えた項目 */
@@ -136,6 +179,8 @@ function asContent(text: string): boolean {
 
 type Context = {
   doc: DesignDocument
+  /** 変数の id から var(名前) の名前 */
+  variableRef: VariableRef
   page: Page
   assets: AssetNamer
   drops: string[]
@@ -304,10 +349,17 @@ function element(ctx: Context, id: NodeId, depth: number, bindings: Map<NodeId, 
     const fallback = base as unknown as Record<string, unknown>
     for (const key of Object.keys(current)) {
       if (HANDLED.has(key) || (set && key === 'setDescription')) continue
-      attributes.push(...changedAttributes(key, current[key], fallback[key]))
+      attributes.push(...changedAttributes(key, current[key], fallback[key], ctx.variableRef))
     }
     attributes.push(...(bindings.get(node.id) ?? []))
-    if (node.type === 'text') {
+    if (node.type === 'frame') {
+      const modes = modesValue(ctx.doc, node.modes, ctx.drops)
+      if (modes !== null) attributes.push(['modes', modes])
+    }
+    // 文言を変数につないでいれば、中身ではなく text="var(名前)" で書く
+    const textBound = node.type === 'text' && node.bindings?.text !== undefined && ctx.variableRef(node.bindings.text) !== undefined
+    attributes.splice(0, attributes.length, ...withVariableRefs(attributes, node.bindings, ctx.variableRef))
+    if (node.type === 'text' && !textBound) {
       if (asContent(node.text)) children.push(`${indent}  ${escapeText(node.text).split('\n').join(`\n${indent}  `)}`)
       else attributes.push(['text', node.text])
     }
@@ -356,6 +408,11 @@ function instanceAttributes(ctx: Context, node: InstanceNode, children: string[]
     const fallback = createFrame(AT)[key]
     if (value !== fallback) out.push([key, String(value)])
   }
+  // 不透明度・表示の変数へのつながりと、変数のモードの指定も、インスタンスが自分で持つ
+  const ownBindings = node.bindings && Object.fromEntries(Object.entries(node.bindings).filter(([key]) => key === 'opacity' || key === 'visible'))
+  out.splice(0, out.length, ...withVariableRefs(out, ownBindings, ctx.variableRef))
+  const modes = modesValue(ctx.doc, node.modes, ctx.drops)
+  if (modes !== null) out.push(['modes', modes])
   for (const axis of ['width', 'height'] as const) {
     if (node.sizing[axis] !== 'fill') continue
     if (fillWritable(page, node, axis, root)) out.push([axis, 'fill'])
@@ -367,7 +424,7 @@ function instanceAttributes(ctx: Context, node: InstanceNode, children: string[]
     const entries = Object.entries(override) as [string, unknown][]
     if (main && key === main.node.id) {
       for (const [field, value] of entries) {
-        if (INSTANCE_ROOT_OVERRIDES.has(field)) out.push(fieldAttribute(field, value))
+        if (INSTANCE_ROOT_OVERRIDES.has(field)) out.push(fieldAttribute(field, value, ctx.variableRef))
         else ctx.drops.push(`${label} の根の上書き ${field}`)
       }
       continue
@@ -391,8 +448,10 @@ function instanceAttributes(ctx: Context, node: InstanceNode, children: string[]
       } else if (field === 'assetId') {
         if (ctx.assets === null) ctx.drops.push(`${label} の画像の差し替え（${key}）（--assets でフォルダを指定すると書き出せる）`)
         else attributes.push(['src', ctx.assets(value as string)])
-      } else attributes.push(fieldAttribute(field, value))
+      } else if (field !== 'bindings') attributes.push(fieldAttribute(field, value, ctx.variableRef))
     }
+    // 上書きの変数へのつながり（文言・文字の書式・表示）は var(名前)。「つながない」（null）は値の上書きで書ける
+    attributes.splice(0, attributes.length, ...withVariableRefs(attributes, override.bindings, ctx.variableRef))
     if (attributes.length > 1) children.push(`${indent}<override${attributes.map(([name, value]) => ` ${name}="${escapeAttribute(value)}"`).join('')}/>`)
   }
   return out
@@ -422,6 +481,7 @@ function context(doc: DesignDocument, page: Page, assets: AssetNamer, drops: str
   const byComponentFull = new Map(mains.map((main) => [main.node.component.id, main]))
   return {
     doc,
+    variableRef: variableRefs(doc),
     page,
     assets,
     drops,
@@ -453,11 +513,46 @@ function context(doc: DesignDocument, page: Page, assets: AssetNamer, drops: str
   }
 }
 
+/** 変数の id から、マークアップで指す名前（同じ名前が別のコレクションにもあれば コレクション:名前） */
+function variableRefs(doc: DesignDocument): VariableRef {
+  const count = new Map<string, number>()
+  for (const collection of doc.collections) for (const variable of collection.variables) count.set(variable.name, (count.get(variable.name) ?? 0) + 1)
+  const refs = new Map<string, string>()
+  for (const collection of doc.collections) {
+    for (const variable of collection.variables) refs.set(variable.id, count.get(variable.name)! > 1 ? `${collection.name}:${variable.name}` : variable.name)
+  }
+  return (id) => refs.get(id)
+}
+
+/** 変数の表（<variables>）の行 */
+function variablesLines(doc: DesignDocument): string[] {
+  if (doc.collections.length === 0) return []
+  const refs = variableRefs(doc)
+  // 値は value、別名は alias（文字の値が「var(…)」の形でも、別名と取り違えないように）
+  const value = (raw: VariableValue) => (isAlias(raw) ? attr('alias', refs(raw.alias) ?? raw.alias) : attr('value', String(raw)))
+  const attr = (name: string, text: string) => ` ${name}="${escapeAttribute(text)}"`
+  const lines = ['  <variables>']
+  for (const collection of doc.collections) {
+    lines.push(`    <collection${attr('id', collection.id)}${attr('name', collection.name)}>`)
+    for (const mode of collection.modes) lines.push(`      <mode${attr('id', mode.id)}${attr('name', mode.name)}/>`)
+    const [first, ...rest] = collection.modes
+    for (const variable of collection.variables) {
+      const head = `      <${variable.type}${attr('id', variable.id)}${attr('name', variable.name)}${value(variable.values[first.id])}`
+      const others = rest.filter((mode) => JSON.stringify(variable.values[mode.id]) !== JSON.stringify(variable.values[first.id]))
+      if (others.length === 0) lines.push(`${head}/>`)
+      else lines.push(`${head}>`, ...others.map((mode) => `        <mode${attr('name', mode.name)}${value(variable.values[mode.id])}/>`), `      </${variable.type}>`)
+    }
+    lines.push('    </collection>')
+  }
+  lines.push('  </variables>')
+  return lines
+}
+
 /** ドキュメント全体を <kdr> のマークアップにする */
 export function documentMarkup(doc: DesignDocument, assets: AssetNamer): MarkupOutput {
   const drops: string[] = []
   if (doc.fonts.length > 0) drops.push(`埋め込んだ書体 ${doc.fonts.length} 個（build のあと font-add で足す）`)
-  const lines = [`<kdr name="${escapeAttribute(doc.name)}">`]
+  const lines = [`<kdr name="${escapeAttribute(doc.name)}">`, ...variablesLines(doc)]
   for (const page of doc.pages) {
     const ctx = context(doc, page, assets, drops)
     const bindings = new Map<NodeId, Attribute[]>()
@@ -465,7 +560,9 @@ export function documentMarkup(doc: DesignDocument, assets: AssetNamer): MarkupO
     const body = page.rootIds.flatMap((id) => element(ctx, id, 2, bindings))
     // ガイド線は「x:120 y:-40」の形の guides 属性に
     const guides = page.guides.length === 0 ? '' : ` guides="${page.guides.map(({ axis, position }) => `${axis}:${position}`).join(' ')}"`
-    lines.push(`  <page id="${escapeAttribute(page.id)}" name="${escapeAttribute(page.name)}"${guides}${body.length === 0 ? '/>' : '>'}`)
+    const pageModes = modesValue(doc, page.modes, drops)
+    const modesAttribute = pageModes === null ? '' : ` modes="${escapeAttribute(pageModes)}"`
+    lines.push(`  <page id="${escapeAttribute(page.id)}" name="${escapeAttribute(page.name)}"${guides}${modesAttribute}${body.length === 0 ? '/>' : '>'}`)
     if (body.length > 0) lines.push(...body, '  </page>')
   }
   lines.push('</kdr>')

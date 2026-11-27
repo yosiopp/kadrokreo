@@ -353,7 +353,7 @@ describe('kdr build', () => {
       ['<kdr><page><component id="a" layout="row"><instance of="a"/></component></page></kdr>', /自分自身を含むことになります/],
       ['<kdr><page><override node="x"/></page></kdr>', /<override> は <instance> の中にだけ書けます/],
       ['<kdr foo="1"><page/></kdr>', /<kdr> に foo は指定できません/],
-      ['<kdr><rect width="1" height="1"/></kdr>', /<kdr> の直下に書けるのは <page> だけ/],
+      ['<kdr><rect width="1" height="1"/></kdr>', /<kdr> の直下に書けるのは <variables> と <page> だけ/],
       ['<kdr/>', /<kdr> には <page> が 1 つ以上要ります/],
       ['<frame width="1" height="1"/>', /最上位は <kdr> です（<frame> から始まる木の一部は、kdr place/],
       ['<!DOCTYPE kdr [<!ENTITY a "b">]><kdr><page/></kdr>', /DOCTYPE・ENTITY は書けません/],
@@ -984,5 +984,152 @@ describe('実装側の部品の対応（code・code-prop・html）', () => {
     expect(v.stderr).toContain('v- で始まる名前')
     expect(await v.run(['-f', 'a.kdr', 'code', 'buttons', 'Button', '--from', 'a\nb'])).not.toBe(0)
     expect(v.stderr).toContain('--from に使えない文字')
+  })
+})
+
+describe('マークアップの変数（<variables>・var(名前)・modes）', () => {
+  const VARIABLES = `<kdr name="Vars">
+  <variables>
+    <collection name="Theme">
+      <mode name="Light"/>
+      <mode name="Dark"/>
+      <color name="color/surface" value="#ffffff">
+        <mode name="Dark" value="#16161d"/>
+      </color>
+      <color name="color/text" value="#16161d">
+        <mode name="Dark" value="#ffffff"/>
+      </color>
+      <color name="color/link" alias="color/text"/>
+      <number name="space/md" value="16">
+        <mode name="Dark" value="24"/>
+      </number>
+      <string name="copy/title" value="こんにちは"/>
+    </collection>
+  </variables>
+  <page name="Page 1" modes="Theme=Light">
+    <frame name="Card" id="card" width="240" fill="var(color/surface)" layout="column" padding="var(space/md)" gap="var(space/md)" cornerRadius="8">
+      <text name="Title" text="var(copy/title)" fill="var(color/link)"/>
+    </frame>
+    <frame name="Dark" id="dark" x="300" width="240" fill="var(color/surface)" layout="column" padding="var(space/md)" modes="Theme=Dark">
+      <text name="Body" fill="var(color/text)">本文</text>
+    </frame>
+  </page>
+</kdr>
+`
+
+  it('変数の表を作り、属性の var(名前) でつなぎ、モードの指定で解決する', async () => {
+    const doc = await built(VARIABLES)
+    const [theme] = doc.collections
+    expect(theme).toMatchObject({ name: 'Theme', modes: [{ name: 'Light' }, { name: 'Dark' }] })
+    expect(theme.variables.map((variable) => variable.name)).toEqual(['color/surface', 'color/text', 'color/link', 'space/md', 'copy/title'])
+    const card = byName<FrameNode>(doc, 'Card')
+    const dark = byName<FrameNode>(doc, 'Dark')
+    expect(card).toMatchObject({ fills: [{ color: '#ffffff' }], layout: { gap: 16, paddingTop: 16 } })
+    expect(dark).toMatchObject({ fills: [{ color: '#16161d' }], layout: { paddingTop: 24 } })
+    expect(byName(doc, 'Title')).toMatchObject({ text: 'こんにちは', fills: [{ color: '#16161d' }] })
+    expect(byName(doc, 'Body')).toMatchObject({ fills: [{ color: '#ffffff' }] })
+  })
+
+  it('kdr markup で書き戻すと、もう一度 build しても同じマークアップになる', async () => {
+    const h = harness({ 'a.xml': VARIABLES })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', 'markup'])).toBe(0)
+    const first = h.stdout
+    expect(first).toContain('fill="var(color/surface)"')
+    expect(first).toContain('text="var(copy/title)"')
+    expect(first).toContain('modes="Theme=Dark"')
+    const again = harness({ 'b.xml': first })
+    expect(await again.run(['build', 'b.xml', '-o', 'b.kdr'])).toBe(0)
+    expect(await again.run(['-f', 'b.kdr', 'markup'])).toBe(0)
+    expect(again.stdout).toBe(first)
+  })
+
+  it('インスタンスのモード・不透明度のつながり、「var(…)」の形の文字の値も書き戻せる。表の誤りは行の付いたエラー', async () => {
+    const markup = `<kdr name="R">
+  <variables>
+    <collection name="Theme">
+      <mode name="Light"/>
+      <mode name="Dark"/>
+      <color name="surface" value="#ffffff">
+        <mode name="Dark" value="#000000"/>
+      </color>
+      <number name="op" value="0.5"/>
+      <string name="tpl" value="var(--brand)"/>
+    </collection>
+  </variables>
+  <page name="P">
+    <component name="C" id="c" width="10" height="10" fill="var(surface)" modes="Theme=Light"/>
+    <instance of="c" id="i2" x="40" modes="Theme=Dark" opacity="var(op)"/>
+    <instance of="c" id="i3" x="80"/>
+  </page>
+</kdr>`
+    const doc = await built(markup)
+    expect(doc.pages[0].nodes.i2).toMatchObject({ opacity: 0.5, fills: [{ color: '#000000' }] })
+    // モードを書かないインスタンスは、元の指定を受け継ぐ
+    expect(doc.pages[0].nodes.i3).toMatchObject({ fills: [{ color: '#ffffff' }] })
+    expect(doc.collections[0].variables[2].values).toEqual({ [doc.collections[0].modes[0].id]: 'var(--brand)', [doc.collections[0].modes[1].id]: 'var(--brand)' })
+    const h = harness({ 'a.xml': markup })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', 'markup'])).toBe(0)
+    const written = h.stdout
+    expect(written).toContain('opacity="var(op)" modes="Theme=Dark"')
+    expect(written).toContain('value="var(--brand)"')
+    expect(h.stderr).toBe('')
+    const again = harness({ 'b.xml': written })
+    expect(await again.run(['build', 'b.xml', '-o', 'b.kdr'])).toBe(0)
+    expect(await again.run(['-f', 'b.kdr', 'markup'])).toBe(0)
+    expect(again.stdout).toBe(written)
+
+    const fails = async (xml: string, message: string) => {
+      const bad = harness({ 'a.xml': xml })
+      expect(await bad.run(['build', 'a.xml', '-o', 'a.kdr'])).not.toBe(0)
+      expect(bad.stderr).toMatch(/a\.xml:\d+: /)
+      expect(bad.stderr).toContain(message)
+    }
+    const table = (inner: string) => `<kdr><variables><collection name="T"><mode name="M"/>${inner}</collection></variables><page name="P"/></kdr>`
+    await fails(table('<color name="a" alias="b"/><color name="b" alias="a"/>'), '循環')
+    await fails(table('<color name="a" id="x" value="#000000"/><color name="b" id="x" value="#000000"/>'), 'id が重複')
+    await fails(table('<color name="a" value="#000000"><mode name="M" value="#111111"/><mode name="M" value="#222222"/></color>'), '2 回')
+    await fails(table('<color name="a" value="#000000" alias="b"/>'), '一緒に書けません')
+  })
+
+  it('インスタンスの上書きで、文言を別の変数につなぎ、書き戻しても戻る', async () => {
+    const markup = `<kdr name="I">
+  <variables>
+    <collection name="Copy">
+      <string name="ok" value="OK"/>
+      <string name="cancel" value="Cancel"/>
+    </collection>
+  </variables>
+  <page name="P">
+    <component name="Btn" id="btn" layout="row">
+      <text name="Label" text="var(ok)"/>
+    </component>
+    <instance of="btn" id="i2" x="200">
+      <override node="Label" text="var(cancel)"/>
+    </instance>
+  </page>
+</kdr>
+`
+    const doc = await built(markup)
+    const cancel = doc.collections[0].variables.find((variable) => variable.name === 'cancel')!.id
+    expect(doc.pages[0].nodes.i2).toMatchObject({ component: { overrides: { [byName(doc, 'Label').id]: { text: 'Cancel', bindings: { text: cancel } } } } })
+    const h = harness({ 'a.xml': markup })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', 'markup'])).toBe(0)
+    expect(h.stdout).toContain('<override node="Label" text="var(cancel)"/>')
+  })
+
+  it('place と、インスタンスの上書きでも var(名前) を使え、誤りは行の付いたエラーにする', async () => {
+    const h = harness({ 'a.xml': VARIABLES, 'part.xml': '<rect name="Chip" width="40" height="20" fill="var(color/text)" cornerRadius="var(space/md)"/>' })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', 'place', 'part.xml', '-o', 'b.kdr'])).toBe(0)
+    expect(byName((await h.doc('b.kdr')), 'Chip')).toMatchObject({ fills: [{ color: '#16161d' }], cornerRadius: 16 })
+    const bad = harness({ 'a.xml': VARIABLES.replace('modes="Theme=Dark"', 'modes="Theme=Night"') })
+    expect(await bad.run(['build', 'a.xml', '-o', 'a.kdr'])).not.toBe(0)
+    expect(bad.stderr).toContain('Night というモードがありません')
+    const missing = harness({ 'a.xml': VARIABLES.replace('alias="color/text"', 'alias="color/nope"') })
+    expect(await missing.run(['build', 'a.xml', '-o', 'a.kdr'])).not.toBe(0)
+    expect(missing.stderr).toContain('color/nope')
   })
 })

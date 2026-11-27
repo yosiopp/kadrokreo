@@ -359,6 +359,7 @@ kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほか�
 | 説明文・プロパティ・バリアント | 説明文は `<component description="…">`。プロパティは元の中のノードに `prop="名前"`（`<text>` なら文言、`<instance>` なら差し替え）か `prop.visible="名前"`（表示）を書いて結ぶ。インスタンスでの値は `<override prop="名前" value="…"/>`。バリアントは `<component-set>` の直下に `<component variant="種類=大, 状態=標準">` を並べ、`<instance of="まとまり" variant="種類=大">` で選ぶ（下の例） |
 | 実装の部品 | `<component code="Button" code-from="@/ui" code-default="true">`（`<component-set>` にも）。props の読み替えはその中に `<code-prop property="大きさ" prop="size"><code-value of="大" to="lg"/></code-prop>` |
 | ページのガイド線 | `<page guides="x:120 y:-40.5">`（`x:` は縦の線、`y:` は横の線の位置。空白で区切る）。フレームのレイアウトグリッドは `layoutGrids='[{"type":"columns","count":12,"gutter":20,"margin":20}]'`（`set` と同じ JSON） |
+| 変数 | `<kdr>` の直下、`<page>` より前に `<variables>` を書く。`<collection name="Theme">` の中に `<mode name="Light"/>`（モードを並べる。省くと `Mode 1`）と `<color name="color/primary" value="#5b4cf5">`（`<number>` `<string>` `<boolean>` も）を並べ、モードごとに違う値は中に `<mode name="Dark" value="#a99fff"/>`。別名は `value` の代わりに `alias="color/primary"`（別名の先の変数の名前）。ノードの属性では `fill="var(color/primary)"` `gap="var(space/md)"` `padding="var(space/md)"` `text="var(copy/title)"` のように `set` と同じく `var(名前)` で指す（`<override>` でも）。ページ・フレーム・インスタンスで使うモードは `modes="Theme=Dark; Density=Compact"` |
 | id | 省ける。省くと木の道筋（名前と、同じ名前の兄弟の中での順）から決まる。後で `set` などから指すノードには `id` を書いておく |
 
 コンポーネントの説明文・プロパティ・バリアントも、マークアップに書ける:
@@ -409,7 +410,7 @@ kdr -f design.kdr markup --assets images > design.xml    # 画像を images/ に
 kdr build design.xml -o design.kdr
 ```
 
-- id はすべて書くので、作り直しても同じ id になる。インスタンスの中身は書かず、元と違えたところだけを `<override>` で書く
+- id はすべて書くので、作り直しても同じ id になる（変数のコレクション・モード・変数の id も書く）。変数につないだ項目は `var(名前)` で、モードの指定は `modes` で書く。インスタンスの中身は書かず、元と違えたところだけを `<override>` で書く
 - 書かなかった項目は、`build` が使う値（塗りなし・線なしなど）と同じもの。グラデーションや影のように略記のないものは、`fills="[…]"` のように JSON で書く
 - 画像は `--assets` を付けたときだけ書き出す（フォルダは先に作っておく。`src` には `--assets` に書いたフォルダからのパスを書くので、マークアップのファイルはそのフォルダと同じ場所に置く）
 - 表せないもの（埋め込んだ書体、差し替えのプロパティの候補、インスタンスの裏返し、入れ子のインスタンスの中身へのプロパティの結び付けなど）は書かずに、`kdr: markup: 書き出せないもの: …` と標準エラーに知らせる。全体を書き出したときは、書き出したものを build し直して元と比べ、違うところも知らせる（editor で作った kdr では、文字の幅の見積もりのため、位置や大きさがずれることがある）

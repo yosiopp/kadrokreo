@@ -19,12 +19,14 @@
 import { type MainNode, OVERRIDE_KEYS, derivedId, findMain, isInstance, isMain, owningInstance } from '../src/document/component.ts'
 import { canBindProperty, enclosingMainNode, instanceProperties } from '../src/document/componentProperties.ts'
 import { namePath, pathIndex, subtreeIds } from '../src/document/componentSource.ts'
-import { KDR_MAX_GUIDES, KdrError, MAX_DEPTH, kdrFile, parseKdr } from '../src/document/kdr.ts'
+import { KDR_MAX_GUIDES, KdrError, MAX_DEPTH, VARIABLE_TYPES, kdrFile, parseKdr } from '../src/document/kdr.ts'
 import { pathFromPoints } from '../src/document/path.ts'
 import { polygonSize } from '../src/document/polygon.ts'
 import { sha256Hex } from '../src/document/sha256.ts'
 import { MAX_CODE_LENGTH, isCodeFrom, isCodeName, isCodePropName } from '../src/document/codeComponent.ts'
-import type { Asset, AssetId, CodeComponent, CodeProp, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, PageGuide, PathNode, SceneNode } from '../src/document/types.ts'
+import type { Asset, AssetId, CodeComponent, CodeProp, ComponentProperty, DesignDocument, FrameNode, ModeSelection, NodeId, Page, PageGuide, PathNode, SceneNode, Variable, VariableCollection, VariableType, VariableValue } from '../src/document/types.ts'
+import { applyVariables } from '../src/document/variables.ts'
+import { DEFAULT_VARIABLE_VALUES } from '../src/editor/operations/variables.ts'
 import { type VariantProps, formatVariantName, isVariantSet, parseVariantName, propValue, variantSetOf, variantsIn } from '../src/document/variants.ts'
 import { alignVariantProperties, setInstanceProperty } from '../src/editor/componentProperties.ts'
 import { canHoldInstance, listComponents, componentName, nestedInstanceOf, sameJson, swapNestedInstance, syncComponents } from '../src/editor/components.ts'
@@ -39,7 +41,7 @@ import { point } from './commands/common.ts'
 import { pathFromData, polygonShape } from './commands/create.ts'
 import type { Session } from './session.ts'
 import { estimateTextSize, fitTextEstimated } from './textMeasure.ts'
-import { buildPatch, orderAssignments } from './values.ts'
+import { buildPatch, findVariableByRef, orderAssignments } from './values.ts'
 
 export class MarkupError extends Error {
   override name = 'MarkupError'
@@ -217,6 +219,8 @@ type Scope = {
   sets: Map<NodeId, { names: Set<string>; strict: boolean }>
   /** place で、入れる先を含むコンポーネントの元（prop の結び先になる） */
   outerMain: NodeId | null
+  /** 変数のコレクション（属性の var(名前) とモードの指定が指す） */
+  collections: VariableCollection[]
 }
 
 /** kdr として読める値かを、ノード 1 つで確かめる（子とコンポーネントのつながりは、最後の全体の検証が見る） */
@@ -239,7 +243,7 @@ function plainMessage(error: Error): string {
  */
 function patchNode<N extends SceneNode>(scope: Scope, element: MarkupElement, node: N, attributes: readonly MarkupAttribute[]): N {
   const attempt = (pairs: readonly [string, string][]) => {
-    const next = { ...node, ...buildPatch(node, pairs) } as N
+    const next = { ...node, ...buildPatch(node, pairs, scope.collections) } as N
     validateNode(next, scope.assets)
     return next
   }
@@ -331,10 +335,10 @@ function codeOfElement(fail: Fail, element: MarkupElement): CodeComponent | null
 
 /** ノードの属性のうち、種類ごとに自分で読むもの（残りは buildPatch に渡す） */
 const STRUCTURAL: Record<(typeof NODE_ELEMENTS)[number], readonly string[]> = {
-  frame: ['id'],
-  component: ['id', 'description', 'variant', ...CODE_ATTRIBUTES],
-  'component-set': ['id', 'description', ...CODE_ATTRIBUTES],
-  instance: ['id', 'of', 'variant'],
+  frame: ['id', 'modes'],
+  component: ['id', 'description', 'variant', 'modes', ...CODE_ATTRIBUTES],
+  'component-set': ['id', 'description', 'modes', ...CODE_ATTRIBUTES],
+  instance: ['id', 'of', 'variant', 'modes'],
   rect: ['id'],
   ellipse: ['id'],
   polygon: ['id', 'count', 'ratio'],
@@ -693,6 +697,12 @@ function buildElement(
     }
   }
 
+  // 変数のモードの指定（フレームの種類だけ）
+  const modes = attribute('modes')
+  if (modes && node.type === 'frame') {
+    const selection = parseModes(scope, modes)
+    if (selection) node = { ...node, modes: selection }
+  }
   const placed = { ...node, parentId: parent?.id ?? null } as SceneNode
   scene.nodes[id] = placed
   if (parent) parent.children.push(id)
@@ -887,7 +897,7 @@ export type MarkupBuild = {
   scope: Scope
 }
 
-function newScope(file: string, images: ReadonlyMap<string, MarkupImage>, assets: Record<AssetId, Asset>): Scope {
+function newScope(file: string, images: ReadonlyMap<string, MarkupImage>, assets: Record<AssetId, Asset>, collections: VariableCollection[] = []): Scope {
   const fail = failer(file)
   return {
     fail,
@@ -902,6 +912,180 @@ function newScope(file: string, images: ReadonlyMap<string, MarkupImage>, assets
     bindings: [],
     sets: new Map(),
     outerMain: null,
+    collections,
+  }
+}
+
+/** modes="コレクション=モード; …" を、コレクションの id → モードの id にする。空なら null */
+function parseModes(scope: Scope, attribute: MarkupAttribute): ModeSelection | null {
+  const selection: ModeSelection = {}
+  for (const part of attribute.value.split(';')) {
+    if (part.trim() === '') continue
+    const at = part.indexOf('=')
+    if (at === -1) throw scope.fail(attribute.line, `modes="${attribute.value}": 「コレクション=モード」を ; で区切って書きます`)
+    const name = part.slice(0, at).trim()
+    const modeName = part.slice(at + 1).trim()
+    const collection = scope.collections.find((item) => item.name === name)
+    if (!collection) throw scope.fail(attribute.line, `modes: ${name} というコレクションがありません`)
+    const mode = collection.modes.find((item) => item.name === modeName)
+    if (!mode) throw scope.fail(attribute.line, `modes: ${name} に ${modeName} というモードがありません（${collection.modes.map((item) => item.name).join(' / ')}）`)
+    selection[collection.id] = mode.id
+  }
+  return Object.keys(selection).length > 0 ? selection : null
+}
+
+/**
+ * <variables> の中身を、変数のコレクションにする。id を省くと名前から決める（同じマークアップからは同じ id）。
+ *   <collection name="Theme"> <mode name="Light"/> <mode name="Dark"/>
+ *     <color name="color/primary" value="#5b4cf5"> <mode name="Dark" value="#a99fff"/> </color>
+ *     <color name="color/link" alias="color/primary"/>
+ *   </collection>
+ */
+function parseVariables(fail: Fail, element: MarkupElement): VariableCollection[] {
+  checkAttributes(fail, element, [])
+  // コレクション・モード・変数の id はドキュメント全体で一意
+  const taken = new Map<string, number>()
+  const idOf = (node: MarkupElement, seed: readonly string[]) => {
+    const written = node.attributes.find((attribute) => attribute.name === 'id')
+    if (written && !ID_PATTERN.test(written.value)) throw fail(written.line, `id="${written.value}": id には英数字と _ - だけを 64 文字まで使えます`)
+    // 名前の組から決める id は、区切りが曖昧にならないよう JSON にしてからハッシュにする
+    const id = written?.value ?? hashId(JSON.stringify(seed))
+    if (taken.has(id)) throw fail(written?.line ?? node.line, `id="${id}": id が重複しています（${taken.get(id)} 行目と同じ）`)
+    taken.set(id, written?.line ?? node.line)
+    return id
+  }
+  const nameOf = (node: MarkupElement) => {
+    const name = node.attributes.find((attribute) => attribute.name === 'name')?.value.trim()
+    if (!name) throw fail(node.line, `<${node.name}> には name が要ります`)
+    return name
+  }
+  /** value（値）か alias（別名の先の変数の名前）のどちらか 1 つ */
+  const valueOf = (node: MarkupElement) => {
+    const value = node.attributes.find((attribute) => attribute.name === 'value')
+    const alias = node.attributes.find((attribute) => attribute.name === 'alias')
+    if (value && alias) throw fail(alias.line, 'value と alias は一緒に書けません（値か、別名の先の変数の名前のどちらか）')
+    if (!value && !alias) throw fail(node.line, `<${node.name}> には value（値）か alias（別名の先の変数の名前）が要ります`)
+    return value ? { kind: 'value' as const, attribute: value } : { kind: 'alias' as const, attribute: alias! }
+  }
+  let collections: VariableCollection[] = []
+  /** 別名は、全部の変数を読んでから id に直す */
+  const pending: { collection: string; variable: string; mode: string; ref: string; line: number }[] = []
+  for (const child of element.children) {
+    if (child.name !== 'collection') throw fail(child.line, `<variables> の中に書けるのは <collection> だけです: <${child.name}>`)
+    checkAttributes(fail, child, ['id', 'name'])
+    const name = nameOf(child)
+    const collectionId = idOf(child, ['collection', name])
+    const modes = child.children.filter((item) => item.name === 'mode').map((mode) => {
+      checkAttributes(fail, mode, ['id', 'name'])
+      const modeName = nameOf(mode)
+      return { id: idOf(mode, ['mode', name, modeName]), name: modeName }
+    })
+    if (modes.length === 0) modes.push({ id: idOf(child, ['mode', name, 'Mode 1']), name: 'Mode 1' })
+    collections = addCollectionWith(fail, collections, child, collectionId, name, modes)
+    for (const item of child.children) {
+      if (item.name === 'mode') continue
+      if (!(VARIABLE_TYPES as readonly string[]).includes(item.name)) {
+        throw fail(item.line, `<collection> の中に書けるのは <mode> と ${VARIABLE_TYPES.map((type) => `<${type}>`).join(' ')} です: <${item.name}>`)
+      }
+      checkAttributes(fail, item, ['id', 'name', 'value', 'alias'])
+      const type = item.name as VariableType
+      const variableName = nameOf(item)
+      const id = idOf(item, ['variable', name, variableName])
+      const values: Record<string, VariableValue> = {}
+      const base = valueOf(item)
+      const baseValue = base.kind === 'value' ? variableLiteral(fail, type, base.attribute.value, base.attribute.line) : DEFAULT_VARIABLE_VALUES[type]
+      for (const mode of modes) values[mode.id] = baseValue
+      const overridden = new Set<string>()
+      for (const override of item.children) {
+        if (override.name !== 'mode') throw fail(override.line, `<${type}> の中に書けるのは <mode> だけです: <${override.name}>`)
+        checkAttributes(fail, override, ['name', 'value', 'alias'])
+        const modeName = nameOf(override)
+        const mode = modes.find((candidate) => candidate.name === modeName)
+        if (!mode) throw fail(override.line, `${name} に ${modeName} というモードがありません`)
+        if (overridden.has(mode.id)) throw fail(override.line, `同じモード ${modeName} を 2 回書いています`)
+        overridden.add(mode.id)
+        const read = valueOf(override)
+        if (read.kind === 'value') values[mode.id] = variableLiteral(fail, type, read.attribute.value, read.attribute.line)
+        else pending.push({ collection: name, variable: variableName, mode: mode.id, ref: read.attribute.value.trim(), line: read.attribute.line })
+      }
+      // value の別名は、<mode> で書かなかったモードに入れる
+      if (base.kind === 'alias') {
+        for (const mode of modes) {
+          if (!overridden.has(mode.id)) pending.push({ collection: name, variable: variableName, mode: mode.id, ref: base.attribute.value.trim(), line: base.attribute.line })
+        }
+      }
+      collections = withVariableAdded(fail, collections, item, name, { id, name: variableName, type, values })
+    }
+  }
+  // 別名を id に直す（同じ種類の変数だけ）
+  const aliasLines = new Map<string, number>()
+  for (const { collection, variable, mode, ref, line } of pending) {
+    const target = findVariableByRefOrFail(fail, collections, ref, line)
+    const owner = collections.find((item) => item.name === collection)!
+    const index = owner.variables.findIndex((item) => item.name === variable)
+    const entry = owner.variables[index]
+    if (target.type !== entry.type) throw fail(line, `alias="${ref}" は ${entry.type} の変数ではありません`)
+    owner.variables[index] = { ...entry, values: { ...entry.values, [mode]: { alias: target.id } } }
+    if (!aliasLines.has(entry.id)) aliasLines.set(entry.id, line)
+  }
+  // 別名の循環は、ここで行の付いたエラーにする
+  const byId = new Map(collections.flatMap((collection) => collection.variables.map((variable) => [variable.id, variable] as const)))
+  for (const [start, line] of aliasLines) {
+    const seen = new Set<string>()
+    const stack = [start]
+    while (stack.length > 0) {
+      const current = stack.pop()!
+      for (const value of Object.values(byId.get(current)?.values ?? {})) {
+        if (typeof value !== 'object') continue
+        if (value.alias === start) throw fail(line, `${byId.get(start)!.name}: 別名が循環しています`)
+        if (!seen.has(value.alias)) {
+          seen.add(value.alias)
+          stack.push(value.alias)
+        }
+      }
+    }
+  }
+  return collections
+}
+
+function addCollectionWith(fail: Fail, collections: VariableCollection[], element: MarkupElement, id: string, name: string, modes: VariableCollection['modes']): VariableCollection[] {
+  if (collections.some((item) => item.name === name)) throw fail(element.line, `同じ名前のコレクションがあります: ${name}`)
+  if (new Set(modes.map((mode) => mode.name)).size !== modes.length) throw fail(element.line, `${name}: 同じ名前のモードがあります`)
+  return [...collections, { id, name, modes, variables: [] }]
+}
+
+function withVariableAdded(fail: Fail, collections: VariableCollection[], element: MarkupElement, collection: string, variable: Variable): VariableCollection[] {
+  return collections.map((item) => {
+    if (item.name !== collection) return item
+    if (item.variables.some((other) => other.name === variable.name)) throw fail(element.line, `同じ名前の変数があります: ${variable.name}`)
+    return { ...item, variables: [...item.variables, variable] }
+  })
+}
+
+function variableLiteral(fail: Fail, type: VariableType, raw: string, line: number): VariableValue {
+  switch (type) {
+    case 'color':
+      if (!/^#[0-9a-fA-F]{6}$/.test(raw.trim())) throw fail(line, `value="${raw}": 色は #rrggbb で書きます`)
+      return raw.trim().toLowerCase()
+    case 'number': {
+      const value = Number(raw)
+      if (raw.trim() === '' || !Number.isFinite(value)) throw fail(line, `value="${raw}": 数値ではありません`)
+      return value
+    }
+    case 'boolean':
+      if (raw !== 'true' && raw !== 'false') throw fail(line, `value="${raw}": true か false を書きます`)
+      return raw === 'true'
+    case 'string':
+      return raw
+  }
+}
+
+function findVariableByRefOrFail(fail: Fail, collections: readonly VariableCollection[], ref: string, line: number) {
+  try {
+    return findVariableByRef(collections, ref)
+  } catch (error) {
+    if (error instanceof UsageError) throw fail(line, error.message)
+    throw error
   }
 }
 
@@ -932,11 +1116,17 @@ export function buildMarkupDocument(
     throw fail(root.line, isNodeElement(root.name) ? `最上位は <kdr> です（<${root.name}> から始まる木の一部は、kdr place で今の kdr に足せます）` : `最上位は <kdr> です: <${root.name}>`)
   }
   checkAttributes(fail, root, ['name'])
-  if (root.children.length === 0) throw fail(root.line, '<kdr> には <page> が 1 つ以上要ります')
+  // 変数の表（<variables>）は、ページより前に 1 つだけ
+  const variablesElements = root.children.filter((element) => element.name === 'variables')
+  if (variablesElements.length > 1) throw fail(variablesElements[1].line, '<variables> は 1 つだけ書けます')
+  if (variablesElements.length === 1 && root.children[0] !== variablesElements[0]) throw fail(variablesElements[0].line, '<variables> は <page> より前に書きます')
+  scope.collections = variablesElements.length === 1 ? parseVariables(fail, variablesElements[0]) : []
+  const pageElements = root.children.filter((element) => element.name !== 'variables')
+  if (pageElements.length === 0) throw fail(root.line, '<kdr> には <page> が 1 つ以上要ります')
   const pageIds = new Set<string>()
-  for (const element of root.children) {
-    if (element.name !== 'page') throw fail(element.line, `<kdr> の直下に書けるのは <page> だけです: <${element.name}>`)
-    checkAttributes(fail, element, ['name', 'id', 'guides'])
+  for (const element of pageElements) {
+    if (element.name !== 'page') throw fail(element.line, `<kdr> の直下に書けるのは <variables> と <page> だけです: <${element.name}>`)
+    checkAttributes(fail, element, ['name', 'id', 'guides', 'modes'])
     const id = element.attributes.find((attribute) => attribute.name === 'id')
     if (id) {
       if (!ID_PATTERN.test(id.value)) throw fail(id.line, `id="${id.value}": id には英数字と _ - だけを 64 文字まで使えます`)
@@ -945,13 +1135,18 @@ export function buildMarkupDocument(
     }
   }
   const names = new Map<string, number>()
-  const pages = root.children.map((element, index) => {
+  const pages = pageElements.map((element, index) => {
     const name = element.attributes.find((attribute) => attribute.name === 'name')?.value ?? `Page ${index + 1}`
     const nth = names.get(name) ?? 0
     names.set(name, nth + 1)
     const id = element.attributes.find((attribute) => attribute.name === 'id')?.value ?? uniqueId(`page:${name}${nth === 0 ? '' : `~${nth}`}`, pageIds)
     const guides = element.attributes.find((attribute) => attribute.name === 'guides')
-    return { element, scene: { id, name, nodes: {} as Record<NodeId, SceneNode>, rootIds: [] as NodeId[], guides: guides ? parseGuidesAttribute(fail, guides) : [] } }
+    const modesAttribute = element.attributes.find((attribute) => attribute.name === 'modes')
+    const modes = modesAttribute ? parseModes(scope, modesAttribute) : null
+    return {
+      element,
+      scene: { id, name, nodes: {} as Record<NodeId, SceneNode>, rootIds: [] as NodeId[], guides: guides ? parseGuidesAttribute(fail, guides) : [], ...(modes ? { modes } : {}) },
+    }
   })
   // ノードの id はページの中でだけ一意
   for (const { element } of pages) assignIds(scope, element.children, '', new Set())
@@ -967,7 +1162,7 @@ export function buildMarkupDocument(
     pages: pages.map(({ scene }) => scene),
     assets,
     fonts: [],
-    collections: [],
+    collections: scope.collections,
   })
   checkCycles(scope, document)
   return { document, build: { pending: scope.pending, scope } }
@@ -987,7 +1182,7 @@ export function placeMarkupFragment(
   index: number | undefined,
   at: { x?: number; y?: number },
 ): { document: DesignDocument; id: NodeId; build: MarkupBuild } {
-  const scope = newScope(file, images, doc.assets)
+  const scope = newScope(file, images, doc.assets, doc.collections)
   const { fail } = scope
   if (!isNodeElement(root.name)) {
     throw fail(root.line, root.name === 'kdr' ? '<kdr> から始まるマークアップは、kdr build でドキュメントにします（place に渡すのはノードの要素 1 つ）' : `知らない要素です: <${root.name}>（${NODE_ELEMENTS.join(' ')}）`)
@@ -1040,7 +1235,8 @@ function depthOf(page: Page, id: NodeId): number {
  * また、大きさが仮のままストアに渡すと、並べ直しで大きさが決まったフレームの子が、仮の大きさからの変化に追従してずれる
  */
 export function settleMarkup(doc: DesignDocument, pageIds: ReadonlySet<string>): DesignDocument {
-  let current = doc
+  // 変数は、置いた場所のモードで解決し直す（属性の var(名前) は最初のモードの値で入れている）。文字の項目が変わったテキストは測り直す
+  let current = resolveMarkupVariables(doc)
   for (let round = 0; round < 64; round++) {
     const pages = current.pages.map((page) => (pageIds.has(page.id) ? relayout(page, fitTextEstimated) : page))
     const arranged = pages.every((page, index) => page === current.pages[index]) ? current : { ...current, pages }
@@ -1146,18 +1342,19 @@ export function applyMarkupOverrides(session: Session, { pending, scope }: Marku
     for (const attribute of attributes) {
       let keys: string[]
       try {
-        keys = Object.keys(buildPatch(node, [[attribute.name, attribute.value]]))
+        keys = Object.keys(buildPatch(node, [[attribute.name, attribute.value]], session.document.collections))
       } catch (error) {
         if (error instanceof UsageError) throw fail(attribute.line, `${attribute.name}="${attribute.value}": ${error.message}`)
         throw error
       }
-      const refused = keys.find((key) => !allowed.has(key))
+      // var(名前) は値と一緒に変数へのつながり（bindings）も書く。つながりは、値の項目が上書きできれば上書きにできる
+      const refused = keys.find((key) => key !== 'bindings' && !allowed.has(key))
       if (refused !== undefined) {
         throw fail(attribute.line, `${attribute.name}: インスタンスごとには変えられない項目です（変えられるのは ${[...allowed].join(' ')}。ほかは元の <component> で決める）`)
       }
     }
     const patched = patchNode(scope, element, node, attributes)
-    const patch: Record<string, unknown> = { ...buildPatch(node, pairs), ...extra }
+    const patch: Record<string, unknown> = { ...buildPatch(node, pairs, session.document.collections), ...extra }
     const keys = Object.keys(patch)
     if (keys.length === 0) return
     const before = Object.fromEntries(keys.map((key) => [key, (node as unknown as Record<string, unknown>)[key]]))
@@ -1271,4 +1468,19 @@ function parseGuidesAttribute(fail: Fail, attribute: MarkupAttribute): PageGuide
     if (!match || !Number.isFinite(Number(match[2]))) throw fail(attribute.line, `guides="${attribute.value}": 「x:120 y:40」のように、x: か y: と位置を空白で区切って書きます（${token}）`)
     return { axis: match[1].toLowerCase() as 'x' | 'y', position: Number(match[2]) }
   })
+}
+
+/** 変数を置いた場所のモードで解決し直し、値の変わったテキストを測り直す */
+function resolveMarkupVariables(doc: DesignDocument): DesignDocument {
+  const resolved = applyVariables(doc)
+  if (resolved === doc) return doc
+  return {
+    ...resolved,
+    pages: resolved.pages.map((page, index) => {
+      const prior = doc.pages[index]
+      if (prior === page) return page
+      const texts = Object.keys(page.nodes).filter((id) => page.nodes[id] !== prior.nodes[id] && page.nodes[id].type === 'text')
+      return texts.length > 0 ? fitTextEstimated(page, texts) : page
+    }),
+  }
 }

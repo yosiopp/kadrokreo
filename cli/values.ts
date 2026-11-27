@@ -338,10 +338,10 @@ export function findVariableByRef(collections: readonly VariableCollection[], re
   const hits = collections.flatMap((collection) => collection.variables.filter((variable) => variable.name === ref))
   if (hits.length === 1) return hits[0]
   if (hits.length > 1) throw new UsageError(`${path}: ${ref} という変数が複数のコレクションにあります（コレクションの名前:変数の名前 で指定してください）`)
-  const colon = ref.indexOf(':')
-  if (colon > 0) {
-    const collection = collections.find((item) => item.name === ref.slice(0, colon))
-    const variable = collection?.variables.find((item) => item.name === ref.slice(colon + 1))
+  // コレクションの名前（: を含んでもよい）で始まるものを探す
+  for (const collection of collections) {
+    if (!ref.startsWith(`${collection.name}:`)) continue
+    const variable = collection.variables.find((item) => item.name === ref.slice(collection.name.length + 1))
     if (variable) return variable
   }
   throw new UsageError(`${path}: ${ref} という変数がありません（kdr vars で一覧できます）`)
