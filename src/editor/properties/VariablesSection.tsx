@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import type { DesignDocument, ModeId, Variable, VariableCollection, VariableType, VariableValue } from '../../document/types.ts'
 import { isAlias, resolveVariable, variableIndex } from '../../document/variables.ts'
 import { TrashIcon } from '../icons.tsx'
+import { OpenFileButton } from '../../ui/OpenFile.tsx'
+import { downloadBlob, safeFileName } from '../../ui/download.ts'
+import { TokensError, variablesJson } from '../../viewer/tokens.ts'
+import { type TokensImport, TokensImportError, importTokens } from '../operations/importTokens.ts'
 import {
   DEFAULT_VARIABLE_VALUES,
   VariableError,
@@ -37,6 +41,37 @@ export function VariablesSection({ store, document }: Props) {
       setError(null)
     } catch (caught) {
       if (caught instanceof VariableError) setError(caught.message)
+      else throw caught
+    }
+  }
+
+  /** Design Tokens の JSON を取り込む。読めなかったものは節の中に知らせる */
+  async function importFile(file: File) {
+    let json: unknown
+    try {
+      json = JSON.parse(await file.text())
+    } catch {
+      setError(`${file.name}: JSON として読めません`)
+      return
+    }
+    try {
+      let result: TokensImport | undefined
+      store.applyDocument((doc) => (result = importTokens(doc, json)).document)
+      const { added, updated, warnings } = result!
+      setError(`取り込みました: 足した ${added}・書き換えた ${updated}${warnings.length > 0 ? `。読めなかったもの: ${warnings.slice(0, 5).join(' / ')}${warnings.length > 5 ? ` ほか ${warnings.length - 5} 件` : ''}` : ''}`)
+    } catch (caught) {
+      if (caught instanceof TokensImportError || caught instanceof VariableError) setError(`${file.name}: ${caught.message}`)
+      else throw caught
+    }
+  }
+
+  /** 変数を Design Tokens の JSON ファイルとして保存する */
+  function exportJson() {
+    try {
+      downloadBlob(new Blob([variablesJson(document.collections)], { type: 'application/json' }), `${safeFileName(document.name)}.tokens.json`)
+      setError(null)
+    } catch (caught) {
+      if (caught instanceof TokensError) setError(caught.message)
       else throw caught
     }
   }
@@ -78,6 +113,16 @@ export function VariablesSection({ store, document }: Props) {
           {error}
         </p>
       )}
+      <div className="font-actions">
+        <OpenFileButton accept=".json,application/json" onFiles={(files) => void importFile(files[0])}>
+          JSON を取り込む…
+        </OpenFileButton>
+        {document.collections.some((collection) => collection.variables.length > 0) && (
+          <button type="button" onClick={exportJson}>
+            JSON に書き出し
+          </button>
+        )}
+      </div>
       <div className="font-actions">
         {document.collections.length === 0 ? (
           <button type="button" onClick={() => addColorVariable(undefined)}>

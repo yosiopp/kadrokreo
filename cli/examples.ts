@@ -1,5 +1,5 @@
 // kdr help コマンド・kdr docs に出す例。コマンドの名前ごとに並べる。
-// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と変える前の写し old.kdr、icon.svg・photo.png・font.ttf、EXAMPLE_MARKUP の design.xml・part.xml）がある場所で、そのまま動く。
+// 例はどれも、下の EXAMPLE_DOCUMENT で作った demo.kdr（と変える前の写し old.kdr、icon.svg・photo.png・font.ttf、EXAMPLE_MARKUP の design.xml・part.xml、EXAMPLE_TOKENS の tokens.json）がある場所で、そのまま動く。
 // cli/help.test.ts が、すべてのコマンドに例があること・すべての例が終了コード 0 で動くことを確かめる。
 // パイプやリダイレクト（| > <）は使わない（1 回の kdr の実行で完結させる）。
 
@@ -16,6 +16,18 @@ export const EXAMPLE_DOCUMENT = [
   '+ add path --name Arrow --id arrow --points "520,0 560,20 520,40" --closed fill=#222222',
   '-o demo.kdr',
 ]
+
+/** tokens-import の例が読む変数の JSON（tokens --format json が書く形） */
+export const EXAMPLE_TOKENS = {
+  Theme: {
+    $extensions: { kadrokreo: { modes: ['Light', 'Dark'] } },
+    color: {
+      primary: { $type: 'color', $value: '#5b4cf5', $extensions: { kadrokreo: { modes: { Dark: '#a99fff' } } } },
+      link: { $type: 'color', $value: '{Theme.color.primary}' },
+    },
+    space: { md: { $type: 'number', $value: 16 } },
+  },
+}
 
 /**
  * build / place の例が読むマークアップ（docs の「マークアップ」の節にもこのまま載せる）。
@@ -147,6 +159,11 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w collection-add Theme --mode Light + mode-add Theme Dark + var-add color/primary "#5b4cf5" + var-set color/primary Dark=#a99fff',
   ],
   'var-rename': ['kdr -f demo.kdr -w var-add color/primary "#5b4cf5" + var-rename color/primary color/brand'],
+  tokens: [
+    'kdr -f demo.kdr var-add color/primary "#5b4cf5" -o tokens.kdr + tokens',
+    'kdr -f demo.kdr var-add color/primary "#5b4cf5" -o tokens.kdr + tokens --format json --color rgb',
+  ],
+  'tokens-import': ['kdr -f demo.kdr -w tokens-import tokens.json   # tokens --format json で書き出したもの'],
   'var-rm': ['kdr -f demo.kdr -w var-add color/primary "#5b4cf5" + set btn fill=var(color/primary) + var-rm color/primary   # btn の色は残る'],
   add: [
     'kdr -f demo.kdr -w add rect --name Badge --parent card --x 16 --y 120 --width 40 --height 20 fill=#ff0000 cornerRadius=10',

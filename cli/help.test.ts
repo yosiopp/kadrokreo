@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { COMMANDS } from './commands.ts'
-import { EXAMPLES, EXAMPLE_DOCUMENT, EXAMPLE_MARKUP, splitExample } from './examples.ts'
+import { EXAMPLES, EXAMPLE_DOCUMENT, EXAMPLE_MARKUP, EXAMPLE_TOKENS, splitExample } from './examples.ts'
 import { type IO, run } from './run.ts'
 import { testFontBytes } from '../src/document/testFont.ts'
 
@@ -61,6 +61,7 @@ async function exampleFiles(): Promise<Map<string, Uint8Array>> {
     ['photo.png', PNG],
     ['icon.svg', SVG],
     ['font.ttf', testFontBytes()],
+    ['tokens.json', new TextEncoder().encode(JSON.stringify(EXAMPLE_TOKENS))],
     ...Object.entries(EXAMPLE_MARKUP).map(([name, text]) => [name, new TextEncoder().encode(text)] as [string, Uint8Array]),
   ])
 }

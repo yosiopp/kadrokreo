@@ -26,6 +26,7 @@ import { InspectPanel } from './InspectPanel.tsx'
 import { formatViewLink, parseViewLink, resolveViewLink } from './link.ts'
 import { copyText } from '../ui/clipboard.ts'
 import { imageExtension, nodeMarkup, standaloneHtml } from './markup.ts'
+import { variablesJson } from './tokens.ts'
 import type { CodeStyle } from './inspect.ts'
 import { LayerTree } from './LayerTree.tsx'
 import { ViewerCanvas } from './ViewerCanvas.tsx'
@@ -267,6 +268,16 @@ export default function ViewerApp() {
     downloadBlob(file, `${safeFileName(node.name)}.html`)
   }
 
+  /** ドキュメントの変数を Design Tokens の JSON ファイルとして保存する */
+  function saveTokens() {
+    if (!doc) return
+    try {
+      downloadBlob(new Blob([variablesJson(doc.collections)], { type: 'application/json' }), `${safeFileName(doc.name)}.tokens.json`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '変数を JSON にできませんでした')
+    }
+  }
+
   /** 選んでいるインスタンスの元を選ぶ。元が別のページにあれば、そのページへ切り替える */
   function goToMain(nodeId: NodeId) {
     if (!doc || !page) return
@@ -452,6 +463,7 @@ export default function ViewerApp() {
             onSaveImage={() => selectedId && saveImage(selectedId)}
             onSaveFont={saveFont}
             onSaveHtml={(style) => selectedId && saveHtml(selectedId, style)}
+            onSaveTokens={saveTokens}
             onGoToMain={() => selectedId && goToMain(selectedId)}
           />
         )}

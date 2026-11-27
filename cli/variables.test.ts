@@ -35,6 +35,9 @@ function harness() {
       const code = await run(line.split(' '), io)
       return { code, stdout, stderr }
     },
+    write(path: string, text: string) {
+      fs.set(path, new TextEncoder().encode(text))
+    },
     async doc(path = 'd.kdr') {
       return decodeKdr(new Blob([new Uint8Array(fs.get(path)!)]))
     },
@@ -203,6 +206,24 @@ describe('変数のコマンド', () => {
     nodes = (await h.doc()).pages[0].nodes
     expect(nodes.btn).not.toHaveProperty('bindings')
     expect(nodes.label).not.toHaveProperty('bindings')
+  })
+
+  it('tokens で CSS・JSON を書き出し、tokens-import で取り込む', async () => {
+    const h = harness()
+    const line = 'new Demo + collection-add Theme --mode Light + mode-add Theme Dark + var-add color/primary #5b4cf5 Dark=#a99fff + var-add space/md 16 -o d.kdr'
+    expect((await h.run(line)).code).toBe(0)
+    const css = await h.run('-f d.kdr tokens --color rgb')
+    expect(css.stdout).toContain('--color-primary: rgb(91, 76, 245);')
+    expect(css.stdout).toContain('[data-theme="dark"]')
+    const json = (await h.run('-f d.kdr tokens --format json')).stdout
+    expect(JSON.parse(json).Theme.space.md).toEqual({ $type: 'number', $value: 16, $extensions: { kadrokreo: { modes: { Dark: 16 } } } })
+    h.write('t.json', json)
+    const imported = await h.run('new Other + tokens-import t.json -o o.kdr')
+    expect(imported.code).toBe(0)
+    expect(imported.stderr).toContain('足した 2')
+    const doc = await h.doc('o.kdr')
+    expect(doc.collections).toMatchObject([{ name: 'Theme', modes: [{ name: 'Light' }, { name: 'Dark' }], variables: [{ name: 'color/primary' }, { name: 'space/md' }] }])
+    expect((await h.run('new X + tokens-import nope.json -o x.kdr')).code).not.toBe(0)
   })
 
   it('誤りは使い方のエラーにする', async () => {

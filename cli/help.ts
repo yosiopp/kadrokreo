@@ -270,7 +270,7 @@ export function docs(): string {
     '',
     '## 例が前提にするドキュメント',
     '',
-    '下の「コマンド」の例は、次のコマンドで作った `demo.kdr` があるディレクトリで、そのまま動く（`old.kdr` は変える前に取っておいた `demo.kdr` の写し、`icon.svg` と `photo.png` と `font.ttf` は手元の SVG と画像と書体ファイル、`design.xml` と `part.xml` は上の「マークアップ」のもの）。',
+    '下の「コマンド」の例は、次のコマンドで作った `demo.kdr` があるディレクトリで、そのまま動く（`old.kdr` は変える前に取っておいた `demo.kdr` の写し、`icon.svg` と `photo.png` と `font.ttf` は手元の SVG と画像と書体ファイル、`design.xml` と `part.xml` は上の「マークアップ」のもの、`tokens.json` は `tokens --format json` で書き出した変数の JSON）。',
     '',
     `${fence}sh`,
     'kdr ' + EXAMPLE_DOCUMENT.join(' \\\n  '),

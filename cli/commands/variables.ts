@@ -19,7 +19,9 @@ import {
 import { type Step, UsageError } from '../args.ts'
 import type { Session } from '../session.ts'
 import { findVariableByRef } from '../values.ts'
-import { type Command, checkStep, flag, option, positional } from './common.ts'
+import { TokensError, variablesCss, variablesJson } from '../../src/viewer/tokens.ts'
+import { TokensImportError, importTokens } from '../../src/editor/operations/importTokens.ts'
+import { type Command, checkStep, colorOption, flag, option, positional } from './common.ts'
 
 // 変数（コレクション・モード・変数）のコマンド。ノードから指すのは set の var(名前)（values.ts）
 
@@ -313,5 +315,61 @@ export const varRm: Command = {
     if (step.positionals.length === 0) throw new UsageError('var-rm: 変数の名前を指定してください')
     const ids = step.positionals.map((ref) => findVariableByRef(session.document.collections, ref).id)
     apply(session, (doc) => ids.reduce(removeVariable, doc))
+  },
+}
+
+export const tokens: Command = {
+  name: 'tokens',
+  kind: 'query',
+  usage: 'tokens [--format css|json] [--color hex|rgb|hsl]',
+  summary:
+    '変数を書き出す。css（既定）は CSS 変数の定義（最初のモードを :root、ほかのモードを [data-コレクション="モード"]。別名は var(--…)）、' +
+    'json は Design Tokens Community Group の形式（コレクションが最上位のグループ、名前の / がグループの区切り、ほかのモードの値は $extensions.kadrokreo.modes、別名は {コレクション.グループ.名前}）。tokens-import で戻せる',
+  run({ session, print }, step) {
+    checkStep(step, { options: ['format', 'color'] })
+    const format = option(step, 'format') ?? 'css'
+    if (format !== 'css' && format !== 'json') throw new UsageError(`tokens: --format は css / json です: ${format}`)
+    const collections = session.document.collections
+    if (format === 'css') {
+      const css = variablesCss(collections, undefined, colorOption(step))
+      if (css !== '') print(css)
+      return
+    }
+    try {
+      print(variablesJson(collections).trimEnd())
+    } catch (error) {
+      if (error instanceof TokensError) throw new UsageError(`tokens: ${error.message}`)
+      throw error
+    }
+  },
+}
+
+export const tokensImport: Command = {
+  name: 'tokens-import',
+  kind: 'edit',
+  usage: 'tokens-import ファイル.json',
+  summary:
+    '変数の JSON（Design Tokens Community Group の形式）を取り込む。tokens --format json で書き出したものは、コレクション・モード・別名ごと戻る。' +
+    'ほかの道具の JSON は Tokens というコレクションの 1 つのモードとして読む（color・dimension（px、rem は 16px として）・number・fontWeight・fontFamily・string・boolean）。' +
+    '同じコレクションに同じ名前の変数があれば値を書き換え、無ければ足す。足した数・書き換えた数と、読めずに飛ばしたものは標準エラーに出す',
+  async run(ctx, step) {
+    checkStep(step, { positionals: 1 })
+    const file = positional(step, 0, 'JSON ファイル')
+    let json: unknown
+    try {
+      json = JSON.parse(new TextDecoder().decode(await ctx.readFile(file)))
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new UsageError(`${file}: JSON として読めません`)
+      throw error
+    }
+    let result: ReturnType<typeof importTokens> | undefined
+    try {
+      apply(ctx.session, (doc) => (result = importTokens(doc, json)).document)
+    } catch (error) {
+      if (error instanceof TokensImportError) throw new UsageError(`${file}: ${error.message}`)
+      throw error
+    }
+    for (const warning of result!.warnings) ctx.warn(warning)
+    ctx.warn(`変数を取り込みました: 足した ${result!.added}・書き換えた ${result!.updated}`)
   },
 }

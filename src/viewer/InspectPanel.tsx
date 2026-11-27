@@ -16,6 +16,7 @@ import {
 import { CODE_FORMAT_LABELS, type CodeFormat } from './codeFormat.ts'
 import { nodeCode, nodeFontFaces, nodeMarkup } from './markup.ts'
 import { inspectPage } from './summary.ts'
+import { variablesCss } from './tokens.ts'
 import { findMain, instanceOf } from '../document/component.ts'
 
 type Props = {
@@ -41,6 +42,8 @@ type Props = {
   onSaveFont: (font: EmbeddedFont) => void
   /** 選んでいるノードを、中身まで含めた HTML ファイルとして保存する */
   onSaveHtml: (style: CodeStyle) => void
+  /** ドキュメントの変数を、Design Tokens の JSON ファイルとして保存する */
+  onSaveTokens: () => void
   /** 選んでいるインスタンス（またはその中身）の元へ移る */
   onGoToMain: () => void
 }
@@ -63,6 +66,7 @@ export function InspectPanel({
   onSaveImage,
   onSaveFont,
   onSaveHtml,
+  onSaveTokens,
   onGoToMain,
 }: Props) {
   // コピーした値の目印（どの行か）。少しのあいだ「コピーしました」と出す
@@ -239,6 +243,22 @@ export function InspectPanel({
         </p>
         {settings}
         {sections(`page:${page.id}`, inspectPage(page, { ...style, variables: document.collections }))}
+        {document.collections.some((collection) => collection.variables.length > 0) && (
+          <section className="panel-section" aria-label="変数">
+            <h3 className="section-title">変数</h3>
+            <p className="section-note">
+              {document.collections.reduce((count, collection) => count + collection.variables.length, 0)} 個。CSS 変数の定義か、Design Tokens の JSON として取り出せます。
+            </p>
+            <div className="button-row">
+              <button type="button" onClick={() => copy('variables/css', variablesCss(document.collections, undefined, style.color))}>
+                {copied === 'variables/css' ? 'コピーしました' : 'CSS をコピー'}
+              </button>
+              <button type="button" onClick={() => onSaveTokens()}>
+                JSON を保存
+              </button>
+            </div>
+          </section>
+        )}
       </aside>
     )
   }

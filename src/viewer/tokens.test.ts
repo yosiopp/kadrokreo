@@ -13,7 +13,7 @@ const theme: VariableCollection = {
     { id: 'p', name: 'color/primary', type: 'color', values: { l: '#5b4cf5', d: '#a99fff' } },
     { id: 'k', name: 'color/link', type: 'color', values: { l: { alias: 'p' }, d: { alias: 'p' } } },
     { id: 's', name: 'space/md', type: 'number', values: { l: 16, d: 16 } },
-    { id: 'f', name: 'font/body', type: 'string', values: { l: 'A "B" </style>', d: 'x' } },
+    { id: 'f', name: 'font/body', type: 'string', values: { l: 'A "B" </style>', d: 'line\nbreak' } },
     { id: 'b', name: 'flag', type: 'boolean', values: { l: true, d: false } },
   ],
 }
@@ -30,6 +30,7 @@ describe('variablesCss', () => {
     const css = variablesCss([theme])
     expect(css).toContain('--space-md: 16;')
     expect(css).toContain('--font-body: "A \\22 B\\22  \\3c /style>";')
+    expect(css).toContain('--font-body: "line\\a break";')
     expect(css).not.toContain('flag')
     expect(variablesCss([theme], [])).toBe('')
     expect(variablesCss([theme], ['nope'])).toBe('')
