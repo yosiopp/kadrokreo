@@ -361,6 +361,20 @@ describe('変数', () => {
     expect(doc.pages[0].nodes.f1).not.toHaveProperty('modes')
   })
 
+  it('数値・文字・真偽のつながり（bindings）を読み、解決する。合わないものは捨てる', () => {
+    const doc = parseKdr(
+      withVariables([
+        rawNode({ cornerRadius: 1, bindings: { cornerRadius: 'v3', opacity: 'v1', strokeWidth: 'nope', text: 'v3', bogus: 'v3' } }),
+        rawNode({ type: 'frame', id: 'f1', modes: { c1: 'm2' }, layout: { direction: 'vertical' }, bindings: { 'layout.gap': 'v3' } }),
+      ]),
+    )
+    expect(doc.pages[0].nodes.n1).toMatchObject({ cornerRadius: 16, bindings: { cornerRadius: 'v3' } })
+    expect(doc.pages[0].nodes.f1).toMatchObject({ layout: { gap: 20 }, bindings: { 'layout.gap': 'v3' } })
+    expect(fileNode(doc.pages[0]).bindings).toEqual({ cornerRadius: 'v3' })
+    // つながりが残らなければ項目ごと無い
+    expect(parseKdr(withVariables([rawNode({ bindings: { text: 'v3' } })])).pages[0].nodes.n1).not.toHaveProperty('bindings')
+  })
+
   it('コレクションの形を検証する', () => {
     const variable = (patch: RawNode) => [{ ...collections[0], variables: [{ id: 'v1', name: 'a', type: 'color', values: { m1: '#000000', m2: '#000000' }, ...patch }] }]
     const parse = (value: unknown) => parseKdr(kdrJson({ name: 'x', collections: value, pages: [{ id: 'p1', name: 'P', children: [] }] }))

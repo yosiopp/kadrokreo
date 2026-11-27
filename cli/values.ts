@@ -1,7 +1,7 @@
 import { LAYOUT_DEFAULTS } from '../src/document/kdr.ts'
 import { isShadow, solid } from '../src/document/paint.ts'
 import type { AutoLayout, Effect, PathContour, PathPoint, SceneNode, VariableCollection, VariableId } from '../src/document/types.ts'
-import { resolveVariable, variableIndex } from '../src/document/variables.ts'
+import { BINDINGS, acceptsBinding, canBind, isBindingKey, resolveVariable, variableIndex } from '../src/document/variables.ts'
 import { parseDashes } from '../src/editor/dashes.ts'
 import { DEFAULT_SHADOW } from '../src/editor/operations/paints.ts'
 import type { NodePatch } from '../src/editor/operations/tree.ts'
@@ -19,6 +19,7 @@ import { UsageError } from './args.ts'
 // letterSpacing=0.05em（em で書いた字間を px に直す。px は 2px でも 2 でも同じ）、
 // フレームの layout=row|column（自動で並べる。余白も間隔も 0 から始める）と、並べ方の項目（gap=8 padding="12 40" align=center など。layout.gap=8 と同じ）。
 // 色の値には var(変数の名前) で色の変数を指せる（fill=var(color/primary)、shadow.color=var(…)、fills.0.color=var(…)）。色を直接書けばつながりは外れる。
+// 数値・文字・真偽の項目（document/variables.ts の BINDINGS。cornerRadius=var(radius/md)、gap=var(space/md)、text=var(copy/title)）も同じ。
 // 同じ語彙を、マークアップ（kdr build / place。markup.ts）の属性にも使う。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
 
@@ -230,6 +231,7 @@ export function buildPatch(
   for (const [written, raw] of orderAssignments(assignments)) {
     // フレームの並べ方の項目は、layout. を付けたものとして読む
     const path = node.type === 'frame' && LAYOUT_KEYS.has(written) ? `layout.${written}` : written
+    if (isBindingKey(path) && bindValue(node, draft, path, raw, collections)) continue
     const sizing = expandSizing(node, path, raw, draft)
     if (sizing) {
       Object.assign(draft, sizing)
@@ -331,4 +333,40 @@ export function findVariableByRef(collections: readonly VariableCollection[], re
     if (variable) return variable
   }
   throw new UsageError(`${path}: ${ref} という変数がありません（kdr vars で一覧できます）`)
+}
+
+/**
+ * 数値・文字・真偽の項目への var(名前)。変数の値を入れ、つながりを draft.bindings に書く（true を返す）。
+ * var( でなければ、つないでいる項目なら値を直接書くのでつながりを外し、false を返す（値はふだんどおり読む）
+ */
+function bindValue(
+  node: SceneNode,
+  draft: Record<string, unknown>,
+  key: keyof typeof BINDINGS,
+  raw: string,
+  collections: readonly VariableCollection[],
+): boolean {
+  const current = (Object.hasOwn(draft, 'bindings') ? draft.bindings : node.bindings) as Record<string, VariableId> | undefined
+  const match = VARIABLE_REF.exec(raw.trim())
+  if (!match) {
+    if (current && Object.hasOwn(current, key)) {
+      const rest = { ...current }
+      delete rest[key]
+      // 空になれば項目ごと外す（undefined は書き出しでも同期の比べでも「無い」と同じ）
+      draft.bindings = Object.keys(rest).length > 0 ? rest : undefined
+    }
+    return false
+  }
+  const variable = findVariableByRef(collections, match[1].trim(), key)
+  if (variable.type !== BINDINGS[key]) throw new UsageError(`${key}: ${variable.name} は ${BINDINGS[key]} の変数ではありません`)
+  // 同じコマンドで先に書いた項目（layout=row など）も見る
+  const merged = { ...node, ...draft } as SceneNode
+  if (!canBind(merged, key)) throw new UsageError(`${node.type} には ${key} がありません${key.startsWith('layout.') ? '（先に layout=row|column で自動で並べる）' : ''}`)
+  const value = resolveVariable(variableIndex(collections), variable.id, (collection) => collection.modes[0].id)
+  if (!acceptsBinding(key, value)) throw new UsageError(`${key}: ${variable.name} の値 ${String(value)} は入れられません`)
+  if (key.startsWith('layout.')) {
+    draft.layout = { ...(merged as { layout: Record<string, unknown> }).layout, [key.slice(7)]: value }
+  } else draft[key] = value
+  draft.bindings = { ...current, [key]: variable.id }
+  return true
 }

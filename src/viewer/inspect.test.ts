@@ -1169,3 +1169,33 @@ describe('変数につないだ色', () => {
     expect(rows).toContain('color/primary · #5B4CF5')
   })
 })
+
+describe('変数につないだ数値・文字', () => {
+  const collections = [
+    {
+      id: 'c',
+      name: 'Theme',
+      modes: [{ id: 'm', name: 'Light' }],
+      variables: [
+        { id: 'r', name: 'radius/md', type: 'number' as const, values: { m: 8 } },
+        { id: 'g', name: 'space/md', type: 'number' as const, values: { m: 12 } },
+        { id: 'f', name: 'font/body', type: 'string' as const, values: { m: 'Inter' } },
+      ],
+    },
+  ]
+
+  it('長さは calc(var(--名前) * 1px)、ほかは var(--名前) で書き、インスペクトに変数の見出しを出す', () => {
+    const box = rect({ cornerRadius: 8, bindings: { cornerRadius: 'r' } })
+    expect(nodeCss(sceneOf(box), 'rect', { variables: collections })).toContain('border-radius: calc(var(--radius-md) * 1px);')
+    expect(nodeCss(sceneOf(box), 'rect', { variables: collections, unit: 'rem' })).toContain('border-radius: calc(var(--radius-md) * 0.0625rem);')
+    const label = text({ fontFamily: 'Inter', bindings: { fontFamily: 'f' } })
+    expect(nodeCss(sceneOf(label), 'text', { variables: collections })).toContain('font-family: var(--font-body);')
+    const row = frame({ layout: { direction: 'horizontal', gap: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' }, bindings: { 'layout.gap': 'g' } })
+    expect(nodeCss(sceneOf(row), 'frame', { variables: collections })).toContain('gap: calc(var(--space-md) * 1px);')
+    // 余白の 1 辺だけつないでも、4 辺とも書く
+    const padded = frame({ layout: { direction: 'horizontal', gap: 0, paddingTop: 12, paddingRight: 12, paddingBottom: 12, paddingLeft: 12, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' }, bindings: { 'layout.paddingLeft': 'g' } })
+    expect(nodeCss(sceneOf(padded), 'frame', { variables: collections })).toContain('padding: 12px 12px 12px calc(var(--space-md) * 1px);')
+    const rows = inspectNode({ ...docOf(sceneOf(box)), collections }, sceneOf(box), 'rect').find((section) => section.title === '変数')?.rows
+    expect(rows).toEqual([{ label: '角丸', value: 'radius/md · 8' }])
+  })
+})

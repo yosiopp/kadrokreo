@@ -31,7 +31,7 @@ import type {
   VariableCollection,
   VariableValue,
 } from './types.ts'
-import { applyVariables, isAlias } from './variables.ts'
+import { BINDINGS, OVERRIDE_BINDINGS, applyVariables, canBind, isAlias, isBindingKey } from './variables.ts'
 import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from './imageInfo.ts'
 import { EMBEDDED_FAMILY_FORBIDDEN, FONT_EXTENSIONS, FONT_MIME_TYPES, MAX_EMBEDDED_FAMILY_LENGTH, fontMime } from './fontFile.ts'
 import { TarError, readTar, type TarEntry } from './tar.ts'
@@ -49,7 +49,8 @@ import { MAX_CODE_LENGTH, isCodeFrom, isCodeName, isCodePropName } from './codeC
 //   16: gzip した 1 つの JSON（画像は base64 で document.assets に入れていた）から、tar.gz に画像のファイルを切り出した形へ。
 //       15 までのファイルは読まない
 //   17: 変数（document.collections。コレクション・モード・変数）、塗り・線・グラデーションの色・影の variable、ページとフレームの modes。
-//       16 のファイルは読み替えて読む（形の変更はないので、version を書き換えるだけ）
+//       16 のファイルは読み替えて読む（形の変更はないので、version を書き換えるだけ）。
+//       あとから v17 のまま、ノードの bindings（数値・文字・真偽の変数へのつながり）を足した
 export const KDR_FORMAT = 'kadrokreo'
 export const KDR_VERSION = 17
 /** 読み替えて読める、いちばん古い version */
@@ -603,7 +604,27 @@ const BOOLEAN_OPERATIONS = ['union', 'subtract', 'intersect', 'exclude'] as cons
 /** 書き出しで、ノードのうち書かない項目（入れ子や他の項目から決まるもの） */
 const DERIVED_KEYS = new Set(['parentId', 'children', 'sizing', 'constraints'])
 
-function parseNode(
+function parseNode(value: unknown, path: string, parentId: NodeId | null, assets: AssetContext): SceneNode {
+  const node = parseNodeBody(value, path, parentId, assets)
+  const bindings = parseBindings(record(value, path).bindings, `${path}.bindings`, node, assets.variables)
+  return bindings ? { ...node, bindings } : node
+}
+
+/**
+ * 数値・文字・真偽の変数へのつながり。知らない項目、そのノードに無い項目、無い変数・種類の違う変数を指すものは捨てる
+ * （色の variable と同じ。値は残る）。何も残らなければ undefined
+ */
+function parseBindings(value: unknown, path: string, node: SceneNode, variables: VariableTypes): Record<string, string> | undefined {
+  if (value === undefined) return undefined
+  const bindings: Record<string, string> = {}
+  for (const [key, raw] of Object.entries(record(value, path))) {
+    const id = nodeId(raw, `${path}.${key}`)
+    if (isBindingKey(key) && canBind(node, key) && variables.get(id) === BINDINGS[key]) bindings[key] = id
+  }
+  return Object.keys(bindings).length > 0 ? bindings : undefined
+}
+
+function parseNodeBody(
   value: unknown,
   path: string,
   parentId: NodeId | null,
@@ -952,6 +973,20 @@ function parseOverrides(value: unknown, path: string, assets: AssetContext): Rec
     }
     // 差し替え先のコンポーネントは、なくても読める（インスタンスの元がないときと同じく、同期で無視される）
     if (Object.hasOwn(raw, 'componentId')) override.componentId = nodeId(raw.componentId, at('componentId'))
+    // 変数へのつながり。上書きできる項目のうち、無い変数・種類の違う変数を指すものは捨てる（ノードの種類はここでは分からない）
+    if (Object.hasOwn(raw, 'bindings')) {
+      const bindings: Record<string, string | null> = {}
+      for (const [key, id] of Object.entries(record(raw.bindings, at('bindings')))) {
+        if (!isBindingKey(key) || !OVERRIDE_BINDINGS.has(key)) continue
+        if (id === null) {
+          bindings[key] = null
+          continue
+        }
+        const variable = nodeId(id, at(`bindings.${key}`))
+        if (assets.variables.get(variable) === BINDINGS[key]) bindings[key] = variable
+      }
+      if (Object.keys(bindings).length > 0) override.bindings = bindings
+    }
     overrides[nodeId(id, `${path}.${id}`)] = override
   }
   return overrides
@@ -1188,7 +1223,7 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
   for (const [key, value] of Object.entries(node)) {
     if (DERIVED_KEYS.has(key)) continue
     // モードの指定は、空なら書かない
-    if (key === 'modes' && (value === undefined || Object.keys(value as object).length === 0)) continue
+    if ((key === 'modes' || key === 'bindings') && (value === undefined || Object.keys(value as object).length === 0)) continue
     if (Object.hasOwn(DEFAULTS, key) && sameValue(value, DEFAULTS[key as keyof typeof DEFAULTS])) continue
     out[key] =
       key === 'layout' && value !== null

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyVariables, cssIdent, cssVariableName, modesAt, resolveVariable, variableIndex } from './variables.ts'
+import { applyVariables, cssIdent, cssVariableName, detachEditedBindings, modesAt, resolveVariable, variableIndex } from './variables.ts'
 import { docOf, frame, rect, sceneOf } from './testNodes.ts'
 import type { DesignDocument, Paint, VariableCollection } from './types.ts'
 
@@ -106,5 +106,31 @@ describe('CSS 変数の名前', () => {
     expect(cssIdent('a.b:c(d)')).toBe('a-b-c-d')
     expect(cssIdent('ボタン/主')).toBe('ボタン-主')
     expect(cssIdent('snake_case-ok')).toBe('snake_case-ok')
+  })
+})
+
+describe('数値・文字・真偽のつながり', () => {
+  const numbers: VariableCollection = {
+    id: 'c',
+    name: 'N',
+    modes: [{ id: 'm', name: 'M' }],
+    variables: [
+      { id: 'n', name: 'n', type: 'number', values: { m: 12 } },
+      { id: 'big', name: 'big', type: 'number', values: { m: 450 } },
+    ],
+  }
+
+  it('入れられない値は解決しない（太さは 100 刻み）', () => {
+    const base = { ...docOf(sceneOf(rect({ id: 'r', cornerRadius: 0, bindings: { cornerRadius: 'n', opacity: 'big' } }))), collections: [numbers] }
+    expect(applyVariables(base).pages[0].nodes.r).toMatchObject({ cornerRadius: 12, opacity: 1 })
+  })
+
+  it('つながりは同じまま値だけ変えた項目は、つながりを外す', () => {
+    const before = { ...docOf(sceneOf(rect({ id: 'r', cornerRadius: 12, strokeWidth: 12, bindings: { cornerRadius: 'n', strokeWidth: 'n' } }))), collections: [numbers] }
+    const page = before.pages[0]
+    const edited = { ...before, pages: [{ ...page, nodes: { r: { ...page.nodes.r, cornerRadius: 4 } } }] }
+    expect(detachEditedBindings(before, edited).pages[0].nodes.r.bindings).toEqual({ strokeWidth: 'n' })
+    const rebound = { ...before, pages: [{ ...page, nodes: { r: { ...page.nodes.r, cornerRadius: 4, bindings: { cornerRadius: 'big', strokeWidth: 'n' } } } }] }
+    expect(detachEditedBindings(before, rebound)).toBe(rebound)
   })
 })

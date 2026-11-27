@@ -13,6 +13,7 @@ import { FrameSections } from './properties/FrameSections.tsx'
 import { BooleanSection, MaskSection } from './properties/MaskSection.tsx'
 import { FontsSection } from './properties/FontsSection.tsx'
 import { VariablesSection } from './properties/VariablesSection.tsx'
+import { BindingsSection } from './properties/BindingsSection.tsx'
 import { TextSection } from './properties/TextSection.tsx'
 import type { EmbeddedFont } from '../document/types.ts'
 import type { EditorState, EditorStore } from './store.ts'
@@ -102,6 +103,7 @@ export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopy
       <AppearanceSections ctx={ctx} onReplaceImage={onReplaceImage} />
       <FrameSections ctx={ctx} />
       <TextSection ctx={ctx} onAddFonts={onAddFonts} />
+      <BindingsSection ctx={ctx} />
       <ExportSection label="PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
     </aside>
   )

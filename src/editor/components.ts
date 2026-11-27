@@ -42,6 +42,7 @@ import {
 import { stretchedAxes } from '../document/autoLayout.ts'
 import { findNodeOrigin, nodeChangesSince, nodeChangesTracked, noteNodeChanges } from '../document/nodeChanges.ts'
 import { variantSetOf } from '../document/variants.ts'
+import { type BindingKey, INSTANCE_BINDINGS, OVERRIDE_BINDINGS, withBindings } from '../document/variables.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
 import { createFrame, createId } from './nodes.ts'
@@ -417,6 +418,20 @@ export function captureOverrides(before: DesignDocument, after: DesignDocument):
 
       const entry: Record<string, unknown> = { ...instance.component.overrides[source.id] }
       for (const key of keys) {
+        // 変数へのつながりは、上書きできる項目ごとに元との差分を覚える（null は「つながない」）
+        if (key === 'bindings') {
+          const diff: Record<string, string | null> = { ...(entry.bindings as Record<string, string | null> | undefined) }
+          for (const item of OVERRIDE_BINDINGS) {
+            if (item === 'visible' && node.id === instance.id) continue
+            const mine = node.bindings?.[item] ?? null
+            const theirs = source.bindings?.[item] ?? null
+            if (mine === theirs) delete diff[item]
+            else diff[item] = mine
+          }
+          if (Object.keys(diff).length > 0) entry.bindings = diff
+          else delete entry.bindings
+          continue
+        }
         // 根の表示・非表示は、インスタンス自身の設定
         if (key === 'visible' && node.id === instance.id) continue
         // 裏返したインスタンスの写しは映した値を持つが、上書きは映す前の（元の向きの）値で覚える
@@ -910,7 +925,12 @@ function expectedCopies(
     component: { ...instance.component, overrides },
     children: main.children.map(idFor),
   }
-  expected[instance.id] = applyOverride(root, overrides[main.id], true)
+  // 不透明度・表示の変数へのつながりも、値と同じくインスタンスごとに持つ（ほかの項目のつながりは元に従う）
+  const rootBindings = Object.fromEntries([
+    ...Object.entries(main.bindings ?? {}).filter(([key]) => !INSTANCE_BINDINGS.has(key)),
+    ...Object.entries(instance.bindings ?? {}).filter(([key]) => INSTANCE_BINDINGS.has(key)),
+  ])
+  expected[instance.id] = applyOverride(withBindings(root, rootBindings), overrides[main.id], true)
 
   // 文言を上書きしたテキストのうち、大きさを測り直すもの
   const stale: NodeId[] = []
@@ -979,6 +999,17 @@ function applyOverride<N extends SceneNode>(node: N, values: Override | undefine
     if (values.flipY !== undefined) patch.flipY = values.flipY
   }
   // values.componentId !== undefined（入れ子のインスタンスの差し替え）は、写しを作る前に swappedSource で当てている
+  // 変数へのつながりは、上書きできる項目だけ上書きのものにし、ほかの項目は元のまま。根の表示は、インスタンス自身の設定
+  // 上書きは項目ごとの差分（null は「つながない」）
+  if (values.bindings !== undefined) {
+    const bindings = { ...node.bindings }
+    for (const [key, variable] of Object.entries(values.bindings)) {
+      if (!OVERRIDE_BINDINGS.has(key as BindingKey) || (root && key === 'visible')) continue
+      if (variable === null) delete bindings[key]
+      else bindings[key] = variable
+    }
+    return withBindings({ ...node, ...patch }, bindings)
+  }
   return { ...node, ...patch }
 }
 

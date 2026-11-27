@@ -4,7 +4,7 @@ import { createHistory, pushHistory, redoHistory, undoHistory } from './history.
 import { type FitText, captureOverrides, syncComponents } from './components.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
-import { applyVariables } from '../document/variables.ts'
+import { applyVariables, detachEditedBindings } from '../document/variables.ts'
 import { fitMovedVariants } from './variants.ts'
 import { updatePage } from './operations/document.ts'
 import { fitBooleanNodes } from './operations/booleanNodes.ts'
@@ -37,6 +37,9 @@ type DocumentRecipe = (doc: DesignDocument) => DesignDocument
 type PageRecipe = (page: Page) => Page
 
 export type EditorStore = ReturnType<typeof createEditorStore>
+
+/** 変わるとテキストの大きさを測り直す項目 */
+const TEXT_KEYS = ['text', 'fontSize', 'fontFamily', 'fontWeight', 'lineHeight', 'letterSpacing'] as const
 
 /** fitText は、文言を上書きしたインスタンスのテキストの大きさを測り直すのに使う（ブラウザでだけ渡せる） */
 export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
@@ -142,8 +145,11 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
   function settle(before: DesignDocument, after: DesignDocument): DesignDocument {
     if (after === before) return after
     checkSettled(before)
-    // まとまりの外へ出した・中へ入れたバリアントの名前を合わせてから、上書きを覚える
-    let current = captureOverrides(before, fitMovedVariants(before, after))
+    // まとまりの外へ出した・中へ入れたバリアントの名前を合わせてから、上書きを覚える。
+    // 変数につないだ項目の値を直接変えたものは、先につながりを外す（外したことも上書きとして覚える）
+    let current = captureOverrides(before, fitMovedVariants(before, detachEditedBindings(before, after)))
+    // 変数・モードの指定が変わったら、つないだ値を解決し直す。数値は大きさや並びに効くので、並べ直しと同期の前に
+    current = resolveVariables(current, before)
     let base = before
     // インスタンスを直すと大きさが変わって並べ直しが要る、ということがあるので、落ち着くまで繰り返す
     for (let pass = 0; pass < 4; pass++) {
@@ -162,9 +168,30 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
       base = current
       current = synced
     }
-    // 変数につないだ値を解決し直す（変数・モードの指定が変わったときと、写しが元の値を受け取ったとき）。
-    // 色だけなので並べ直しは要らない。写しが元と違う値になっても、上書きとしては覚えない（captureOverrides は利用者の変更だけを見る）
-    return applyVariables(current, before)
+    // 同期で写しが元の値を受け取ったので、置いた場所のモードで解決し直す。写しが元と違う値になっても、上書きとしては覚えない
+    // （captureOverrides は利用者の変更だけを見る）。それで大きさが変わったページは、もう一度並べる（同期はかけ直さない）
+    const resolved = resolveVariables(current, before)
+    if (resolved === current) return current
+    return mapPages(resolved, (page) => {
+      const prior = findPage(current, page.id)
+      return prior === page ? page : arrange(prior, page)
+    })
+  }
+
+  /** 変数につないだ値を解決し直す。文字の大きさなどが変わったテキストは測り直す */
+  function resolveVariables(doc: DesignDocument, base: DesignDocument): DesignDocument {
+    const resolved = applyVariables(doc, base)
+    if (resolved === doc || !fitText) return resolved
+    return mapPages(resolved, (page) => {
+      const prior = findPage(doc, page.id)
+      if (!prior || prior === page) return page
+      const texts = Object.keys(page.nodes).filter((id) => {
+        const node = page.nodes[id]
+        const old = prior.nodes[id]
+        return node !== old && node.type === 'text' && old?.type === 'text' && TEXT_KEYS.some((key) => node[key] !== old[key])
+      })
+      return texts.length > 0 ? fitText(page, texts) : page
+    })
   }
 
   /**

@@ -58,6 +58,11 @@ type BaseNode = {
   maxWidth: number | null
   minHeight: number | null
   maxHeight: number | null
+  /**
+   * 数値・文字・真偽の変数へのつながり（項目の名前 → 変数の id。項目は document/variables.ts の BINDINGS。layout.gap のように . でつなぐ）。
+   * つないだ項目には、その変数を解決した値が入っている。つながりが無ければ持たない（空にしない）
+   */
+  bindings?: Record<string, VariableId>
 }
 
 /**
@@ -509,6 +514,11 @@ export type Override = {
    * そこをこの id のコンポーネントのインスタンスにする。そのほかのノードや、元が見つからない・循環するときは無視する
    */
   componentId?: string
+  /**
+   * 変数へのつながりの、元との差分（項目の名前 → 変数の id。null は「つながない」）。効くのは文言・文字の書式・表示の項目だけ
+   * （document/variables.ts の OVERRIDE_BINDINGS）。書いていない項目は元のつながりのまま
+   */
+  bindings?: Record<string, VariableId | null>
 }
 
 export type FrameNode = BaseNode &

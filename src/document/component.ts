@@ -32,6 +32,7 @@ export const OVERRIDE_KEYS = [
   'flipX',
   'flipY',
   'componentId',
+  'bindings',
 ] as const satisfies readonly (keyof Override)[]
 
 /** コンポーネントの元か */

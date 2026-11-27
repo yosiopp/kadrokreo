@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DesignDocument, ModeId, Variable, VariableCollection, VariableValue } from '../../document/types.ts'
+import type { DesignDocument, ModeId, Variable, VariableCollection, VariableType, VariableValue } from '../../document/types.ts'
 import { isAlias, resolveVariable, variableIndex } from '../../document/variables.ts'
 import { TrashIcon } from '../icons.tsx'
 import {
+  DEFAULT_VARIABLE_VALUES,
   VariableError,
   addCollection,
   addMode,
@@ -48,7 +49,7 @@ export function VariablesSection({ store, document }: Props) {
     return `${base} ${n}`
   }
 
-  function addColorVariable(collection: VariableCollection | undefined) {
+  function addColorVariable(collection: VariableCollection | undefined, type: VariableType = 'color') {
     run((doc) => {
       let current = doc
       let id = collection?.id
@@ -58,7 +59,8 @@ export function VariablesSection({ store, document }: Props) {
         id = added.id
       }
       const target = current.collections.find((item) => item.id === id)!
-      return addVariable(current, id, freshName(target.variables.map((variable) => variable.name), 'color/new'), 'color', '#5b4cf5').document
+      const name = freshName(target.variables.map((variable) => variable.name), `${NEW_NAMES[type]}/new`)
+      return addVariable(current, id, name, type, type === 'color' ? '#5b4cf5' : DEFAULT_VARIABLE_VALUES[type]).document
     })
   }
 
@@ -69,7 +71,7 @@ export function VariablesSection({ store, document }: Props) {
         <p className="panel-hint">色に名前を付けて変数にすると、塗り・線・影の色からつなげます。変数の値を変えると、つないだ色が全部変わります。</p>
       )}
       {document.collections.map((collection) => (
-        <CollectionTable key={collection.id} document={document} collection={collection} run={run} onAddVariable={() => addColorVariable(collection)} freshName={freshName} />
+        <CollectionTable key={collection.id} document={document} collection={collection} run={run} onAddVariable={(type) => addColorVariable(collection, type)} freshName={freshName} />
       ))}
       {error && (
         <p className="section-note" role="alert">
@@ -98,7 +100,7 @@ type TableProps = {
   document: DesignDocument
   collection: VariableCollection
   run: (recipe: (doc: DesignDocument) => DesignDocument) => void
-  onAddVariable: () => void
+  onAddVariable: (type: VariableType) => void
   freshName: (taken: readonly string[], base: string) => string
 }
 
@@ -169,9 +171,22 @@ function CollectionTable({ document, collection, run, onAddVariable, freshName }
         </tbody>
       </table>
       <div className="font-actions">
-        <button type="button" onClick={onAddVariable}>
+        <button type="button" onClick={() => onAddVariable('color')}>
           色の変数を追加
         </button>
+        <select
+          aria-label="色でない変数を追加"
+          value=""
+          onChange={(event) => {
+            if (event.target.value !== '') onAddVariable(event.target.value as VariableType)
+            event.target.blur()
+          }}
+        >
+          <option value="">ほかの変数…</option>
+          <option value="number">数値</option>
+          <option value="string">文字</option>
+          <option value="boolean">真偽</option>
+        </select>
         <button type="button" onClick={() => run((doc) => addMode(doc, collection.id, freshName(collection.modes.map((mode) => mode.name), 'Mode')).document)}>
           モードを追加
         </button>
@@ -207,6 +222,9 @@ function NameInput({ label, value, onCommit }: { label: string; value: string; o
 
 /** 別名ではなく値を持つ（別名の選択で選ぶ値。変数の id には空白が入らないので、ぶつからない） */
 const OWN_VALUE = ' '
+
+/** 新しい変数の名前の頭（color/new など） */
+const NEW_NAMES: Record<VariableType, string> = { color: 'color', number: 'number', string: 'text', boolean: 'flag' }
 
 type CellProps = {
   document: DesignDocument

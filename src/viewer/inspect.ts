@@ -5,7 +5,7 @@ import { BOOLEAN_OPERATION_LABELS, booleanParts, drawnNode, isBooleanNode } from
 import { type MaskNode, clipsByOutline, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
 import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
-import { cssVariableName, variableIndex } from '../document/variables.ts'
+import { type BindingKey, acceptsBinding, boundValue, cssVariableName, isBindingKey, resolveVariable, variableIndex } from '../document/variables.ts'
 import { CONTRAST_AA, CONTRAST_AAA, CONTRAST_AAA_LARGE, CONTRAST_AA_LARGE, formatRatio, textContrast } from './contrast.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
@@ -17,7 +17,7 @@ import type { Asset, AssetId, AutoLayout, CodeComponent, ComponentProperty, Corn
 import { isPassThroughFrame, passThroughFade } from '../document/passThrough.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
-import { ALIGN_CONTENT_LABELS, BLEND_MODE_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, JOIN_LABELS, MASK_TYPE_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
+import { ALIGN_CONTENT_LABELS, BINDING_LABELS, BLEND_MODE_LABELS, CAP_LABELS, CONSTRAINT_LABELS, EFFECT_TYPE_LABELS, FIT_LABELS, JOIN_LABELS, MASK_TYPE_LABELS, OVERRIDE_LABELS, PROPERTY_TYPE_LABELS, SIZING_LABELS, alignLabels } from '../ui/labels.ts'
 
 // viewer で見せる、ノードの設定の一覧と CSS。どちらもドキュメントを読むだけで、変更はしない。
 
@@ -362,6 +362,16 @@ export function inspectNode(
     }
   }
 
+  // 数値・文字・真偽の変数につないだ項目
+  add(
+    '変数',
+    Object.entries(original.bindings ?? {}).flatMap(([key, variable]) => {
+      const entry = index.get(variable)
+      if (!entry || !isBindingKey(key)) return []
+      const value = boundValue(original, key)
+      return [{ label: BINDING_LABELS[key], value: `${entry.variable.name} · ${typeof value === 'number' ? num(value) : String(value)}` }]
+    }),
+  )
   return sections
 }
 
@@ -441,6 +451,23 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   const lines: string[] = []
   const add = (property: string, value: string) => lines.push(`${property}: ${value};`)
   const px = (value: number) => length(value, style)
+  // 変数につないだ項目は var(--名前) で書く（style.variables があるとき）。変数は単位を持たないので、長さは calc で px（rem）にする
+  // 入れられない値になるモードのある変数（ノードには前の値が残る）は、var で書くと食い違うので値で書く
+  const bound = (key: BindingKey): string | undefined => {
+    const variable = node.bindings?.[key]
+    if (variable === undefined || !style.variables || !acceptedInEveryMode(style.variables, variable, key)) return undefined
+    return variableCssName(style.variables, variable)
+  }
+  const lengthOf = (key: BindingKey, value: number, scale = 1) => {
+    const name = bound(key)
+    if (name === undefined) return px(value * scale)
+    const factor = style.unit === 'rem' ? `${Math.round((scale / style.remBase) * 10000) / 10000}rem` : `${num(scale)}px`
+    return `calc(var(${name}) * ${factor})`
+  }
+  const plainOf = (key: BindingKey, value: string) => {
+    const name = bound(key)
+    return name === undefined ? value : `var(${name})`
+  }
 
   // 自動で並べるフレームの子は、親が位置を決める（並びから外したものを除く）。ページ直下のものは、置き場所を決めない
   const absolute = parent !== null && followsConstraints(parent, node)
@@ -509,9 +536,15 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       // gap は「行の間隔 列の間隔」の順
       const [row, column] =
         layout.direction === 'horizontal' ? [layout.crossGap, layout.gap] : [layout.gap, layout.crossGap]
-      add('gap', `${px(row)} ${px(column)}`)
-    } else if (layout.gap !== 0) add('gap', px(layout.gap))
-    const padding = paddingCss(layout, px)
+      const [rowKey, columnKey] = layout.direction === 'horizontal' ? (['layout.crossGap', 'layout.gap'] as const) : (['layout.gap', 'layout.crossGap'] as const)
+      add('gap', `${lengthOf(rowKey, row)} ${lengthOf(columnKey, column)}`)
+    } else if (layout.gap !== 0 || bound('layout.gap') !== undefined) add('gap', lengthOf('layout.gap', layout.gap))
+    const sides = ['layout.paddingTop', 'layout.paddingRight', 'layout.paddingBottom', 'layout.paddingLeft'] as const
+    // どこか 1 辺でもつないでいれば、縮めずに 4 辺とも書く（縮めると辺とつながりの対応がずれる）
+    const fourSides = [layout.paddingTop, layout.paddingRight, layout.paddingBottom, layout.paddingLeft]
+    const padding = sides.some((side) => bound(side) !== undefined)
+      ? fourSides.map((value, i) => lengthOf(sides[i], value)).join(' ')
+      : paddingCss(layout, px)
     if (padding !== null) add('padding', padding)
   }
 
@@ -544,7 +577,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   if (transforms.length > 0) add('transform', transforms.join(' '))
   // 子に配れる通過のフレームは、自分の opacity を書かずに子に掛ける（passThrough.ts）
   const opacity = (passThroughFade(scene, scene.nodes[id]) === null ? node.opacity : 1) * inheritedFade(scene, node)
-  if (opacity < 1) add('opacity', num(opacity))
+  if (opacity < 1 || (opacity === node.opacity && bound('opacity') !== undefined)) add('opacity', opacity === node.opacity ? plainOf('opacity', num(opacity)) : num(opacity))
   // 塗りが 1 つだけなら、塗りの描画モードは要素ごと後ろに混ぜるのと同じ（ノードの描画モードが normal のとき）
   const fills = 'fills' in node ? node.fills : []
   const blend = node.blendMode !== 'normal' ? node.blendMode : fills.length === 1 && node.type !== 'path' ? fills[0].blendMode : 'normal'
@@ -562,15 +595,15 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       add('background-clip', 'text')
       add('color', 'transparent')
     } else if (top?.type === 'solid') add('color', topColorCss(top, style))
-    add('font-family', cssFontFamily(node.fontFamily))
-    add('font-size', px(node.fontSize))
-    add('font-weight', String(node.fontWeight))
-    if (node.letterSpacing !== 0) add('letter-spacing', px(node.letterSpacing))
+    add('font-family', plainOf('fontFamily', cssFontFamily(node.fontFamily)))
+    add('font-size', lengthOf('fontSize', node.fontSize))
+    add('font-weight', plainOf('fontWeight', String(node.fontWeight)))
+    if (node.letterSpacing !== 0 || bound('letterSpacing') !== undefined) add('letter-spacing', lengthOf('letterSpacing', node.letterSpacing))
     // 線に沿う文字の装飾は、svg の中の text に属性で書く（CSS の text-decoration は svg の中の文字へ伝わらない。markup.ts）
     if (node.textDecoration !== 'none' && node.textPath === null) add('text-decoration', node.textDecoration)
     // 線に沿う文字は SVG の textPath で並べる（markup.ts）ので、行の高さ・行揃えは CSS に書かない
     if (node.textPath === null) {
-      add('line-height', num(node.lineHeight))
+      add('line-height', plainOf('lineHeight', num(node.lineHeight)))
       if (node.textAlign !== 'left') add('text-align', node.textAlign)
     }
     // 中身に合わせる幅は、上限があればそこで折り返す（max-width は上で書いている）
@@ -590,7 +623,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     const stroke = node.strokes.at(-1)
     if (!isLine(node)) add('fill', fill ? topColorCss(fill, style) : 'none')
     add('stroke', stroke ? topColorCss(stroke, style) : 'none')
-    if (stroke) add('stroke-width', px(node.strokeWidth))
+    if (stroke) add('stroke-width', lengthOf('strokeWidth', node.strokeWidth))
     if (stroke && node.strokeDashes.length > 0) add('stroke-dasharray', node.strokeDashes.map(px).join(' '))
     if (stroke && node.strokeDashes.length > 0 && node.strokeDashOffset !== 0) add('stroke-dashoffset', px(node.strokeDashOffset))
     if (stroke && node.strokeJoin !== 'miter') add('stroke-linejoin', node.strokeJoin)
@@ -608,12 +641,13 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       // outline は色を 1 つしか持てないので、いちばん上の線の色（グラデーションなら始まりの色）で代える
       // 破線は CSS の dashed で代える（線と空きの長さは指定できない）
       const lineStyle = node.strokeDashes.length > 0 ? 'dashed' : 'solid'
-      add('outline', `${px(node.strokeWidth)} ${lineStyle} ${topColorCss(stroke, style)}`)
-      add('outline-offset', px(-node.strokeWidth / 2))
+      add('outline', `${lengthOf('strokeWidth', node.strokeWidth)} ${lineStyle} ${topColorCss(stroke, style)}`)
+      add('outline-offset', lengthOf('strokeWidth', node.strokeWidth, -0.5))
     }
   }
 
   if (node.type === 'ellipse') add('border-radius', '50%')
+  else if ('cornerRadius' in node && typeof node.cornerRadius === 'number' && bound('cornerRadius') !== undefined) add('border-radius', lengthOf('cornerRadius', node.cornerRadius))
   else if ('cornerRadius' in node && isRounded(node.cornerRadius)) add('border-radius', radiusText(node.cornerRadius, px))
   if ('effects' in node && node.effects.length > 0) {
     // CSS は先に書いた影が手前。効果は先頭が奥なので、逆に並べる。内側の影は inset（box-shadow ではどの落ち影よりも手前に描かれる）
@@ -928,4 +962,14 @@ function codeText(code: CodeComponent): string {
 
 function codeRow(code: CodeComponent | null) {
   return code !== null && { label: '実装の部品', value: codeText(code) }
+}
+
+/** 変数を、そのコレクションのどのモードで解決しても、その項目に入れられる値になるか（別名の先の別のコレクションは最初のモードで見る） */
+function acceptedInEveryMode(collections: readonly VariableCollection[], id: VariableId, key: BindingKey): boolean {
+  const index = variableIndex(collections)
+  const entry = index.get(id)
+  if (!entry) return false
+  return entry.collection.modes.every((mode) =>
+    acceptsBinding(key, resolveVariable(index, id, (other) => (other.id === entry.collection.id ? mode.id : other.modes[0].id))),
+  )
 }

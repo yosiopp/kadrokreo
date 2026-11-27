@@ -3,6 +3,7 @@
 // ノードの色などには、いつも解決済みの値が入っている（ファイルにも書く）。変数を指す印（塗り・線・グラデーションの色・影の variable）は
 // その横にあり、変数の値やモードの指定が変わったら、applyVariables でつながりのある値を解決し直す（読み込みのときと、editor の後始末）。
 // 描画や書き出しのように表示するだけの処理は、変数を読まなくてよい。
+// 数値・文字・真偽の変数は、ノードの bindings（項目の名前 → 変数の id。BINDINGS の項目だけ）でつなぐ。
 //
 // ノードで使うモードは、自分から上へたどって最初にそのコレクションの指定（modes）があるフレーム、無ければページ、
 // それも無ければコレクションの最初のモード。別名（{ alias }）の先が別のコレクションの変数なら、その先のコレクションのモードを
@@ -21,6 +22,7 @@ import type {
   Variable,
   VariableCollection,
   VariableId,
+  VariableType,
   VariableValue,
 } from './types.ts'
 
@@ -126,7 +128,8 @@ function applyToPage(page: Page, index: ReadonlyMap<VariableId, VariableEntry>, 
       const value = resolveVariable(index, variable, lookup)
       return typeof value === 'string' && index.get(variable)?.variable.type === 'color' ? value : fallback
     }
-    const next = resolveNode(node, color)
+    const value = (variable: VariableId): string | number | boolean | undefined => resolveVariable(index, variable, lookup)
+    const next = resolveBindings(resolveNode(node, color), index, value)
     if (next !== node) (nodes ??= { ...page.nodes })[id] = next
   }
   return nodes ? { ...page, nodes } : page
@@ -136,6 +139,7 @@ type ColorResolver = (variable: VariableId, fallback: string) => string
 
 /** 色のつながりを持つか（速く飛ばすため） */
 function hasBinding(node: SceneNode): boolean {
+  if (node.bindings !== undefined && Object.keys(node.bindings).length > 0) return true
   if ('fills' in node && node.fills.some(paintBound)) return true
   if ('strokes' in node && node.strokes.some(paintBound)) return true
   if (node.effects.some((effect) => 'variable' in effect && effect.variable !== undefined)) return true
@@ -217,7 +221,7 @@ function resolveEffects(effects: Effect[], color: ColorResolver): Effect[] {
 
 /** ノード（とインスタンスの上書き）が色をつないでいる変数の id */
 export function boundVariables(node: SceneNode): VariableId[] {
-  const ids: VariableId[] = []
+  const ids: VariableId[] = node.bindings ? Object.values(node.bindings) : []
   const paints = (list: readonly Paint[]) => {
     for (const paint of list) {
       if (paint.type === 'solid') {
@@ -278,4 +282,142 @@ export function cssIdent(text: string): string {
     .replace(/[\s!-,./:-@[-^`{-~]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
+}
+
+/** 数値・文字・真偽の変数をつなげる項目（layout. はオートレイアウトの項目）と、その変数の種類 */
+export const BINDINGS = {
+  opacity: 'number',
+  strokeWidth: 'number',
+  cornerRadius: 'number',
+  fontSize: 'number',
+  fontWeight: 'number',
+  lineHeight: 'number',
+  letterSpacing: 'number',
+  'layout.gap': 'number',
+  'layout.crossGap': 'number',
+  'layout.paddingTop': 'number',
+  'layout.paddingRight': 'number',
+  'layout.paddingBottom': 'number',
+  'layout.paddingLeft': 'number',
+  text: 'string',
+  fontFamily: 'string',
+  visible: 'boolean',
+} as const satisfies Record<string, Exclude<VariableType, 'color'>>
+
+export type BindingKey = keyof typeof BINDINGS
+
+/** インスタンスの写しで上書きできる（元と違う変数につなげる）項目。上書きできる値（OVERRIDE_KEYS）と揃える */
+export const OVERRIDE_BINDINGS: ReadonlySet<BindingKey> = new Set(['text', 'fontSize', 'fontFamily', 'fontWeight', 'letterSpacing', 'visible'])
+
+/** インスタンスの根が、元ではなく自分で持つ項目（値と同じく、インスタンスごとの設定） */
+export const INSTANCE_BINDINGS: ReadonlySet<string> = new Set(['opacity', 'visible'])
+
+export function isBindingKey(key: string): key is BindingKey {
+  return Object.hasOwn(BINDINGS, key)
+}
+
+/** 書体名に使えない文字（kdr.ts の検証と同じ） */
+// eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査なので、制御文字そのものを書く
+const FONT_FAMILY_FORBIDDEN = /[\u0000-\u001f\u007f;{}<>\\]/
+
+/** 変数の値を、その項目に入れてよいか（kdr の検証に通る値か）。入れられない値なら解決せず、今の値のまま */
+export function acceptsBinding(key: BindingKey, value: unknown): boolean {
+  if (BINDINGS[key] === 'string') {
+    if (typeof value !== 'string') return false
+    return key !== 'fontFamily' || (value.length <= 200 && !FONT_FAMILY_FORBIDDEN.test(value))
+  }
+  if (BINDINGS[key] === 'boolean') return typeof value === 'boolean'
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false
+  switch (key) {
+    case 'opacity':
+      return value >= 0 && value <= 1
+    case 'fontWeight':
+      return Number.isInteger(value / 100) && value >= 100 && value <= 900
+    case 'letterSpacing':
+    case 'layout.gap':
+    case 'layout.crossGap':
+      return true
+    default:
+      return value >= 0
+  }
+}
+
+/** その種類のノードが、その項目を持つか（layout. は自動で並べるフレームだけ） */
+export function canBind(node: SceneNode, key: BindingKey): boolean {
+  if (key.startsWith('layout.')) return node.type === 'frame' && node.layout !== null
+  if (key === 'text' || key === 'fontFamily' || key === 'fontSize' || key === 'fontWeight' || key === 'lineHeight' || key === 'letterSpacing') {
+    return node.type === 'text'
+  }
+  return key in node
+}
+
+/** ノードのその項目の値（角丸が 4 隅ばらばらなら配列のまま） */
+export function boundValue(node: SceneNode, key: BindingKey): unknown {
+  if (key.startsWith('layout.')) return node.type === 'frame' ? (node.layout as Record<string, unknown> | null)?.[key.slice(7)] : undefined
+  return (node as Record<string, unknown>)[key]
+}
+
+/** その項目を value にしたノード（角丸は 4 隅とも同じ値にする） */
+export function withBoundValue<N extends SceneNode>(node: N, key: BindingKey, value: unknown): N {
+  if (key.startsWith('layout.')) {
+    if (node.type !== 'frame' || node.layout === null) return node
+    return { ...node, layout: { ...node.layout, [key.slice(7)]: value } }
+  }
+  return { ...node, [key]: value }
+}
+
+/** bindings のつながりを解決したノード。変わらなければ同じノード */
+function resolveBindings(
+  node: SceneNode,
+  index: ReadonlyMap<VariableId, VariableEntry>,
+  value: (variable: VariableId) => string | number | boolean | undefined,
+): SceneNode {
+  if (!node.bindings) return node
+  let next = node
+  for (const [key, variable] of Object.entries(node.bindings)) {
+    if (!isBindingKey(key) || !canBind(next, key) || index.get(variable)?.variable.type !== BINDINGS[key]) continue
+    const resolved = value(variable)
+    if (resolved === undefined || !acceptsBinding(key, resolved) || Object.is(boundValue(next, key), resolved)) continue
+    next = withBoundValue(next, key, resolved)
+  }
+  return next
+}
+
+/**
+ * 利用者がつないだ項目の値を直接変えたものは、つながりを外す（外さないと、後始末が変数の値に戻してしまう）。
+ * before から after への変更で、つながりは同じまま値だけ変わった項目を見る。変わらなければ after をそのまま返す
+ */
+export function detachEditedBindings(before: DesignDocument, after: DesignDocument): DesignDocument {
+  if (after === before || after.collections.length === 0) return after
+  let changed = false
+  const pages = after.pages.map((page) => {
+    const old = before.pages.find((item) => item.id === page.id)
+    if (!old || old === page || old.nodes === page.nodes) return page
+    let nodes: Record<NodeId, SceneNode> | null = null
+    for (const id in page.nodes) {
+      const node = page.nodes[id]
+      const previous = old.nodes[id]
+      if (!node.bindings || !previous || previous === node || previous.type !== node.type) continue
+      let bindings: Record<string, VariableId> | null = null
+      for (const [key, variable] of Object.entries(node.bindings)) {
+        if (!isBindingKey(key) || previous.bindings?.[key] !== variable) continue
+        const a = boundValue(previous, key)
+        const b = boundValue(node, key)
+        if (Object.is(a, b) || JSON.stringify(a) === JSON.stringify(b)) continue
+        delete (bindings ??= { ...node.bindings })[key]
+      }
+      if (bindings) (nodes ??= { ...page.nodes })[id] = withBindings(node, bindings)
+    }
+    if (!nodes) return page
+    changed = true
+    return { ...page, nodes }
+  })
+  return changed ? { ...after, pages } : after
+}
+
+/** bindings を置き換えたノード（空なら項目ごと消す） */
+export function withBindings<N extends SceneNode>(node: N, bindings: Record<string, VariableId>): N {
+  if (Object.keys(bindings).length > 0) return { ...node, bindings }
+  const { bindings: _bindings, ...rest } = node
+  return rest as N
 }

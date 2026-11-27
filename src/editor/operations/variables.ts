@@ -1,4 +1,4 @@
-import { isAlias, resolveVariable, variableIndex } from '../../document/variables.ts'
+import { isAlias, resolveVariable, variableIndex, withBindings } from '../../document/variables.ts'
 import type {
   CollectionId,
   DesignDocument,
@@ -289,14 +289,22 @@ function detachNode(node: SceneNode, removed: ReadonlySet<VariableId>): SceneNod
   }
   const effects = detachEffects(node.effects, removed)
   if (effects !== node.effects) next = { ...next, effects } as SceneNode
+  if (next.bindings && Object.values(next.bindings).some((id) => removed.has(id))) {
+    next = withBindings(next, Object.fromEntries(Object.entries(next.bindings).filter(([, id]) => !removed.has(id))))
+  }
   if (next.type === 'frame' && next.component?.role === 'instance') {
     const overrides = next.component.overrides
     let detached: Record<NodeId, Override> | null = null
     for (const [id, override] of Object.entries(overrides)) {
       const fills = override.fills && detachPaints(override.fills, removed)
       const strokes = override.strokes && detachPaints(override.strokes, removed)
-      if (fills !== override.fills || strokes !== override.strokes) {
-        ;(detached ??= { ...overrides })[id] = { ...override, ...(fills ? { fills } : {}), ...(strokes ? { strokes } : {}) }
+      // 上書きで消える変数につないでいた項目は、「つながない」にする
+      const bound = override.bindings && Object.values(override.bindings).some((variable) => variable !== null && removed.has(variable))
+      if (fills !== override.fills || strokes !== override.strokes || bound) {
+        const bindings = bound
+          ? Object.fromEntries(Object.entries(override.bindings!).map(([key, variable]) => [key, variable !== null && removed.has(variable) ? null : variable]))
+          : override.bindings
+        ;(detached ??= { ...overrides })[id] = { ...override, ...(fills ? { fills } : {}), ...(strokes ? { strokes } : {}), ...(bindings ? { bindings } : {}) }
       }
     }
     if (detached) next = { ...next, component: { ...next.component, overrides: detached } }

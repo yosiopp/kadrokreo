@@ -124,6 +124,87 @@ describe('変数のコマンド', () => {
     expect(next.btn).toMatchObject({ fills: [{ color: '#ffffff' }] })
   })
 
+  it('数値・文字・真偽の変数を項目につなぎ、値を変えると並べ直しと測り直しも追従する', async () => {
+    const h = harness()
+    const line =
+      'new Demo + var-add radius/md 8 + var-add space/md 12 + var-add size/body 16 + var-add copy/title Hello + var-add flag/show true' +
+      ' + add frame --name Row --id row layout=row gap=var(space/md) padding=4 cornerRadius=var(radius/md)' +
+      ' + add text --parent row --name T --id t --text x fontSize=var(size/body) text=var(copy/title)' +
+      ' + add rect --parent row --name R --id r visible=var(flag/show) -o d.kdr'
+    expect((await h.run(line)).code).toBe(0)
+    let doc = await h.doc()
+    const ids = Object.fromEntries(doc.collections[0].variables.map((v) => [v.name, v.id]))
+    let nodes = doc.pages[0].nodes
+    expect(nodes.row).toMatchObject({ cornerRadius: 8, layout: { gap: 12 }, bindings: { cornerRadius: ids['radius/md'], 'layout.gap': ids['space/md'] } })
+    expect(nodes.t).toMatchObject({ fontSize: 16, text: 'Hello', bindings: { fontSize: ids['size/body'], text: ids['copy/title'] } })
+    expect(nodes.r).toMatchObject({ visible: true, bindings: { visible: ids['flag/show'] } })
+    const width = nodes.t.width
+
+    expect((await h.run('-f d.kdr -w var-set size/body 32 + var-set space/md 40 + var-set copy/title HelloHello + var-set flag/show false')).code).toBe(0)
+    doc = await h.doc()
+    nodes = doc.pages[0].nodes
+    expect(nodes.t).toMatchObject({ fontSize: 32, text: 'HelloHello', visible: true })
+    expect(nodes.t.width).toBeGreaterThan(width)
+    expect(nodes.row).toMatchObject({ layout: { gap: 40 } })
+    // 並べ直しも追従する（隠した R は並びに入らないので、幅は T と余白と間隔で決まる）
+    expect(nodes.row.width).toBe(nodes.t.width + 8)
+    expect(nodes.r).toMatchObject({ visible: false })
+
+    // 値を直接書けばつながりは外れる
+    expect((await h.run('-f d.kdr -w set row cornerRadius=4 + set t fontSize=10')).code).toBe(0)
+    nodes = (await h.doc()).pages[0].nodes
+    expect(nodes.row.bindings).toEqual({ 'layout.gap': ids['space/md'] })
+    expect(nodes.t.bindings).toEqual({ text: ids['copy/title'] })
+    expect(nodes.t).toMatchObject({ fontSize: 10 })
+
+    // 入れられない値（不透明度 2）は解決せず、今の値のまま
+    expect((await h.run('-f d.kdr -w var-add alpha 0.5 + set r opacity=var(alpha) + var-set alpha 2')).code).toBe(0)
+    expect((await h.doc()).pages[0].nodes.r).toMatchObject({ opacity: 0.5 })
+    expect((await h.run('-f d.kdr set r cornerRadius=var(copy/title) -o x.kdr')).stderr).toContain('number の変数ではありません')
+    expect((await h.run('-f d.kdr set r gap=var(space/md) -o x.kdr')).stderr).toContain('gap')
+  })
+
+  it('インスタンスの写しで、文言を別の変数につなげる（上書きとして覚える）', async () => {
+    const h = harness()
+    const line =
+      'new Demo + var-add copy/ok OK + var-add copy/cancel Cancel' +
+      ' + add frame --name Btn --id btn layout=row + add text --parent btn --name Label --id label --text x text=var(copy/ok) + component btn' +
+      ' + instance Btn --id inst --x 200 -o d.kdr'
+    expect((await h.run(line)).code).toBe(0)
+    let doc = await h.doc()
+    const copy = Object.values(doc.pages[0].nodes).find((node) => node.parentId === 'inst')!
+    expect(copy).toMatchObject({ text: 'OK' })
+    expect((await h.run(`-f d.kdr -w set ${copy.id} text=var(copy/cancel) + var-set copy/cancel Nope + set btn x=10`)).code).toBe(0)
+    doc = await h.doc()
+    const nodes = doc.pages[0].nodes
+    const cancel = doc.collections[0].variables.find((v) => v.name === 'copy/cancel')!.id
+    expect(nodes[copy.id]).toMatchObject({ text: 'Nope', bindings: { text: cancel } })
+    expect(nodes.label).toMatchObject({ text: 'OK' })
+    expect(nodes.inst).toMatchObject({ component: { overrides: { label: { bindings: { text: cancel } } } } })
+  })
+
+  it('写しの文言を直接直すと残り、根の不透明度はインスタンスのもの。変数を消すとつながりも消える', async () => {
+    const h = harness()
+    const line =
+      'new Demo + var-add copy/ok OK + var-add alpha 1' +
+      ' + add frame --name Btn --id btn layout=row opacity=var(alpha) + add text --parent btn --name Label --id label --text x text=var(copy/ok) + component btn' +
+      ' + instance Btn --id inst --x 200 -o d.kdr'
+    expect((await h.run(line)).code).toBe(0)
+    let nodes = (await h.doc()).pages[0].nodes
+    const copy = Object.values(nodes).find((node) => node.parentId === 'inst')!
+    expect((await h.run(`-f d.kdr -w set ${copy.id} text=Hi + set inst opacity=0.5 + set btn x=10 + var-set copy/ok OKAY + var-set alpha 0.9`)).code).toBe(0)
+    nodes = (await h.doc()).pages[0].nodes
+    expect(nodes[copy.id]).toMatchObject({ text: 'Hi' })
+    expect(nodes[copy.id]).not.toHaveProperty('bindings')
+    expect(nodes.inst).toMatchObject({ opacity: 0.5, component: { overrides: { label: { text: 'Hi', bindings: { text: null } } } } })
+    expect(nodes.label).toMatchObject({ text: 'OKAY' })
+    expect(nodes.btn).toMatchObject({ opacity: 0.9 })
+    expect((await h.run('-f d.kdr -w var-rm alpha copy/ok')).code).toBe(0)
+    nodes = (await h.doc()).pages[0].nodes
+    expect(nodes.btn).not.toHaveProperty('bindings')
+    expect(nodes.label).not.toHaveProperty('bindings')
+  })
+
   it('誤りは使い方のエラーにする', async () => {
     const h = harness()
     expect((await h.run(`${BASE} + set box fill=var(nope) -o d.kdr`)).stderr).toContain('nope という変数がありません')

@@ -1,3 +1,4 @@
+import type { BindingKey } from '../document/variables.ts'
 import type { NodeKind } from '../document/path.ts'
 import type { AutoLayout, BlendMode, Cap, ComponentProperty, Constraint, Effect, ImageNode, MaskType, Override, Paint, Sizing, StrokeJoin } from '../document/types.ts'
 
@@ -146,4 +147,25 @@ export const OVERRIDE_LABELS: Record<keyof Override, string> = {
   flipX: '左右の裏返し',
   flipY: '上下の裏返し',
   componentId: '入れ子のインスタンスの元',
+  bindings: '変数へのつながり',
+}
+
+/** 数値・文字・真偽の変数をつなげる項目の呼び名（document/variables.ts の BINDINGS） */
+export const BINDING_LABELS: Record<BindingKey, string> = {
+  opacity: '不透明度',
+  strokeWidth: '線の太さ',
+  cornerRadius: '角丸',
+  fontSize: '文字の大きさ',
+  fontWeight: '太さ',
+  lineHeight: '行の高さ',
+  letterSpacing: '字間',
+  'layout.gap': '間隔',
+  'layout.crossGap': '行の間隔',
+  'layout.paddingTop': '上の余白',
+  'layout.paddingRight': '右の余白',
+  'layout.paddingBottom': '下の余白',
+  'layout.paddingLeft': '左の余白',
+  text: '文言',
+  fontFamily: '書体',
+  visible: '表示',
 }

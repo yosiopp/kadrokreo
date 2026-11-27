@@ -1166,7 +1166,7 @@ export function applyMarkupOverrides(session: Session, { pending, scope }: Marku
     if (page.has(nodeId)) throw fail(element.line, '同じレイヤーへの <override> が 2 つあります。1 つにまとめてください')
     page.set(nodeId, { patch, before, line: element.line })
   }
-  const overridable = new Set<string>(OVERRIDE_KEYS.filter((key) => key !== 'componentId' && key !== 'assetId'))
+  const overridable = new Set<string>(OVERRIDE_KEYS.filter((key) => key !== 'componentId' && key !== 'assetId' && key !== 'bindings'))
   for (const item of pending) {
     if (item.root.length > 0) add(item, item.instanceId, item.element, item.root, INSTANCE_ROOT_OVERRIDES, {})
     for (const override of item.element.children) {
