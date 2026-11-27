@@ -634,6 +634,26 @@ describe('kdr markup（ノードの木をマークアップに書き出す）', 
     expect(again.stdout).toBe(text)
   })
 
+  it('ページのガイド線（guides 属性）とフレームのレイアウトグリッドも書き出して同じものに戻る', async () => {
+    const grids = '[{"type":"columns","count":4,"gutter":10,"margin":20},{"type":"grid","size":8}]'
+    const h = harness({ 'a.xml': `<kdr><page name="P" guides="x:120 y:-40.5 x:0"><frame name="F" width="400" height="300" layoutGrids='${grids}'/></page></kdr>` })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    const { text, warnings, original, rebuilt } = await roundTrip(h, 'a.kdr')
+    expect(warnings).toBe('')
+    expect(original.pages[0].guides).toEqual([{ axis: 'x', position: 120 }, { axis: 'y', position: -40.5 }, { axis: 'x', position: 0 }])
+    expect((original.pages[0].nodes[Object.keys(original.pages[0].nodes)[0]] as FrameNode).layoutGrids).toHaveLength(2)
+    expect(text).toContain('guides="x:120 y:-40.5 x:0"')
+    expect(documentDifferences(original, rebuilt)).toEqual([])
+  })
+
+  it('ガイド線の書き間違いは行番号付きで知らせる', async () => {
+    for (const value of ['z:1', 'x:', 'x:1px', 'x 1']) {
+      const h = harness({ 'a.xml': `<kdr>\n<page guides="${value}"/></kdr>` })
+      expect(await h.run(['build', 'a.xml', '-o', 'a.kdr']), value).toBe(1)
+      expect(h.stderr).toMatch(/a\.xml:2: guides=/)
+    }
+  })
+
   it('説明文・プロパティ・バリアントも、#42 の語彙で書き出して同じものに戻る', async () => {
     const h = harness({ 'a.xml': VARIANTS })
     expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)

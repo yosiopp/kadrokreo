@@ -1,12 +1,13 @@
 const { chromium } = require('playwright-core')
+const path = require('path')
 
 // editor のレイアウトグリッド: フレームのプロパティで足し、数・溝・余白・種類を変えられ、キャンバスに重ねて出る。
 // 中の図形はカラムの端に吸着する。Shift+G で隠すと見えず吸着もしない。kdr のフレームの layoutGrids に保存される
-const { EDITOR, check, finish, crashed, watchErrors, pointer, fieldFinder, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, pointer, fieldFinder, savedDocument } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true })
   const page = await context.newPage()
   const errors = []
   watchErrors(page, errors)
@@ -86,6 +87,27 @@ const { EDITOR, check, finish, crashed, watchErrors, pointer, fieldFinder, saved
   await page.keyboard.press('ControlOrMeta+z')
   saved = await frameNode()
   check('元に戻せる', saved.layoutGrids.length === 1)
+
+  // ── viewer でも、ボタンでレイアウトグリッドを重ねて出せ、フレームを選ぶとパネルに値が出る ──
+  await page.locator('.layout-grid-row select').selectOption('columns')
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button:has-text("kdr に書き出し")').click()])
+  const file = path.join(OUT, 'layout-grids.kdr')
+  await download.saveAs(file)
+  const viewer = await context.newPage()
+  watchErrors(viewer, errors, 'viewer: ')
+  await viewer.goto(VIEWER)
+  await viewer.locator('input[type=file]').setInputFiles(file)
+  await viewer.waitForSelector('.canvas-view canvas')
+  const gridButton = viewer.locator('button[aria-label="レイアウトグリッド"]')
+  check('viewer: レイアウトグリッドのボタンは押せて、既定は出さない', !(await gridButton.isDisabled()) && (await gridButton.getAttribute('aria-pressed')) === 'false')
+  check('viewer: ガイド線が無ければ、そのボタンは押せない', await viewer.locator('button[aria-label="ガイド線"]').isDisabled())
+  const shot = async () => (await viewer.locator('.canvas-view canvas').screenshot()).toString('base64')
+  const before = await shot()
+  await gridButton.click()
+  check('viewer: ボタンでレイアウトグリッドが重なる', (await shot()) !== before)
+  await viewer.locator('.inspect-layer:has(.layer-name:text-is("Frame 1"))').first().click()
+  const rows = await viewer.locator('.inspect-panel section[aria-label="レイアウトグリッド"] .inspect-row').allTextContents()
+  check('viewer: フレームを選ぶと、パネルにレイアウトグリッドの値が出る', rows.some((row) => row.includes('カラム 12・溝 20・余白 20')), rows.join(' | '))
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

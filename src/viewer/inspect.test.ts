@@ -1248,3 +1248,14 @@ describe('変数につないだ数値・文字', () => {
     expect(rows).toEqual([{ label: '角丸', value: 'radius/md · 8' }])
   })
 })
+
+describe('レイアウトグリッド', () => {
+  it('フレームのレイアウトグリッドを値だけ出し、CSS には出さない', () => {
+    const scene = sceneOf(frame({ layoutGrids: [{ type: 'columns', count: 12, gutter: 20, margin: 16 }, { type: 'grid', size: 8 }] }))
+    expect(rowsOf(scene, 'frame', 'レイアウトグリッド')).toEqual(['1=カラム 12・溝 20・余白 16', '2=方眼 8'])
+    expect(nodeCss(scene, 'frame')).not.toMatch(/grid/)
+    const single = sceneOf(frame({ layoutGrids: [{ type: 'rows', count: 3, gutter: 0, margin: 0 }] }))
+    expect(rowsOf(single, 'frame', 'レイアウトグリッド')).toEqual(['種類=行 3・溝 0・余白 0'])
+    expect(rowsOf(sceneOf(frame()), 'frame', 'レイアウトグリッド')).toBeUndefined()
+  })
+})

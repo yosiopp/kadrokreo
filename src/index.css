@@ -381,6 +381,7 @@ input.document-name:focus {
 /* ツールバー */
 
 .toolbar,
+.view-toggles,
 .zoom-controls {
   display: flex;
   align-items: center;

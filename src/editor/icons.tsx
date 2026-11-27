@@ -1,4 +1,5 @@
 import { Icon } from '../ui/icons.tsx'
+export { LayoutGridIcon } from '../ui/icons.tsx'
 
 const EYE = 'M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z'
 
@@ -92,15 +93,6 @@ export function RulerIcon() {
     <Icon>
       <path d="M1.5 1.5h13v4h-9v9h-4z" />
       <path d="M4.5 1.5v2M7.5 1.5v2M10.5 1.5v2M1.5 8.5h2M1.5 11.5h2" />
-    </Icon>
-  )
-}
-
-export function LayoutGridIcon() {
-  return (
-    <Icon>
-      <rect x="1.5" y="2.5" width="13" height="11" rx="1" />
-      <path d="M5.5 2.5v11M10.5 2.5v11" />
     </Icon>
   )
 }

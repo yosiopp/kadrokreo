@@ -357,6 +357,7 @@ kdr build design.xml + png Card --to card.png -o design.kdr   # 続けてほか�
 | コンポーネント | `<instance of="…">` の元は、マークアップの中の `<component>` の `id`、なければ `name` で探す（`place` は今の kdr の元からも探す）。中身を変えるのは `<override node="レイヤー名" text="…" fill="…" visible="false"/>`。同じ名前がいくつもあれば `node="親/子"` か、元の側で付けた `id` で指す。入れ子のインスタンスの差し替えは `<override node="…" of="別の元"/>`。`<instance>` 自身に書けるのは名前・位置・回転・表示・不透明度、`width="fill"` / `height="fill"`、塗りと線で、ほかは元で決まる |
 | 説明文・プロパティ・バリアント | 説明文は `<component description="…">`。プロパティは元の中のノードに `prop="名前"`（`<text>` なら文言、`<instance>` なら差し替え）か `prop.visible="名前"`（表示）を書いて結ぶ。インスタンスでの値は `<override prop="名前" value="…"/>`。バリアントは `<component-set>` の直下に `<component variant="種類=大, 状態=標準">` を並べ、`<instance of="まとまり" variant="種類=大">` で選ぶ（下の例） |
 | 実装の部品 | `<component code="Button" code-from="@/ui" code-default="true">`（`<component-set>` にも）。props の読み替えはその中に `<code-prop property="大きさ" prop="size"><code-value of="大" to="lg"/></code-prop>` |
+| ページのガイド線 | `<page guides="x:120 y:-40.5">`（`x:` は縦の線、`y:` は横の線の位置。空白で区切る）。フレームのレイアウトグリッドは `layoutGrids='[{"type":"columns","count":12,"gutter":20,"margin":20}]'`（`set` と同じ JSON） |
 | id | 省ける。省くと木の道筋（名前と、同じ名前の兄弟の中での順）から決まる。後で `set` などから指すノードには `id` を書いておく |
 
 コンポーネントの説明文・プロパティ・バリアントも、マークアップに書ける:

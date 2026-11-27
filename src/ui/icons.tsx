@@ -65,3 +65,23 @@ export function TypeIcon({ type, role, mask = false }: { type: NodeKind; role?: 
   }
   return <Icon>{TYPE_SHAPES[type]}</Icon>
 }
+
+/** レイアウトグリッドの表示の切り替え（editor と viewer） */
+export function LayoutGridIcon() {
+  return (
+    <Icon>
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1" />
+      <path d="M5.5 2.5v11M10.5 2.5v11" />
+    </Icon>
+  )
+}
+
+/** ガイド線の表示の切り替え（viewer） */
+export function GuidesIcon() {
+  return (
+    <Icon>
+      <path d="M5.5 1.5v13M1.5 10.5h13" />
+      <path d="M9.5 4.5h3v3h-3z" />
+    </Icon>
+  )
+}

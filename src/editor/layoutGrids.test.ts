@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createFrame } from './nodes.ts'
 import { createPage } from './operations/document.ts'
 import { insertNode, updateNode } from './operations/tree.ts'
-import { frameGridLines, gridBands, gridSteps, layoutGridSnapLines } from './layoutGrids.ts'
+import { gridBands, gridSteps } from '../canvas/guideOverlay.ts'
+import { frameGridLines, layoutGridSnapLines } from './layoutGrids.ts'
 
 describe('レイアウトグリッド', () => {
   it('カラムは余白の内側に溝を挟んで均等に並ぶ', () => {

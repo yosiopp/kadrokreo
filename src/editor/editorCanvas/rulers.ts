@@ -1,4 +1,5 @@
 import { OVERLAY_ACCENT } from '../../canvas/overlay.ts'
+import { GUIDE_COLOR } from '../../canvas/guideOverlay.ts'
 import { type Viewport, worldToScreen } from '../../canvas/viewport.ts'
 import type { Bounds, Point, Size } from '../../document/geometry.ts'
 
@@ -133,39 +134,6 @@ export function drawRulers(ctx: CanvasRenderingContext2D, viewport: Viewport, si
   // 角の四角
   ctx.fillStyle = RULER_BG
   ctx.fillRect(0, 0, RULER_SIZE - 1, RULER_SIZE - 1)
-  ctx.restore()
-}
-
-/** ガイド線の色 */
-export const GUIDE_COLOR = '#e8378b'
-
-/**
- * ページのガイド線を、キャンバスの端から端まで引く。active は引き出している・動かしているガイド線で、
- * ルーラーの上に位置の数字を出す
- */
-export function drawGuides(
-  ctx: CanvasRenderingContext2D,
-  viewport: Viewport,
-  size: Size,
-  guides: readonly { axis: 'x' | 'y'; position: number }[],
-  active: { axis: 'x' | 'y'; position: number } | null,
-) {
-  ctx.save()
-  ctx.strokeStyle = GUIDE_COLOR
-  ctx.lineWidth = 1
-  ctx.beginPath()
-  for (const { axis, position } of active ? [...guides, active] : guides) {
-    if (axis === 'x') {
-      const x = Math.round((position - viewport.x) * viewport.zoom) + 0.5
-      ctx.moveTo(x, 0)
-      ctx.lineTo(x, size.height)
-    } else {
-      const y = Math.round((position - viewport.y) * viewport.zoom) + 0.5
-      ctx.moveTo(0, y)
-      ctx.lineTo(size.width, y)
-    }
-  }
-  ctx.stroke()
   ctx.restore()
 }
 

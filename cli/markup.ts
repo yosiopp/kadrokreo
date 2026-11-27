@@ -19,12 +19,12 @@
 import { type MainNode, OVERRIDE_KEYS, derivedId, findMain, isInstance, isMain, owningInstance } from '../src/document/component.ts'
 import { canBindProperty, enclosingMainNode, instanceProperties } from '../src/document/componentProperties.ts'
 import { namePath, pathIndex, subtreeIds } from '../src/document/componentSource.ts'
-import { KdrError, MAX_DEPTH, kdrFile, parseKdr } from '../src/document/kdr.ts'
+import { KDR_MAX_GUIDES, KdrError, MAX_DEPTH, kdrFile, parseKdr } from '../src/document/kdr.ts'
 import { pathFromPoints } from '../src/document/path.ts'
 import { polygonSize } from '../src/document/polygon.ts'
 import { sha256Hex } from '../src/document/sha256.ts'
 import { MAX_CODE_LENGTH, isCodeFrom, isCodeName, isCodePropName } from '../src/document/codeComponent.ts'
-import type { Asset, AssetId, CodeComponent, CodeProp, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, PathNode, SceneNode } from '../src/document/types.ts'
+import type { Asset, AssetId, CodeComponent, CodeProp, ComponentProperty, DesignDocument, FrameNode, NodeId, Page, PageGuide, PathNode, SceneNode } from '../src/document/types.ts'
 import { type VariantProps, formatVariantName, isVariantSet, parseVariantName, propValue, variantSetOf, variantsIn } from '../src/document/variants.ts'
 import { alignVariantProperties, setInstanceProperty } from '../src/editor/componentProperties.ts'
 import { canHoldInstance, listComponents, componentName, nestedInstanceOf, sameJson, swapNestedInstance, syncComponents } from '../src/editor/components.ts'
@@ -936,7 +936,7 @@ export function buildMarkupDocument(
   const pageIds = new Set<string>()
   for (const element of root.children) {
     if (element.name !== 'page') throw fail(element.line, `<kdr> の直下に書けるのは <page> だけです: <${element.name}>`)
-    checkAttributes(fail, element, ['name', 'id'])
+    checkAttributes(fail, element, ['name', 'id', 'guides'])
     const id = element.attributes.find((attribute) => attribute.name === 'id')
     if (id) {
       if (!ID_PATTERN.test(id.value)) throw fail(id.line, `id="${id.value}": id には英数字と _ - だけを 64 文字まで使えます`)
@@ -950,7 +950,8 @@ export function buildMarkupDocument(
     const nth = names.get(name) ?? 0
     names.set(name, nth + 1)
     const id = element.attributes.find((attribute) => attribute.name === 'id')?.value ?? uniqueId(`page:${name}${nth === 0 ? '' : `~${nth}`}`, pageIds)
-    return { element, scene: { id, name, nodes: {} as Record<NodeId, SceneNode>, rootIds: [] as NodeId[], guides: [] } }
+    const guides = element.attributes.find((attribute) => attribute.name === 'guides')
+    return { element, scene: { id, name, nodes: {} as Record<NodeId, SceneNode>, rootIds: [] as NodeId[], guides: guides ? parseGuidesAttribute(fail, guides) : [] } }
   })
   // ノードの id はページの中でだけ一意
   for (const { element } of pages) assignIds(scope, element.children, '', new Set())
@@ -1257,4 +1258,17 @@ function applySwapProperty(session: Session, scope: Scope, item: PendingInstance
 /** インスタンスかその中身か（place で、入れる先に選べないもの） */
 export function insideInstance(page: Page, id: NodeId): boolean {
   return isInstance(page.nodes[id]) || owningInstance(page, id) !== null
+}
+
+/**
+ * <page> の guides 属性（ページのガイド線）。「x:120 y:-40.5」のように、x:（縦の線）か y:（横の線）と位置を空白で区切って並べる
+ */
+function parseGuidesAttribute(fail: Fail, attribute: MarkupAttribute): PageGuide[] {
+  const tokens = attribute.value.trim() === '' ? [] : attribute.value.trim().split(/\s+/)
+  if (tokens.length > KDR_MAX_GUIDES) throw fail(attribute.line, `guides: ガイド線が多すぎます（${KDR_MAX_GUIDES} 本まで）`)
+  return tokens.map((token) => {
+    const match = /^(x|y):(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i.exec(token)
+    if (!match || !Number.isFinite(Number(match[2]))) throw fail(attribute.line, `guides="${attribute.value}": 「x:120 y:40」のように、x: か y: と位置を空白で区切って書きます（${token}）`)
+    return { axis: match[1].toLowerCase() as 'x' | 'y', position: Number(match[2]) }
+  })
 }

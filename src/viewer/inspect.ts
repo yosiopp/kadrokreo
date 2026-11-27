@@ -13,7 +13,7 @@ import { cssFontFamily } from './fontFamily.ts'
 import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { codeOfComponent } from '../document/codeComponent.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
-import type { Asset, AssetId, AutoLayout, CodeComponent, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow, TextNode, VariableCollection, VariableId } from '../document/types.ts'
+import type { Asset, AssetId, AutoLayout, CodeComponent, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, LayoutGrid, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow, TextNode, VariableCollection, VariableId } from '../document/types.ts'
 import { isPassThroughFrame, passThroughFade } from '../document/passThrough.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
@@ -133,6 +133,11 @@ export function inspectNode(
       { label: '幅', value: SIZING_LABELS[node.sizing.width] },
       { label: '高さ', value: SIZING_LABELS[node.sizing.height] },
     ])
+  }
+
+  if (original.type === 'frame' && original.layoutGrids.length > 0) {
+    // レイアウトグリッドは見た目を作らないので、CSS・コードには出さず、値だけを見せる
+    add('レイアウトグリッド', original.layoutGrids.map((grid, i) => ({ label: original.layoutGrids.length === 1 ? '種類' : `${i + 1}`, value: layoutGridText(grid) })))
   }
 
   if (node.type === 'text' && node.textPath !== null) {
@@ -1012,4 +1017,10 @@ function acceptedInEveryMode(collections: readonly VariableCollection[], id: Var
   return entry.collection.modes.every((mode) =>
     acceptsBinding(key, resolveVariable(index, id, (other) => (other.id === entry.collection.id ? mode.id : other.modes[0].id))),
   )
+}
+
+/** レイアウトグリッド 1 つの説明（「カラム 12・溝 20・余白 20」「方眼 8」） */
+export function layoutGridText(grid: LayoutGrid): string {
+  if (grid.type === 'grid') return `方眼 ${num(grid.size)}`
+  return `${grid.type === 'columns' ? 'カラム' : '行'} ${grid.count}・溝 ${num(grid.gutter)}・余白 ${num(grid.margin)}`
 }

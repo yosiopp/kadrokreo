@@ -19,6 +19,7 @@ import { Logo } from '../ui/Logo.tsx'
 import { Message } from '../ui/Message.tsx'
 import { OpenFileButton } from '../ui/OpenFile.tsx'
 import { ZoomControls } from '../ui/ZoomControls.tsx'
+import { GuidesIcon, LayoutGridIcon } from '../ui/icons.tsx'
 import { downloadBlob, safeFileName } from '../ui/download.ts'
 import { useFileDrop } from '../ui/useFileDrop.ts'
 import { InspectPanel } from './InspectPanel.tsx'
@@ -55,6 +56,9 @@ export default function ViewerApp() {
   useEmbeddedFonts(doc?.fonts, doc?.assets)
   const [pageId, setPageId] = useState<PageId | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  // ガイド線・レイアウトグリッドを重ねて出すか。viewer はブラウザに何も保存しないので、開いている間だけ
+  const [showGuides, setShowGuides] = useState(false)
+  const [showLayoutGrids, setShowLayoutGrids] = useState(false)
   const [scale, setScale] = useState(1)
   // viewer は、既存のデザインツールの開発者向けモードに当たる表示。図形を選んで、大きさ・色・間隔・CSS を確かめられる。
   // 選択は画面の状態で、ドキュメントは変えない
@@ -158,6 +162,9 @@ export default function ViewerApp() {
       const next = await decodeKdr(file)
       if (count !== openCount.current) return
       setDoc(next)
+      // 別のファイルを開いたら、ガイド線・レイアウトグリッドはまた隠した状態から
+      setShowGuides(false)
+      setShowLayoutGrids(false)
       showLink(next)
       setMessage(null)
     } catch (error) {
@@ -288,6 +295,32 @@ export default function ViewerApp() {
         <span className="app-mode">viewer</span>
         {doc && <span className="document-name">{doc.name}</span>}
         <div className="app-header-spacer" />
+        {doc && page && (
+          <div className="view-toggles">
+            <button
+              type="button"
+              className="icon-button"
+              title={page.guides.length > 0 ? 'ガイド線を重ねて出す' : 'このページにはガイド線がありません'}
+              aria-label="ガイド線"
+              aria-pressed={showGuides && page.guides.length > 0}
+              disabled={page.guides.length === 0}
+              onClick={() => setShowGuides(!showGuides)}
+            >
+              <GuidesIcon />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              title={hasLayoutGrids(page) ? 'レイアウトグリッドを重ねて出す' : 'このページにはレイアウトグリッドがありません'}
+              aria-label="レイアウトグリッド"
+              aria-pressed={showLayoutGrids && hasLayoutGrids(page)}
+              disabled={!hasLayoutGrids(page)}
+              onClick={() => setShowLayoutGrids(!showLayoutGrids)}
+            >
+              <LayoutGridIcon />
+            </button>
+          </div>
+        )}
         {page && <ZoomControls camera={camera} getContentBounds={() => getContentBounds(page)} />}
         {page && (
           <button
@@ -388,6 +421,8 @@ export default function ViewerApp() {
               selection={selection}
               onSelect={select}
               onFit={fitAt}
+              showGuides={showGuides}
+              showLayoutGrids={showLayoutGrids}
             />
           ) : (
             <div className="empty-state">
@@ -464,4 +499,9 @@ function ModeSwitcher({ document, page, view, onChange }: { document: DesignDocu
       </div>
     </section>
   )
+}
+
+/** ページのどこかのフレームにレイアウトグリッドがあるか */
+function hasLayoutGrids(page: Page): boolean {
+  return Object.values(page.nodes).some((node) => node.type === 'frame' && node.layoutGrids.length > 0)
 }

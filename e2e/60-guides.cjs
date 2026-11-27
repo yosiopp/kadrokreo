@@ -5,7 +5,7 @@ const { parseKdrBytes } = require('./kdr.cjs')
 
 // editor のガイド線: ルーラーから引き出して置き、図形が吸着する。ドラッグで動かし、ルーラーへ戻すと消える。
 // 元に戻せる。ページに保存され（kdr の guides）、ルーラーを隠すと見えず吸着もしない
-const { OUT, EDITOR, check, finish, crashed, watchErrors, pointer, fieldFinder, savedDocument } = require('./harness.cjs')
+const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, pointer, fieldFinder, savedDocument } = require('./harness.cjs')
 
 ;(async () => {
   const browser = await chromium.launch({ channel: 'chrome' })
@@ -103,6 +103,27 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, pointer, fieldFinder, 
   await download.saveAs(file)
   const json = await parseKdrBytes(fs.readFileSync(file))
   check('書き出した kdr のページにガイド線が入る', json.raw.document.pages[0].guides?.length === 2, JSON.stringify(json.raw.document.pages[0].guides))
+
+  // ── viewer でも、ボタンでガイド線を重ねて出せる（既定は出さない）──
+  const viewer = await context.newPage()
+  watchErrors(viewer, errors, 'viewer: ')
+  await viewer.goto(VIEWER)
+  await viewer.locator('input[type=file]').setInputFiles(file)
+  await viewer.waitForSelector('.canvas-view canvas')
+  const guideButton = viewer.locator('button[aria-label="ガイド線"]')
+  check('viewer: ガイド線のボタンは押せて、既定は出さない', !(await guideButton.isDisabled()) && (await guideButton.getAttribute('aria-pressed')) === 'false')
+  check('viewer: レイアウトグリッドが無ければ、そのボタンは押せない', await viewer.locator('button[aria-label="レイアウトグリッド"]').isDisabled())
+  const shot = async () => (await viewer.locator('.canvas-view canvas').screenshot()).toString('base64')
+  const before = await shot()
+  await guideButton.click()
+  check('viewer: ボタンでガイド線が重なる', (await shot()) !== before)
+  await guideButton.click()
+  check('viewer: もう一度押すと消える', (await shot()) === before)
+  await guideButton.click()
+  await viewer.locator('input[type=file]').setInputFiles(file)
+  await viewer.waitForTimeout(300)
+  check('viewer: ファイルを開き直すと、ガイド線はまた隠れる', (await guideButton.getAttribute('aria-pressed')) === 'false')
+  await viewer.close()
 
   // 右クリックメニューで全部消す（ルーラーを出しているときだけ押せる）
   await page.keyboard.press('Escape')
