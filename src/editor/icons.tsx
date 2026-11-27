@@ -86,3 +86,12 @@ export function TrashIcon() {
     </Icon>
   )
 }
+
+export function RulerIcon() {
+  return (
+    <Icon>
+      <path d="M1.5 1.5h13v4h-9v9h-4z" />
+      <path d="M4.5 1.5v2M7.5 1.5v2M10.5 1.5v2M1.5 8.5h2M1.5 11.5h2" />
+    </Icon>
+  )
+}

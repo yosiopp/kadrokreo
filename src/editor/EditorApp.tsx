@@ -28,7 +28,8 @@ import { COMPONENT_DRAG_TYPE, draggedComponent, instanceDropTarget, placeInstanc
 import { PropertiesPanel } from './PropertiesPanel.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
-import { RedoIcon, UndoIcon } from './icons.tsx'
+import { RedoIcon, RulerIcon, UndoIcon } from './icons.tsx'
+import { setViewSettings, useViewSettings } from './viewSettings.ts'
 import { readFontFile } from './importFont.ts'
 import { placeImage, readImageFile } from './importImage.ts'
 import { SVG_ACCEPT, convertSvgText, isSvgFile, placeSvg, readSvgFile, svgWarningMessage } from './importSvg.ts'
@@ -480,6 +481,7 @@ function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps
           </button>
         </div>
         <div className="app-header-spacer" />
+        <ViewToggles />
         <ZoomControls camera={camera} getContentBounds={() => getContentBounds(store.getState().page)} />
         <button type="button" onClick={newDocument}>
           新規
@@ -545,6 +547,25 @@ function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps
         </main>
         <PropertiesPanel store={store} state={state} onExportPng={exportPng} onExportSvg={exportSvg} onCopySvg={copySvg} onReplaceImage={replaceImage} onAddFonts={addFonts} onRemoveFont={removeEmbeddedFont} />
       </div>
+    </div>
+  )
+}
+
+/** キャンバスの表示（ルーラー）の切り替えボタン */
+function ViewToggles() {
+  const view = useViewSettings()
+  return (
+    <div className="toolbar">
+      <button
+        type="button"
+        className="icon-button"
+        title="ルーラー (Shift+R)"
+        aria-label="ルーラー"
+        aria-pressed={view.rulers}
+        onClick={() => setViewSettings({ rulers: !view.rulers })}
+      >
+        <RulerIcon />
+      </button>
     </div>
   )
 }

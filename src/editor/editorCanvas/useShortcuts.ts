@@ -21,6 +21,7 @@ import type { EditorStore } from '../store.ts'
 import { isSvgFile, looksLikeSvg } from '../importSvg.ts'
 import type { Tool } from '../tools.ts'
 import { nextName } from './handles.ts'
+import { getViewSettings, setViewSettings } from '../viewSettings.ts'
 
 /** 埋め込んだ書体で描かないテキストを、アウトライン化・ブーリアン演算に入れなかったときの説明 */
 const UNEMBEDDED_TEXT_OUTLINE = 'kdr に埋め込んでいない書体のテキストは、文字の形が分からないのでアウトライン化しませんでした。書体ファイルを追加して（何も選んでいないときのプロパティの「書体」）そのテキストに当ててから、もう一度試してください。'
@@ -334,6 +335,7 @@ export function useShortcuts(options: Options) {
     if (event.shiftKey && key === 'a') wrap()
     else if (event.shiftKey && key === 'h') flip('horizontal')
     else if (event.shiftKey && key === 'v') flip('vertical')
+    else if (event.shiftKey && key === 'r') setViewSettings({ rulers: !getViewSettings().rulers })
     else if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
     else if (event.shiftKey && event.code === 'Digit2') zoomToSelection()
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)

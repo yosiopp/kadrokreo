@@ -67,6 +67,8 @@ import { handleCursor } from './resize.ts'
 import type { EditorState, EditorStore } from './store.ts'
 import { DEFAULT_SHAPE_OPTIONS, type ShapeOptions, type Tool } from './tools.ts'
 import { polygonSize } from '../document/polygon.ts'
+import { drawRulers, rulerAt } from './editorCanvas/rulers.ts'
+import { setViewSettings, useViewSettings } from './viewSettings.ts'
 
 // メニューに出すショートカットの表記。macOS は記号、ほかは Ctrl などの名前
 const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -133,6 +135,7 @@ export function EditorCanvas({
   const [menuAt, setMenuAt] = useState<Point | null>(null)
   const closeMenu = useCallback(() => setMenuAt(null), [])
   const [, redraw] = useReducer((n: number) => n + 1, 0)
+  const view = useViewSettings()
   const { editing, editingRef, editText, startNewText, onTextInput, finishEditing } = useTextEditing(
     store,
     onToolChange,
@@ -354,6 +357,8 @@ export function EditorCanvas({
     }
     setHover(null)
     const { page, selection } = store.getState()
+    // ルーラーの帯の上では、下にある図形を選んだり描いたりしない
+    if (view.rulers && rulerAt(pointer.screen)) return
 
     if (tool === 'text') {
       gestureRef.current = { kind: 'text', screen: pointer.screen, world: pointer.world }
@@ -495,6 +500,11 @@ export function EditorCanvas({
         return
       }
       if (tool !== 'select' || editingRef.current) return
+      if (view.rulers && rulerAt(pointer.screen)) {
+        setCursor('default')
+        setHover(null)
+        return
+      }
       const viewport = camera.getViewport()
       const box = selectionBox()
       const handle = handleAt(viewport, box, pointer.screen)
@@ -596,6 +606,7 @@ export function EditorCanvas({
   function onDoubleClick(pointer: CanvasPointer) {
     if (tool === 'pen') return finishPen(false)
     if (tool !== 'select' || editingRef.current) return
+    if (view.rulers && rulerAt(pointer.screen)) return
     if (addGradientStopAt(pointer)) return
     if (editVertexAt(pointer)) return
     const page = store.getState().page
@@ -815,6 +826,8 @@ export function EditorCanvas({
         { label: '貼り付け', shortcut: `${MOD}V`, disabled: !canPaste, onSelect: commands.paste },
         'separator',
         { label: '全体を表示', shortcut: `${SHIFT}1`, onSelect: commands.zoomToFit },
+        'separator',
+        { label: view.rulers ? 'ルーラーを隠す' : 'ルーラーを表示', shortcut: `${SHIFT}R`, onSelect: () => setViewSettings({ rulers: !view.rulers }) },
       ]
     }
     const otherPages = document.pages.filter((other) => other.id !== page.id)
@@ -917,6 +930,7 @@ export function EditorCanvas({
       box: selectionBox(),
       dropTarget,
     })
+    if (view.rulers) drawRulers(ctx, viewport, camera.getSize(), getNodesBounds(state.page, state.selection))
   }
 
   return (
