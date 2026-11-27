@@ -222,6 +222,48 @@ docker run --rm ghcr.io/yosiopp/kadrokreo kdr help set    # 1 つのコマンド
 ノードの指定、`+` とパイプ、JSON で出せるコマンド、終了コードとエラーの出方、作る → 調べる → 変える → PNG / SVG で確かめる流れ、
 すべてのコマンドと例が載っている。
 
+### MCP のサーバーとしてつなぐ（kdr mcp）
+
+MCP（Model Context Protocol）に対応したエージェントなら、`kdr mcp` をサーバーとして登録できる。
+1 回つなげば、コマンドのたびにコンテナを起動せずに済み（1 回あたり 0.3〜0.4 秒ほど縮む）、開いたドキュメントをメモリに持って編集を重ね、PNG を画像のまま受け取れる。
+やり取りは標準入出力だけで、ネットワークの口は開かない。
+
+```sh
+docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" ghcr.io/yosiopp/kadrokreo kdr mcp
+```
+
+エージェントの設定は、ふつうシェルを通さずにコマンドを起動するので、`$PWD` などを使うなら `sh -c` で包む（`$PWD` はエージェントがサーバーを起動したディレクトリ、ふつうはプロジェクトのフォルダ）。
+プロジェクトの `.mcp.json` に書く例:
+
+```json
+{
+  "mcpServers": {
+    "kdr": {
+      "command": "sh",
+      "args": ["-c", "exec docker run --rm -i -v \"$PWD:/work\" --user \"$(id -u):$(id -g)\" ghcr.io/yosiopp/kadrokreo kdr mcp"]
+    }
+  }
+}
+```
+
+Claude Code なら、プロジェクトのフォルダで次のように足せる（`--scope project` で `.mcp.json` に書かれる）。
+
+```sh
+claude mcp add --scope project kdr -- sh -c 'exec docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" ghcr.io/yosiopp/kadrokreo kdr mcp'
+```
+
+| 道具 | すること |
+| --- | --- |
+| `open` | kdr を開く（`path` は `/work` からの相対パス） |
+| `run` | kdr のコマンドを、開いているドキュメントに対して実行する（`args` は `["set", "Title", "text=ホーム"]` のような引数の配列。`+` でつなげる。`new`・`build` で始めると新しく作る。`stdin` は `build -` のマークアップ） |
+| `png` | `kdr png` と同じ絵を画像で返す（`nodes`・`scale`・`background`） |
+| `save` | kdr に書き出す（`path` を省くと開いたファイルへ） |
+| `help` | `kdr docs` か、1 つのコマンドの説明 |
+
+- 変更はメモリにあり、`save` するまでファイルは変わらない。`run` が途中で失敗したら、その呼び出しの変更はすべて捨てる
+- `run` では `-f`・`-o`・`-w` は使えない（`open`・`save` を使う）。ほかのコマンドと書き方はコマンドラインと同じ
+- 下の skill（プラグイン）はサーバーを登録しない。使うプロジェクトで、上のように足す
+
 ### skill（プラグイン）を入れる
 
 このリポジトリは Claude Code のプラグインのマーケットプレイスになっていて、kdr の skill（[`plugins/kdr/skills/kdr/SKILL.md`](../../plugins/kdr/skills/kdr/SKILL.md)）を入れられる。

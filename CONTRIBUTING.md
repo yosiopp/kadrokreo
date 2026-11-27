@@ -81,7 +81,7 @@ src/canvas/     Canvas 2D の描画、ズーム・パン、当たり判定、PNG
 src/ui/         共通の UI 部品
 src/viewer/     viewer の画面（インスペクト、CSS / HTML の出力、間隔の計測）
 src/editor/     編集操作、履歴、ツール、パネル、kdr の書き出し、自動保存、SVG の取り込み
-cli/            コマンドライン kdr（Node で TypeScript のまま動かす）。kdr help / kdr docs は help.ts と examples.ts から作る。マークアップ（kdr build / place）は markup.ts
+cli/            コマンドライン kdr（Node で TypeScript のまま動かす）。kdr help / kdr docs は help.ts と examples.ts から作る。マークアップ（kdr build / place）は markup.ts、MCP のサーバー（kdr mcp）は mcp.ts
 docker/         nginx の設定と起動スクリプト
 e2e/            ブラウザでの動作確認とキャプチャ
 bench/          性能の計測（大きな kdr の生成と Node での計測は cli/bench/）

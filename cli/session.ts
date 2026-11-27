@@ -18,6 +18,8 @@ const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 // WOFF2 の書体の字の形も同期で読めるようにする（ブラウザでは大きいので遅れて読み込むが、CLI は最初から読み込んでおく）
 setWoff2Decoder(decodeWoff2)
 
+export type SessionSnapshot = { readonly document: DesignDocument; readonly pageId: string; readonly last: NodeId[] }
+
 export class Session {
   #store
   #pageId: string
@@ -66,6 +68,17 @@ export class Session {
     this.#store.load(checked)
     if (!this.document.pages.some((page) => page.id === this.#pageId)) this.#pageId = this.document.pages[0].id
     this.modified = true
+  }
+
+  /** 今の状態（ドキュメント・ページ・@）を覚える。restore で戻す（kdr mcp で、失敗した呼び出しの変更を捨てるため） */
+  snapshot(): SessionSnapshot {
+    return { document: this.document, pageId: this.#pageId, last: this.last }
+  }
+
+  restore(snapshot: SessionSnapshot): void {
+    if (this.document !== snapshot.document) this.#store.load(snapshot.document)
+    this.#pageId = snapshot.pageId
+    this.last = snapshot.last
   }
 
   /** いまのページを変える */

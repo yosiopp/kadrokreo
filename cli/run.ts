@@ -27,10 +27,22 @@ export type IO = {
 /** 終了コード 1 で「見つけた」を知らせるコマンド（diff・lint）のための状態 */
 type Outcome = { reports: boolean; found: boolean }
 
-export async function run(argv: readonly string[], io: IO): Promise<number> {
+/**
+ * 呼び出しをまたいで開いておくドキュメント（kdr mcp が使う）。run に渡すと、-f・-o・-w の代わりにこれを読み書きする。
+ * 途中で失敗したら、その呼び出しの変更は捨てて元に戻す（CLI の「失敗したら何も書き出さない」と同じ）
+ */
+export type Held = {
+  session: Session | null
+  /** 直前の run が最後まで通ったか（diff・lint の「見つけた」の終了コード 1 と、失敗の 1 を見分けるため） */
+  ok?: boolean
+}
+
+export async function run(argv: readonly string[], io: IO, held?: Held): Promise<number> {
   const outcome: Outcome = { reports: false, found: false }
+  if (held) held.ok = false
   try {
-    await execute(argv, io, outcome)
+    await execute(argv, io, outcome, held)
+    if (held) held.ok = true
     return outcome.found ? 1 : 0
   } catch (error) {
     if (error instanceof UsageError) {
@@ -49,17 +61,20 @@ export async function run(argv: readonly string[], io: IO): Promise<number> {
   }
 }
 
-async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promise<void> {
+async function execute(argv: readonly string[], io: IO, outcome: Outcome, held: Held | undefined): Promise<void> {
   const { global, steps } = parseArgs(argv, (name) => ({
     flags: new Set(COMMANDS.get(name)?.flags ?? []),
     assignments: COMMANDS.get(name)?.assignments ?? false,
   }))
+  if (held && (global.file !== null || global.out !== null || global.write)) {
+    throw new UsageError('-f・-o・-w は使えません（開く・保存するのは open・save の道具で）')
+  }
   if (global.version) {
     io.stdout(`kdr（kadrokreo のコマンドライン、kdr ファイル v${KDR_VERSION}）\n`)
     return
   }
   // コマンドなしで -f と -o だけなら、読んで書き直す（古い版の kdr を今の版にする）
-  const convert = steps.length === 0 && global.file !== null && global.out !== null
+  const convert = !held && steps.length === 0 && global.file !== null && global.out !== null
   // kdr help [コマンド]・kdr コマンド --help（-h）・kdr docs は、入力を読まずに説明を出す
   if (steps[0]?.name === 'help') {
     io.stdout(help(steps[0].positionals[0]))
@@ -68,6 +83,9 @@ async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promi
   if (global.help || (steps.length === 0 && !convert)) {
     io.stdout(help(steps[0]?.name))
     return
+  }
+  if (steps.some((step) => step.name === 'mcp')) {
+    throw new UsageError('mcp: 引数は取りません（ほかのコマンドとはつなげません。kdr mcp だけで起動します）')
   }
   if (steps[0]?.name === 'docs') {
     if (steps.length > 1 || steps[0].positionals.length > 0 || steps[0].options.size > 0) {
@@ -85,18 +103,23 @@ async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promi
   outcome.reports = commands.some((command) => command.reports)
   const standalone = commands.find((command) => command.standalone)
   if (standalone) checkStandalone(standalone, steps, global)
-  const plan = convert || standalone ? { source: false } : checkPlan(commands, steps, global, io)
+  const plan = convert || standalone ? { source: false } : checkPlan(commands, steps, global, io, held !== undefined)
 
   // place - はマークアップを標準入力から読むので、入力の kdr も標準入力だと読めない（kdr として読む前に断る）
-  if (!standalone && !plan.source && (global.file === null || global.file === '-') && steps.some((step) => step.name === 'place' && step.positionals[0] === '-')) {
+  if (!held && !standalone && !plan.source && (global.file === null || global.file === '-') && steps.some((step) => step.name === 'place' && step.positionals[0] === '-')) {
     throw new UsageError('place -: マークアップを標準入力から読むときは、入力の kdr を -f のファイルで渡してください')
   }
   // new・build は、ここで作った空のドキュメントを置き換える。standalone のコマンドは入力の kdr を自分で読む
   const session = standalone
     ? null
-    : new Session(plan.source ? createDocument() : await decodeKdr(new Blob([await readInput(global.file, io)])))
+    : held
+      ? plan.source
+        ? new Session(createDocument()) // new・build は作り直す（いまのページも @ も持ち越さない。成功したときだけ held に入る）
+        : (held.session ?? noDocument())
+      : new Session(plan.source ? createDocument() : await decodeKdr(new Blob([await readInput(global.file, io)])))
+  const snapshot = held && session && !plan.source ? session.snapshot() : null
 
-  let stdinRead = session !== null && !plan.source && (global.file === null || global.file === '-')
+  let stdinRead = !held && session !== null && !plan.source && (global.file === null || global.file === '-')
   const output: string[] = []
   const ctx = {
     get session(): Session {
@@ -125,6 +148,7 @@ async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promi
     try {
       await commands[i].run(ctx, step)
     } catch (error) {
+      if (snapshot) session!.restore(snapshot)
       if (error instanceof UsageError || error instanceof KdrError || error instanceof MarkupError) {
         error.message = `${step.name}: ${error.message.replace(new RegExp(`^${step.name}: `), '')}`
       }
@@ -133,6 +157,10 @@ async function execute(argv: readonly string[], io: IO, outcome: Outcome): Promi
   }
   if (output.length > 0) io.stdout(output.join('\n') + '\n')
   if (session === null) return
+  if (held) {
+    held.session = session
+    return
+  }
 
   const destination = global.out ?? (global.write ? global.file : session.modified ? '-' : null)
   if (destination === null) return
@@ -150,7 +178,13 @@ function checkStandalone(command: Command, steps: readonly Step[], global: { fil
 }
 
 /** 実行する前に、入出力の組み合わせがおかしくないかを確かめる */
-function checkPlan(commands: readonly Command[], steps: readonly Step[], global: { file: string | null; out: string | null; write: boolean }, io: IO) {
+function checkPlan(
+  commands: readonly Command[],
+  steps: readonly Step[],
+  global: { file: string | null; out: string | null; write: boolean },
+  io: IO,
+  held: boolean,
+) {
   const source = commands[0].kind === 'source'
   if (commands.slice(1).some((command) => command.kind === 'source')) {
     throw new UsageError('new・build はコマンドの先頭にだけ置けます')
@@ -160,7 +194,7 @@ function checkPlan(commands: readonly Command[], steps: readonly Step[], global:
     if (global.out !== null) throw new UsageError('-o と -w は一緒に指定できません')
     if (global.file === null || global.file === '-') throw new UsageError('-w には -f で入力のファイルを指定してください')
   }
-  if (!source && global.file === null && io.stdinIsTTY) {
+  if (!held && !source && global.file === null && io.stdinIsTTY) {
     throw new UsageError('入力の kdr がありません。-f で指定するか、標準入力へ渡してください')
   }
   const edits = source || commands.some((command) => command.kind === 'edit')
@@ -168,7 +202,8 @@ function checkPlan(commands: readonly Command[], steps: readonly Step[], global:
   const exportsToStdout = steps.filter((step, i) => commands[i].kind === 'export' && step.options.get('to') === '-')
   const pngToStdout = exportsToStdout.length
   const queries = commands.some((command) => command.kind === 'query') || pngToStdout > 0
-  const toStdout = global.out === '-' || (global.out === null && !global.write && edits)
+  // 開いておくドキュメント（held）は kdr を書き出さない
+  const toStdout = !held && (global.out === '-' || (global.out === null && !global.write && edits))
   if (pngToStdout > 1 || (pngToStdout > 0 && commands.some((command) => command.kind === 'query'))) {
     throw new UsageError('標準出力（--to -）へ出す png / svg-out は、ほかの標準出力への出力と一緒にできません')
   }
@@ -183,6 +218,10 @@ function checkPlan(commands: readonly Command[], steps: readonly Step[], global:
     throw new UsageError('kdr を端末には出力しません。-o で出力先を指定するか（-w で上書き）、パイプでつないでください')
   }
   return { source }
+}
+
+function noDocument(): never {
+  throw new UsageError('開いているドキュメントがありません。open で kdr を開くか、new・build で作ってください')
 }
 
 async function readInput(file: string | null, io: IO): Promise<Uint8Array<ArrayBuffer>> {

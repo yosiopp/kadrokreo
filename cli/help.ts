@@ -22,7 +22,7 @@ function examplesOf(name: string): readonly string[] {
 /** kdr help コマンド。名前を省くと全体のヘルプ */
 export function help(name?: string): string {
   if (name === undefined) return overview()
-  if (name === 'help' || name === 'docs') return builtinHelp(name)
+  if (name === 'help' || name === 'docs' || name === 'mcp') return builtinHelp(name)
   const command = COMMANDS.get(name)
   if (!command) throw new UsageError(`不明なコマンドです: ${name}`)
   const lines = [`kdr ${command.usage}`, '', command.summary, '']
@@ -34,10 +34,18 @@ export function help(name?: string): string {
   return lines.join('\n') + '\n'
 }
 
-function builtinHelp(name: 'help' | 'docs'): string {
-  return name === 'help'
-    ? 'kdr help [コマンド]\n\nコマンドの説明と例を出す（kdr コマンド --help と同じ）。省くと全体のヘルプ\n'
-    : 'kdr docs\n\nエージェント向けの全体のリファレンス（Docker 越しの呼び方・ノードの指定・出力の形・終了コード・すべてのコマンドと例）を Markdown で標準出力へ出す\n'
+function builtinHelp(name: 'help' | 'docs' | 'mcp'): string {
+  switch (name) {
+    case 'help':
+      return 'kdr help [コマンド]\n\nコマンドの説明と例を出す（kdr コマンド --help と同じ）。省くと全体のヘルプ\n'
+    case 'docs':
+      return 'kdr docs\n\nエージェント向けの全体のリファレンス（Docker 越しの呼び方・ノードの指定・出力の形・終了コード・すべてのコマンドと例）を Markdown で標準出力へ出す\n'
+    case 'mcp':
+      return (
+        'kdr mcp\n\nAI エージェント向けの MCP（Model Context Protocol）のサーバーとして常駐する。標準入出力で JSON-RPC をやり取りし、ネットワークの口は開かない。\n' +
+        '道具は open（kdr を開く）・run（コマンドを実行）・png（画像で返す）・save（保存）・help。登録の仕方は kdr docs の「MCP のサーバー」\n'
+      )
+  }
 }
 
 function overview(): string {
@@ -69,6 +77,7 @@ function overview(): string {
   lines.push(
     'kdr help コマンド（または kdr コマンド --help）で、1 つのコマンドの説明と例を出す',
     'kdr docs で、エージェント向けの全体のリファレンスを Markdown で出す',
+    'kdr mcp で、AI エージェント向けの MCP のサーバーとして常駐する（標準入出力だけ）',
   )
   return lines.join('\n') + '\n'
 }
@@ -99,6 +108,33 @@ export function docs(): string {
     '- PNG の描画のライブラリ（`@napi-rs/canvas`）と書体（Liberation Sans・Noto Sans CJK）はイメージに入っている。リポジトリから直接動かすときは、任意の依存が入っていないと `png` だけがエラーになる',
     '',
     '以下の例は `kdr …` と書く。Docker なら `kdr` を上の `docker run … ghcr.io/yosiopp/kadrokreo kdr` に読み替える。',
+    '',
+    '## MCP のサーバー（kdr mcp）',
+    '',
+    '`kdr mcp` は、MCP（Model Context Protocol）のサーバーとして常駐する。標準入出力で JSON-RPC をやり取りするだけで、ネットワークの口は開かない。コマンドのたびにコンテナを起動せずに済み、開いたドキュメントをメモリに持って編集を重ね、PNG を画像のまま受け取れる。',
+    'MCP に対応したクライアントに、次のコマンドで起動するサーバーとして登録する（`-i` は要る。`-t` は付けない）。',
+    '',
+    `${fence}sh`,
+    'docker run --rm -i -v "$PWD:/work" --user "$(id -u):$(id -g)" ghcr.io/yosiopp/kadrokreo kdr mcp',
+    fence,
+    '',
+    'クライアントの設定はシェルを通さずに起動することが多いので、`$PWD` を使うなら `sh -c` で包む（プロジェクトの `.mcp.json` の例）:',
+    '',
+    `${fence}json`,
+    '{ "mcpServers": { "kdr": { "command": "sh", "args": ["-c", "exec docker run --rm -i -v \\"$PWD:/work\\" --user \\"$(id -u):$(id -g)\\" ghcr.io/yosiopp/kadrokreo kdr mcp"] } } }',
+    fence,
+    '',
+    '| 道具 | 引数 | すること |',
+    '| --- | --- | --- |',
+    '| `open` | `path` | kdr を読み込んで、開いているドキュメントにする（保存していない変更は捨てる） |',
+    '| `run` | `args`（文字列の配列）、`stdin`（任意） | この文書のコマンドを、開いているドキュメントに対して実行し、文字の出力を返す。`args` は `kdr` の後ろの引数（例 `["set", "Title", "text=ホーム", "+", "get", "Title"]`）。`new`・`build` で始めると新しく作る。`-f`・`-o`・`-w` は使えない。`stdin` は `build -` / `place -` のマークアップ |',
+    '| `png` | `nodes`・`scale`・`background`（どれも任意） | `png` と同じ絵を、ファイルに書かずに画像（`image/png`）で返す |',
+    '| `save` | `path`（任意） | kdr に書き出す。省くと開いたファイルへ |',
+    '| `help` | `command`（任意） | この文書（省いたとき）か、1 つのコマンドの説明 |',
+    '',
+    '- 変更はメモリにあり、`save` するまでファイルは変わらない。`run` が途中で失敗したら、その呼び出しの変更はすべて捨てる。いまのページと `@` は呼び出しをまたいで覚える',
+    '- パスはサーバーの今のディレクトリ（Docker なら `/work`）からの相対パス。`run` の `png --to`・`svg-out` などのファイルの書き出しも、コマンドラインと同じく使える',
+    '- エラーは道具の結果（`isError`）として、コマンドラインと同じ文面で返る',
     '',
     '## 書き方',
     '',
