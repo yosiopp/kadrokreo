@@ -232,6 +232,11 @@ export function buildPatch(
     // フレームの並べ方の項目は、layout. を付けたものとして読む
     const path = node.type === 'frame' && LAYOUT_KEYS.has(written) ? `layout.${written}` : written
     if (isBindingKey(path) && bindValue(node, draft, path, raw, collections)) continue
+    // padding=var(名前) は 4 辺ともつなぐ
+    if (path === 'layout.padding' && VARIABLE_REF.test(raw.trim())) {
+      for (const side of ['layout.paddingTop', 'layout.paddingRight', 'layout.paddingBottom', 'layout.paddingLeft'] as const) bindValue(node, draft, side, raw, collections)
+      continue
+    }
     const sizing = expandSizing(node, path, raw, draft)
     if (sizing) {
       Object.assign(draft, sizing)

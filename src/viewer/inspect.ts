@@ -540,10 +540,13 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       add('gap', `${lengthOf(rowKey, row)} ${lengthOf(columnKey, column)}`)
     } else if (layout.gap !== 0 || bound('layout.gap') !== undefined) add('gap', lengthOf('layout.gap', layout.gap))
     const sides = ['layout.paddingTop', 'layout.paddingRight', 'layout.paddingBottom', 'layout.paddingLeft'] as const
-    // どこか 1 辺でもつないでいれば、縮めずに 4 辺とも書く（縮めると辺とつながりの対応がずれる）
+    // どこか 1 辺でもつないでいれば、4 辺とも書く（2・3 個に縮めると辺とつながりの対応がずれる。4 辺とも同じなら 1 つ）
     const fourSides = [layout.paddingTop, layout.paddingRight, layout.paddingBottom, layout.paddingLeft]
+    const boundSides = fourSides.map((value, i) => lengthOf(sides[i], value))
     const padding = sides.some((side) => bound(side) !== undefined)
-      ? fourSides.map((value, i) => lengthOf(sides[i], value)).join(' ')
+      ? boundSides.every((side) => side === boundSides[0])
+        ? boundSides[0]
+        : boundSides.join(' ')
       : paddingCss(layout, px)
     if (padding !== null) add('padding', padding)
   }

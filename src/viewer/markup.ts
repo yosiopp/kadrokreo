@@ -4,9 +4,9 @@ import { drawnNode } from '../document/booleanNode.ts'
 import { withoutHidden } from '../document/paint.ts'
 import { dataUri, escapeXml as escapeHtml, pathSvg } from '../document/svgShapes.ts'
 import { embeddedFontFaces, fontFaceRule, fontFileName, usedFontFaces } from '../document/fontFace.ts'
-import type { Asset, AssetId, CodeComponent, DesignDocument, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode, TextPath, VariableId } from '../document/types.ts'
-import { boundVariables } from '../document/variables.ts'
-import { variablesCss } from './tokens.ts'
+import type { Asset, AssetId, CodeComponent, DesignDocument, EmbeddedFont, NodeId, Page, PathNode, Scene, SceneNode, TextNode, TextPath, VariableId } from '../document/types.ts'
+import { boundVariables, modesAt } from '../document/variables.ts'
+import { modeSelector, variablesCss } from './tokens.ts'
 import { isInstance } from '../document/component.ts'
 import { type CodeArg, type CodeCall, codeCall } from '../document/codeComponent.ts'
 import { contoursData } from '../document/path.ts'
@@ -192,6 +192,24 @@ export function nodeMarkup(
     }
   }
 
+  /**
+   * 変数のモードを切り替える data 属性（data-theme="dark"）。フレームが指定したモードと、選んだ根では親やページから受け継いだモード。
+   * 最初のモード（:root の値）なら付けない
+   */
+  function modeAttributes(node: SceneNode): string {
+    if (!style.variables || node.type !== 'frame') return ''
+    const lookup = node.id === id ? modesAt(scene as Page, id) : null
+    const attrs: string[] = []
+    for (const collection of style.variables) {
+      if (collection.modes.length < 2) continue
+      const mode = lookup ? lookup(collection) : node.modes?.[collection.id]
+      if (mode === undefined || mode === collection.modes[0].id || !collection.modes.some((item) => item.id === mode)) continue
+      const selector = modeSelector(collection, mode)
+      attrs.push(selector.slice(1, -1))
+    }
+    return attrs.map((attr) => ` ${attr}`).join('')
+  }
+
   function visit(source: SceneNode, depth: number) {
     if (calls && isInstance(source)) {
       const call = codeCall(document, tree, source)
@@ -210,7 +228,7 @@ export function nodeMarkup(
     if (node.type === 'path' || isPathText(node)) css += '\noverflow: visible;'
     if (format !== 'react' && format !== 'tailwind') rules.push(`.${name} {\n${css.replace(/^/gm, '  ')}\n}`)
 
-    const attr = attribute(name, css)
+    const attr = attribute(name, css) + modeAttributes(node)
     switch (node.type) {
       case 'frame': {
         // マスクは描かない（手前の兄弟の clip-path になる）

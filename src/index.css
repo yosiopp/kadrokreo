@@ -613,6 +613,7 @@ input.document-name:focus {
 }
 
 .variable-collection .font-actions {
+  flex-wrap: wrap;
   gap: 6px;
   padding: 6px 0 0;
 }
@@ -700,6 +701,13 @@ input.document-name:focus {
 .variable-value select {
   flex: 1;
   min-width: 0;
+}
+
+/* viewer の変数のモードの切り替え */
+.mode-switcher {
+  display: grid;
+  gap: 4px;
+  padding: 0 12px 12px;
 }
 
 /* ページ */

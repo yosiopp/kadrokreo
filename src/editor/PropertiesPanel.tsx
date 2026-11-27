@@ -14,6 +14,7 @@ import { BooleanSection, MaskSection } from './properties/MaskSection.tsx'
 import { FontsSection } from './properties/FontsSection.tsx'
 import { VariablesSection } from './properties/VariablesSection.tsx'
 import { BindingsSection } from './properties/BindingsSection.tsx'
+import { FrameModesSection, PageModesSection } from './properties/ModesSection.tsx'
 import { TextSection } from './properties/TextSection.tsx'
 import type { EmbeddedFont } from '../document/types.ts'
 import type { EditorState, EditorStore } from './store.ts'
@@ -69,6 +70,7 @@ export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopy
           ))}
         </dl>
         <VariablesSection store={store} document={state.document} />
+        <PageModesSection store={store} document={state.document} pageId={page.id} modes={page.modes} />
         <FontsSection fonts={state.document.fonts} onAddFonts={onAddFonts} onRemoveFont={onRemoveFont} />
         <ExportSection label="このページを PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
       </aside>
@@ -104,6 +106,7 @@ export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopy
       <FrameSections ctx={ctx} />
       <TextSection ctx={ctx} onAddFonts={onAddFonts} />
       <BindingsSection ctx={ctx} />
+      <FrameModesSection ctx={ctx} />
       <ExportSection label="PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
     </aside>
   )

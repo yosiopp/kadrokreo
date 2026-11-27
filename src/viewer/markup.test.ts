@@ -628,3 +628,33 @@ describe('nodeMarkup の実装側の部品', () => {
     )
   })
 })
+
+describe('変数のモードの data 属性', () => {
+  const collections = [
+    {
+      id: 'c',
+      name: 'Theme',
+      modes: [
+        { id: 'l', name: 'Light' },
+        { id: 'd', name: 'Dark' },
+      ],
+      variables: [{ id: 'v', name: 'color/surface', type: 'color' as const, values: { l: '#ffffff', d: '#000000' } }],
+    },
+  ]
+
+  it('モードを決めたフレームと、受け継いだモードの根に data 属性を付ける（最初のモードには付けない）', () => {
+    const scene = sceneOf(
+      frame({ id: 'outer', name: 'Outer', children: ['inner', 'light'], modes: { c: 'd' } }),
+      frame({ id: 'inner', name: 'Inner', parentId: 'outer', children: [] }),
+      frame({ id: 'light', name: 'Light', parentId: 'outer', children: [], modes: { c: 'l' } }),
+    )
+    const html = nodeMarkup(scene, 'outer', { style: { variables: collections } }).html
+    expect(html).toContain('<div class="outer" data-theme="dark">')
+    expect(html).toContain('<div class="inner"></div>')
+    expect(html).toContain('<div class="light"></div>')
+    // 子だけを選んでも、受け継いだモードを根に付ける
+    expect(nodeMarkup(scene, 'inner', { style: { variables: collections } }).html).toBe('<div class="inner" data-theme="dark"></div>')
+    // 変数を渡さなければ付けない
+    expect(nodeMarkup(scene, 'outer').html).not.toContain('data-theme')
+  })
+})

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
 import { exportTargets, pngFileName, renderPng } from '../canvas/exportPng.ts'
@@ -9,7 +9,8 @@ import { assetBlob } from '../canvas/images.ts'
 import { getAbsoluteBounds, getContentBounds, getNodesBounds } from '../document/geometry.ts'
 import { decodeKdr } from '../document/kdr.ts'
 import { findPage } from '../document/pages.ts'
-import type { DesignDocument, EmbeddedFont, NodeId, PageId } from '../document/types.ts'
+import type { DesignDocument, EmbeddedFont, ModeSelection, NodeId, Page, PageId } from '../document/types.ts'
+import { applyVariables } from '../document/variables.ts'
 import { fontFileName } from '../document/fontFace.ts'
 import { findMain, instanceOf } from '../document/component.ts'
 import { ExportControls } from '../ui/ExportControls.tsx'
@@ -41,7 +42,15 @@ const STEP_KEYS: Record<string, [Step, Step] | undefined> = {
 
 export default function ViewerApp() {
   const [camera] = useState(createCamera)
-  const [doc, setDoc] = useState<DesignDocument | null>(null)
+  const [loaded, setLoaded] = useState<DesignDocument | null>(null)
+  // 変数のモードの切り替え（コレクションの id → モードの id）。ページの指定の代わりに使い、ドキュメントは変えない
+  const [view, setView] = useState<ModeSelection>({})
+  // 表示・インスペクト・コード・書き出しは、切り替えたモードで解決し直したもの
+  const doc = useMemo(() => (loaded && Object.keys(view).length > 0 ? applyVariables(loaded, undefined, view) : loaded), [loaded, view])
+  const setDoc = (next: DesignDocument) => {
+    setLoaded(next)
+    setView({})
+  }
   // kdr に埋め込んだ書体で描く
   useEmbeddedFonts(doc?.fonts, doc?.assets)
   const [pageId, setPageId] = useState<PageId | null>(null)
@@ -318,6 +327,7 @@ export default function ViewerApp() {
                 ))}
               </ul>
             </section>
+            <ModeSwitcher document={doc} page={page} view={view} onChange={setView} />
             {frames.length > 0 && (
               <section aria-label="フレーム">
                 <h2 className="panel-title">フレーム</h2>
@@ -412,5 +422,46 @@ export default function ViewerApp() {
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * 変数のモードの切り替え（モードが 2 つ以上あるコレクションごと）。「ページの指定」はページに決めたモード（無ければ最初のモード）。
+ * フレームに決めたモードは、切り替えても変わらない
+ */
+function ModeSwitcher({ document, page, view, onChange }: { document: DesignDocument; page: Page; view: ModeSelection; onChange: (view: ModeSelection) => void }) {
+  const collections = document.collections.filter((collection) => collection.modes.length > 1)
+  if (collections.length === 0) return null
+  return (
+    <section aria-label="変数のモード">
+      <h2 className="panel-title">モード</h2>
+      <div className="mode-switcher">
+        {collections.map((collection) => {
+          const pageMode = collection.modes.find((mode) => mode.id === page.modes?.[collection.id]) ?? collection.modes[0]
+          return (
+            <label key={collection.id} className="field">
+              <span className="field-label">{collection.name}</span>
+              <select
+                value={view[collection.id] ?? ''}
+                onChange={(event) => {
+                  const next = { ...view }
+                  if (event.target.value === '') delete next[collection.id]
+                  else next[collection.id] = event.target.value
+                  onChange(next)
+                  event.target.blur()
+                }}
+              >
+                <option value="">ページの指定（{pageMode.name}）</option>
+                {collection.modes.map((mode) => (
+                  <option key={mode.id} value={mode.id}>
+                    {mode.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )
+        })}
+      </div>
+    </section>
   )
 }
