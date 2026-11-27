@@ -428,6 +428,8 @@ export function documentMarkup(doc: DesignDocument, assets: AssetNamer): MarkupO
   const lines = [`<kdr name="${escapeAttribute(doc.name)}">`]
   for (const page of doc.pages) {
     const ctx = context(doc, page, assets, drops)
+    // ガイド線は editor の補助なので、マークアップには書かない
+    if (page.guides.length > 0) drops.push(`ページ ${page.name} のガイド線 ${page.guides.length} 本`)
     const bindings = new Map<NodeId, Attribute[]>()
     // プロパティは、結ぶノードより先に元を読んでおく（元の中のノードは元より後に書くので、元を書くときに集めれば間に合う）
     const body = page.rootIds.flatMap((id) => element(ctx, id, 2, bindings))

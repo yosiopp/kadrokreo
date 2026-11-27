@@ -551,7 +551,7 @@ function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps
   )
 }
 
-/** キャンバスの表示（ルーラー）の切り替えボタン */
+/** キャンバスの表示（ルーラーとガイド線）の切り替えボタン */
 function ViewToggles() {
   const view = useViewSettings()
   return (
@@ -559,7 +559,7 @@ function ViewToggles() {
       <button
         type="button"
         className="icon-button"
-        title="ルーラー (Shift+R)"
+        title="ルーラーとガイド (Shift+R)"
         aria-label="ルーラー"
         aria-pressed={view.rulers}
         onClick={() => setViewSettings({ rulers: !view.rulers })}

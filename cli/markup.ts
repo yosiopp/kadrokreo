@@ -212,7 +212,7 @@ type Scope = {
 /** kdr として読める値かを、ノード 1 つで確かめる（子とコンポーネントのつながりは、最後の全体の検証が見る） */
 function validateNode(node: SceneNode, assets: Record<AssetId, Asset>): void {
   const lone = node.type === 'frame' ? { ...node, parentId: null, children: [], component: null } : { ...node, parentId: null }
-  const page = { id: 'p', name: 'p', nodes: { [node.id]: lone }, rootIds: [node.id] }
+  const page = { id: 'p', name: 'p', nodes: { [node.id]: lone }, rootIds: [node.id], guides: [] }
   parseKdr(JSON.parse(JSON.stringify(kdrFile({ name: 'x', pages: [page] }))), assets)
 }
 
@@ -894,7 +894,7 @@ export function buildMarkupDocument(
     const nth = names.get(name) ?? 0
     names.set(name, nth + 1)
     const id = element.attributes.find((attribute) => attribute.name === 'id')?.value ?? uniqueId(`page:${name}${nth === 0 ? '' : `~${nth}`}`, pageIds)
-    return { element, scene: { id, name, nodes: {} as Record<NodeId, SceneNode>, rootIds: [] as NodeId[] } }
+    return { element, scene: { id, name, nodes: {} as Record<NodeId, SceneNode>, rootIds: [] as NodeId[], guides: [] } }
   })
   // ノードの id はページの中でだけ一意
   for (const { element } of pages) assignIds(scope, element.children, '', new Set())

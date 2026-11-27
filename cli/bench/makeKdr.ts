@@ -257,7 +257,7 @@ export function makeBenchDocument(options: BenchOptions): { document: DesignDocu
     }
   }
 
-  const page: Page = { id: 'page1', name: 'Bench', nodes, rootIds }
+  const page: Page = { id: 'page1', name: 'Bench', nodes, rootIds, guides: [] }
   // 読み込んだときと同じ形に組み直してから、インスタンスの中身を入れる
   const parsed = parseKdr(JSON.parse(JSON.stringify(kdrFile({ name: 'Bench', pages: [page] }))), assets)
   const document = syncComponents(parsed, fitTextEstimated)

@@ -85,3 +85,28 @@ describe('snapShape', () => {
     expect(snapMove({ x: 47, y: 200, width: 20, height: 10 }, [target], 5).dx).toBe(3)
   })
 })
+
+describe('ガイド線・グリッドの線への吸着', () => {
+  const lines = [
+    { axis: 'x' as const, position: 300, from: -Infinity, to: Infinity },
+    { axis: 'y' as const, position: 400, from: 0, to: 1000 },
+  ]
+
+  it('移動で線に吸着する（図形どうしの吸着はそのまま）', () => {
+    expect(snapMove({ x: 296, y: 397, width: 20, height: 20 }, [], 5, lines)).toEqual({ dx: 4, dy: 3 })
+    // 線を渡さなければ今までどおり
+    expect(snapMove({ x: 296, y: 397, width: 20, height: 20 }, [], 5)).toEqual({ dx: 0, dy: 0 })
+    // 図形の端のほうが近ければ図形に
+    expect(snapMove({ x: 302, y: 500, width: 50, height: 50 }, [{ x: 301, y: 0, width: 10, height: 10 }], 5, lines).dx).toBe(-1)
+  })
+
+  it('リサイズで動かしている辺を線に吸着する', () => {
+    expect(snapResize({ x: 250, y: 350, width: 47, height: 48 }, 'se', [], 5, lines)).toEqual({ x: 250, y: 350, width: 50, height: 50 })
+  })
+
+  it('揃った線を返す。端の無い線は長さに入れない', () => {
+    const guides = findGuides({ x: 300, y: 380, width: 20, height: 20 }, [], undefined, lines)
+    expect(guides).toContainEqual({ axis: 'x', position: 300, from: 380, to: 400 })
+    expect(guides).toContainEqual({ axis: 'y', position: 400, from: 0, to: 1000 })
+  })
+})

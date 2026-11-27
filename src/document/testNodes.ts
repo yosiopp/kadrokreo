@@ -115,7 +115,7 @@ export function sceneOf(...nodes: SceneNode[]): Scene {
 export function docOf(scene: Scene): DesignDocument {
   return {
     name: 'x',
-    pages: [{ id: 'p1', name: 'Page 1', ...scene }],
+    pages: [{ id: 'p1', name: 'Page 1', ...scene, guides: [] }],
     assets: { a1: { mime: 'image/png', bytes: new Uint8Array() } },
     fonts: [],
   }

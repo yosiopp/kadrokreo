@@ -13,6 +13,14 @@ export type Guide = { axis: 'x' | 'y'; position: number; from: number; to: numbe
  */
 export type SnapShape = Bounds & { xs?: readonly number[]; ys?: readonly number[] }
 
+/**
+ * 吸着の相手になる 1 本の線（ガイド線やレイアウトグリッドの線）。axis が 'x' なら x = position の縦線。
+ * from〜to はその線が引かれている範囲（縦線なら y の範囲）で、揃ったことを示す線の長さに使う。端の無い線（ガイド線）は ±Infinity
+ */
+export type SnapLine = { axis: 'x' | 'y'; position: number; from: number; to: number }
+
+const linePositions = (lines: readonly SnapLine[], axis: 'x' | 'y') => lines.filter((line) => line.axis === axis).map((line) => line.position)
+
 const xLines = (b: SnapShape) => [b.x, b.x + b.width / 2, b.x + b.width, ...(b.xs ?? [])]
 const yLines = (b: SnapShape) => [b.y, b.y + b.height / 2, b.y + b.height, ...(b.ys ?? [])]
 
@@ -73,29 +81,31 @@ function nearest(lines: number[], targets: number[], threshold: number): number 
   return best
 }
 
-/** 動かしている矩形を、近くにある targets の端か中央に揃えるための移動量 */
+/** 動かしている矩形を、近くにある targets の端か中央（と snapLines の線）に揃えるための移動量 */
 export function snapMove(
   bounds: SnapShape,
   targets: readonly SnapShape[],
   threshold: number,
+  snapLines: readonly SnapLine[] = [],
 ): { dx: number; dy: number } {
   const lines = movingLines(bounds)
   return {
-    dx: nearest(lines.x, targets.flatMap(xLines), threshold),
-    dy: nearest(lines.y, targets.flatMap(yLines), threshold),
+    dx: nearest(lines.x, [...targets.flatMap(xLines), ...linePositions(snapLines, 'x')], threshold),
+    dy: nearest(lines.y, [...targets.flatMap(yLines), ...linePositions(snapLines, 'y')], threshold),
   }
 }
 
-/** リサイズ中の矩形の、ハンドルで動かしている辺を targets に揃える */
+/** リサイズ中の矩形の、ハンドルで動かしている辺を targets（と snapLines の線）に揃える */
 export function snapResize(
   bounds: Bounds,
   handle: Handle,
   targets: readonly SnapShape[],
   threshold: number,
+  snapLines: readonly SnapLine[] = [],
 ): Bounds {
   const lines = movingLines(bounds, handle)
-  const dx = nearest(lines.x, targets.flatMap(xLines), threshold)
-  const dy = nearest(lines.y, targets.flatMap(yLines), threshold)
+  const dx = nearest(lines.x, [...targets.flatMap(xLines), ...linePositions(snapLines, 'x')], threshold)
+  const dy = nearest(lines.y, [...targets.flatMap(yLines), ...linePositions(snapLines, 'y')], threshold)
   let { x, y, width, height } = bounds
   if (handle.includes('w')) {
     x += dx
@@ -112,32 +122,38 @@ export function snapResize(
   return { x, y, width: Math.max(1, width), height: Math.max(1, height) }
 }
 
-/** bounds の線のうち、targets とぴったり揃っているものをガイドとして返す */
-export function findGuides(bounds: SnapShape, targets: readonly SnapShape[], handle?: Handle): Guide[] {
+/**
+ * bounds の線のうち、targets（と snapLines の線）とぴったり揃っているものをガイドとして返す。
+ * 揃った線の長さは、揃ったものの範囲を合わせたもの（端の無い線は、範囲に入れない）
+ */
+export function findGuides(bounds: SnapShape, targets: readonly SnapShape[], handle?: Handle, snapLines: readonly SnapLine[] = []): Guide[] {
   const lines = movingLines(bounds, handle)
   const guides: Guide[] = []
   const aligned = (a: number, b: number) => Math.abs(a - b) < 0.01
+  const finite = (values: number[]) => values.filter((value) => Number.isFinite(value))
 
   for (const position of new Set(lines.x)) {
     const matched = targets.filter((t) => xLines(t).some((line) => aligned(line, position)))
-    if (matched.length === 0) continue
+    const matchedLines = snapLines.filter((line) => line.axis === 'x' && aligned(line.position, position))
+    if (matched.length === 0 && matchedLines.length === 0) continue
     const all = [bounds, ...matched]
     guides.push({
       axis: 'x',
       position,
-      from: Math.min(...all.map((b) => b.y)),
-      to: Math.max(...all.map((b) => b.y + b.height)),
+      from: Math.min(...all.map((b) => b.y), ...finite(matchedLines.map((line) => line.from))),
+      to: Math.max(...all.map((b) => b.y + b.height), ...finite(matchedLines.map((line) => line.to))),
     })
   }
   for (const position of new Set(lines.y)) {
     const matched = targets.filter((t) => yLines(t).some((line) => aligned(line, position)))
-    if (matched.length === 0) continue
+    const matchedLines = snapLines.filter((line) => line.axis === 'y' && aligned(line.position, position))
+    if (matched.length === 0 && matchedLines.length === 0) continue
     const all = [bounds, ...matched]
     guides.push({
       axis: 'y',
       position,
-      from: Math.min(...all.map((b) => b.x)),
-      to: Math.max(...all.map((b) => b.x + b.width)),
+      from: Math.min(...all.map((b) => b.x), ...finite(matchedLines.map((line) => line.from))),
+      to: Math.max(...all.map((b) => b.x + b.width), ...finite(matchedLines.map((line) => line.to))),
     })
   }
   return guides

@@ -544,7 +544,15 @@ export type Scene = {
 }
 
 /** ページごとに独立したキャンバスを持つ。ノードの id はページの中で一意であればよい */
-export type Page = Scene & { id: PageId; name: string }
+export type Page = Scene & {
+  id: PageId
+  name: string
+  /** ルーラーから引き出して置いたガイド線（editor で吸着の相手になる。書き出しには出ない）。並びは置いた順 */
+  guides: PageGuide[]
+}
+
+/** ページのガイド線。axis が 'x' なら x = position の縦の線、'y' なら y = position の横の線（ページ座標） */
+export type PageGuide = { axis: 'x' | 'y'; position: number }
 
 export type DesignDocument = {
   name: string

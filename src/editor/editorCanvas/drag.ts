@@ -26,7 +26,7 @@ import {
   reshapeContours,
   withFlatVertices,
 } from '../pathEdit.ts'
-import type { Gradient, NodeId, PathNode, Scene, SceneNode } from '../../document/types.ts'
+import type { Gradient, NodeId, Page, PathNode, Scene, SceneNode } from '../../document/types.ts'
 import { patchGradientAt } from '../operations/paints.ts'
 import { type GradientEdit, type GradientPart, dragGradient, toNodeSpace } from './gradientHandles.ts'
 import { findFrameAt, nodesInMarquee } from '../hitTest.ts'
@@ -38,7 +38,7 @@ import { DEFAULT_SHAPE_OPTIONS, type ShapeOptions } from '../tools.ts'
 import { reshapeNode, resizeNodes, rotateNodes, translateNodes } from '../operations/transform.ts'
 import { insertNode, reparentNodes } from '../operations/tree.ts'
 import { type Handle, resizeBounds } from '../resize.ts'
-import { type Guide, findGuides, snapMove, snapResize, snapShape, toFrame } from '../snap.ts'
+import { type Guide, type SnapLine, findGuides, snapMove, snapResize, snapShape, toFrame } from '../snap.ts'
 import type { EditorStore } from '../store.ts'
 import {
   DRAG_THRESHOLD,
@@ -77,6 +77,11 @@ export type Gesture =
   | { kind: 'vertexMarquee'; id: NodeId; screen: Point; world: Point; current: Point; base: number[]; dragged: boolean }
   // キャンバスで動かしているグラデーションのハンドルをつかんでいる。base はつかんだときのグラデーション
   | { kind: 'gradient'; edit: GradientEdit; part: GradientPart; base: Gradient }
+  // ガイド線をルーラーから引き出している（index が null）か、置いてあるガイド線（ページの guides の番号）をつかんでいる。
+  // position はいまの位置（ページ座標）で、ルーラーの上かそれより外にあるあいだは null（離すと消える・置かない）。
+  // screen / world は押した所、from はつかんだときの位置（引き出すときは null）、moved はしきい値を越えて動かしたか。
+  // clickSelect は、置いてあるガイド線を動かさずに離したときに選び直すもの（押した所の図形。空なら選択を外す）
+  | { kind: 'guide'; axis: 'x' | 'y'; index: number | null; position: number | null; screen: Point; world: Point; from: number | null; moved: boolean; clickSelect: NodeId[] }
 
 type CreateGesture = {
   kind: 'create'
@@ -185,6 +190,17 @@ function sameAxes(a: number, b: number): boolean {
   return d < 0.01 || d > 89.99
 }
 
+/**
+ * ページ座標の線を、rotation 度（90° の倍数）回した向きの座標（toFrame）での線にする。90°・270° では縦横が入れ替わる。
+ * 範囲は向きが変わると意味がずれるので、端の無い線にする
+ */
+export function lineInFrame(line: SnapLine, rotation: number): SnapLine {
+  const point = toFrame(line.axis === 'x' ? { x: line.position, y: 0 } : { x: 0, y: line.position }, rotation)
+  const swapped = Math.abs(Math.round(rotation / 90)) % 2 === 1
+  const axis = swapped ? (line.axis === 'x' ? 'y' : 'x') : line.axis
+  return { axis, position: tidy(axis === 'x' ? point.x : point.y), from: -Infinity, to: Infinity }
+}
+
 /** 選んだものをつかんで動かし始めたときのジェスチャー */
 export function moveGesture(page: Scene, world: Point, ids: NodeId[], from: Bounds): Gesture {
   // 全部が同じ向きに斜めに回っていれば、その向きに沿っても吸着させる
@@ -201,12 +217,16 @@ function settle(delta: number, snap: number): number {
   return Number.isInteger(snap * 2) ? Math.round(delta + snap) : tidy(delta + snap)
 }
 
+/** 図形どうしのほかに吸着させる線（ガイド線・レイアウトグリッド）。parentId は、動かしているものが入る（入っている）フレーム */
+export type SnapLinesOf = (page: Page, parentId: NodeId | null) => SnapLine[]
+
 /**
  * ドラッグ中のポインタの動きを、ジェスチャーに応じたプレビューにする。
  * ジェスチャーの途中の状態（ガイドや回した角度など）は gesture に書き込む。
- * press と text のジェスチャーは扱わない。
+ * press と text のジェスチャーは扱わない。ガイド線のジェスチャー（guide）は、ルーラーの上かどうかを知っている呼び出し側が扱う。
+ * snapLines は、図形どうしのほかに吸着させる線（回っていない向きの移動・リサイズで使う）
  */
-export function dragGesture(store: EditorStore, gesture: Gesture, pointer: CanvasPointer, zoom: number) {
+export function dragGesture(store: EditorStore, gesture: Gesture, pointer: CanvasPointer, zoom: number, snapLines: SnapLinesOf = () => []) {
   switch (gesture.kind) {
     case 'gradient': {
       const { edit, part, base } = gesture
@@ -245,12 +265,14 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
         const node = page.nodes[id]
         const origin = toFrame(applyMatrix(gesture.matrix, { x: 0, y: 0 }), gesture.rotation)
         const targets = snapTargets(page, node.parentId, new Set([id])).map((target) => snapShape([getCorners(page, target)], gesture.rotation)!)
-        const framed = snapResize({ ...box, x: box.x + origin.x, y: box.y + origin.y }, handle, targets, SNAP_DISTANCE / zoom)
+        // ガイド線・レイアウトグリッドの線は、ノードの向きが 90° の倍数のときだけ、その向きの座標に直して揃える
+        const lines = sameAxes(gesture.rotation, 0) ? snapLines(page, node.parentId).map((line) => lineInFrame(line, gesture.rotation)) : []
+        const framed = snapResize({ ...box, x: box.x + origin.x, y: box.y + origin.y }, handle, targets, SNAP_DISTANCE / zoom, lines)
         box = { ...framed, x: tidy(framed.x - origin.x), y: tidy(framed.y - origin.y), width: tidy(framed.width), height: tidy(framed.height) }
         // テキストの高さは中身で決まるので、上下の辺は揃えない
         const guideHandle = isFlowText(node) ? (handle.replace(/[ns]/g, '') as Handle) : handle
         if (guideHandle) {
-          gesture.guides = findGuides({ ...box, x: box.x + origin.x, y: box.y + origin.y }, targets, guideHandle).map((guide) => ({ ...guide, rotation: gesture.rotation }))
+          gesture.guides = findGuides({ ...box, x: box.x + origin.x, y: box.y + origin.y }, targets, guideHandle, lines).map((guide) => ({ ...guide, rotation: gesture.rotation }))
         }
       }
       const target = box
@@ -337,11 +359,13 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
       }
       if (!snapped) {
         const targets = targetIds.map((id) => snapShape([getCorners(page, id)])!)
-        const snap = snapMove(snapShape(movedCorners(dx, dy))!, targets, threshold)
+        // ガイド線・レイアウトグリッドの線にも揃える
+        const lines = pointer.modKey ? [] : snapLines(page, parentId)
+        const snap = snapMove(snapShape(movedCorners(dx, dy))!, targets, threshold, lines)
         // Shift で向きを固定しているときは、固定した向きには吸着させない
         if (!pointer.shiftKey || dx !== 0) dx = settle(dx, snap.dx)
         if (!pointer.shiftKey || dy !== 0) dy = settle(dy, snap.dy)
-        gesture.guides = findGuides(snapShape(movedCorners(dx, dy))!, targets)
+        gesture.guides = findGuides(snapShape(movedCorners(dx, dy))!, targets, undefined, lines)
       }
 
       store.preview((base) => reparentNodes(translateNodes(base, ids, dx, dy), ids, parentId))
@@ -363,16 +387,21 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
         keepAspect,
       )
       const exclude = new Set(ids)
+      const parentId = page.nodes[ids[0]].parentId
       const targets = pointer.modKey
         ? []
-        : snapTargets(page, page.nodes[ids[0]].parentId, exclude).map((id) => snapShape([getCorners(page, id)])!)
-      if (!keepAspect) to = snapResize(to, handle, targets, SNAP_DISTANCE / zoom)
+        : snapTargets(page, parentId, exclude).map((id) => snapShape([getCorners(page, id)])!)
+      // ガイド線・レイアウトグリッドの線にも揃える
+      const lines = pointer.modKey ? [] : snapLines(page, parentId)
+      if (!keepAspect) to = snapResize(to, handle, targets, SNAP_DISTANCE / zoom, lines)
       const target = to
       store.preview((base) => fitTextNodes(resizeNodes(base, ids, from, target), ids))
       const resized = getNodesBounds(store.getState().page, ids)
-      gesture.guides = resized ? findGuides(resized, targets, handle) : []
+      gesture.guides = resized ? findGuides(resized, targets, handle, lines) : []
       return
     }
+    case 'guide':
+      return
     case 'vertexMarquee': {
       gesture.current = pointer.world
       if (!gesture.dragged && distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return

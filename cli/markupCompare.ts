@@ -67,6 +67,7 @@ export function documentDifferences(original: DesignDocument, rebuilt: DesignDoc
       continue
     }
     if (page.name !== other.name) lines.push(`ページ ${page.id} の名前`)
+    if (JSON.stringify(page.guides) !== JSON.stringify(other.guides)) lines.push(`ページ ${page.name} のガイド線`)
     if (!same(page.rootIds, other.rootIds)) lines.push(`ページ ${page.name} の直下の並び`)
     for (const node of Object.values(page.nodes)) {
       const counterpart = other.nodes[node.id]

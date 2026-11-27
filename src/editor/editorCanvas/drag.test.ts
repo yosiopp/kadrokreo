@@ -4,7 +4,7 @@ import { createRect } from '../nodes.ts'
 import { createDocument } from '../operations/document.ts'
 import { insertNode } from '../operations/tree.ts'
 import { createEditorStore } from '../store.ts'
-import { dragGesture, moveGesture } from './drag.ts'
+import { dragGesture, lineInFrame, moveGesture } from './drag.ts'
 
 const pointer = (world: { x: number; y: number }, modKey = false) => ({ screen: world, client: world, world, shiftKey: false, altKey: false, modKey })
 
@@ -47,5 +47,16 @@ describe('回した図形の移動の吸着', () => {
     const gesture = moveGesture(store.getState().page, { x: 0, y: 0 }, [b.id], { x: 0, y: 0, width: 1, height: 1 })
     dragGesture(store, gesture, pointer({ x: 0, y: 0 }, true), 1)
     expect(offset(store, a.id, b.id).x).toBeCloseTo(103, 1)
+  })
+})
+
+describe('lineInFrame', () => {
+  const line = { axis: 'x' as const, position: 100, from: 0, to: 10 }
+  it('0° はそのまま（範囲は端なしに）、180° は向きが逆、90° は縦横が入れ替わる', () => {
+    expect(lineInFrame(line, 0)).toEqual({ axis: 'x', position: 100, from: -Infinity, to: Infinity })
+    expect(lineInFrame(line, 180)).toMatchObject({ axis: 'x', position: -100 })
+    expect(lineInFrame(line, 90).axis).toBe('y')
+    expect(Math.abs(lineInFrame(line, 90).position)).toBe(100)
+    expect(lineInFrame(line, -90).axis).toBe('y')
   })
 })

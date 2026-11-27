@@ -12,6 +12,7 @@ import type {
   NodeId,
   Override,
   Page,
+  PageGuide,
   CornerRadius,
   Paint,
   PathContour,
@@ -28,7 +29,7 @@ import { EMBEDDED_FAMILY_FORBIDDEN, FONT_EXTENSIONS, FONT_MIME_TYPES, MAX_EMBEDD
 import { TarError, readTar, type TarEntry } from './tar.ts'
 
 // kdr ファイルの実体は、次のファイルを tar にまとめて gzip で圧縮した 1 つのファイル（中身は `tar xzf` で取り出せる）:
-//   document.json              { format: 'kadrokreo', version: 16, document: { name, pages: [{ id, name, children: [ノード, …] }], fonts?: [書体, …] } }
+//   document.json              { format: 'kadrokreo', version: 16, document: { name, pages: [{ id, name, guides?: [{ axis, position }, …], children: [ノード, …] }], fonts?: [書体, …] } }
 //   assets/<id>.<png|jpg|webp|gif>   画像の元のファイルそのまま。id は中身の SHA-256（16 進 64 文字）
 //   assets/<id>.<ttf|otf|woff|woff2> 埋め込んだ書体の元のファイルそのまま（document.fonts の assetId が指す）
 // ノードは木のまま入れ子で持ち（フレームの children にノードそのものが入る）、親の id は書かない。
@@ -63,6 +64,8 @@ export const KDR_MAX_ASSET_BYTES = 32 * 1024 * 1024
 export const KDR_MAX_ASSETS = 10_000
 /** 埋め込める書体の数の上限 */
 export const KDR_MAX_FONTS = 1_000
+/** 1 ページのガイド線の上限 */
+export const KDR_MAX_GUIDES = 1_000
 
 export type KdrLimits = { maxBytes?: number; maxJsonBytes?: number; maxAssetBytes?: number }
 
@@ -243,7 +246,18 @@ function parsePage(value: unknown, path: string, assets: AssetContext): Page {
   const raw = record(value, path)
   const scene: Scene = { nodes: {}, rootIds: [] }
   scene.rootIds = parseChildren(raw.children, `${path}.children`, null, 1, scene, assets)
-  return { id: nodeId(raw.id, `${path}.id`), name: string(raw.name, `${path}.name`), ...scene }
+  const guides = raw.guides === undefined ? [] : parseGuides(raw.guides, `${path}.guides`)
+  return { id: nodeId(raw.id, `${path}.id`), name: string(raw.name, `${path}.name`), ...scene, guides }
+}
+
+/** ページのガイド線。省いたら空（ガイドなし） */
+function parseGuides(value: unknown, path: string): PageGuide[] {
+  const list = array(value, path)
+  if (list.length > KDR_MAX_GUIDES) throw new KdrError(`${path}: ガイドが多すぎます（${KDR_MAX_GUIDES} 本まで）`)
+  return list.map((rawGuide, i) => {
+    const raw = record(rawGuide, `${path}[${i}]`)
+    return { axis: oneOf(raw.axis, ['x', 'y'] as const, `${path}[${i}].axis`), position: number(raw.position, `${path}[${i}].position`) }
+  })
 }
 
 /** 入れ子のノードを読み、scene.nodes に平らに入れる。返すのは子の id の並び */
@@ -860,7 +874,13 @@ export function kdrFile(
     version: KDR_VERSION,
     document: {
       name: doc.name,
-      pages: doc.pages.map((page) => ({ id: page.id, name: page.name, children: page.rootIds.map((id) => nodeFile(page, id)) })),
+      // ガイド線は、無ければ書かない。ガイド線を足す前の自動保存（IndexedDB）から来たページには項目が無いので、無ければ空として扱う
+      pages: doc.pages.map((page) => ({
+        id: page.id,
+        name: page.name,
+        ...((page.guides ?? []).length === 0 ? {} : { guides: page.guides.map(({ axis, position }) => ({ axis, position })) }),
+        children: page.rootIds.map((id) => nodeFile(page, id)),
+      })),
       ...(fonts.length === 0
         ? {}
         : {

@@ -9,7 +9,7 @@ import { collectSubtrees, removeNodes, sortByDocumentOrder, topLevelIds } from '
 // ドキュメント・ページ・アセットの操作。どれも新しいドキュメントを返し、変化がなければ同じ参照を返す
 
 export function createPage(name = 'Page 1'): Page {
-  return { id: createId(), name, nodes: {}, rootIds: [] }
+  return { id: createId(), name, nodes: {}, rootIds: [], guides: [] }
 }
 
 export function createDocument(name = 'Untitled'): DesignDocument {
@@ -65,7 +65,8 @@ export function duplicatePage(
   if (index === -1) return null
   const source = doc.pages[index]
   const fragment = copyFragment(source, doc.assets, source.rootIds)
-  const copy = pasteFragment(createPage(`${source.name} のコピー`), fragment).scene
+  // ガイド線も写す
+  const copy = pasteFragment({ ...createPage(`${source.name} のコピー`), guides: source.guides }, fragment).scene
   return { document: addPage(doc, copy, index + 1), pageId: copy.id }
 }
 

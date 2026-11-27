@@ -40,6 +40,11 @@ export function rulerLabel(value: number, step: number): string {
   return text === '-0' ? '0' : text
 }
 
+/** ガイド線を離すと消える所か。ルーラーの上と、それより外（キャンバスの上・左の外。ポインタをキャプチャしているので届く） */
+export function inGuideTrash(screen: Point): boolean {
+  return screen.x < RULER_SIZE || screen.y < RULER_SIZE
+}
+
 /** 画面座標 screen がどちらのルーラーの上か（角は上のルーラーとして扱う） */
 export function rulerAt(screen: Point): 'top' | 'left' | null {
   if (screen.y >= 0 && screen.y < RULER_SIZE && screen.x >= 0) return 'top'
@@ -128,5 +133,64 @@ export function drawRulers(ctx: CanvasRenderingContext2D, viewport: Viewport, si
   // 角の四角
   ctx.fillStyle = RULER_BG
   ctx.fillRect(0, 0, RULER_SIZE - 1, RULER_SIZE - 1)
+  ctx.restore()
+}
+
+/** ガイド線の色 */
+export const GUIDE_COLOR = '#e8378b'
+
+/**
+ * ページのガイド線を、キャンバスの端から端まで引く。active は引き出している・動かしているガイド線で、
+ * ルーラーの上に位置の数字を出す
+ */
+export function drawGuides(
+  ctx: CanvasRenderingContext2D,
+  viewport: Viewport,
+  size: Size,
+  guides: readonly { axis: 'x' | 'y'; position: number }[],
+  active: { axis: 'x' | 'y'; position: number } | null,
+) {
+  ctx.save()
+  ctx.strokeStyle = GUIDE_COLOR
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (const { axis, position } of active ? [...guides, active] : guides) {
+    if (axis === 'x') {
+      const x = Math.round((position - viewport.x) * viewport.zoom) + 0.5
+      ctx.moveTo(x, 0)
+      ctx.lineTo(x, size.height)
+    } else {
+      const y = Math.round((position - viewport.y) * viewport.zoom) + 0.5
+      ctx.moveTo(0, y)
+      ctx.lineTo(size.width, y)
+    }
+  }
+  ctx.stroke()
+  ctx.restore()
+}
+
+/** 引き出している・動かしているガイド線の位置を、ルーラーの上に札で出す（ルーラーを描いたあとに呼ぶ） */
+export function drawGuideLabel(ctx: CanvasRenderingContext2D, viewport: Viewport, guide: { axis: 'x' | 'y'; position: number }) {
+  const text = rulerLabel(guide.position, 1)
+  ctx.save()
+  ctx.font = '10px system-ui, sans-serif'
+  const width = ctx.measureText(text).width + 8
+  const at = worldToScreen(viewport, { x: guide.position, y: guide.position })
+  ctx.fillStyle = GUIDE_COLOR
+  if (guide.axis === 'x') {
+    const x = Math.round(at.x - width / 2)
+    ctx.fillRect(x, 3, width, RULER_SIZE - 6)
+    ctx.fillStyle = '#ffffff'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, x + 4, RULER_SIZE / 2)
+  } else {
+    const y = Math.round(at.y - width / 2)
+    ctx.fillRect(3, y, RULER_SIZE - 6, width)
+    ctx.fillStyle = '#ffffff'
+    ctx.translate(RULER_SIZE / 2, y + width - 4)
+    ctx.rotate(-Math.PI / 2)
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, 0, 0)
+  }
   ctx.restore()
 }

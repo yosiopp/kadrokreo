@@ -56,7 +56,7 @@ const { EDITOR, check, finish, crashed, watchErrors, pointer, savedDocument } = 
   await page.waitForSelector('.canvas-view canvas')
   check('読み込み直してもルーラーを出したまま', (await button.getAttribute('aria-pressed')) === 'true')
   await page.mouse.click(...at(600, 500), { button: 'right' })
-  await page.locator('.context-menu button:has-text("ルーラーを隠す")').click()
+  await page.locator('.context-menu button:has-text("ルーラーとガイドを隠す")').click()
   check('右クリックメニューでルーラーを隠せる', (await button.getAttribute('aria-pressed')) === 'false')
   check('隠すと帯が消える', (await pixel(8, 300)).join() === before.join())
   await button.click()

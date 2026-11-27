@@ -56,7 +56,7 @@ function jagged(id: string, x: number, n = 2000) {
 function jaggedDocument(boolean: boolean): DesignDocument {
   const scene = sceneOf(jagged('a', 0), jagged('b', 80))
   const page = boolean ? createBooleanNode(scene, ['a', 'b'], 'union').scene : scene
-  return { name: 'boolean', pages: [{ ...page, id: 'p', name: 'P' }], assets: {}, fonts: [] }
+  return { name: 'boolean', pages: [{ ...page, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [] }
 }
 
 /** ブーリアン演算のノードの子のドラッグ（ストアの preview 1 回）と、離したとき（preview と確定）。比べるために演算のない同じ形も */

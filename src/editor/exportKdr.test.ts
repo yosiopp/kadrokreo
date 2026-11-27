@@ -976,4 +976,24 @@ describe('parseKdr', () => {
     expect(() => parseOne(rawNode({ id: '__proto__' }))).toThrow(KdrError)
     expect(() => parseOne(rawNode({ id: '../x' }))).toThrow('不正な id')
   })
+
+  it('ページのガイド線を読み書きする（省けば空、空なら書かない）', () => {
+    const guides = [{ axis: 'x', position: 120 }, { axis: 'y', position: -40.5 }]
+    const parsed = parseKdr(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', guides, children: [] }] }), {})
+    expect(parsed.pages[0].guides).toEqual(guides)
+    const written = kdrFile(parsed) as { document: { pages: Record<string, unknown>[] } }
+    expect(written.document.pages[0].guides).toEqual(guides)
+    expect(parseKdr(kdrOf([]), {}).pages[0].guides).toEqual([])
+    expect(Object.hasOwn((kdrFile(documentOf(samplePage())) as { document: { pages: object[] } }).document.pages[0], 'guides')).toBe(false)
+    const bad = (raw: unknown) => () => parseKdr(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', guides: raw, children: [] }] }), {})
+    expect(bad([{ axis: 'z', position: 1 }])).toThrow('guides[0].axis')
+    expect(bad([{ axis: 'x', position: '1' }])).toThrow('guides[0].position')
+    expect(bad({})).toThrow('guides')
+    expect(bad(Array.from({ length: 1001 }, () => ({ axis: 'x', position: 0 })))).toThrow('ガイドが多すぎます')
+  })
+
+  it('ガイド線の項目が無いページ（足す前の自動保存）も書き出せる', () => {
+    const { guides: _, ...old } = samplePage()
+    expect(() => kdrFile(documentOf(old as Page))).not.toThrow()
+  })
 })

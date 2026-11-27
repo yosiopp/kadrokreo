@@ -67,8 +67,13 @@ import { handleCursor } from './resize.ts'
 import type { EditorState, EditorStore } from './store.ts'
 import { DEFAULT_SHAPE_OPTIONS, type ShapeOptions, type Tool } from './tools.ts'
 import { polygonSize } from '../document/polygon.ts'
-import { drawRulers, rulerAt } from './editorCanvas/rulers.ts'
+import { drawGuideLabel, drawGuides, drawRulers, inGuideTrash, rulerAt } from './editorCanvas/rulers.ts'
+import { addGuide, clearGuides, guideAt, guideSnapLines, moveGuide, removeGuide } from './operations/guides.ts'
+import type { SnapLinesOf } from './editorCanvas/drag.ts'
 import { setViewSettings, useViewSettings } from './viewSettings.ts'
+
+/** ガイド線をつかめる、線からの距離（画面ピクセル） */
+const GUIDE_TOLERANCE = 3
 
 // メニューに出すショートカットの表記。macOS は記号、ほかは Ctrl などの名前
 const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -296,6 +301,19 @@ export function EditorCanvas({
     return selectionBoxOf(store.getState().page, movableIds())
   }
 
+  /** 画面座標 screen の近くにある、つかめるガイド線の番号。ルーラーを隠しているとき、フレーム以外の図形の上（hit）なら null */
+  function guideNear(screen: Point, hit: NodeId | null): number | null {
+    if (!view.rulers || tool !== 'select') return null
+    const page = store.getState().page
+    const node = hit === null ? null : page.nodes[hit]
+    // インスタンスとブーリアン演算のノードは、フレームでも図形として扱う
+    if (node && (node.type !== 'frame' || isInstance(node) || isBooleanNode(node))) return null
+    return guideAt(page, camera.getViewport(), screen, GUIDE_TOLERANCE)
+  }
+
+  /** 図形どうしのほかに吸着させる線。ガイド線は、ルーラーを出しているあいだだけ */
+  const snapLines: SnapLinesOf = (page) => (view.rulers ? guideSnapLines(page) : [])
+
   function pick(pointer: CanvasPointer): NodeId | null {
     return pickNode(store.getState().page, camera.getViewport(), pointer)
   }
@@ -357,8 +375,22 @@ export function EditorCanvas({
     }
     setHover(null)
     const { page, selection } = store.getState()
-    // ルーラーの帯の上では、下にある図形を選んだり描いたりしない
-    if (view.rulers && rulerAt(pointer.screen)) return
+    // ルーラーの帯の上を押すと、ガイド線を引き出す（下にある図形を選んだり描いたりしない）。上のルーラーからは横の線、左からは縦の線
+    const ruler = view.rulers ? rulerAt(pointer.screen) : null
+    if (ruler) {
+      gestureRef.current = {
+        kind: 'guide',
+        axis: ruler === 'top' ? 'y' : 'x',
+        index: null,
+        position: null,
+        screen: pointer.screen,
+        world: pointer.world,
+        from: null,
+        moved: false,
+        clickSelect: [],
+      }
+      return
+    }
 
     if (tool === 'text') {
       gestureRef.current = { kind: 'text', screen: pointer.screen, world: pointer.world }
@@ -460,6 +492,23 @@ export function EditorCanvas({
     }
 
     const hit = pick(pointer)
+    // 置いてあるガイド線をつかむ。図形の辺がガイド線に揃っていることが多いので、フレーム以外の図形の上では図形を優先する
+    const guide = guideNear(pointer.screen, hit)
+    if (guide !== null) {
+      const { axis, position } = page.guides[guide]
+      gestureRef.current = {
+        kind: 'guide',
+        axis,
+        index: guide,
+        position,
+        screen: pointer.screen,
+        world: pointer.world,
+        from: position,
+        moved: false,
+        clickSelect: hit ? [hit] : [],
+      }
+      return
+    }
     if (!pointer.shiftKey && insideSelection(pointer, hit)) {
       // 選択枠の内側の空いた所。ドラッグなら選んでいるもの全体を動かし、クリックだけなら押した所のものを選び直す
       gestureRef.current = { kind: 'press', screen: pointer.screen, world: pointer.world, collapseTo: null, clickSelect: hit ? [hit] : [] }
@@ -511,10 +560,20 @@ export function EditorCanvas({
       const endpoint = pointAt(pointer.screen) ?? gradientPartNear(pointer.screen)
       const rotating = rotateHandleAt(viewport, box, pointer.screen)
       const rotation = box?.rotation ?? 0
+      const picked = rotating || handle || endpoint ? null : pick(pointer)
+      const guide = rotating || handle || endpoint ? null : guideNear(pointer.screen, picked)
       setCursor(
-        rotating ? 'grab' : handle ? handleCursor(handle, rotation) : endpoint ? 'crosshair' : 'default',
+        rotating
+          ? 'grab'
+          : handle
+            ? handleCursor(handle, rotation)
+            : endpoint
+              ? 'crosshair'
+              : guide !== null
+                ? store.getState().page.guides[guide].axis === 'x' ? 'col-resize' : 'row-resize'
+                : 'default',
       )
-      setHover(rotating || handle || endpoint ? null : pick(pointer))
+      setHover(guide !== null ? null : picked)
       return
     }
 
@@ -529,7 +588,20 @@ export function EditorCanvas({
       gesture = gestureRef.current = moveGesture(store.getState().page, gesture.world, ids, from)
     }
 
-    dragGesture(store, gesture, pointer, camera.getViewport().zoom)
+    if (gesture.kind === 'guide') {
+      // 置いてあるガイド線は、少し動かすまでは動かさない（クリックで下のフレームを選べるように）
+      if (!gesture.moved && gesture.from !== null && distance(pointer.screen, gesture.screen) < DRAG_THRESHOLD) return
+      gesture.moved = true
+      // ルーラーの上かそれより外にあるあいだは位置なし（離すと消える）。
+      // 置いてあるものは押した所からの動きの分だけ動かす（線から少し離れた所をつかんでも飛ばない）
+      const along = (point: Point) => (gesture.axis === 'x' ? point.x : point.y)
+      gesture.position = inGuideTrash(pointer.screen)
+        ? null
+        : Math.round(gesture.from === null ? along(pointer.world) : gesture.from + along(pointer.world) - along(gesture.world))
+      redraw()
+      return
+    }
+    dragGesture(store, gesture, pointer, camera.getViewport().zoom, snapLines)
     // 回している最中は、角度の表示を描き直す
     if (gesture.kind === 'rotate') redraw()
   }
@@ -570,6 +642,19 @@ export function EditorCanvas({
       case 'marquee':
         redraw()
         break
+      case 'guide': {
+        const { axis, index, position, moved } = gesture
+        if (index === null) {
+          if (position !== null) store.apply((page) => addGuide(page, { axis, position }))
+        } else if (moved) {
+          store.apply((page) => (position === null ? removeGuide(page, index) : moveGuide(page, index, position)))
+        } else {
+          // 動かさずに離したら、ふつうのクリックとして押した所のフレームを選ぶ（何もなければ選択を外す）
+          store.select(gesture.clickSelect)
+        }
+        redraw()
+        break
+      }
       case 'create':
         // ドラッグせずクリックしただけなら既定の大きさで置く
         if (!gesture.dragged) {
@@ -827,7 +912,12 @@ export function EditorCanvas({
         'separator',
         { label: '全体を表示', shortcut: `${SHIFT}1`, onSelect: commands.zoomToFit },
         'separator',
-        { label: view.rulers ? 'ルーラーを隠す' : 'ルーラーを表示', shortcut: `${SHIFT}R`, onSelect: () => setViewSettings({ rulers: !view.rulers }) },
+        { label: view.rulers ? 'ルーラーとガイドを隠す' : 'ルーラーとガイドを表示', shortcut: `${SHIFT}R`, onSelect: () => setViewSettings({ rulers: !view.rulers }) },
+        {
+          label: 'ガイドをすべて削除',
+          disabled: !view.rulers || page.guides.length === 0,
+          onSelect: () => store.apply(clearGuides),
+        },
       ]
     }
     const otherPages = document.pages.filter((other) => other.id !== page.id)
@@ -916,6 +1006,16 @@ export function EditorCanvas({
   }
 
   function drawOverlay(ctx: CanvasRenderingContext2D, viewport: Viewport) {
+    const size = camera.getSize()
+    // 動かしているガイド線は元の位置に描かず、いまの位置に描く（ルーラーの上に戻しているあいだは描かない）
+    const gesture = gestureRef.current
+    const dragged = gesture?.kind === 'guide' ? gesture : null
+    const active = dragged && dragged.position !== null ? { axis: dragged.axis, position: dragged.position } : null
+    // ガイド線は選択枠などの下に描く
+    if (view.rulers) {
+      const guides = dragged?.index != null ? state.page.guides.filter((_, index) => index !== dragged.index) : state.page.guides
+      drawGuides(ctx, viewport, size, guides, active)
+    }
     drawEditorOverlay(ctx, viewport, {
       page: state.page,
       selection: state.selection,
@@ -930,7 +1030,10 @@ export function EditorCanvas({
       box: selectionBox(),
       dropTarget,
     })
-    if (view.rulers) drawRulers(ctx, viewport, camera.getSize(), getNodesBounds(state.page, state.selection))
+    if (view.rulers) {
+      drawRulers(ctx, viewport, size, getNodesBounds(state.page, state.selection))
+      if (active) drawGuideLabel(ctx, viewport, active)
+    }
   }
 
   return (
