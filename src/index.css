@@ -1401,3 +1401,25 @@ input.document-name:focus {
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
+
+/* レイアウトグリッドの 1 行（種類と外すボタン、数値の欄） */
+.layout-grid-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.layout-grid-row + .layout-grid-row {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.layout-grid-row .field-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.layout-grid-row .field-row .field {
+  flex: 1;
+}

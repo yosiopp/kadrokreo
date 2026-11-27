@@ -340,6 +340,21 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await page.locator('.field:has(.field-label:text-is("縦")) select').selectOption('end')
   await shot(page, '15-editor-constraints.png')
 
+  // ルーラー・ガイド線・レイアウトグリッド。2 ページ目のフレームに 4 カラムのグリッドを置き、ルーラーからガイド線を 2 本引き出す
+  // （ルーラーの表示はブラウザが覚えるので、撮ったら隠す）
+  await page.keyboard.press('Escape')
+  await click(200, 320)
+  await page.locator('button[aria-label="レイアウトグリッドを足す"]').click()
+  await set('数', 4)
+  await field('数').blur()
+  await page.keyboard.press('Shift+R')
+  await drag([10, 470], [320, 470])
+  await drag([640, 10], [640, 360])
+  await click(200, 320)
+  await page.locator('.layout-grid-row').scrollIntoViewIfNeeded()
+  await shot(page, '18-editor-guides.png')
+  await page.keyboard.press('Shift+R')
+
   // editor を 2 つ目のタブで開いたときの知らせ（編集できるタブは 1 つだけ）
   const second = await context.newPage()
   await second.goto(EDITOR)

@@ -11,6 +11,7 @@ import type {
   EmbeddedFont,
   NodeId,
   Override,
+  LayoutGrid,
   Page,
   PageGuide,
   CornerRadius,
@@ -82,6 +83,8 @@ export const KDR_MAX_ASSET_BYTES = 32 * 1024 * 1024
 export const KDR_MAX_ASSETS = 10_000
 /** 埋め込める書体の数の上限 */
 export const KDR_MAX_FONTS = 1_000
+/** 1 つのフレームのレイアウトグリッドの上限 */
+export const KDR_MAX_LAYOUT_GRIDS = 100
 /** 1 ページのガイド線の上限 */
 export const KDR_MAX_GUIDES = 1_000
 
@@ -433,6 +436,25 @@ function parsePage(value: unknown, path: string, assets: AssetContext): Page {
   return { id: nodeId(raw.id, `${path}.id`), name: string(raw.name, `${path}.name`), ...scene, guides, ...(modes ? { modes } : {}) }
 }
 
+/** フレームのレイアウトグリッド。帯の数は 1〜1000 の整数、方眼の間隔は 1 以上 */
+function layoutGrids(value: unknown, path: string): LayoutGrid[] {
+  const list = array(value, path)
+  if (list.length > KDR_MAX_LAYOUT_GRIDS) throw new KdrError(`${path}: レイアウトグリッドが多すぎます（${KDR_MAX_LAYOUT_GRIDS} 個まで）`)
+  return list.map((rawGrid, i) => {
+    const at = (key: string) => `${path}[${i}].${key}`
+    const raw = record(rawGrid, `${path}[${i}]`)
+    const type = oneOf(raw.type, ['columns', 'rows', 'grid'] as const, at('type'))
+    if (type === 'grid') {
+      const gridSize = number(raw.size, at('size'))
+      if (gridSize < 1) throw new KdrError(`${at('size')}: 1 より小さい間隔です`)
+      return { type, size: gridSize }
+    }
+    const count = number(raw.count, at('count'))
+    if (!Number.isInteger(count) || count < 1 || count > 1000) throw new KdrError(`${at('count')}: 1〜1000 の整数ではありません`)
+    return { type, count, gutter: size(raw.gutter, at('gutter')), margin: size(raw.margin, at('margin')) }
+  })
+}
+
 /** ページのガイド線。省いたら空（ガイドなし） */
 function parseGuides(value: unknown, path: string): PageGuide[] {
   const list = array(value, path)
@@ -553,6 +575,7 @@ const DEFAULTS = {
   setDescription: '',
   booleanOperation: null,
   booleanIncludeStrokes: false,
+  layoutGrids: [],
 } as const
 
 /** オートレイアウトの省略できる項目と、省略したときの値（余白も間隔もなし） */
@@ -720,6 +743,7 @@ function parseNode(
         setDescription: optional('setDescription', string),
         booleanOperation: booleanOperation(),
         booleanIncludeStrokes: optional('booleanIncludeStrokes', boolean),
+        layoutGrids: optional('layoutGrids', layoutGrids),
         isMask: isMask(),
         maskType: maskType(),
         ...modes(),

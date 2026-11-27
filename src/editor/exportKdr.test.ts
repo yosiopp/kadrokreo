@@ -1085,4 +1085,19 @@ describe('parseKdr', () => {
     const { guides: _, ...old } = samplePage()
     expect(() => kdrFile(documentOf(old as Page))).not.toThrow()
   })
+
+  it('フレームのレイアウトグリッドを読み書きする（省けば空、空なら書かない）', () => {
+    const grids = [{ type: 'columns', count: 12, gutter: 20, margin: 16 }, { type: 'rows', count: 3, gutter: 0, margin: 0 }, { type: 'grid', size: 8 }]
+    expect(parseOne(rawNode({ type: 'frame', layoutGrids: grids }))).toMatchObject({ layoutGrids: grids })
+    expect(roundTrip(rawNode({ type: 'frame', layoutGrids: grids })).layoutGrids).toEqual(grids)
+    expect(parseOne(rawNode({ type: 'frame' }))).toMatchObject({ layoutGrids: [] })
+    expect(Object.hasOwn(roundTrip(rawNode({ type: 'frame' })), 'layoutGrids')).toBe(false)
+    const bad = (grid: unknown) => () => parseOne(rawNode({ type: 'frame', layoutGrids: [grid] }))
+    expect(bad({ type: 'hex', size: 8 })).toThrow('layoutGrids[0].type')
+    expect(bad({ type: 'columns', count: 0, gutter: 0, margin: 0 })).toThrow('layoutGrids[0].count')
+    expect(bad({ type: 'columns', count: 1.5, gutter: 0, margin: 0 })).toThrow('layoutGrids[0].count')
+    expect(bad({ type: 'rows', count: 2, gutter: -1, margin: 0 })).toThrow('layoutGrids[0].gutter')
+    expect(bad({ type: 'grid', size: 0.5 })).toThrow('layoutGrids[0].size')
+    expect(() => parseOne(rawNode({ type: 'frame', layoutGrids: Array.from({ length: 101 }, () => ({ type: 'grid', size: 8 })) }))).toThrow('多すぎます')
+  })
 })

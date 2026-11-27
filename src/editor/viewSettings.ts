@@ -3,13 +3,16 @@ import { useSyncExternalStore } from 'react'
 // editor のキャンバスの表示の設定（ルーラーなど）。ドキュメントの中身ではないので kdr には持たせず、ブラウザに覚えておく
 
 export type ViewSettings = {
-  /** キャンバスの上と左にルーラーを出すか */
+  /** キャンバスの上と左にルーラーとガイド線を出すか（隠している間はガイド線に吸着しない） */
   rulers: boolean
+  /** フレームのレイアウトグリッドを出すか（隠している間はグリッドに吸着しない） */
+  layoutGrids: boolean
 }
 
 const KEY = 'kadrokreo.editorView'
-// ルーラーは既定では出さない（帯がキャンバスの端に重なり、今までの操作の場所を変えないように）
-const DEFAULTS: ViewSettings = { rulers: false }
+// ルーラーは既定では出さない（帯がキャンバスの端に重なり、今までの操作の場所を変えないように）。
+// レイアウトグリッドは置いたフレームにだけ出るので、既定で出す
+const DEFAULTS: ViewSettings = { rulers: false, layoutGrids: true }
 const listeners = new Set<() => void>()
 let current: ViewSettings = load()
 
@@ -19,6 +22,7 @@ function load(): ViewSettings {
     if (!raw || typeof raw !== 'object') return DEFAULTS
     return {
       rulers: typeof raw.rulers === 'boolean' ? raw.rulers : DEFAULTS.rulers,
+      layoutGrids: typeof raw.layoutGrids === 'boolean' ? raw.layoutGrids : DEFAULTS.layoutGrids,
     }
   } catch {
     return DEFAULTS

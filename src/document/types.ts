@@ -520,7 +520,20 @@ export type FrameNode = BaseNode &
      * 無ければページ、それも無ければコレクションの最初のモードで変数を解決する。指定が無ければ持たない（空にしない）
      */
     modes?: ModeSelection
+    /**
+     * レイアウトグリッド（カラム・行・方眼）。editor でフレームに重ねて出し、図形の吸着の相手にする。描画・書き出し・viewer には効かない。
+     * 空ならなし。並びは足した順
+     */
+    layoutGrids: LayoutGrid[]
   }
+
+/**
+ * フレームのレイアウトグリッド 1 つ。columns は縦の帯（カラム）、rows は横の帯（行）で、count 本の帯を、
+ * フレームの両端から margin ずつ空けた内側に gutter（溝）を挟んで均等に並べる。grid は size 間隔の方眼（左上から）
+ */
+export type LayoutGrid =
+  | { type: 'columns' | 'rows'; count: number; gutter: number; margin: number }
+  | { type: 'grid'; size: number }
 
 /** ブーリアン演算の種類（document/pathBoolean.ts の BooleanOp と同じ） */
 export type BooleanOperation = 'union' | 'subtract' | 'intersect' | 'exclude'

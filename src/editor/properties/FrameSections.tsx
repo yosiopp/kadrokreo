@@ -1,9 +1,10 @@
 import { isInstance } from '../../document/component.ts'
-import type { AutoLayout, FrameNode, Sizing } from '../../document/types.ts'
+import type { AutoLayout, FrameNode, LayoutGrid, Sizing } from '../../document/types.ts'
 import { ALIGN_CONTENT_LABELS, SIZING_LABELS, alignLabels, optionsOf } from '../../ui/labels.ts'
 import { patchLayouts, setAutoLayoutEnabled, setFrameSizing, setLayoutWrap } from '../layout.ts'
 import { type PanelContext, common } from './context.ts'
 import { CheckField, NumberField, Section, SelectField } from './fields.tsx'
+import { DEFAULT_COLUMNS, MAX_LAYOUT_GRIDS } from '../layoutGrids.ts'
 
 /** 余白の欄。上・右・下・左（CSS と同じ順） */
 const PADDING_FIELDS = [
@@ -50,6 +51,8 @@ export function FrameSections({ ctx }: { ctx: PanelContext }) {
           onChange={(checked) => apply({ clipContent: checked })}
         />
       </Section>
+
+      <LayoutGridSection frames={frames} apply={apply} />
 
       <Section title="オートレイアウト">
         <CheckField
@@ -124,5 +127,73 @@ export function FrameSections({ ctx }: { ctx: PanelContext }) {
         )}
       </Section>
     </>
+  )
+}
+
+/** 種類を変えたときの、新しい種類のグリッド（帯の数・溝・余白は、帯どうしなら引き継ぐ） */
+function withType(grid: LayoutGrid, type: LayoutGrid['type']): LayoutGrid {
+  if (type === 'grid') return { type, size: 8 }
+  return grid.type === 'grid' ? { ...DEFAULT_COLUMNS, type } : { ...grid, type }
+}
+
+/** レイアウトグリッド。フレームを 1 つだけ選んでいるときに、足す・変える・消す */
+function LayoutGridSection({ frames, apply }: { frames: FrameNode[]; apply: PanelContext['apply'] }) {
+  const single = frames.length === 1 ? frames[0] : null
+  const grids = single?.layoutGrids ?? []
+  const set = (next: LayoutGrid[]) => apply({ layoutGrids: next })
+  const update = (index: number, grid: LayoutGrid) => set(grids.with(index, grid))
+  const addButton = single && (
+    <button
+      type="button"
+      className="icon-button"
+      aria-label="レイアウトグリッドを足す"
+      title="カラムのグリッドを足す"
+      disabled={grids.length >= MAX_LAYOUT_GRIDS}
+      onClick={() => set([...grids, DEFAULT_COLUMNS])}
+    >
+      +
+    </button>
+  )
+  return (
+    <Section title="レイアウトグリッド" action={addButton}>
+      {!single ? (
+        <p className="section-note">フレームを 1 つだけ選ぶと設定できます。</p>
+      ) : (
+        grids.map((grid, index) => (
+          <div key={index} className="layout-grid-row" aria-label={`レイアウトグリッド ${index + 1}`}>
+            <div className="field-row">
+              <SelectField
+                label="種類"
+                value={grid.type}
+                options={[
+                  ['columns', 'カラム'],
+                  ['rows', '行'],
+                  ['grid', '方眼'],
+                ]}
+                onChange={(type: LayoutGrid['type']) => update(index, withType(grid, type))}
+              />
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`レイアウトグリッド ${index + 1} を外す`}
+                title="外す"
+                onClick={() => set(grids.toSpliced(index, 1))}
+              >
+                −
+              </button>
+            </div>
+            {grid.type === 'grid' ? (
+              <NumberField label="間隔" value={grid.size} min={1} onCommit={(size) => update(index, { ...grid, size })} />
+            ) : (
+              <div className="field-grid">
+                <NumberField label="数" value={grid.count} min={1} max={1000} onCommit={(count) => update(index, { ...grid, count: Math.round(count) })} />
+                <NumberField label="溝" value={grid.gutter} min={0} onCommit={(gutter) => update(index, { ...grid, gutter })} />
+                <NumberField label="余白" value={grid.margin} min={0} onCommit={(margin) => update(index, { ...grid, margin })} />
+              </div>
+            )}
+          </div>
+        ))
+      )}
+    </Section>
   )
 }

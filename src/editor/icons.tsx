@@ -95,3 +95,12 @@ export function RulerIcon() {
     </Icon>
   )
 }
+
+export function LayoutGridIcon() {
+  return (
+    <Icon>
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1" />
+      <path d="M5.5 2.5v11M10.5 2.5v11" />
+    </Icon>
+  )
+}

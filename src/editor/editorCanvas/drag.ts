@@ -14,6 +14,7 @@ import {
   rotateVector,
   tidy,
   toLocal,
+  unionBounds,
 } from '../../document/geometry.ts'
 import { type Contour, type Vertex, isLine, pathFromPoints } from '../../document/path.ts'
 import {
@@ -217,8 +218,16 @@ function settle(delta: number, snap: number): number {
   return Number.isInteger(snap * 2) ? Math.round(delta + snap) : tidy(delta + snap)
 }
 
-/** 図形どうしのほかに吸着させる線（ガイド線・レイアウトグリッド）。parentId は、動かしているものが入る（入っている）フレーム */
-export type SnapLinesOf = (page: Page, parentId: NodeId | null) => SnapLine[]
+/**
+ * 図形どうしのほかに吸着させる線（ガイド線・レイアウトグリッド）。parentId は、動かしているものが入る（入っている）フレーム、
+ * near は動かしているものの近くの範囲（ページ座標。方眼の線はここに入るものだけ作ればよい）
+ */
+export type SnapLinesOf = (page: Page, parentId: NodeId | null, near: Bounds) => SnapLine[]
+
+/** bounds を四方に margin だけ広げた範囲 */
+function grow(bounds: Bounds, margin: number): Bounds {
+  return { x: bounds.x - margin, y: bounds.y - margin, width: bounds.width + margin * 2, height: bounds.height + margin * 2 }
+}
 
 /**
  * ドラッグ中のポインタの動きを、ジェスチャーに応じたプレビューにする。
@@ -266,7 +275,9 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
         const origin = toFrame(applyMatrix(gesture.matrix, { x: 0, y: 0 }), gesture.rotation)
         const targets = snapTargets(page, node.parentId, new Set([id])).map((target) => snapShape([getCorners(page, target)], gesture.rotation)!)
         // ガイド線・レイアウトグリッドの線は、ノードの向きが 90° の倍数のときだけ、その向きの座標に直して揃える
-        const lines = sameAxes(gesture.rotation, 0) ? snapLines(page, node.parentId).map((line) => lineInFrame(line, gesture.rotation)) : []
+        // 近くの範囲は、ノードのいまの枠とポインタを囲む範囲
+        const near = grow(unionBounds([getNodesBounds(page, [id]) ?? boundsFromPoints(pointer.world, pointer.world), boundsFromPoints(pointer.world, pointer.world)])!, SNAP_DISTANCE / zoom)
+        const lines = sameAxes(gesture.rotation, 0) ? snapLines(page, node.parentId, near).map((line) => lineInFrame(line, gesture.rotation)) : []
         const framed = snapResize({ ...box, x: box.x + origin.x, y: box.y + origin.y }, handle, targets, SNAP_DISTANCE / zoom, lines)
         box = { ...framed, x: tidy(framed.x - origin.x), y: tidy(framed.y - origin.y), width: tidy(framed.width), height: tidy(framed.height) }
         // テキストの高さは中身で決まるので、上下の辺は揃えない
@@ -360,7 +371,7 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
       if (!snapped) {
         const targets = targetIds.map((id) => snapShape([getCorners(page, id)])!)
         // ガイド線・レイアウトグリッドの線にも揃える
-        const lines = pointer.modKey ? [] : snapLines(page, parentId)
+        const lines = pointer.modKey ? [] : snapLines(page, parentId, grow(snapShape(movedCorners(dx, dy))!, threshold))
         const snap = snapMove(snapShape(movedCorners(dx, dy))!, targets, threshold, lines)
         // Shift で向きを固定しているときは、固定した向きには吸着させない
         if (!pointer.shiftKey || dx !== 0) dx = settle(dx, snap.dx)
@@ -392,7 +403,7 @@ export function dragGesture(store: EditorStore, gesture: Gesture, pointer: Canva
         ? []
         : snapTargets(page, parentId, exclude).map((id) => snapShape([getCorners(page, id)])!)
       // ガイド線・レイアウトグリッドの線にも揃える
-      const lines = pointer.modKey ? [] : snapLines(page, parentId)
+      const lines = pointer.modKey ? [] : snapLines(page, parentId, grow(to, SNAP_DISTANCE / zoom))
       if (!keepAspect) to = snapResize(to, handle, targets, SNAP_DISTANCE / zoom, lines)
       const target = to
       store.preview((base) => fitTextNodes(resizeNodes(base, ids, from, target), ids))

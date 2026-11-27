@@ -69,6 +69,7 @@ import { DEFAULT_SHAPE_OPTIONS, type ShapeOptions, type Tool } from './tools.ts'
 import { polygonSize } from '../document/polygon.ts'
 import { drawGuideLabel, drawGuides, drawRulers, inGuideTrash, rulerAt } from './editorCanvas/rulers.ts'
 import { addGuide, clearGuides, guideAt, guideSnapLines, moveGuide, removeGuide } from './operations/guides.ts'
+import { drawLayoutGrids, layoutGridSnapLines } from './layoutGrids.ts'
 import type { SnapLinesOf } from './editorCanvas/drag.ts'
 import { setViewSettings, useViewSettings } from './viewSettings.ts'
 
@@ -311,8 +312,14 @@ export function EditorCanvas({
     return guideAt(page, camera.getViewport(), screen, GUIDE_TOLERANCE)
   }
 
-  /** 図形どうしのほかに吸着させる線。ガイド線は、ルーラーを出しているあいだだけ */
-  const snapLines: SnapLinesOf = (page) => (view.rulers ? guideSnapLines(page) : [])
+  /**
+   * 図形どうしのほかに吸着させる線。ガイド線はルーラーを出しているあいだだけ、レイアウトグリッドは表示しているあいだだけ、
+   * 動かしているものが入る（入っている）フレームのものに
+   */
+  const snapLines: SnapLinesOf = (page, parentId, near) => [
+    ...(view.rulers ? guideSnapLines(page) : []),
+    ...(view.layoutGrids ? layoutGridSnapLines(page, parentId, near) : []),
+  ]
 
   function pick(pointer: CanvasPointer): NodeId | null {
     return pickNode(store.getState().page, camera.getViewport(), pointer)
@@ -918,6 +925,11 @@ export function EditorCanvas({
           disabled: !view.rulers || page.guides.length === 0,
           onSelect: () => store.apply(clearGuides),
         },
+        {
+          label: view.layoutGrids ? 'レイアウトグリッドを隠す' : 'レイアウトグリッドを表示',
+          shortcut: `${SHIFT}G`,
+          onSelect: () => setViewSettings({ layoutGrids: !view.layoutGrids }),
+        },
       ]
     }
     const otherPages = document.pages.filter((other) => other.id !== page.id)
@@ -1011,7 +1023,8 @@ export function EditorCanvas({
     const gesture = gestureRef.current
     const dragged = gesture?.kind === 'guide' ? gesture : null
     const active = dragged && dragged.position !== null ? { axis: dragged.axis, position: dragged.position } : null
-    // ガイド線は選択枠などの下に描く
+    // レイアウトグリッドとガイド線は、選択枠などの下に描く
+    if (view.layoutGrids) drawLayoutGrids(ctx, viewport, size, state.page)
     if (view.rulers) {
       const guides = dragged?.index != null ? state.page.guides.filter((_, index) => index !== dragged.index) : state.page.guides
       drawGuides(ctx, viewport, size, guides, active)

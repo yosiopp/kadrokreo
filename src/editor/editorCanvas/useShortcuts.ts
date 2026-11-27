@@ -336,6 +336,7 @@ export function useShortcuts(options: Options) {
     else if (event.shiftKey && key === 'h') flip('horizontal')
     else if (event.shiftKey && key === 'v') flip('vertical')
     else if (event.shiftKey && key === 'r') setViewSettings({ rulers: !getViewSettings().rulers })
+    else if (event.shiftKey && key === 'g') setViewSettings({ layoutGrids: !getViewSettings().layoutGrids })
     else if (event.shiftKey && event.code === 'Digit1') camera.fit(getContentBounds(page))
     else if (event.shiftKey && event.code === 'Digit2') zoomToSelection()
     else if (event.shiftKey && event.code === 'Digit0') camera.zoomTo(1)

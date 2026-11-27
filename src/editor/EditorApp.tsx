@@ -28,7 +28,7 @@ import { COMPONENT_DRAG_TYPE, draggedComponent, instanceDropTarget, placeInstanc
 import { PropertiesPanel } from './PropertiesPanel.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { downloadKdr } from './exportKdr.ts'
-import { RedoIcon, RulerIcon, UndoIcon } from './icons.tsx'
+import { LayoutGridIcon, RedoIcon, RulerIcon, UndoIcon } from './icons.tsx'
 import { setViewSettings, useViewSettings } from './viewSettings.ts'
 import { readFontFile } from './importFont.ts'
 import { placeImage, readImageFile } from './importImage.ts'
@@ -551,7 +551,7 @@ function Editor({ store, autosaveStopped, onSaveBlocked, flushRef }: EditorProps
   )
 }
 
-/** キャンバスの表示（ルーラーとガイド線）の切り替えボタン */
+/** キャンバスの表示（ルーラーとガイド線、レイアウトグリッド）の切り替えボタン */
 function ViewToggles() {
   const view = useViewSettings()
   return (
@@ -565,6 +565,16 @@ function ViewToggles() {
         onClick={() => setViewSettings({ rulers: !view.rulers })}
       >
         <RulerIcon />
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        title="レイアウトグリッド (Shift+G)"
+        aria-label="レイアウトグリッド"
+        aria-pressed={view.layoutGrids}
+        onClick={() => setViewSettings({ layoutGrids: !view.layoutGrids })}
+      >
+        <LayoutGridIcon />
       </button>
     </div>
   )

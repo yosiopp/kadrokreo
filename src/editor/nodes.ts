@@ -154,5 +154,6 @@ export function createFrame(bounds: Bounds): FrameNode {
     setDescription: '',
     booleanOperation: null,
     booleanIncludeStrokes: false,
+    layoutGrids: [],
   }
 }

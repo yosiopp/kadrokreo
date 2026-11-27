@@ -55,6 +55,7 @@ function box(id: string, parentId: string | null, x: number, y: number, rotation
     setDescription: '',
     booleanOperation: null,
     booleanIncludeStrokes: false,
+    layoutGrids: [],
     isMask: false,
     maskType: 'vector',
   } as SceneNode
