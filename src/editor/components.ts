@@ -396,6 +396,10 @@ export function captureOverrides(before: DesignDocument, after: DesignDocument):
     const old = findPage(before, page.id)
     if (!old || old === page) return page
     let next = page
+    // 上書きを書き込む表。変わったノードごとに表を丸ごと写すと、インスタンスが多いときにノードの数の 2 乗になるので、
+    // ページごとに 1 回だけ写して書き込み、最後に書き換えた id をまとめて覚える（途中で読む next はこの表を指す）
+    let nodes: Record<NodeId, SceneNode> | null = null
+    const written = new Set<NodeId>()
     // 変わったノードが分かれば、それだけを見る（ほかは前と同じ参照なので比べるまでもない）
     const changedIds = nodeChangesSince(old.nodes, page.nodes)
     const candidates = changedIds ? [...changedIds].flatMap((id) => page.nodes[id] ?? []) : Object.values(page.nodes)
@@ -423,9 +427,16 @@ export function captureOverrides(before: DesignDocument, after: DesignDocument):
       const overrides = { ...instance.component.overrides }
       delete overrides[source.id]
       if (Object.keys(entry).length > 0) overrides[source.id] = entry as Override
-      next = updateNode(next, instance.id, { component: { ...instance.component, overrides } })
+      if (!nodes) {
+        nodes = { ...page.nodes }
+        next = { ...page, nodes }
+      }
+      nodes[instance.id] = { ...instance, component: { ...instance.component, overrides } }
+      written.add(instance.id)
     }
-    if (next !== page) changed = true
+    if (!nodes) return page
+    noteNodeChanges(nodes, page.nodes, written)
+    changed = true
     return next
   })
   return changed ? { ...after, pages } : after

@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { derivedId, isInstance, isMain, mainsOf } from '../document/component.ts'
+import { derivedId, isInstance, isMain, mainsOf, owningInstance } from '../document/component.ts'
+import { nodeChangesSince } from '../document/nodeChanges.ts'
 import { solid } from '../document/paint.ts'
-import type { DesignDocument, FrameNode, NodeId, Page } from '../document/types.ts'
+import type { DesignDocument, FrameNode, NodeId, Page, SceneNode } from '../document/types.ts'
 import { type FitText, captureOverrides, createInstance, makeComponent, syncComponents } from './components.ts'
 import { enableAutoLayout, patchLayouts, setLayoutFill } from './layout.ts'
 import { createFrame, createRect, createText } from './nodes.ts'
 import { addPage, createDocument, createPage, updatePage } from './operations/document.ts'
 import { setFill } from './operations/paints.ts'
 import { translateNodes } from './operations/transform.ts'
-import { insertNode, removeNodes, updateNode } from './operations/tree.ts'
+import { insertNode, patchNodes, removeNodes, updateNode } from './operations/tree.ts'
 
 // 同期を速くした仕組み（ページのノードの表を 1 回だけ写す、合っていたインスタンスとドキュメントを覚えて飛ばす）が、
 // 結果を変えていないことを確かめる。覚え書きは参照で引くので、structuredClone した（参照を共有しない）ドキュメントを
@@ -179,5 +180,31 @@ describe('同期を速くしても結果は変わらない', () => {
     }
     // 途中でインスタンスがなくなっていない（確かめた中身があった）
     expect(doc.pages.some((page) => Object.values(page.nodes).some(isInstance))).toBe(true)
+  })
+})
+
+describe('上書きの後始末', () => {
+  it('1 回の変更で多くのインスタンスの写しを変えても、1 つずつ変えて覚えたのと同じ上書きになり、入力は書き換えない', () => {
+    const { doc } = fixture()
+    const page = doc.pages[0]
+    // 1 ページ目のすべてのインスタンスの、すべての写し（1 つのインスタンスに写しが 2 つ以上ある）
+    const copies = Object.values(page.nodes).filter((node) => node.type !== 'frame' && owningInstance(page, node.id) !== null)
+    expect(new Set(copies.map((node) => owningInstance(page, node.id)!.id)).size).toBeGreaterThan(3)
+    const patchFor = (node: SceneNode) => (node.type === 'text' ? { text: `${node.text}!` } : { opacity: 0.5 })
+
+    deepFreeze(doc)
+    const raw = updatePage(doc, page.id, (scene) => patchNodes(scene, copies.map((node) => node.id), patchFor))
+    const captured = captureOverrides(doc, raw)
+
+    let oneByOne = doc
+    for (const node of copies) {
+      const before = oneByOne
+      oneByOne = captureOverrides(before, updatePage(before, page.id, (scene) => updateNode(scene, node.id, patchFor(node))))
+    }
+    expect(captured).toEqual(oneByOne)
+    // 上書きを書き込んだインスタンスは、後始末が変わったノードとして引ける
+    const changed = nodeChangesSince(page.nodes, captured.pages[0].nodes)
+    for (const node of copies) expect(changed?.has(owningInstance(page, node.id)!.id)).toBe(true)
+    expect(syncComponents(captured, fitText)).toEqual(fresh(captured))
   })
 })

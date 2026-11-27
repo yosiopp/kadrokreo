@@ -83,7 +83,7 @@ async function buildInto(ctx: Pick<Context, 'session' | 'readFile'>, root: Marku
 }
 
 /** 書き出したものを build し直して比べる、ノードの数の上限 */
-const REBUILD_LIMIT = 10_000
+const REBUILD_LIMIT = 100_000
 
 const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
 
@@ -113,7 +113,7 @@ export const markup: Command = {
     for (const [assetId, path] of written) await ctx.writeFile(path, doc.assets[assetId].bytes)
     for (const drop of output.drops) ctx.warn(`markup: 書き出せないもの: ${drop}`)
     if (selector === undefined) {
-      // 作り直しはノードの数が多いと重い（インスタンスの上書きの後始末が、ノードの数に比例して何度も走る）ので、大きなものでは省く
+      // 作り直しは書き出しと同じくらいの時間とメモリを使う（10 万ノードで数秒、1GB ほど）ので、それより大きなものでは省く
       const nodes = doc.pages.reduce((sum, page) => sum + Object.keys(page.nodes).length, 0)
       if (nodes > REBUILD_LIMIT) ctx.warn(`markup: ノードが ${nodes} 個と多いので、build し直して元と比べる確かめは省きました`)
       else for (const line of await rebuildDifferences(doc, output.text, written)) ctx.warn(`markup: ${line}`)
