@@ -46,6 +46,7 @@ npm run kdr -- --help   # コマンドライン（npm link すれば kdr --help�
 
 viewer で開くサンプル `docs/examples/sample.kdr` が元の `docs/examples/sample.xml` とずれると（マークアップを書き換えた、kdr の形式を変えた）、単体テストが知らせる。
 `./cli/kadrokreo.ts build docs/examples/sample.xml -o docs/examples/sample.kdr` で作り直して一緒に入れる。
+viewer のビルドは、このファイルをそのまま `assets/` に入れて「サンプルを開く」から読む（`src/viewer/ViewerApp.tsx` の import。写しは持たない）。
 
 ## ソースからイメージをビルドする
 
@@ -87,7 +88,7 @@ e2e/            ブラウザでの動作確認とキャプチャ
 bench/          性能の計測（大きな kdr の生成と Node での計測は cli/bench/）
 scripts/        check:viewer、版の表記の確認と書き換え（version.mjs）、リリースの本文（release-notes.sh）など
 docs/guide/     ユーザーズガイド
-docs/examples/  kdr コマンドの例と、viewer で開くサンプル（sample.kdr は sample.xml から作る）
+docs/examples/  kdr コマンドの例と、viewer で開くサンプル（sample.kdr は sample.xml から作る。viewer のビルドにも入る）
 plugins/kdr/    配布する skill（kdr を Docker 越しに使う）。.claude-plugin/marketplace.json でマーケットプレイスにしている
 ```
 

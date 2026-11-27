@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createCamera } from '../canvas/camera.ts'
 import { isTextInput } from '../canvas/dom.ts'
 import { exportTargets, pngFileName, renderPng } from '../canvas/exportPng.ts'
@@ -27,6 +27,10 @@ import { imageExtension, nodeMarkup, standaloneHtml } from './markup.ts'
 import type { CodeStyle } from './inspect.ts'
 import { LayerTree } from './LayerTree.tsx'
 import { ViewerCanvas } from './ViewerCanvas.tsx'
+// サンプルの kdr は docs/examples/sample.kdr をそのままビルドに入れ、同じ配信元のファイルとして読む（外部へは通信しない）。
+// 小さいファイルは既定で data: URL に埋め込まれるが、配布するイメージの CSP（default-src 'self'）では fetch できないので、
+// no-inline で別のファイルにする。editor からは import しないので、editor のビルドには入らない
+import sampleUrl from '../../docs/examples/sample.kdr?url&no-inline'
 import { type Step, stepFrom } from './traverse.ts'
 
 /** 選択を動かすキー。[そのまま押したとき, Shift を押しながらのとき] */
@@ -136,15 +140,36 @@ export default function ViewerApp() {
     )
   }
 
-  async function openFile(file: File) {
+  // 開くたびに数を進め、読み込み中に別のファイルを開いたら、前の読み込みの結果は捨てる
+  // （サンプルの読み込みを待つあいだに「kdr を開く」で選んだファイルが、あとから届いたサンプルで替わらないように）
+  const openCount = useRef(0)
+
+  async function openFile(file: Blob, count = ++openCount.current) {
     try {
       const next = await decodeKdr(file)
+      if (count !== openCount.current) return
       setDoc(next)
       showLink(next)
       setMessage(null)
     } catch (error) {
+      if (count !== openCount.current) return
       setMessage(error instanceof Error ? error.message : 'ファイルを開けませんでした')
     }
+  }
+
+  /** ビルドに入れてあるサンプルの kdr を開く */
+  async function openSample() {
+    const count = ++openCount.current
+    let file: Blob
+    try {
+      const response = await fetch(sampleUrl)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      file = await response.blob()
+    } catch {
+      if (count === openCount.current) setMessage('サンプルを読み込めませんでした')
+      return
+    }
+    await openFile(file, count)
   }
 
   /** ノード（いくつでも）、または表示中のページ全体を PNG として保存する。ドキュメントは変更しない */
@@ -358,6 +383,11 @@ export default function ViewerApp() {
             <div className="empty-state">
               <p>kdr ファイルを開くと、ここにデザインが表示されます。</p>
               <p>「kdr を開く」から選ぶか、このウィンドウにファイルをドロップしてください。</p>
+              <p className="empty-state-actions">
+                <button type="button" onClick={openSample} title="ビルドに入っているサンプルのデザインを開く">
+                  サンプルを開く
+                </button>
+              </p>
             </div>
           )}
           {dragging && <div className="drop-overlay">kdr ファイルをドロップして開く</div>}

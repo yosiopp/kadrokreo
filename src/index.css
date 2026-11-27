@@ -256,6 +256,10 @@ input.document-name:focus {
   margin: 2px 0;
 }
 
+.empty-state .empty-state-actions {
+  margin-top: 16px;
+}
+
 .drop-overlay {
   position: absolute;
   inset: 8px;
