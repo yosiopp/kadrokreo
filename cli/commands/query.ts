@@ -14,7 +14,9 @@ function describe(node: SceneNode): string {
   const size = `${round(node.x)},${round(node.y)} ${round(node.width)}×${round(node.height)}`
   const notes = [
     node.type === 'frame' && node.component ? `component:${node.component.role}` : '',
-    node.type === 'frame' && node.layout ? `auto-layout:${node.layout.direction}` : '',
+    node.type === 'frame' && node.layout
+      ? `auto-layout:${node.layout.mode === 'grid' ? `grid(${node.layout.columns})` : node.layout.direction}`
+      : '',
     node.visible ? '' : 'hidden',
     node.type === 'text' ? JSON.stringify(node.text.length > 40 ? node.text.slice(0, 40) + '…' : node.text) : '',
   ].filter(Boolean)

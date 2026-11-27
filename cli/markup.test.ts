@@ -129,7 +129,7 @@ describe('kdr build', () => {
     expect(frame).toMatchObject({ fills: [], strokes: [], sizing: { width: 'hug', height: 'hug' } })
     expect(frame.layout).toEqual({
       direction: 'horizontal', gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
-      align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto',
+      align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto', mode: 'flex', columns: 2, columnWidth: null,
     })
     expect(byName<RectNode>(doc, 'R')).toMatchObject({ fills: [], strokes: [] })
     expect(byName<TextNode>(doc, 'T')).toMatchObject({ fills: solid('#000000'), fontSize: 16, fontFamily: 'sans-serif', x: 10 })
@@ -807,9 +807,56 @@ describe('set / add の大きさと並べ方の略記', () => {
     expect((await h.doc('a.kdr')).pages[0].nodes.t).toMatchObject({ width: 80, sizing: { width: 'hug' } })
     const bad = harness()
     expect(await bad.run(['new', '+', 'add', 'frame', 'gap=8', '-o', 'b.kdr'])).toBe(2)
-    expect(bad.stderr).toMatch(/layout\.gap: 先に layout=row\|column か auto-layout/)
+    expect(bad.stderr).toMatch(/layout\.gap: 先に layout=row\|column\|grid か auto-layout/)
     expect(await bad.run(['new', '+', 'add', 'frame', 'layout=row', 'padding=1 2 3 4 5', '-o', 'b.kdr'])).toBe(2)
     expect(await bad.run(['new', '+', 'add', 'text', 'lineHeight=px', '-o', 'b.kdr'])).toBe(2)
+  })
+})
+
+describe('グリッド（layout="grid"）', () => {
+  const GRID = `<kdr name="Grid"><page name="P">
+<frame name="Cards" id="cards" width="300" layout="grid" columns="3" gap="10" crossGap="6" padding="20">
+  <rect name="A" id="a" width="30" height="20"/>
+  <rect name="B" id="b" width="50" height="40"/>
+  <rect name="C" id="c" width="fill" height="fill"/>
+  <rect name="D" id="d" width="20" height="10"/>
+</frame>
+</page></kdr>`
+
+  it('build でグリッドに並べ、markup で同じ形に書き出して戻る。伸ばす子はセルいっぱい', async () => {
+    const h = harness({ 'a.xml': GRID })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    const doc = await h.doc('a.kdr')
+    const nodes = doc.pages[0].nodes
+    expect((nodes.cards as FrameNode).layout).toMatchObject({ mode: 'grid', columns: 3, gap: 10, crossGap: 6 })
+    // 内側 260、列の幅 (260 - 20) / 3 = 80。C は 1 行目の高さ 40 まで伸びる。D は 2 行目
+    expect(nodes.c).toMatchObject({ x: 200, y: 20, width: 80, height: 40 })
+    expect(nodes.d).toMatchObject({ x: 20, y: 66 })
+    expect(nodes.cards).toMatchObject({ width: 300, height: 96 })
+    expect(await h.run(['-f', 'a.kdr', 'markup'])).toBe(0)
+    expect(h.stdout).toContain('layout="grid" padding="20" columns="3" gap="10" crossGap="6"')
+    h.fs.set('out.xml', encode(h.stdout))
+    expect(await h.run(['build', 'out.xml', '-o', 'b.kdr'])).toBe(0)
+    expect(documentDifferences(doc, await h.doc('b.kdr'))).toEqual([])
+  })
+
+  it('set で並べ方・列の数・列の幅を変えると並び直す。不正な値はエラー', async () => {
+    const h = harness({ 'a.xml': GRID })
+    expect(await h.run(['build', 'a.xml', '-o', 'a.kdr'])).toBe(0)
+    expect(await h.run(['-f', 'a.kdr', '-w', 'set', 'cards', 'columns=2', 'columnWidth=100', 'justify=end'])).toBe(0)
+    let nodes = (await h.doc('a.kdr')).pages[0].nodes
+    // 列の幅 100 × 2 + 間隔 10 = 210、余り 50 を先に空ける
+    expect(nodes.a).toMatchObject({ x: 70, y: 20 })
+    expect(nodes.b).toMatchObject({ x: 180, y: 20 })
+    expect(nodes.c).toMatchObject({ x: 70, width: 100 })
+    expect(await h.run(['-f', 'a.kdr', '-w', 'set', 'cards', 'columnWidth=null', 'layout=row'])).toBe(0)
+    nodes = (await h.doc('a.kdr')).pages[0].nodes
+    expect((nodes.cards as FrameNode).layout).toMatchObject({ mode: 'flex', direction: 'horizontal', columns: 2, columnWidth: null })
+    for (const bad of ['columns=0', 'columns=1.5', 'columnWidth=0', 'mode=table']) {
+      expect(await h.run(['-f', 'a.kdr', '-w', 'set', 'cards', bad])).not.toBe(0)
+    }
+    expect(await h.run(['-f', 'a.kdr', '-w', 'auto-layout', 'cards', 'mode=grid', 'columns=4'])).toBe(0)
+    expect(((await h.doc('a.kdr')).pages[0].nodes.cards as FrameNode).layout).toMatchObject({ mode: 'grid', columns: 4 })
   })
 })
 

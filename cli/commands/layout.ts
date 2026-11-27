@@ -18,7 +18,8 @@ export const autoLayout: Command = {
   name: 'auto-layout',
   kind: 'edit',
   assignments: true,
-  usage: 'auto-layout フレーム [--off] [direction=vertical gap=8 padding=16 align=center wrap=true crossGap=8 alignContent=space-between …]',
+  usage: 'auto-layout フレーム [--off] [direction=vertical gap=8 padding=16 align=center wrap=true crossGap=8 alignContent=space-between …]\n' +
+    '      グリッド: mode=grid columns=3 [columnWidth=120（null で等分）] gap=列の間隔 crossGap=行の間隔',
   summary: 'フレームの中身を自動で並べるようにする（--off でやめる）。名前=値 で並べ方を変える',
   flags: ['off'],
   run({ session }, step) {

@@ -371,8 +371,23 @@ export type ImageNode = BaseNode &
  * 表示するだけなら、この設定を読まなくてよい。フレーム自身の大きさの決め方は sizing にある。
  */
 export type AutoLayout = {
+  /**
+   * 並べ方。flex は 1 方向に並べる（direction の向き。折り返しは wrap）。
+   * grid は行と列の 2 次元に並べる（CSS の display: grid）: 子を children の順に、左上から右へ columns 個ずつ並べ、
+   * 埋まったら次の行へ。列の幅は columnWidth、行の高さはその行でいちばん高い子に合わせる。
+   * grid のとき、direction・wrap・alignContent は意味がなく、gap は列の間隔、crossGap は行の間隔、
+   * align はセルの中での縦の揃え方、justify は列のまとまりの置き方（列の幅が固定で、余りがあるときだけ効く）
+   */
+  mode: 'flex' | 'grid'
   direction: 'horizontal' | 'vertical'
-  /** 子と子の間隔 */
+  /** グリッドの列の数（1〜100 の整数）。mode が grid でないなら意味はない */
+  columns: number
+  /**
+   * グリッドの列の幅（px）。null はフレームの内側の幅を列で等分する（CSS の repeat(N, minmax(0, 1fr))。
+   * フレームの幅が中身に合わせるなら、いちばん幅の広い子に揃える）。mode が grid でないなら意味はない
+   */
+  columnWidth: number | null
+  /** 子と子の間隔（グリッドでは列の間隔） */
   gap: number
   /** 内側の余白 */
   paddingTop: number
@@ -388,7 +403,7 @@ export type AutoLayout = {
    * 並べる向きの大きさが中身に合わせる（hug）なら折り返さない
    */
   wrap: boolean
-  /** 折り返したときの、行と行の間隔 */
+  /** 折り返したときの、行と行の間隔（グリッドでは行の間隔） */
   crossGap: number
   /**
    * 折り返したときの、行のまとまりの置き方（CSS の align-content）。auto は align に従って寄せ、

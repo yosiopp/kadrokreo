@@ -52,7 +52,21 @@ function arbitrary(value: string): string {
   return value.replace(/_/g, '\\_').replace(/\s+/g, '_').replace(/"/g, "'")
 }
 
-const FLEX_ALIGN: Record<string, string> = { 'flex-start': 'start', center: 'center', 'flex-end': 'end', 'space-between': 'between' }
+/** flex とグリッドの揃え方の値 → Tailwind のクラスの後ろ（グリッドは start / end と書く） */
+const FLEX_ALIGN: Record<string, string> = {
+  'flex-start': 'start',
+  start: 'start',
+  center: 'center',
+  'flex-end': 'end',
+  end: 'end',
+  'space-between': 'between',
+}
+
+/** 列を等分するグリッドの列の定義（Tailwind の grid-cols-N と同じ値）。N を返す */
+function equalColumns(value: string): number | null {
+  const match = /^repeat\((\d+), minmax\(0, 1fr\)\)$/.exec(value)
+  return match ? Number(match[1]) : null
+}
 
 /** 1 つの色だけの値か（グラデーションや重ねた塗りでない） */
 function isSingleColor(value: string): boolean {
@@ -67,7 +81,19 @@ function tailwindClass([property, value]: Declaration): string[] {
       if (value === 'absolute' || value === 'relative') return [value]
       break
     case 'display':
-      if (value === 'flex') return ['flex']
+      if (value === 'flex' || value === 'grid') return [value]
+      break
+    case 'grid-template-columns': {
+      const columns = equalColumns(value)
+      // grid-cols-1〜12 は repeat(N, minmax(0, 1fr)) と同じ
+      if (columns !== null && columns >= 1 && columns <= 12) return [`grid-cols-${columns}`]
+      return sized('grid-cols')
+    }
+    case 'justify-items':
+      if (value === 'start') return ['justify-items-start']
+      break
+    case 'justify-self':
+      if (value === 'stretch') return ['justify-self-stretch']
       break
     case 'flex-direction':
       if (value === 'row') return ['flex-row']

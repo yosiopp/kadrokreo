@@ -224,6 +224,7 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   'auto-layout': [
     'kdr -f demo.kdr -w auto-layout card direction=vertical gap=8 padding=16',
     'kdr -f demo.kdr -w auto-layout card gap=8 wrap=true crossGap=8 sizing.height=hug',
+    'kdr -f demo.kdr -w auto-layout card mode=grid columns=3 gap=8 crossGap=8   # 3 列のグリッドに',
     'kdr -f demo.kdr -w auto-layout btn --off',
   ],
   wrap: ['kdr -f demo.kdr -w wrap Box Dot --name Row --id row direction=horizontal gap=12 padding=8'],

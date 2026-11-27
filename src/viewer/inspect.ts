@@ -106,7 +106,21 @@ export function inspectNode(
     },
   ])
 
-  if (node.type === 'frame' && node.layout) {
+  if (node.type === 'frame' && node.layout?.mode === 'grid') {
+    const { layout } = node
+    add('オートレイアウト', [
+      { label: '並べ方', value: 'グリッド' },
+      { label: '列', value: String(layout.columns) },
+      { label: '列の幅', value: layout.columnWidth === null ? '等分' : num(layout.columnWidth) },
+      { label: '列の間隔', value: num(layout.gap) },
+      { label: '行の間隔', value: num(layout.crossGap) },
+      { label: '余白', value: paddingText(layout) },
+      { label: '揃え', value: alignLabels('horizontal')[layout.align] },
+      layout.columnWidth !== null && { label: '寄せ', value: JUSTIFY[layout.justify] },
+      { label: '幅', value: SIZING_LABELS[node.sizing.width] },
+      { label: '高さ', value: SIZING_LABELS[node.sizing.height] },
+    ])
+  } else if (node.type === 'frame' && node.layout) {
     const { layout } = node
     add('オートレイアウト', [
       { label: '向き', value: DIRECTIONS[layout.direction] },
@@ -464,6 +478,15 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     const factor = style.unit === 'rem' ? `${Math.round((scale / style.remBase) * 10000) / 10000}rem` : `${num(scale)}px`
     return `calc(var(${name}) * ${factor})`
   }
+  /** オートレイアウトの余白。どこか 1 辺でもつないでいれば、4 辺とも書く（2・3 個に縮めると辺とつながりの対応がずれる。4 辺とも同じなら 1 つ） */
+  const layoutPadding = (layout: AutoLayout): string | null => {
+    const sides = ['layout.paddingTop', 'layout.paddingRight', 'layout.paddingBottom', 'layout.paddingLeft'] as const
+    const fourSides = [layout.paddingTop, layout.paddingRight, layout.paddingBottom, layout.paddingLeft]
+    const boundSides = fourSides.map((value, k) => lengthOf(sides[k], value))
+    if (!sides.some((side) => bound(side) !== undefined)) return paddingCss(layout, px)
+    return boundSides.every((side) => side === boundSides[0]) ? boundSides[0] : boundSides.join(' ')
+  }
+
   const plainOf = (key: BindingKey, value: string) => {
     const name = bound(key)
     return name === undefined ? value : `var(${name})`
@@ -522,7 +545,26 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
     add('position', 'relative')
   }
 
-  if (node.type === 'frame' && node.layout) {
+  if (node.type === 'frame' && node.layout?.mode === 'grid') {
+    const { layout } = node
+    add('display', 'grid')
+    add(
+      'grid-template-columns',
+      layout.columnWidth === null ? `repeat(${layout.columns}, minmax(0, 1fr))` : `repeat(${layout.columns}, ${px(layout.columnWidth)})`,
+    )
+    // セルの中では左に寄せ、縦は揃え方に従う。行は上から詰める（どれも既定の stretch だと描画と合わない）
+    add('align-items', layout.align)
+    add('justify-items', 'start')
+    add('align-content', 'start')
+    if (layout.columnWidth !== null && layout.justify !== 'start') add('justify-content', layout.justify)
+    // gap は「行の間隔 列の間隔」の順。変数につないでいれば、値が同じでも分けて書く
+    const gapBound = bound('layout.gap') !== undefined || bound('layout.crossGap') !== undefined
+    if (layout.crossGap !== layout.gap || (gapBound && bound('layout.gap') !== bound('layout.crossGap'))) {
+      add('gap', `${lengthOf('layout.crossGap', layout.crossGap)} ${lengthOf('layout.gap', layout.gap)}`)
+    } else if (layout.gap !== 0 || gapBound) add('gap', lengthOf('layout.gap', layout.gap))
+    const padding = layoutPadding(layout)
+    if (padding !== null) add('padding', padding)
+  } else if (node.type === 'frame' && node.layout) {
     const { layout } = node
     const wrapping = wraps(node)
     add('display', 'flex')
@@ -539,15 +581,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
       const [rowKey, columnKey] = layout.direction === 'horizontal' ? (['layout.crossGap', 'layout.gap'] as const) : (['layout.gap', 'layout.crossGap'] as const)
       add('gap', `${lengthOf(rowKey, row)} ${lengthOf(columnKey, column)}`)
     } else if (layout.gap !== 0 || bound('layout.gap') !== undefined) add('gap', lengthOf('layout.gap', layout.gap))
-    const sides = ['layout.paddingTop', 'layout.paddingRight', 'layout.paddingBottom', 'layout.paddingLeft'] as const
-    // どこか 1 辺でもつないでいれば、4 辺とも書く（2・3 個に縮めると辺とつながりの対応がずれる。4 辺とも同じなら 1 つ）
-    const fourSides = [layout.paddingTop, layout.paddingRight, layout.paddingBottom, layout.paddingLeft]
-    const boundSides = fourSides.map((value, i) => lengthOf(sides[i], value))
-    const padding = sides.some((side) => bound(side) !== undefined)
-      ? boundSides.every((side) => side === boundSides[0])
-        ? boundSides[0]
-        : boundSides.join(' ')
-      : paddingCss(layout, px)
+    const padding = layoutPadding(layout)
     if (padding !== null) add('padding', padding)
   }
 
@@ -556,7 +590,10 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
   const hugHeight = hugs(node, 'height') || (node.type === 'text' && node.sizing.height === 'hug')
   // 親いっぱいに伸ばす向きは、大きさの代わりに伸ばし方を書く
   const stretched = stretchedAxes(scene, node)
-  if (parent?.type === 'frame' && parent.layout) {
+  if (parent?.type === 'frame' && parent.layout?.mode === 'grid') {
+    if (stretched.width) add('justify-self', 'stretch')
+    if (stretched.height) add('align-self', 'stretch')
+  } else if (parent?.type === 'frame' && parent.layout) {
     const mainStretched = parent.layout.direction === 'horizontal' ? stretched.width : stretched.height
     const crossStretched = parent.layout.direction === 'horizontal' ? stretched.height : stretched.width
     if (mainStretched) add('flex', '1 0 0')

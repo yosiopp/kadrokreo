@@ -12,7 +12,7 @@ const layout = {
   align: 'start',
   justify: 'start',
   widthMode: 'hug',
-  heightMode: 'hug', wrap: false, crossGap: 0, alignContent: 'auto',
+  heightMode: 'hug', wrap: false, crossGap: 0, alignContent: 'auto', mode: 'flex', columns: 2, columnWidth: null,
 } as const
 
 // ページ直下に card と back。card の中に a, b, row。row（自動で並べる）の中に x, y

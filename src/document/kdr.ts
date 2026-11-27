@@ -585,7 +585,10 @@ const DEFAULTS = {
 
 /** オートレイアウトの省略できる項目と、省略したときの値（余白も間隔もなし） */
 export const LAYOUT_DEFAULTS = {
+  mode: 'flex',
   direction: 'horizontal',
+  columns: 2,
+  columnWidth: null,
   gap: 0,
   paddingTop: 0,
   paddingRight: 0,
@@ -597,6 +600,9 @@ export const LAYOUT_DEFAULTS = {
   crossGap: 0,
   alignContent: 'auto',
 } as const
+
+/** グリッドの列の数の上限 */
+export const MAX_GRID_COLUMNS = 100
 
 /** ブーリアン演算の種類 */
 const BOOLEAN_OPERATIONS = ['union', 'subtract', 'intersect', 'exclude'] as const
@@ -997,7 +1003,14 @@ function parseLayout(value: unknown, path: string): AutoLayout {
   const optional = <K extends keyof typeof LAYOUT_DEFAULTS, T>(key: K, parse: (value: unknown, path: string) => T) =>
     raw[key] === undefined ? LAYOUT_DEFAULTS[key] : parse(raw[key], `${path}.${key}`)
   return {
+    mode: optional('mode', (v, p) => oneOf(v, ['flex', 'grid'] as const, p)),
     direction: optional('direction', (v, p) => oneOf(v, ['horizontal', 'vertical'] as const, p)),
+    columns: optional('columns', (v, p) => {
+      const count = number(v, p)
+      if (!Number.isInteger(count) || count < 1 || count > MAX_GRID_COLUMNS) throw new KdrError(`${p}: 1〜${MAX_GRID_COLUMNS} の整数ではありません`)
+      return count
+    }),
+    columnWidth: optional('columnWidth', (v, p): number | null => (v === null ? null : columnWidth(v, p))),
     gap: optional('gap', number),
     paddingTop: optional('paddingTop', size),
     paddingRight: optional('paddingRight', size),
@@ -1396,6 +1409,13 @@ function oneOf<const T>(value: unknown, choices: readonly T[], path: string): T 
 function size(value: unknown, path: string): number {
   const n = number(value, path)
   if (n < 0) throw new KdrError(`${path}: 負の値です`)
+  return n
+}
+
+/** グリッドの列の幅。1 以上（0 の列は並べようがない） */
+function columnWidth(value: unknown, path: string): number {
+  const n = number(value, path)
+  if (n < 1) throw new KdrError(`${path}: 1 より小さい値です`)
   return n
 }
 

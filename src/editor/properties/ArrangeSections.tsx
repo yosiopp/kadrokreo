@@ -1,5 +1,5 @@
 import { isLine } from '../../document/path.ts'
-import { followsConstraints, sizeLimited } from '../../document/autoLayout.ts'
+import { followsConstraints, isGrid, sizeLimited } from '../../document/autoLayout.ts'
 import { AlignIcon } from '../icons.tsx'
 import { setLayoutFill, setLayoutPositioning } from '../layout.ts'
 import { fitTextNodes } from '../measure.ts'
@@ -40,6 +40,7 @@ export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
     const parent = node.parentId === null ? null : page.nodes[node.parentId]
     return parent?.type === 'frame' && parent.layout !== null
   })
+  const inGrid = nodes.every((node) => isGrid(node.parentId === null ? undefined : page.nodes[node.parentId]))
   // 大きさの下限・上限は、大きさを自動で決める向き（親いっぱい・中身に合わせる）でだけ効くので、その向きの欄だけ出す
   const limitAxes = {
     width: nodes.every((node) => sizeLimited(page, node).width),
@@ -177,7 +178,9 @@ export function ArrangeSections({ ctx }: { ctx: PanelContext }) {
             )}
           </div>
           <p className="section-note">
-            並べる向きなら余った場所を分け合い、直交する向きなら余白の内側いっぱいに広がります。
+            {inGrid
+              ? 'セル（列の幅と、その行の高さ）いっぱいに広がります。'
+              : '並べる向きなら余った場所を分け合い、直交する向きなら余白の内側いっぱいに広がります。'}
           </p>
         </Section>
       )}

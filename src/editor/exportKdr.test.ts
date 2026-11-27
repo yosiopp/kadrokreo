@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KDR_MIN_VERSION, KDR_VERSION, KdrError, MAX_FONT_FAMILY_LENGTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
+import { KDR_MIN_VERSION, KDR_VERSION, KdrError, LAYOUT_DEFAULTS, MAX_FONT_FAMILY_LENGTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
 import { solid } from '../document/paint.ts'
 import type { CodeComponent, DesignDocument, Page } from '../document/types.ts'
 import { encodeKdr, kdrEntries } from './exportKdr.ts'
@@ -268,7 +268,7 @@ describe('kdrFile（書き出す形）', () => {
     // オートレイアウトの中も、既定値の項目は書かない
     const frame = {
       ...createFrame({ x: 0, y: 0, width: 10, height: 10 }),
-      layout: { direction: 'vertical', gap: 8, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' },
+      layout: { direction: 'vertical', gap: 8, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto', mode: 'flex', columns: 2, columnWidth: null },
       sizing: { width: 'hug', height: 'fixed' },
     } as const
     expect(fileNode(insertNode(createPage(), frame))).toMatchObject({ layout: { direction: 'vertical', gap: 8 }, sizing: { width: 'hug' } })
@@ -505,7 +505,7 @@ describe('parseKdr', () => {
       setDescription: '',
       booleanOperation: null,
       booleanIncludeStrokes: false,
-      layout: { direction: 'horizontal', gap: 0, paddingTop: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' },
+      layout: { direction: 'horizontal', gap: 0, paddingTop: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto', mode: 'flex', columns: 2, columnWidth: null },
     })
   })
 
@@ -925,6 +925,26 @@ describe('parseKdr', () => {
     expect(() => parseOne(withLayout({ gap: '8' }))).toThrow('layout.gap')
     expect(() => parseOne(withLayout({ wrap: 'yes' }))).toThrow('layout.wrap')
     expect(() => parseOne(withLayout({ crossGap: null }))).toThrow('layout.crossGap')
+  })
+
+  it('グリッドの並べ方（mode・columns・columnWidth）を検証し、省けば 1 方向の並べ方で読む', () => {
+    const grid = rawNode({ type: 'frame', layout: { mode: 'grid', columns: 3, columnWidth: 120 } })
+    expect(parseOne(grid)).toMatchObject({ layout: { mode: 'grid', columns: 3, columnWidth: 120 } })
+    // 省けば 1 方向（今までのファイルと同じ）で、列の数・幅は既定値
+    expect(parseOne(rawNode({ type: 'frame', layout: {} }))).toMatchObject({ layout: { mode: 'flex', columns: 2, columnWidth: null } })
+    expect(parseOne(rawNode({ type: 'frame', layout: { columnWidth: null } }))).toMatchObject({ layout: { columnWidth: null } })
+    const withLayout = (patch: object) => rawNode({ type: 'frame', layout: { mode: 'grid', ...patch } })
+    expect(() => parseOne(withLayout({ mode: 'table' }))).toThrow('layout.mode')
+    for (const columns of [0, 1.5, 101, '3']) expect(() => parseOne(withLayout({ columns }))).toThrow('layout.columns')
+    for (const columnWidth of [0, -10, '120']) expect(() => parseOne(withLayout({ columnWidth }))).toThrow('layout.columnWidth')
+  })
+
+  it('グリッドの項目は、既定から変えたものだけ書き出す', () => {
+    const base = createFrame({ x: 0, y: 0, width: 100, height: 100 })
+    const flex = { ...base, layout: { ...LAYOUT_DEFAULTS, gap: 8 } }
+    expect(Object.keys(fileNode(insertNode(createPage(), flex)).layout as object)).toEqual(['gap'])
+    const grid = { ...base, layout: { ...LAYOUT_DEFAULTS, mode: 'grid' as const, columns: 4 } }
+    expect(fileNode(insertNode(createPage(), grid)).layout).toEqual({ mode: 'grid', columns: 4 })
   })
 
   it('コンポーネントとのつながりを検証する', () => {

@@ -7,7 +7,8 @@ import {
   toLocal,
   transformRect,
 } from '../document/geometry.ts'
-import { clampSize, stretchedAxes, wraps } from '../document/autoLayout.ts'
+import { clampSize, fillBlocked, stretchedAxes, wraps } from '../document/autoLayout.ts'
+import { MAX_GRID_COLUMNS } from '../document/kdr.ts'
 import type { AutoLayout, FrameNode, NodeId, Scene, SceneNode, Sizing } from '../document/types.ts'
 import { nodeChangesSince } from '../document/nodeChanges.ts'
 import { createFrame } from './nodes.ts'
@@ -134,6 +135,7 @@ const WRAP_EPSILON = 0.01
 function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
   const frame = scene.nodes[id]
   if (frame.type !== 'frame' || !frame.layout) return scene
+  if (frame.layout.mode === 'grid') return layoutGrid(scene, id, frame, frame.layout)
   const { direction, gap, crossGap, align, justify } = frame.layout
   const horizontal = direction === 'horizontal'
   // 並べる向き（main）と、それに直交する向き（cross）で考える
@@ -270,6 +272,95 @@ function layoutFrame<T extends Scene>(scene: T, id: NodeId): T {
 }
 
 /**
+ * グリッドの列の幅と、列のまとまりの置き方。frameWidth はフレームの（中身に合わせるなら合わせたあとの）幅。
+ * 列の幅を決めていなければ、内側の幅を列で等分する（CSS の repeat(N, minmax(0, 1fr))）
+ */
+function gridTracks(layout: AutoLayout, frameWidth: number): { width: number; start: number; step: number } {
+  const { columns, columnWidth, gap, justify, paddingLeft, paddingRight } = layout
+  const inner = frameWidth - paddingLeft - paddingRight
+  const width = columnWidth ?? Math.max(0, (inner - gap * (columns - 1)) / columns)
+  // 列のまとまりの置き方（CSS の justify-content）。等分なら余りはない（CSS にも書かない。狭すぎて余りが負でも先頭から置く）。
+  // 均等に配るのは余りがあるときだけ
+  if (columnWidth === null) return { width, start: paddingLeft, step: gap }
+  const free = inner - (width * columns + gap * (columns - 1))
+  if (justify === 'space-between') {
+    return { width, start: paddingLeft, step: gap + (columns > 1 && free > 0 ? free / (columns - 1) : 0) }
+  }
+  const offset = justify === 'center' ? free / 2 : justify === 'end' ? free : 0
+  return { width, start: paddingLeft + offset, step: gap }
+}
+
+/**
+ * グリッドで並べる。子を children の順に、左上から右へ columns 個ずつ置き、埋まったら次の行へ。
+ * 行の高さはその行の子の高さの最大（縦に伸ばす子は数えない。全部がそうなら全部で数える。1 方向の並べ方と同じ）。
+ * 行は上から詰める（CSS の align-content: start）。セルの中では左に寄せ、縦は align に従う。伸ばす子はセルいっぱいにする
+ */
+function layoutGrid<T extends Scene>(scene: T, id: NodeId, frame: FrameNode, layout: AutoLayout): T {
+  const { columns, crossGap, align, paddingTop: top, paddingBottom: bottom, paddingLeft: left, paddingRight: right } = layout
+  const items: LayoutItem[] = visibleItems(scene, frame).map((item) => {
+    const axes = stretchedAxes(scene, item.node)
+    return { ...item, fillMain: axes.width, fillCross: axes.height }
+  })
+  // 中身に合わせる幅は、列の幅を決めていればそれ、決めていなければいちばん幅の広い子を列の数だけ並べたもの
+  // （そのときは横に伸ばす子はない。fillBlocked）
+  const contentColumn = layout.columnWidth ?? Math.max(0, ...items.map((item) => item.box.width))
+  const frameWidth = frame.sizing.width === 'hug'
+    ? clampSize(frame, 'width', contentColumn * columns + layout.gap * (columns - 1) + left + right)
+    : frame.width
+  const tracks = gridTracks(layout, frameWidth)
+
+  const rows: LayoutItem[][] = []
+  items.forEach((item, index) => {
+    if (index % columns === 0) rows.push([])
+    rows[rows.length - 1].push(item)
+  })
+  const rowHeights = rows.map((row) => {
+    const sizing = row.some((item) => !item.fillCross) ? row.filter((item) => !item.fillCross) : row
+    return Math.max(0, ...sizing.map((item) => item.box.height))
+  })
+  const contentHeight = rowHeights.reduce((sum, height) => sum + height, 0) + crossGap * Math.max(0, rows.length - 1)
+  const frameHeight = frame.sizing.height === 'hug' ? clampSize(frame, 'height', contentHeight + top + bottom) : frame.height
+
+  const patches = new Map<NodeId, NodePatch>()
+  let rowTop = top
+  rows.forEach((row, rowIndex) => {
+    const rowHeight = rowHeights[rowIndex]
+    row.forEach((item, column) => {
+      const { node, box } = item
+      const cellX = tracks.start + column * (tracks.width + tracks.step)
+      const width = item.fillMain ? Math.max(1, clampSize(node, 'width', tracks.width)) : box.width
+      const height = item.fillCross ? Math.max(1, clampSize(node, 'height', rowHeight)) : box.height
+      const y = item.fillCross || align === 'start'
+        ? rowTop
+        : align === 'center'
+          ? rowTop + (rowHeight - height) / 2
+          : rowTop + rowHeight - height
+      const patch: NodePatch = { x: tidy(node.x + cellX - box.x), y: tidy(node.y + y - box.y) }
+      // 伸ばすものは回っていないので、囲む矩形とノードの枠が同じ
+      if (item.fillMain || item.fillCross) {
+        patch.x = tidy(cellX)
+        patch.y = tidy(y)
+        patch.width = Math.max(1, tidy(width))
+        patch.height = Math.max(1, tidy(height))
+      }
+      patches.set(node.id, patch)
+    })
+    rowTop += rowHeight + crossGap
+  })
+  patches.set(id, { width: Math.max(1, tidy(frameWidth)), height: Math.max(1, tidy(frameHeight)) })
+  return patchNodes(scene, patches.keys(), (node) => patches.get(node.id) ?? null)
+}
+
+/**
+ * グリッドで並べているフレームの、いまの列の幅（列の幅を決めていなければ、等分した幅）。
+ * 列の幅を「固定」に切り替えるときの初めの値にする
+ */
+export function gridColumnWidth(frame: FrameNode): number | null {
+  if (frame.layout?.mode !== 'grid') return null
+  return gridTracks(frame.layout, frame.width).width
+}
+
+/**
  * total を nodes で等分する。下限・上限に引っかかったものはその大きさに留め、残りをほかで分け直す
  * （CSS の flex の伸び方と同じ手順）。どれも 1 より小さくはしない
  */
@@ -308,7 +399,11 @@ const DEFAULT_LAYOUT: AutoLayout = {
   align: 'start',
   justify: 'start',
   wrap: false,
-  crossGap: 10, alignContent: 'auto',
+  crossGap: 10,
+  alignContent: 'auto',
+  mode: 'flex',
+  columns: 2,
+  columnWidth: null,
 }
 
 /**
@@ -407,7 +502,9 @@ export function placeInLayout<T extends Scene>(
 ): T {
   const parent = scene.nodes[parentId]
   if (parent?.type !== 'frame' || !parent.layout) return scene
-  const horizontal = parent.layout.direction === 'horizontal'
+  // グリッドは、行の中を横に並べ、columns 個ごとに次の行へ折り返した並びとして扱う
+  const grid = parent.layout.mode === 'grid'
+  const horizontal = grid || parent.layout.direction === 'horizontal'
   const axis = horizontal ? 'x' : 'y'
   const size = horizontal ? 'width' : 'height'
   const crossAxis = horizontal ? 'y' : 'x'
@@ -415,18 +512,20 @@ export function placeInLayout<T extends Scene>(
   const local = toLocal(scene, parentId, point)
 
   const moving = sortByDocumentOrder(scene, topLevelIds(scene, ids))
+  const inFlow = (id: NodeId) => scene.nodes[id].visible && scene.nodes[id].layoutPositioning !== 'absolute'
+  // グリッドの行は、動かすものも含めたいまの並びの番号で決める（動かすものを除いて数えると、後ろの子が前の行に繰り上がる）
+  const gridRow = new Map(parent.children.filter(inFlow).map((id, index) => [id, Math.floor(index / parent.layout!.columns)]))
   const others = parent.children.filter((id) => !moving.includes(id))
-  const flow = others.flatMap((id) => {
-    const node = scene.nodes[id]
-    return node.visible && node.layoutPositioning !== 'absolute' ? [{ id, box: boxOf(node) }] : []
-  })
+  const flow = others.flatMap((id) => (inFlow(id) ? [{ id, box: boxOf(scene.nodes[id]) }] : []))
   // 折り返していれば、並びを行に分ける（前のものより先頭の側へ戻ったところで次の行）。
   // ポインタのある行より前の行のものと、同じ行でポインタより手前に中心があるものの後ろへ入れる
   const lines: (typeof flow)[] = []
   for (const item of flow) {
     const line = lines.at(-1)
     const previous = line?.at(-1)
-    const wrapped = parent.layout.wrap && previous !== undefined && item.box[axis] <= previous.box[axis]
+    const wrapped = grid
+      ? previous !== undefined && gridRow.get(item.id) !== gridRow.get(previous.id)
+      : parent.layout.wrap && previous !== undefined && item.box[axis] <= previous.box[axis]
     if (line && !wrapped) line.push(item)
     else lines.push([item])
   }
@@ -468,8 +567,7 @@ export function setLayoutFill<T extends Scene>(
       return node.sizing[axis] === 'fill' ? updateNode(next, id, { sizing: { ...node.sizing, [axis]: 'fixed' } }) : next
     }
     let changed = updateNode(next, id, { sizing: { ...node.sizing, [axis]: 'fill' } })
-    const along = (parent.layout.direction === 'horizontal') === (axis === 'width')
-    if (along && parent.sizing[axis] === 'hug') {
+    if (fillBlocked(parent, axis)) {
       changed = updateNode(changed, parent.id, { sizing: { ...parent.sizing, [axis]: 'fixed' } })
     }
     return changed
@@ -485,11 +583,11 @@ export function flowParent(scene: Scene, id: NodeId): FrameNode | null {
 }
 
 /**
- * 自動で並べるフレームの中で、ids を 1 つ前（step = -1）か後ろ（step = 1）へ並べ替える。
+ * 自動で並べるフレームの中で、ids を step 個前（負）か後ろ（正）へ並べ替える（グリッドの上下は列の数だけ動かす）。
  * 非表示の子や並びから外した子は飛ばして数える。ids がみな同じフレームの並びに加わっていなければ変えない。
  * 端にあるものがあれば、まとめて動かせないので変えない。
  */
-export function moveInLayout<T extends Scene>(scene: T, ids: readonly NodeId[], step: -1 | 1): T {
+export function moveInLayout<T extends Scene>(scene: T, ids: readonly NodeId[], step: number): T {
   const parents = new Set(ids.map((id) => flowParent(scene, id)?.id ?? null))
   const parentId = parents.size === 1 ? [...parents][0] : null
   if (parentId === null) return scene
@@ -503,7 +601,7 @@ export function moveInLayout<T extends Scene>(scene: T, ids: readonly NodeId[], 
   const order = [...flow]
   const indices = order.flatMap((id, index) => (selected.has(id) ? [index] : []))
   if (indices.length === 0) return scene
-  if ((step < 0 && indices[0] === 0) || (step > 0 && indices.at(-1) === order.length - 1)) return scene
+  if (step === 0 || indices[0] + step < 0 || indices.at(-1)! + step > order.length - 1) return scene
   for (const index of step < 0 ? indices : indices.toReversed()) {
     const target = index + step
     ;[order[index], order[target]] = [order[target], order[index]]
@@ -547,6 +645,39 @@ export function setLayoutWrap<T extends Scene>(scene: T, ids: readonly NodeId[],
     const fixed = value && node.sizing[axis] === 'hug' ? { sizing: { ...node.sizing, [axis]: 'fixed' as const } } : {}
     return { layout: { ...node.layout, wrap: value }, ...fixed }
   })
+}
+
+/**
+ * 自動で並べるフレーム ids の並べ方を変える。'grid' はグリッドに、'horizontal' / 'vertical' はその向きの 1 方向の並べ方にする。
+ * グリッドにするときは、いまの最初の行に並んでいる子の数を列の数にする（見た目がなるべく変わらないように）
+ */
+export function setLayoutMode<T extends Scene>(
+  scene: T,
+  ids: readonly NodeId[],
+  value: 'grid' | AutoLayout['direction'],
+): T {
+  return patchNodes(scene, ids, (node) => {
+    if (node.type !== 'frame' || !node.layout) return null
+    if (value !== 'grid') return { layout: { ...node.layout, mode: 'flex', direction: value } }
+    if (node.layout.mode === 'grid') return null
+    return { layout: { ...node.layout, mode: 'grid', columns: firstRowCount(scene, node) ?? node.layout.columns } }
+  })
+}
+
+/** 子の並びのうち、最初の子と縦の範囲が重なり、左から右へ続いている子の数（列の数の見積もり）。子がなければ null */
+function firstRowCount(scene: Scene, frame: FrameNode): number | null {
+  const items = visibleItems(scene, frame)
+  if (items.length === 0) return null
+  const first = items[0].box
+  let count = 1
+  for (let index = 1; index < items.length; index++) {
+    const { box } = items[index]
+    const previous = items[index - 1].box
+    const sameRow = box.y < first.y + first.height && box.y + box.height > first.y && box.x >= previous.x + previous.width - 1
+    if (!sameRow) break
+    count++
+  }
+  return Math.min(MAX_GRID_COLUMNS, count)
 }
 
 /** ids のうち自動で並べているフレームだけ、設定の一部を書き換える */

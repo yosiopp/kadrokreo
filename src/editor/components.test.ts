@@ -282,13 +282,13 @@ describe('親いっぱいに伸ばすインスタンス', () => {
       updateNode(page, base.button.id, {
         layout: {
           direction: 'horizontal', gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
-          align: 'start', justify: 'end', wrap: false, crossGap: 0, alignContent: 'auto' as const,
+          align: 'start', justify: 'end', wrap: false, crossGap: 0, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
         },
       }),
     )
     const column = { ...createFrame({ x: 0, y: 300, width: 400, height: 200 }), layout: {
       direction: 'vertical' as const, gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
-      align: 'start' as const, justify: 'start' as const, wrap: false, crossGap: 0, alignContent: 'auto' as const,
+      align: 'start' as const, justify: 'start' as const, wrap: false, crossGap: 0, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
     } }
     doc = updatePage(doc, base.pageId, (page) => insertNode(page, column))
     const created = createInstance(doc, base.pageId, base.componentId, { center: { x: 100, y: 320 }, parentId: column.id })
@@ -314,7 +314,7 @@ describe('親いっぱいに伸ばすインスタンス', () => {
     })
     const column = { ...createFrame({ x: 0, y: 300, width: 400, height: 200 }), layout: {
       direction: 'vertical' as const, gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
-      align: 'start' as const, justify: 'start' as const, wrap: false, crossGap: 0, alignContent: 'auto' as const,
+      align: 'start' as const, justify: 'start' as const, wrap: false, crossGap: 0, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
     } }
     doc = updatePage(doc, base.pageId, (page) => insertNode(page, column))
     const created = createInstance(doc, base.pageId, base.componentId, { center: { x: 100, y: 320 }, parentId: column.id })
@@ -704,7 +704,7 @@ describe('インスタンスごとの上書き', () => {
       align: 'start',
       justify: 'start',
       wrap: false,
-      crossGap: 0, alignContent: 'auto' as const,
+      crossGap: 0, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
     }
     const store = createEditorStore(doc, fitText)
     store.apply((page) => updateNode(page, button.id, { layout, sizing: { width: 'hug', height: 'hug' } }))

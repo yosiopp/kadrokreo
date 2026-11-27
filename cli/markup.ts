@@ -28,6 +28,7 @@ import type { Asset, AssetId, CodeComponent, CodeProp, ComponentProperty, Design
 import { type VariantProps, formatVariantName, isVariantSet, parseVariantName, propValue, variantSetOf, variantsIn } from '../src/document/variants.ts'
 import { alignVariantProperties, setInstanceProperty } from '../src/editor/componentProperties.ts'
 import { canHoldInstance, listComponents, componentName, nestedInstanceOf, sameJson, swapNestedInstance, syncComponents } from '../src/editor/components.ts'
+import { fillBlocked } from '../src/document/autoLayout.ts'
 import { relayout } from '../src/editor/layout.ts'
 import { createEllipse, createFrame, createImage, createLine, createPath, createRect, createText } from '../src/editor/nodes.ts'
 import { addOrReuseAsset, updatePage } from '../src/editor/operations/document.ts'
@@ -676,7 +677,7 @@ function buildElement(
     for (const axis of ['width', 'height'] as const) {
       if (sized && !attribute(axis)) throw fail(element.line, `<${kind}> には ${axis} が要ります（数値か fill。自動で並べるフレームなら省ける）`)
       if (node.sizing[axis] === 'hug' && node.type === 'frame' && !node.layout) {
-        throw fail(attribute(axis)?.line ?? element.line, `${axis}="hug" は、自動で並べるフレーム（layout="row|column"）とテキストの幅にだけ使えます`)
+        throw fail(attribute(axis)?.line ?? element.line, `${axis}="hug" は、自動で並べるフレーム（layout="row|column|grid"）とテキストの幅にだけ使えます`)
       }
     }
     if (node.type === 'text') node = { ...node, ...estimateTextSize(node) }
@@ -686,9 +687,8 @@ function buildElement(
   for (const axis of ['width', 'height'] as const) {
     if (node.sizing[axis] !== 'fill') continue
     const line = attribute(axis)?.line ?? element.line
-    if (!parent?.layout) throw fail(line, `${axis}="fill" は、自動で並べるフレーム（layout="row|column"）の子でだけ使えます`)
-    const along = (parent.layout.direction === 'horizontal') === (axis === 'width')
-    if (along && parent.sizing[axis] === 'hug') {
+    if (!parent?.layout) throw fail(line, `${axis}="fill" は、自動で並べるフレーム（layout="row|column|grid"）の子でだけ使えます`)
+    if (fillBlocked(parent, axis)) {
       throw fail(line, `${axis}="fill": 親の ${axis} が中身に合わせる（hug）なので伸ばせません。親の ${axis} を数値か fill にしてください`)
     }
   }

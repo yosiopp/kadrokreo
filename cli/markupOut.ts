@@ -4,6 +4,7 @@
 // - id はすべて書く（作り直しても同じ id になり、インスタンスの of・上書きの node もその id で指せる）
 // - インスタンスの中身（写し）は書かない。元の側の id で指す <override> と、根の塗り・線だけを書く
 // - 表せないもの（埋め込んだ書体、差し替えの候補、--assets なしの画像など）は書かずに、呼ぶ側へ知らせる（drops）
+import { fillBlocked } from '../src/document/autoLayout.ts'
 import { type InstanceNode, type MainNode, derivedId, isInstance, isMain, owningInstance } from '../src/document/component.ts'
 import { canBindProperty } from '../src/document/componentProperties.ts'
 import { LAYOUT_DEFAULTS } from '../src/document/kdr.ts'
@@ -109,15 +110,18 @@ function changedAttributes(key: string, value: unknown, fallback: unknown): Attr
   return [fieldAttribute(key, value)]
 }
 
-/** 並べ方（layout）の属性。layout=row|column と、既定から変えた項目 */
+/** 並べ方（layout）の属性。layout=row|column|grid と、既定から変えた項目 */
 function layoutAttributes(layout: AutoLayout): Attribute[] {
-  const out: Attribute[] = [['layout', layout.direction === 'horizontal' ? 'row' : 'column']]
+  const grid = layout.mode === 'grid'
+  const out: Attribute[] = [['layout', grid ? 'grid' : layout.direction === 'horizontal' ? 'row' : 'column']]
+  // グリッドでも向きは持っている（1 方向に戻したときに使う）ので、既定から変えていれば書く
+  if (grid && layout.direction !== LAYOUT_DEFAULTS.direction) out.push(['direction', layout.direction])
   const { paddingTop: top, paddingRight: right, paddingBottom: bottom, paddingLeft: left } = layout
   if (top !== 0 || right !== 0 || bottom !== 0 || left !== 0) {
     const padding = left === right ? (top === bottom ? (top === right ? [top] : [top, right]) : [top, right, bottom]) : [top, right, bottom, left]
     out.push(['padding', padding.join(' ')])
   }
-  for (const key of ['gap', 'align', 'justify', 'wrap', 'crossGap', 'alignContent'] as const) {
+  for (const key of ['columns', 'columnWidth', 'gap', 'align', 'justify', 'wrap', 'crossGap', 'alignContent'] as const) {
     if (layout[key] !== LAYOUT_DEFAULTS[key]) out.push([key, String(layout[key])])
   }
   return out
@@ -186,8 +190,7 @@ function positioned(page: Page, node: SceneNode): boolean {
 function fillWritable(page: Page, node: SceneNode, axis: 'width' | 'height', root: boolean): boolean {
   const parent = node.parentId === null ? null : page.nodes[node.parentId]
   if (root || parent?.type !== 'frame' || parent.layout === null) return false
-  const along = (parent.layout.direction === 'horizontal') === (axis === 'width')
-  return !(along && parent.sizing[axis] === 'hug')
+  return !fillBlocked(parent, axis)
 }
 
 /** 大きさ（width / height）の属性 */

@@ -47,7 +47,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
   await row('Frame 1').click()
   await page.locator('label:has-text("中身を自動で並べる") input').check()
   let n = await nodesByName()
-  check('いまの並びから向き・間隔・余白を決める', JSON.stringify(n['Frame 1'].layout) === JSON.stringify({ direction: 'horizontal', gap: 30, paddingTop: 40, paddingRight: 130, paddingBottom: 80, paddingLeft: 30, align: 'start', justify: 'start', wrap: false, crossGap: 30, alignContent: 'auto' }) && n['Frame 1'].sizing.width === 'hug' && n['Frame 1'].sizing.height === 'hug', JSON.stringify(n['Frame 1'].layout))
+  check('いまの並びから向き・間隔・余白を決める', Object.entries({ mode: 'flex', direction: 'horizontal', gap: 30, paddingTop: 40, paddingRight: 130, paddingBottom: 80, paddingLeft: 30, align: 'start', justify: 'start', wrap: false, crossGap: 30, alignContent: 'auto' }).every(([key, value]) => n['Frame 1'].layout[key] === value) && n['Frame 1'].sizing.width === 'hug' && n['Frame 1'].sizing.height === 'hug', JSON.stringify(n['Frame 1'].layout))
   check('見た目の位置もフレームの大きさも変わらない', n['Rectangle 1'].x === 30 && n['Rectangle 2'].x === 120 && n['Rectangle 3'].x === 230 && n['Frame 1'].width === 400 && n['Frame 1'].height === 200, `${n['Rectangle 2'].x}, ${n['Rectangle 3'].x}, ${n['Frame 1'].width}x${n['Frame 1'].height}`)
   check('レイヤー一覧は並び順のまま（先頭が上）', (await layers()).join() === 'Frame 1,Rectangle 1,Rectangle 2,Rectangle 3', (await layers()).join())
 
@@ -97,7 +97,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
   await select('幅').selectOption('hug')
   n = await nodesByName()
   check('中身に合わせるに戻せる', n['Frame 1'].width === 360, String(n['Frame 1'].width))
-  await select('向き').selectOption('vertical')
+  await select('並べ方').selectOption('vertical')
   n = await nodesByName()
   check('縦に並べ替えられる', n['Rectangle 1'].y === 40 && n['Rectangle 2'].y === 110 && n['Rectangle 3'].y === 160 && n['Frame 1'].height === 280, `${n['Rectangle 2'].y}, ${n['Rectangle 3'].y}, ${n['Frame 1'].height}`)
 
@@ -154,7 +154,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
 
   // ── 折り返す（横に並べ直して、幅を狭める） ──
   await row('Frame 1').click()
-  await select('向き').selectOption('horizontal')
+  await select('並べ方').selectOption('horizontal')
   await page.locator('label:has-text("収まらなければ折り返す") input').check()
   n = await nodesByName()
   check('折り返すようにすると、幅は固定になる', n['Frame 1'].layout.wrap && n['Frame 1'].sizing.width === 'fixed' && n['Frame 1'].width === 360, JSON.stringify(n['Frame 1'].layout))

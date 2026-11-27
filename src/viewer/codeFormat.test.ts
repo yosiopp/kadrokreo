@@ -26,6 +26,22 @@ describe('jsxStyle', () => {
 })
 
 describe('tailwindClasses', () => {
+  it('グリッドは grid と grid-cols-N（等分で 12 列まで）、ほかは任意の値で書く', () => {
+    const grid = (columns: string) =>
+      tailwindClasses(parseDeclarations([
+        'display: grid;',
+        `grid-template-columns: ${columns};`,
+        'align-items: start;',
+        'justify-items: start;',
+        'align-content: start;',
+        'justify-content: end;',
+      ].join('\n')))
+    expect(grid('repeat(3, minmax(0, 1fr))')).toEqual(['grid', 'grid-cols-3', 'items-start', 'justify-items-start', 'content-start', 'justify-end'])
+    expect(grid('repeat(13, minmax(0, 1fr))')[1]).toBe('grid-cols-[repeat(13,_minmax(0,_1fr))]')
+    expect(grid('repeat(3, 120px)')[1]).toBe('grid-cols-[repeat(3,_120px)]')
+    expect(tailwindClasses([['justify-self', 'stretch']])).toEqual(['justify-self-stretch'])
+  })
+
   it('決まったクラスがあればそれを使い、値は任意の値 [..] で書く', () => {
     expect(
       tailwindClasses(

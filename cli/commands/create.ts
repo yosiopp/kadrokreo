@@ -176,7 +176,7 @@ async function runAdd(ctx: Context, step: Step): Promise<void> {
   node = { ...node, ...(id === undefined ? {} : { id }), ...(name === undefined ? {} : { name }) }
   // 名前=値 は、作ったノードへ set と同じ決まりで当てる
   node = { ...node, ...buildPatch(node, step.assignments, session.document.collections) } as SceneNode
-  // layout=row|column は大きさを中身に合わせるが、--width / --height で決めた向きは固定のまま
+  // layout=row|column|grid は大きさを中身に合わせるが、--width / --height で決めた向きは固定のまま
   if (node.type === 'frame' && node.layout) {
     const fixed = (axis: 'width' | 'height') => (node.sizing[axis] === 'hug' && option(step, axis) !== undefined ? 'fixed' : node.sizing[axis])
     node = { ...node, sizing: { width: fixed('width'), height: fixed('height') } }

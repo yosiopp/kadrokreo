@@ -101,11 +101,13 @@ function spacingValues(node: SceneNode): [string, number][] {
     else radius.forEach((value, i) => values.push([`cornerRadius.${i}`, value]))
   }
   if (node.type === 'frame' && node.layout) {
-    const { gap, paddingTop, paddingRight, paddingBottom, paddingLeft, wrap, crossGap, justify, alignContent } = node.layout
-    // 両端に揃えるときの間隔は並べ直しが決めるので、値に意味が無い
-    if (justify !== 'space-between') values.push(['gap', gap])
+    const { mode, gap, paddingTop, paddingRight, paddingBottom, paddingLeft, wrap, crossGap, justify, alignContent, columnWidth } = node.layout
+    const grid = mode === 'grid'
+    // 両端に揃えるときの間隔は並べ直しが決めるので、値に意味が無い（グリッドで列を等分するなら余りがないので効かない）
+    if (justify !== 'space-between' || (grid && columnWidth === null)) values.push(['gap', gap])
     values.push(['paddingTop', paddingTop], ['paddingRight', paddingRight], ['paddingBottom', paddingBottom], ['paddingLeft', paddingLeft])
-    if (wrap && alignContent !== 'space-between') values.push(['crossGap', crossGap])
+    // グリッドの行の間隔はいつも効く
+    if (grid || (wrap && alignContent !== 'space-between')) values.push(['crossGap', crossGap])
   }
   return values
 }

@@ -10,6 +10,7 @@ import {
   setAutoLayoutEnabled,
   setFrameSizing,
   setLayoutFill,
+  setLayoutMode,
   setLayoutPositioning,
   setLayoutWrap,
   wrapInAutoLayout,
@@ -30,7 +31,7 @@ const LAYOUT: AutoLayout = {
   align: 'start',
   justify: 'start',
   wrap: false,
-  crossGap: 0, alignContent: 'auto',
+  crossGap: 0, alignContent: 'auto', mode: 'flex', columns: 2, columnWidth: null,
 }
 
 type Sizes = SceneNode['sizing']
@@ -639,5 +640,111 @@ describe('親の辺に固定する（constraints）', () => {
     store.apply((base) => insertNode(insertNode(base, frame), label, frame.id))
     store.apply((base) => setSize(base, [frame.id], { width: 250 }))
     expect(node(store, label.id)).toMatchObject({ width: 80, sizing: { width: 'fixed' } })
+  })
+})
+
+describe('グリッド', () => {
+  const GRID: Partial<AutoLayout> = { mode: 'grid', columns: 2, crossGap: 6 }
+  const childrenOf = (scene: Scene, id: string) => (scene.nodes[id] as FrameNode).children
+
+  it('左上から列の数ずつ並べ、行の高さはその行でいちばん高い子。中身に合わせる幅はいちばん広い子を列の数だけ', () => {
+    const { page, frame, a, b, c } = fixture(GRID)
+    // 列の幅 50（いちばん広い b）: 余白 20 × 2 + 50 × 2 + 間隔 10
+    expect(at(page, a.id)).toEqual({ x: 20, y: 5 })
+    expect(at(page, b.id)).toEqual({ x: 80, y: 5 })
+    // 1 行目の高さ 40 + 行の間隔 6
+    expect(at(page, c.id)).toEqual({ x: 20, y: 51 })
+    expect(sizeOf(page, frame.id)).toEqual({ width: 150, height: 66 })
+  })
+
+  it('幅が固定なら内側を列で等分し、列の数・間隔を変えると並び直す', () => {
+    const { page, frame, a, b, c } = fixture({ ...GRID, columns: 3 }, FIXED)
+    // 内側 260、間隔 10 × 2 → 列の幅 80
+    expect([at(page, a.id).x, at(page, b.id).x, at(page, c.id).x]).toEqual([20, 110, 200])
+    const two = relayout(patchLayouts(page, [frame.id], { columns: 2, gap: 20 }))
+    // 列の幅 (260 - 20) / 2 = 120
+    expect(at(two, b.id)).toEqual({ x: 160, y: 5 })
+    expect(at(two, c.id)).toEqual({ x: 20, y: 51 })
+    expect(sizeOf(two, frame.id)).toEqual({ width: 300, height: 100 })
+  })
+
+  it('列の幅を決めると、その幅で並べ、余りは寄せ方に従って配る', () => {
+    const fixed = { ...GRID, columns: 3, columnWidth: 60 }
+    const center = fixture({ ...fixed, justify: 'center' }, FIXED)
+    expect([center.a, center.b, center.c].map((node) => at(center.page, node.id).x)).toEqual([50, 120, 190])
+    const between = fixture({ ...fixed, justify: 'space-between' }, FIXED)
+    expect([between.a, between.b, between.c].map((node) => at(between.page, node.id).x)).toEqual([20, 120, 220])
+    // 中身に合わせる幅は、列の幅 × 列の数 + 間隔 + 余白
+    const hug = fixture(fixed)
+    expect(sizeOf(hug.page, hug.frame.id).width).toBe(240)
+  })
+
+  it('揃え方はセルの中の縦の位置に効く', () => {
+    const center = fixture({ ...GRID, columns: 3, align: 'center' })
+    expect(at(center.page, center.a.id).y).toBe(15)
+    expect(at(center.page, center.c.id).y).toBe(20)
+    const end = fixture({ ...GRID, columns: 3, align: 'end' })
+    expect(at(end.page, end.a.id).y).toBe(25)
+  })
+
+  it('伸ばす子はセルいっぱいに広がる。列を等分して幅を中身に合わせる親なら、横に伸ばすと親の幅を固定にする', () => {
+    const { page, a } = fixture({ ...GRID }, FIXED)
+    const filled = relayout(setLayoutFill(setLayoutFill(page, [a.id], 'width', true), [a.id], 'height', true))
+    // 列の幅 (260 - 10) / 2 = 125、1 行目の高さは b の 40
+    expect(sizeOf(filled, a.id)).toEqual({ width: 125, height: 40 })
+    const hug = fixture({ ...GRID })
+    const hugFilled = relayout(setLayoutFill(hug.page, [hug.a.id], 'width', true))
+    expect(hugFilled.nodes[hug.frame.id].sizing).toEqual({ width: 'fixed', height: 'hug' })
+    expect(sizeOf(hugFilled, hug.a.id).width).toBe(50)
+    // 縦と、列の幅を決めたときの横は、中身に合わせる親のまま伸ばせる
+    const tall = relayout(setLayoutFill(hug.page, [hug.a.id], 'height', true))
+    expect(tall.nodes[hug.frame.id].sizing).toEqual(HUG)
+    expect(sizeOf(tall, hug.a.id).height).toBe(40)
+    const fixedColumns = fixture({ ...GRID, columnWidth: 70 })
+    const wide = relayout(setLayoutFill(fixedColumns.page, [fixedColumns.a.id], 'width', true))
+    expect(wide.nodes[fixedColumns.frame.id].sizing).toEqual(HUG)
+    expect(sizeOf(wide, fixedColumns.a.id).width).toBe(70)
+  })
+
+  it('並べ方を変える。グリッドにするときは、いまの最初の行の子の数を列の数にする', () => {
+    const row = fixture()
+    const grid = setLayoutMode(row.page, [row.frame.id], 'grid')
+    expect((grid.nodes[row.frame.id] as FrameNode).layout).toMatchObject({ mode: 'grid', columns: 3 })
+    const column = fixture({ direction: 'vertical' })
+    expect((setLayoutMode(column.page, [column.frame.id], 'grid').nodes[column.frame.id] as FrameNode).layout?.columns).toBe(1)
+    const back = setLayoutMode(grid, [row.frame.id], 'vertical')
+    expect((back.nodes[row.frame.id] as FrameNode).layout).toMatchObject({ mode: 'flex', direction: 'vertical', columns: 3 })
+  })
+
+  it('ドラッグで入れる位置はセルで決まり、上下の矢印は列の数だけ動かす', () => {
+    const { page, frame, a, b, c } = fixture(GRID)
+    // 1 行目の b の中心（x 105）より左 → a と b の間
+    expect(childrenOf(placeInLayout(page, [c.id], frame.id, { x: 175, y: 110 }), frame.id)).toEqual([a.id, c.id, b.id])
+    expect(childrenOf(moveInLayout(page, [a.id], 2), frame.id)).toEqual([c.id, b.id, a.id])
+    expect(moveInLayout(page, [b.id], 2)).toBe(page)
+  })
+
+  it('同じグリッドの中のドラッグでも、行はいまの並びで数える', () => {
+    // 3 列に A B C / D E F。A を 2 行目の E と F の間へ
+    const frame = { ...createFrame({ x: 0, y: 0, width: 300, height: 100 }), layout: { ...LAYOUT, mode: 'grid' as const, columns: 3 }, sizing: HUG }
+    const names = ['A', 'B', 'C', 'D', 'E', 'F']
+    let page = insertNode(createPage(), frame)
+    const rects = names.map(() => createRect({ x: 0, y: 0, width: 30, height: 20 }))
+    for (const rect of rects) page = insertNode(page, rect, frame.id)
+    page = relayout(page)
+    const [a, , , , e] = rects.map((rect) => page.nodes[rect.id])
+    const point = { x: e.x + e.width + 1, y: e.y + 5 }
+    const order = childrenOf(placeInLayout(page, [a.id], frame.id, point), frame.id).map((id) => names[rects.findIndex((rect) => rect.id === id)])
+    expect(order.join('')).toBe('BCDEAF')
+  })
+
+  it('列を等分して狭すぎても、寄せ方でずらさない（CSS にも書かないので）', () => {
+    const { page, a } = fixture({ ...GRID, columns: 3, gap: 200, justify: 'center' }, FIXED)
+    expect(at(page, a.id).x).toBe(20)
+  })
+
+  it('グリッドでない設定（折り返し）は効かない', () => {
+    const { page, a, c } = fixture({ ...GRID, wrap: true, columns: 3 }, FIXED)
+    expect(at(page, c.id).y).toBe(at(page, a.id).y)
   })
 })

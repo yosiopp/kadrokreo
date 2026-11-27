@@ -355,6 +355,35 @@ const VIEWER = process.env.VIEWER_URL || 'http://localhost:5181'
   await shot(page, '18-editor-guides.png')
   await page.keyboard.press('Shift+R')
 
+  // グリッドで並べる。2 ページ目の空いたところ（ガイド線の右下）に大きさの違う長方形を 6 つ横に入れたフレームを作り、
+  // 3 列のグリッドにして選ぶ（撮ったら消して、後のキャプチャに写さない）
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('f')
+  await drag([560, 400], [940, 700])
+  await rename(await page.locator('.layer-row[data-selected="true"] .layer-name').textContent(), 'カード一覧')
+  await fill('#f1f5f9')
+  // 左から右へ 1 列に置く（並べる順番が左からの順になる）
+  const gridCards = [
+    [[575, 420], [620, 470], '#a5b4fc'], [[628, 420], [690, 490], '#fcd34d'], [[698, 420], [733, 455], '#86efac'],
+    [[741, 420], [791, 460], '#fca5a5'], [[799, 420], [864, 480], '#93c5fd'], [[872, 420], [907, 445], '#f0abfc'],
+  ]
+  for (const [from, to, color] of gridCards) {
+    await page.keyboard.press('r')
+    await drag(from, to)
+    await fill(color)
+  }
+  await row('カード一覧').click()
+  await page.locator('label:has-text("中身を自動で並べる") input').check()
+  await page.locator('.field:has(.field-label:text-is("並べ方")) select').selectOption('grid')
+  await set('列の数', 3)
+  await set('列の間隔', 12)
+  await set('行の間隔', 12)
+  await set('上', 16); await set('右', 16); await set('下', 16); await set('左', 16)
+  await set('W', 380)
+  await page.locator('.properties-panel').evaluate((el) => el.scrollTo(0, el.scrollHeight))
+  await shot(page, '19-editor-grid.png')
+  await page.keyboard.press('Delete')
+
   // editor を 2 つ目のタブで開いたときの知らせ（編集できるタブは 1 つだけ）
   const second = await context.newPage()
   await second.goto(EDITOR)

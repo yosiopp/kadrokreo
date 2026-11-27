@@ -3,6 +3,7 @@ import { derivedId } from '../document/component.ts'
 import { linearFromAngle, solid } from '../document/paint.ts'
 import type { EllipseNode, ImageNode, Paint, PathNode, Scene, SceneNode } from '../document/types.ts'
 import { inspectNode, inspectSelection, nodeCss } from './inspect.ts'
+import { LAYOUT_DEFAULTS } from '../document/kdr.ts'
 import { base, docOf, frame, paint, rect, sceneOf, text } from '../document/testNodes.ts'
 
 const css = (scene: Scene, id: string) => nodeCss(scene, id).split('\n')
@@ -45,7 +46,7 @@ describe('nodeCss', () => {
         align: 'center',
         justify: 'space-between',
         wrap: false,
-        crossGap: 0, alignContent: 'auto' as const,
+        crossGap: 0, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
       },
     })
     const scene = sceneOf(parent, rect({ parentId: 'frame', x: 16, y: 0 }))
@@ -73,7 +74,7 @@ describe('nodeCss', () => {
       align: 'start' as const,
       justify: 'start' as const,
       wrap: false,
-      crossGap: 0, alignContent: 'auto' as const,
+      crossGap: 0, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
     }
     const scene = sceneOf(
       frame({ children: ['rect'], clipContent: false, layout }),
@@ -91,6 +92,51 @@ describe('nodeCss', () => {
     // 親が自動で並べていなければ、伸ばす指定は意味がない
     const plain = sceneOf(frame({ children: ['rect'] }), rect({ parentId: 'frame', sizing: { width: 'fill', height: 'fill' } }))
     expect(css(plain, 'rect')).toContain('width: 100px;')
+  })
+
+  it('グリッドで並べるフレームは grid になり、列の定義・揃え・間隔を書く。伸ばす子は justify-self / align-self', () => {
+    const layout = {
+      ...LAYOUT_DEFAULTS,
+      mode: 'grid' as const,
+      columns: 3,
+      gap: 8,
+      crossGap: 12,
+      paddingTop: 4,
+      paddingRight: 4,
+      paddingBottom: 4,
+      paddingLeft: 4,
+      align: 'center' as const,
+    }
+    const scene = sceneOf(
+      frame({ children: ['rect'], clipContent: false, layout }),
+      rect({ parentId: 'frame', sizing: { width: 'fill', height: 'fill' } }),
+    )
+    expect(css(scene, 'frame')).toEqual([
+      'display: grid;',
+      'grid-template-columns: repeat(3, minmax(0, 1fr));',
+      'align-items: center;',
+      'justify-items: start;',
+      'align-content: start;',
+      'gap: 12px 8px;',
+      'padding: 4px;',
+      'width: 100px;',
+      'height: 50px;',
+      'background: #ff0000;',
+    ])
+    expect(css(scene, 'rect')).toEqual(['justify-self: stretch;', 'align-self: stretch;', 'background: #ff0000;'])
+    // 列の幅を決めると px で、寄せ方は justify-content に
+    const fixed = sceneOf(frame({ clipContent: false, layout: { ...layout, columnWidth: 120, justify: 'center' as const, crossGap: 8 } }))
+    expect(css(fixed, 'frame')).toEqual(expect.arrayContaining([
+      'grid-template-columns: repeat(3, 120px);',
+      'justify-content: center;',
+      'gap: 8px;',
+    ]))
+    expect(inspectNode(docOf(fixed), fixed, 'frame').find((section) => section.title === 'オートレイアウト')?.rows).toEqual(expect.arrayContaining([
+      { label: '並べ方', value: 'グリッド' },
+      { label: '列', value: '3' },
+      { label: '列の幅', value: '120' },
+      { label: '寄せ', value: '中央' },
+    ]))
   })
 
   it('親の辺への追従は、left / right / top / bottom と割合で書く', () => {
@@ -128,7 +174,7 @@ describe('nodeCss', () => {
   it('折り返した行を均等に配るなら align-content: space-between', () => {
     const layout = {
       direction: 'horizontal' as const, gap: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
-      align: 'center' as const, justify: 'start' as const, wrap: true, crossGap: 0, alignContent: 'space-between' as const,
+      align: 'center' as const, justify: 'start' as const, wrap: true, crossGap: 0, alignContent: 'space-between' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
     }
     const scene = sceneOf(frame({ children: [], layout, sizing: { width: 'fixed', height: 'fixed' } }))
     expect(css(scene, 'frame')).toContain('align-content: space-between;')
@@ -146,7 +192,7 @@ describe('nodeCss', () => {
       align: 'center' as const,
       justify: 'start' as const,
       wrap: true,
-      crossGap: 4, alignContent: 'auto' as const,
+      crossGap: 4, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
     }
     const scene = sceneOf(
       frame({ children: ['rect'], clipContent: false, layout, sizing: { width: 'fixed', height: 'hug' }, minHeight: 40, maxWidth: 500 }),
@@ -736,7 +782,7 @@ describe('inspectNode', () => {
         align: 'end',
         justify: 'start',
         wrap: false,
-        crossGap: 0, alignContent: 'auto' as const,
+        crossGap: 0, alignContent: 'auto' as const, mode: 'flex' as const, columns: 2, columnWidth: null,
       },
     })
     const instance = frame({ id: 'instance', component: { id: 'c1', role: 'instance', overrides: {}, flipX: false, flipY: false } })
@@ -1190,11 +1236,14 @@ describe('変数につないだ数値・文字', () => {
     expect(nodeCss(sceneOf(box), 'rect', { variables: collections, unit: 'rem' })).toContain('border-radius: calc(var(--radius-md) * 0.0625rem);')
     const label = text({ fontFamily: 'Inter', bindings: { fontFamily: 'f' } })
     expect(nodeCss(sceneOf(label), 'text', { variables: collections })).toContain('font-family: var(--font-body);')
-    const row = frame({ layout: { direction: 'horizontal', gap: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' }, bindings: { 'layout.gap': 'g' } })
+    const row = frame({ layout: { direction: 'horizontal', gap: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto', mode: 'flex', columns: 2, columnWidth: null }, bindings: { 'layout.gap': 'g' } })
     expect(nodeCss(sceneOf(row), 'frame', { variables: collections })).toContain('gap: calc(var(--space-md) * 1px);')
     // 余白の 1 辺だけつないでも、4 辺とも書く
-    const padded = frame({ layout: { direction: 'horizontal', gap: 0, paddingTop: 12, paddingRight: 12, paddingBottom: 12, paddingLeft: 12, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto' }, bindings: { 'layout.paddingLeft': 'g' } })
+    const padded = frame({ layout: { direction: 'horizontal', gap: 0, paddingTop: 12, paddingRight: 12, paddingBottom: 12, paddingLeft: 12, align: 'start', justify: 'start', wrap: false, crossGap: 0, alignContent: 'auto', mode: 'flex', columns: 2, columnWidth: null }, bindings: { 'layout.paddingLeft': 'g' } })
     expect(nodeCss(sceneOf(padded), 'frame', { variables: collections })).toContain('padding: 12px 12px 12px calc(var(--space-md) * 1px);')
+    // グリッドの行の間隔だけつなげば、値が同じでも行と列を分けて書く
+    const grid = frame({ layout: { ...LAYOUT_DEFAULTS, mode: 'grid', gap: 12, crossGap: 12 }, bindings: { 'layout.crossGap': 'g' } })
+    expect(nodeCss(sceneOf(grid), 'frame', { variables: collections })).toContain('gap: calc(var(--space-md) * 1px) 12px;')
     const rows = inspectNode({ ...docOf(sceneOf(box)), collections }, sceneOf(box), 'rect').find((section) => section.title === '変数')?.rows
     expect(rows).toEqual([{ label: '角丸', value: 'radius/md · 8' }])
   })

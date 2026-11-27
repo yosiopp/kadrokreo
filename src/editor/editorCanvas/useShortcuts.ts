@@ -324,8 +324,14 @@ export function useShortcuts(options: Options) {
       // 自動で並べるフレームの並びの中では、位置はフレームが決めるので、並べる向きの矢印で順番を入れ替える
       const parent = ids.length > 0 ? flowParent(page, ids[0]) : null
       if (parent) {
-        const horizontal = parent.layout!.direction === 'horizontal'
-        const along = horizontal ? dx : dy
+        const layout = parent.layout!
+        // グリッドでは、左右で 1 つ、上下で 1 行（列の数）ずつ動かす
+        if (layout.mode === 'grid') {
+          const step = dx !== 0 ? Math.sign(dx) : Math.sign(dy) * layout.columns
+          if (step !== 0) store.apply((base) => moveInLayout(base, ids, step))
+          return
+        }
+        const along = layout.direction === 'horizontal' ? dx : dy
         if (along !== 0) store.apply((base) => moveInLayout(base, ids, along < 0 ? -1 : 1))
         return
       }

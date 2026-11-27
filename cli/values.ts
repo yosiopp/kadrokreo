@@ -17,7 +17,7 @@ import { UsageError } from './args.ts'
 // radius.1=8（N 番目の輪郭だけ。0 が最初の輪郭 points、1 からが contours）、
 // width=fill / height=hug（大きさの決め方 sizing。数値なら、その大きさで固定にする）、lineHeight=24px（px で書いた行の高さを fontSize に対する倍率に直す）、
 // letterSpacing=0.05em（em で書いた字間を px に直す。px は 2px でも 2 でも同じ）、
-// フレームの layout=row|column（自動で並べる。余白も間隔も 0 から始める）と、並べ方の項目（gap=8 padding="12 40" align=center など。layout.gap=8 と同じ）。
+// フレームの layout=row|column|grid（自動で並べる。余白も間隔も 0 から始める）と、並べ方の項目（gap=8 padding="12 40" align=center columns=3 など。layout.gap=8 と同じ）。
 // 色の値には var(変数の名前) で色の変数を指せる（fill=var(color/primary)、shadow.color=var(…)、fills.0.color=var(…)）。色を直接書けばつながりは外れる。
 // 数値・文字・真偽の項目（document/variables.ts の BINDINGS。cornerRadius=var(radius/md)、gap=var(space/md)、text=var(copy/title)）も同じ。
 // 同じ語彙を、マークアップ（kdr build / place。markup.ts）の属性にも使う。
@@ -125,7 +125,10 @@ function expandRadius(node: SceneNode, path: string, raw: string, draft: Record<
 
 /** フレームの並べ方の項目。layout. を付けずに書ける */
 const LAYOUT_KEYS = new Set([
+  'mode',
   'direction',
+  'columns',
+  'columnWidth',
   'gap',
   'padding',
   'paddingTop',
@@ -144,6 +147,7 @@ const DIRECTIONS: Record<string, AutoLayout['direction']> = { row: 'horizontal',
 /**
  * 大きさと並べ方の略記を、項目の patch に直す。当てはまらなければ null。
  *   layout=row|column   フレームを自動で並べる（すでに並べていれば向きだけ変える）。余白も間隔も 0 から始め、大きさは中身に合わせる
+ *   layout=grid         フレームをグリッドで並べる（columns=3 columnWidth=120 などと組む。columnWidth=null で等分）
  *   width=fill|hug      大きさの決め方（sizing）。数値なら、その大きさで固定にする（テキストの高さはいつも中身で決まる）
  *   lineHeight=24px     行の高さを px で（fontSize に対する倍率に直す）
  *   letterSpacing=0.05em  字間を em で（その時点の fontSize を掛けて px に直す。あとで fontSize を変えても px のまま）。2px は 2 と同じ
@@ -151,12 +155,15 @@ const DIRECTIONS: Record<string, AutoLayout['direction']> = { row: 'horizontal',
 function expandSizing(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): Record<string, unknown> | null {
   const value = raw.trim()
   const sizing = () => (Object.hasOwn(draft, 'sizing') ? draft.sizing : node.sizing) as SceneNode['sizing']
-  if (path === 'layout' && node.type === 'frame' && Object.hasOwn(DIRECTIONS, value)) {
+  if (path === 'layout' && node.type === 'frame' && (Object.hasOwn(DIRECTIONS, value) || value === 'grid')) {
+    // grid はグリッド（向きはそのまま）、row|column は 1 方向の並べ方
+    const mode: Pick<AutoLayout, 'mode'> | Pick<AutoLayout, 'mode' | 'direction'> =
+      value === 'grid' ? { mode: 'grid' } : { mode: 'flex', direction: DIRECTIONS[value] }
     const current = (Object.hasOwn(draft, 'layout') ? draft.layout : node.layout) as AutoLayout | null
-    if (current) return { layout: { ...current, direction: DIRECTIONS[value] } }
+    if (current) return { layout: { ...current, ...mode } }
     const { width, height } = sizing()
     return {
-      layout: { ...LAYOUT_DEFAULTS, direction: DIRECTIONS[value] } satisfies AutoLayout,
+      layout: { ...LAYOUT_DEFAULTS, ...mode } satisfies AutoLayout,
       sizing: { width: width === 'fill' ? 'fill' : 'hug', height: height === 'fill' ? 'fill' : 'hug' },
     }
   }
@@ -263,7 +270,7 @@ export function buildPatch(
     const base = (Object.hasOwn(draft, head) ? draft[head] : source[head]) as unknown
     if (base === null || typeof base !== 'object') {
       throw new UsageError(
-        head === 'layout' ? `${path}: 先に layout=row|column か auto-layout で自動で並べるようにしてください` : `${path}: ${head} が空です`,
+        head === 'layout' ? `${path}: 先に layout=row|column|grid か auto-layout で自動で並べるようにしてください` : `${path}: ${head} が空です`,
       )
     }
     draft[head] = setIn(structuredClone(base) as Record<string, unknown>, rest, raw, path, collections)

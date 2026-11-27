@@ -1,4 +1,4 @@
-import type { Scene, SceneNode } from './types.ts'
+import type { AutoLayout, FrameNode, Scene, SceneNode } from './types.ts'
 
 // オートレイアウトの設定を読む関数。並べる処理そのもの（書き換える側）は editor/layout.ts にある。
 // viewer の CSS の出力も、子を親いっぱいに伸ばしているかを知るためにこれを使う
@@ -13,10 +13,30 @@ export function stretchedAxes(scene: Scene, node: SceneNode): { width: boolean; 
   const none = { width: false, height: false }
   if (parent?.type !== 'frame' || !parent.layout || node.rotation !== 0 || !node.visible) return none
   if (node.layoutPositioning === 'absolute') return none
-  const { direction } = parent.layout
-  const width = node.sizing.width === 'fill' && !(direction === 'horizontal' && parent.sizing.width === 'hug')
-  const height = node.sizing.height === 'fill' && !(direction === 'vertical' && parent.sizing.height === 'hug')
-  return { width, height }
+  return {
+    width: node.sizing.width === 'fill' && !fillBlocked(parent, 'width'),
+    height: node.sizing.height === 'fill' && !fillBlocked(parent, 'height'),
+  }
+}
+
+/**
+ * 自動で並べるフレーム parent の子を、axis の向きに親いっぱいに伸ばせないか。
+ * 1 方向に並べるとき、並べる向きの大きさを親が中身に合わせていると、伸ばす先が決まらない。
+ * グリッドでは、列を等分していて幅を中身に合わせているときだけ横に伸ばせない（列の幅が子の幅で決まり、取り合いになる）。
+ * 高さはいつも伸ばせる（行の高さは、その行のほかの子で決まる）
+ */
+export function fillBlocked(parent: FrameNode, axis: 'width' | 'height'): boolean {
+  if (!parent.layout) return false
+  if (parent.layout.mode === 'grid') {
+    return axis === 'width' && parent.layout.columnWidth === null && parent.sizing.width === 'hug'
+  }
+  const along = (parent.layout.direction === 'horizontal') === (axis === 'width')
+  return along && parent.sizing[axis] === 'hug'
+}
+
+/** 自動で並べるフレームが、グリッドで並べているか */
+export function isGrid(node: SceneNode | undefined): node is FrameNode & { layout: AutoLayout } {
+  return node?.type === 'frame' && node.layout?.mode === 'grid'
 }
 
 /** 自動で並べるフレームが、その向きの大きさを中身に合わせているか */
@@ -48,7 +68,7 @@ export function clampSize(node: SceneNode, axis: 'width' | 'height', value: numb
 
 /** 自動で並べるフレームが、実際に折り返すか。並べる向きを中身に合わせていれば折り返さない */
 export function wraps(frame: SceneNode): boolean {
-  if (frame.type !== 'frame' || !frame.layout?.wrap) return false
+  if (frame.type !== 'frame' || !frame.layout?.wrap || frame.layout.mode === 'grid') return false
   const axis = frame.layout.direction === 'horizontal' ? 'width' : 'height'
   return frame.sizing[axis] !== 'hug'
 }
