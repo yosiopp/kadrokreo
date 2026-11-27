@@ -123,6 +123,31 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     'kdr -f demo.kdr -w font-add font.ttf --family Brand',
   ],
   'font-rm': ['kdr -f demo.kdr -w font-add font.ttf + font-rm "Kdr Test"'],
+  vars: [
+    'kdr -f demo.kdr -w var-add color/primary "#5b4cf5" + mode-add Variables Dark + var-set color/primary Dark=#a99fff + vars   # -w で書き戻す（一覧は標準出力へ）',
+    'kdr -f demo.kdr var-add color/primary "#5b4cf5" -o tokens.kdr + vars --json',
+  ],
+  'collection-add': ['kdr -f demo.kdr -w collection-add Theme --mode Light + mode-add Theme Dark'],
+  'collection-rename': ['kdr -f demo.kdr -w collection-add Theme + collection-rename Theme Brand'],
+  'collection-rm': ['kdr -f demo.kdr -w collection-add Theme + var-add color/primary "#5b4cf5" + set btn fill=var(color/primary) + collection-rm Theme   # btn の色は残る'],
+  'mode-add': ['kdr -f demo.kdr -w collection-add Theme --mode Light + mode-add Theme Dark'],
+  'mode-rename': ['kdr -f demo.kdr -w collection-add Theme + mode-rename Theme "Mode 1" Light'],
+  'mode-rm': ['kdr -f demo.kdr -w collection-add Theme --mode Light + mode-add Theme Dark + mode-rm Theme Dark'],
+  mode: [
+    'kdr -f demo.kdr -w var-add color/surface "#ffffff" + mode-add Variables Dark + var-set color/surface Dark=#16161d + set card fill=var(color/surface) + mode card Variables=Dark',
+    'kdr -f demo.kdr -w collection-add Theme --mode Light + mode-add Theme Dark + mode Theme=Dark   # ページ全体',
+  ],
+  'var-add': [
+    'kdr -f demo.kdr -w var-add color/primary "#5b4cf5" + set btn fill=var(color/primary)',
+    'kdr -f demo.kdr -w collection-add Theme --mode Light + mode-add Theme Dark + var-add color/primary "#5b4cf5" --collection Theme Dark=#a99fff + var-add color/link "var(color/primary)"',
+    'kdr -f demo.kdr -w var-add space/md 16 + var-add font/body Inter --type string',
+  ],
+  'var-set': [
+    'kdr -f demo.kdr -w var-add color/primary "#5b4cf5" + set btn fill=var(color/primary) + var-set color/primary "#ff3366"   # btn の色も変わる',
+    'kdr -f demo.kdr -w collection-add Theme --mode Light + mode-add Theme Dark + var-add color/primary "#5b4cf5" + var-set color/primary Dark=#a99fff',
+  ],
+  'var-rename': ['kdr -f demo.kdr -w var-add color/primary "#5b4cf5" + var-rename color/primary color/brand'],
+  'var-rm': ['kdr -f demo.kdr -w var-add color/primary "#5b4cf5" + set btn fill=var(color/primary) + var-rm color/primary   # btn の色は残る'],
   add: [
     'kdr -f demo.kdr -w add rect --name Badge --parent card --x 16 --y 120 --width 40 --height 20 fill=#ff0000 cornerRadius=10',
     'kdr -f demo.kdr -w add text --parent card --x 16 --y 160 --text "こんにちは" fontSize=18 fill=#333333',

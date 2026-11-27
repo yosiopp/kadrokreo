@@ -158,7 +158,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const rotations = Object.values(json.document.pages[0].nodes).map((n) => n.rotation).sort((a, b) => a - b)
-  check('kdr に角度が入る', json.version === 16 && rotations.join() === '0,20,25,30', rotations.join())
+  check('kdr に角度が入る', json.version === 17 && rotations.join() === '0,20,25,30', rotations.join())
   check('kdr にテキストの裏返しが入る', JSON.stringify(json.raw).includes('"flipX":true') && !JSON.stringify(json.raw).includes('"flipY"'))
 
   const viewer = await context.newPage()

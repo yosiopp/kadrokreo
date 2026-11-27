@@ -1,6 +1,7 @@
 import { tidy } from '../document/geometry.ts'
 import { isMaskNode } from '../document/mask.ts'
-import type { Shadow, NodeId, Paint, Scene, SceneNode, TextNode } from '../document/types.ts'
+import type { Shadow, NodeId, Paint, Scene, SceneNode, TextNode, VariableId } from '../document/types.ts'
+import { variableIndex } from '../document/variables.ts'
 import { hasStroke, isShadow, shownPaints } from '../document/paint.ts'
 import { colorAlpha, formatColor } from './colors.ts'
 import { cssFontFamily } from './fontFamily.ts'
@@ -8,8 +9,11 @@ import { type CodeStyle, DEFAULT_CODE_STYLE, type InspectSection, shadowCss } fr
 
 // ページで使われている色と文字の設定の一覧。何も選んでいないときに見せる。
 
-/** count は使われている数（塗りと線の両方に使えば 2）、nodes は使っているノード（重ねない） */
-export type ColorUse = { color: string; count: number; nodes: NodeId[] }
+/**
+ * count は使われている数（塗りと線の両方に使えば 2）、nodes は使っているノード（重ねない）。
+ * variables はその色につないでいる変数（あれば。重ねない）
+ */
+export type ColorUse = { color: string; count: number; nodes: NodeId[]; variables?: VariableId[] }
 export type TextStyleUse = Pick<TextNode, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight' | 'letterSpacing'> & {
   count: number
   nodes: NodeId[]
@@ -63,19 +67,20 @@ export function summarizePage(scene: Scene): {
     // 非表示や不透明度 0 のものは、その中身も画面に出ない（描画も省く）
     // マスクも描かないので、その色は数えない
     if (!node.visible || node.opacity === 0 || isMaskNode(node)) return
-    const countColor = (value: string) => {
+    const countColor = (value: string, variable?: VariableId) => {
       const color = value.toLowerCase()
-      const use = colors.get(color) ?? { color, count: 0, nodes: [] }
+      const use: ColorUse = colors.get(color) ?? { color, count: 0, nodes: [] }
       use.count++
       if (use.nodes.at(-1) !== node.id) use.nodes.push(node.id)
+      if (variable !== undefined && !use.variables?.includes(variable)) (use.variables ??= []).push(variable)
       colors.set(color, use)
     }
     const seeThrough = paintsSeeThrough(node)
     const countPaints = (paints: readonly Paint[]) => {
       for (const paint of visiblePaints(paints, seeThrough)) {
-        if (paint.type === 'solid') countColor(paint.color)
+        if (paint.type === 'solid') countColor(paint.color, paint.variable)
         // 完全に透明な色（不透明度 0）は見えないので数えない
-        else for (const stop of paint.stops) if (stop.opacity > 0) countColor(stop.color)
+        else for (const stop of paint.stops) if (stop.opacity > 0) countColor(stop.color, stop.variable)
       }
     }
     if (node.type === 'text') {
@@ -150,7 +155,13 @@ export function inspectPage(scene: Scene, style: CodeStyle = DEFAULT_CODE_STYLE)
   if (colors.length > 0) {
     sections.push({
       title: 'このページの色',
-      rows: colors.map(({ color, count, nodes }) => ({ label: uses(count), value: formatColor(color, style.color, { upper: true }), color, nodes })),
+      rows: colors.map(({ color, count, nodes, variables }) => {
+        // 変数につないでいれば、その名前を前に添える（色の値が同じ別の変数もまとめて）
+        const index = style.variables ? variableIndex(style.variables) : null
+        const names = (variables ?? []).flatMap((id) => index?.get(id)?.variable.name ?? [])
+        const value = formatColor(color, style.color, { upper: true })
+        return { label: uses(count), value: names.length > 0 ? `${names.join(', ')} · ${value}` : value, color, nodes }
+      }),
     })
   }
   if (textStyles.length > 0) {

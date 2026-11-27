@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { tidy } from '../../document/geometry.ts'
 import { ExportControls } from '../../ui/ExportControls.tsx'
+import type { VariableCollection, VariableId } from '../../document/types.ts'
 import { MIXED, type Mixed } from './context.ts'
 
 // プロパティパネルの欄の部品。どれも、複数選択で値が揃っていないとき（MIXED）の出し方を持つ
@@ -293,5 +294,33 @@ export function ColorField({ label, value, nullable, fallback, onPreview, onComm
         {value === MIXED ? '混在' : value === null ? 'なし' : value.toUpperCase()}
       </span>
     </div>
+  )
+}
+
+type VariableFieldProps = {
+  label: string
+  collections: readonly VariableCollection[]
+  value: VariableId | undefined | Mixed
+  onChange: (id: VariableId | null) => void
+}
+
+/** つながない（変数の id には空白が入らないので、ぶつからない） */
+const NO_VARIABLE = ' '
+
+/** 色を色の変数につなぐ選択。色の変数がなければ出さない */
+export function VariableField({ label, collections, value, onChange }: VariableFieldProps) {
+  const options = collections.flatMap((collection) =>
+    collection.variables
+      .filter((variable) => variable.type === 'color')
+      .map((variable) => [variable.id, collections.length > 1 ? `${collection.name}: ${variable.name}` : variable.name] as const),
+  )
+  if (options.length === 0) return null
+  return (
+    <SelectField
+      label={`${label}の変数`}
+      value={value === MIXED ? MIXED : (value ?? NO_VARIABLE)}
+      options={[[NO_VARIABLE, '（つながない）'], ...options]}
+      onChange={(id) => onChange(id === NO_VARIABLE ? null : id)}
+    />
   )
 }

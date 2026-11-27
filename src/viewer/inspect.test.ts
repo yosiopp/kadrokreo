@@ -1124,3 +1124,29 @@ describe('ブーリアン演算の元の図形の数', () => {
     expect(rowsOf(scene, 'op', 'ブーリアン演算')).toEqual(['演算=合体', '元の図形=1 個', '線=元の図形の線も含める'])
   })
 })
+
+describe('変数につないだ色', () => {
+  const collections = [
+    { id: 'c', name: 'Theme', modes: [{ id: 'm', name: 'Light' }], variables: [{ id: 'v', name: 'color/primary', type: 'color' as const, values: { m: '#5b4cf5' } }] },
+  ]
+  const bound = (opacity = 1): Paint => ({ type: 'solid', color: '#5b4cf5', variable: 'v', opacity, visible: true, blendMode: 'normal' })
+
+  it('コードでは var(--名前) で書き、不透明度は color-mix にする。変数を渡さなければ値で書く', () => {
+    const scene = sceneOf(rect({ fills: [bound()] }))
+    expect(nodeCss(scene, 'rect', { variables: collections })).toContain('background: var(--color-primary);')
+    expect(nodeCss(scene, 'rect')).toContain('background: #5b4cf5;')
+    expect(nodeCss(sceneOf(rect({ fills: [bound(0.5)] })), 'rect', { variables: collections })).toContain(
+      'background: color-mix(in srgb, var(--color-primary) 50%, transparent);',
+    )
+    // 無い変数を指していれば値で書く
+    expect(nodeCss(scene, 'rect', { variables: [] })).toContain('background: #5b4cf5;')
+  })
+
+  it('インスペクトの色の行に変数の名前を添える', () => {
+    const scene = sceneOf(rect({ fills: [bound()] }))
+    const rows = inspectNode({ ...docOf(scene), collections }, scene, 'rect')
+      .find((section) => section.title === '塗り')
+      ?.rows.map((row) => row.value)
+    expect(rows).toContain('color/primary · #5B4CF5')
+  })
+})

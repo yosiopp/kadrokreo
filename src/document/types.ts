@@ -64,7 +64,13 @@ type BaseNode = {
  * グラデーションの色の位置。offset（0〜1）の小さい順に並べる。
  * opacity（0〜1）はその色の不透明度（SVG の stop-opacity）。色の間は透明度も滑らかにつなぐ。塗りの opacity とは別に重なる
  */
-export type ColorStop = { offset: number; color: string; opacity: number }
+export type ColorStop = {
+  offset: number
+  color: string
+  opacity: number
+  /** 色をつないだ変数（color の変数の id）。あれば color はその変数を解決した値（document/variables.ts）。なければ持たない */
+  variable?: VariableId
+}
 
 /**
  * 塗り（面・線・文字に使う）。色は #rrggbb。
@@ -90,7 +96,12 @@ export type ColorStop = { offset: number; color: string; opacity: number }
  */
 export type Paint = PaintCommon &
   (
-    | { type: 'solid'; color: string }
+    | {
+        type: 'solid'
+        color: string
+        /** 色をつないだ変数（color の変数の id）。あれば color はその変数を解決した値（document/variables.ts）。なければ持たない */
+        variable?: VariableId
+      }
     | { type: 'linear'; x1: number; y1: number; x2: number; y2: number; stops: ColorStop[] }
     | { type: 'radial'; cx: number; cy: number; rx: number; ry: number; angle: number; fx: number; fy: number; stops: ColorStop[] }
     | { type: 'conic'; cx: number; cy: number; angle: number; stops: ColorStop[] }
@@ -149,6 +160,8 @@ export type Shadow = {
   blur: number
   spread: number
   color: string
+  /** 色をつないだ変数（color の変数の id）。あれば color はその変数を解決した値（document/variables.ts）。なければ持たない */
+  variable?: VariableId
   opacity: number
   visible: boolean
   blendMode: BlendMode
@@ -502,6 +515,11 @@ export type FrameNode = BaseNode &
      * 子の形に合体してから演算する（線の外形まで結果に入る）。false なら子の形だけ。演算のノードでなければ意味はない
      */
     booleanIncludeStrokes: boolean
+    /**
+     * 変数のモードの指定（コレクションの id → モードの id）。中のノードは、自分から上へたどって最初に指定のあるフレーム、
+     * 無ければページ、それも無ければコレクションの最初のモードで変数を解決する。指定が無ければ持たない（空にしない）
+     */
+    modes?: ModeSelection
   }
 
 /** ブーリアン演算の種類（document/pathBoolean.ts の BooleanOp と同じ） */
@@ -549,10 +567,39 @@ export type Page = Scene & {
   name: string
   /** ルーラーから引き出して置いたガイド線（editor で吸着の相手になる。書き出しには出ない）。並びは置いた順 */
   guides: PageGuide[]
+  /** ページ全体の変数のモードの指定（FrameNode の modes と同じ。指定が無ければ持たない） */
+  modes?: ModeSelection
 }
 
 /** ページのガイド線。axis が 'x' なら x = position の縦の線、'y' なら y = position の横の線（ページ座標） */
 export type PageGuide = { axis: 'x' | 'y'; position: number }
+
+export type CollectionId = string
+export type ModeId = string
+export type VariableId = string
+
+/** 変数のモードの指定。コレクションの id → そのコレクションのモードの id */
+export type ModeSelection = Record<CollectionId, ModeId>
+
+/** 変数の種類。color は #rrggbb */
+export type VariableType = 'color' | 'number' | 'string' | 'boolean'
+
+/** 変数の 1 つのモードの値。{ alias } は同じ種類の別の変数を指す（別名。別のコレクションの変数も指せる） */
+export type VariableValue = string | number | boolean | { alias: VariableId }
+
+/**
+ * 名前の付いた値（デザイントークン）。name の / はグループの区切り（color/primary）で、コレクションの中で一意。
+ * values はコレクションのモードの id ごとの値で、どのモードにもある
+ */
+export type Variable = { id: VariableId; name: string; type: VariableType; values: Record<ModeId, VariableValue> }
+
+export type VariableMode = { id: ModeId; name: string }
+
+/**
+ * 変数のまとまり。モード（ライト / ダークなど）の並びを持ち、変数はモードごとに値を持つ。modes は 1 つ以上で、先頭が既定のモード。
+ * コレクション・モード・変数の id はドキュメント全体で一意
+ */
+export type VariableCollection = { id: CollectionId; name: string; modes: VariableMode[]; variables: Variable[] }
 
 export type DesignDocument = {
   name: string
@@ -562,4 +609,6 @@ export type DesignDocument = {
   assets: Record<AssetId, Asset>
   /** 埋め込んだ書体。全ページで共有する。並びは取り込んだ順 */
   fonts: EmbeddedFont[]
+  /** 変数のコレクション。全ページで共有する */
+  collections: VariableCollection[]
 }

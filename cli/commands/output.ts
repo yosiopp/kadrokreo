@@ -23,7 +23,7 @@ export const css: Command = {
   run({ session, print }, step) {
     checkStep(step, { options: ['format', 'unit', 'rem-base', 'color'], positionals: 1 })
     const id = session.resolveOne(positional(step, 0, 'ノード'))
-    print(nodeCode(session.page, id, codeStyle(step), session.document.assets).code)
+    print(nodeCode(session.page, id, { ...codeStyle(step), variables: session.document.collections }, session.document.assets).code)
   },
 }
 
@@ -38,7 +38,7 @@ export const html: Command = {
     checkStep(step, { options: ['standalone', 'format', 'unit', 'rem-base', 'color'], positionals: 1 })
     const id = session.resolveOne(positional(step, 0, 'ノード'))
     const standalone = flag(step, 'standalone')
-    const style = codeStyle(step)
+    const style = { ...codeStyle(step), variables: session.document.collections }
     const format = style.format ?? 'html'
     if (standalone && format !== 'html') throw new UsageError('html: --standalone は --format html のときだけ使えます')
     const markup = nodeMarkup(session.page, id, {

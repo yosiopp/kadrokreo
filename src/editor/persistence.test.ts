@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { KDR_VERSION } from '../document/kdr.ts'
+import { KDR_MIN_VERSION, KDR_VERSION } from '../document/kdr.ts'
 import { canOverwrite, revisionOf, savedVersionKind } from './persistence.ts'
 
 // IndexedDB を使う読み書きはブラウザでの確認（e2e）で見る。ここは、上書きしてよいかの判断だけ。
 
 describe('自動保存の保存データの見分け', () => {
-  it('version が今と同じものだけが読める', () => {
+  it('version が読み替えて読める範囲のものだけが読める', () => {
     expect(savedVersionKind({ version: KDR_VERSION })).toBe('current')
-    expect(savedVersionKind({ version: KDR_VERSION - 1 })).toBe('older')
+    expect(savedVersionKind({ version: KDR_MIN_VERSION })).toBe('current')
+    expect(savedVersionKind({ version: KDR_MIN_VERSION - 1 })).toBe('older')
     expect(savedVersionKind({ version: 1 })).toBe('older')
     expect(savedVersionKind({ version: KDR_VERSION + 1 })).toBe('newer')
   })
@@ -52,7 +53,7 @@ describe('保存先を上書きしてよいか', () => {
   })
 
   it('version の違う保存データは、印が合っていても書かない', () => {
-    expect(canOverwrite({ version: KDR_VERSION - 1 }, null)).toBe(false)
+    expect(canOverwrite({ version: KDR_MIN_VERSION - 1 }, null)).toBe(false)
     expect(canOverwrite({ version: KDR_VERSION + 1, revision: 'r1' }, 'r1')).toBe(false)
     expect(canOverwrite({}, null)).toBe(false)
   })

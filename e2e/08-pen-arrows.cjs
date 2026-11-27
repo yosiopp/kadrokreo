@@ -222,7 +222,7 @@ const { lineDirection, lineFlipped } = require('./kdr.cjs')
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const types = Object.values(json.document.pages[0].nodes).map((n) => n.type).sort().join()
-  check('kdr にパスと矢印が入る', json.version === 16 && types === 'path,path,path,path', types)
+  check('kdr にパスと矢印が入る', json.version === 17 && types === 'path,path,path,path', types)
 
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')

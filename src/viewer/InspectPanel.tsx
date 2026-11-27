@@ -238,17 +238,19 @@ export function InspectPanel({
           Shift を押しながら押すと、いくつも選べます。
         </p>
         {settings}
-        {sections(`page:${page.id}`, inspectPage(page, style))}
+        {sections(`page:${page.id}`, inspectPage(page, { ...style, variables: document.collections }))}
       </aside>
     )
   }
 
-  const code = nodeCode(page, node.id, style, document.assets)
+  // コードでは、変数につないだ色を var(--名前) で書く
+  const codeStyle = { ...style, variables: document.collections }
+  const code = nodeCode(page, node.id, codeStyle, document.assets)
   const cssKey = `${node.id}/css`
   // 中身のあるフレームは、子孫までまとめた HTML（形式が React なら JSX、Vue なら .vue ファイル）と CSS も出す
   const markup =
     node.type === 'frame' && node.children.length > 0
-      ? nodeMarkup(page, node.id, { style, assets: document.assets, fonts: document.fonts })
+      ? nodeMarkup(page, node.id, { style: codeStyle, assets: document.assets, fonts: document.fonts })
       : null
   // コピー用の CSS の @font-face が指す書体ファイル（保存して HTML の隣に置く）
   const faces = nodeFontFaces(page, node.id, document.fonts, document.assets)

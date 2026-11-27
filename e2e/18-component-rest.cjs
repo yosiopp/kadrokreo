@@ -141,7 +141,7 @@ cli(...(
   const kdrPath = path.join(OUT, 'component-rest.kdr')
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
-  check('kdr に説明文とプロパティが入る', json.version === 16 && JSON.stringify(json.document.pages[0].nodes[btn.id].component.properties) === JSON.stringify(btn.component.properties))
+  check('kdr に説明文とプロパティが入る', json.version === 17 && JSON.stringify(json.document.pages[0].nodes[btn.id].component.properties) === JSON.stringify(btn.component.properties))
 
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')

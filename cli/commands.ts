@@ -34,6 +34,7 @@ import { gradient } from './commands/paints.ts'
 import { build, markup, place } from './commands/markup.ts'
 import { autoLayout, layoutFill, wrap } from './commands/layout.ts'
 import { fontAdd, fontRm } from './commands/fonts.ts'
+import { collectionAdd, collectionRename, collectionRm, mode, modeAdd, modeRename, modeRm, varAdd, varRename, varRm, varSet, vars } from './commands/variables.ts'
 import { css, html, json, png, svgOut } from './commands/output.ts'
 import { docName, newDocument, page, pageAdd, pageRename, pageRm } from './commands/pages.ts'
 import { bounds, componentList, find, get, info, ls } from './commands/query.ts'
@@ -61,6 +62,7 @@ const commands: Command[] = [
   shadows,
   diff,
   lint,
+  vars,
   // export
   png,
   svgOut,
@@ -73,6 +75,18 @@ const commands: Command[] = [
   pageRm,
   fontAdd,
   fontRm,
+  // edit: 変数
+  collectionAdd,
+  collectionRename,
+  collectionRm,
+  modeAdd,
+  modeRename,
+  modeRm,
+  varAdd,
+  varSet,
+  varRename,
+  varRm,
+  mode,
   // edit: ノード
   add,
   svg,

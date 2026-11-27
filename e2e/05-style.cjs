@@ -139,7 +139,7 @@ require('fs').mkdirSync(OUT, { recursive: true })
   const kdrPath = path.join(OUT, 'style.kdr')
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
-  check('kdr は version 16', json.version === 16)
+  check('kdr は version 16', json.version === 17)
 
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')

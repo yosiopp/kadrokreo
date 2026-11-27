@@ -69,7 +69,7 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument, pointer
   await drawRect()
   await page.waitForTimeout(800)
   const first = await stored()
-  check('自動保存に version と印（revision）が入る', first.current.version === 16 && typeof first.current.revision === 'string' && first.current.revision.length > 0, JSON.stringify({ version: first.current.version, revision: first.current.revision }))
+  check('自動保存に version と印（revision）が入る', first.current.version === 17 && typeof first.current.revision === 'string' && first.current.revision.length > 0, JSON.stringify({ version: first.current.version, revision: first.current.revision }))
 
   // ── 前の版の保存データ ──
   await writeSaved({ version: 15, document: oldDocument('前の版') })
@@ -101,24 +101,44 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument, pointer
   await drawRect()
   await page.waitForTimeout(800)
   const fresh = await savedDocument(page)
-  check('破棄したあとは自動保存される', (await stored()).current.version === 16 && Object.values(fresh.pages[0].nodes).map((node) => node.name).join() === 'Rectangle 1', JSON.stringify(Object.keys(fresh.pages[0].nodes)))
+  check('破棄したあとは自動保存される', (await stored()).current.version === 17 && Object.values(fresh.pages[0].nodes).map((node) => node.name).join() === 'Rectangle 1', JSON.stringify(Object.keys(fresh.pages[0].nodes)))
   await page.reload()
   await page.waitForSelector('.layer-row')
   check('開き直すと、破棄したあとに描いたものが戻る', (await layers()).join() === 'Rectangle 1', (await layers()).join())
 
+  // ── 1 つ前の版（読み替えて開ける v16）の保存データ ──
+  await page.evaluate(() => new Promise((resolve, reject) => {
+    const open = indexedDB.open('kadrokreo')
+    open.onerror = () => reject(open.error)
+    open.onsuccess = () => {
+      const tx = open.result.transaction(['document'], 'readwrite')
+      const store = tx.objectStore('document')
+      const request = store.get('current')
+      request.onsuccess = () => store.put({ ...request.result, version: 16 }, 'current')
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    }
+  }))
+  await page.reload()
+  await page.waitForSelector('.layer-row')
+  check('1 つ前の版（v16）の保存データは、知らせを出さずに読み替えて開く', (await layers()).join() === 'Rectangle 1' && (await page.locator('.editor-notice').count()) === 0, (await layers()).join())
+  await drawRect()
+  await page.waitForTimeout(800)
+  check('読み替えて開いたあとは、今の版で自動保存する', (await stored()).current.version === 17)
+
   // ── 新しい版の保存データ ──
-  await writeSaved({ version: 17, revision: 'next', document: oldDocument('新しい版') })
+  await writeSaved({ version: 18, revision: 'next', document: oldDocument('新しい版') })
   await reopen('newer')
   const newerText = await notice('newer').innerText()
   await page.waitForTimeout(800)
   now = await stored()
-  check('新しい版の保存データも、消さずに知らせる', newerText.includes('新しい版で保存した編集中の内容があります') && now.current.version === 17 && now.current.revision === 'next' && now.assets === 1, newerText.slice(0, 40))
+  check('新しい版の保存データも、消さずに知らせる', newerText.includes('新しい版で保存した編集中の内容があります') && now.current.version === 18 && now.current.revision === 'next' && now.assets === 1, newerText.slice(0, 40))
   await discardButton.click()
   await page.waitForSelector('.canvas-view canvas')
   check('新しい版の保存データも、破棄すると新しく始まる', (await layers()).length === 0 && (await stored()).current === undefined)
 
   // ── 同じ version で、検証に通らない保存データ（画像が古い形の base64） ──
-  await writeSaved({ version: 16, document: oldDocument('壊れた形') })
+  await writeSaved({ version: 17, document: oldDocument('壊れた形') })
   await reopen('broken')
   const brokenText = await notice('broken').innerText()
   await page.waitForTimeout(800)
@@ -138,7 +158,7 @@ const { OUT, EDITOR, check, finish, crashed, watchErrors, savedDocument, pointer
   await page.waitForSelector('.canvas-view canvas')
   await drawRect()
   await page.waitForTimeout(800)
-  check('破棄したあとは、また自動保存される', (await stored()).current.version === 16 && (await layers()).join() === 'Rectangle 1')
+  check('破棄したあとは、また自動保存される', (await stored()).current.version === 17 && (await layers()).join() === 'Rectangle 1')
 
   check('コンソールエラーなし', errors.length === 0, errors.join(' | '))
   await browser.close()

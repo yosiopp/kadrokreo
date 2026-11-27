@@ -13,7 +13,7 @@ export function createPage(name = 'Page 1'): Page {
 }
 
 export function createDocument(name = 'Untitled'): DesignDocument {
-  return { name, pages: [createPage()], assets: {}, fonts: [] }
+  return { name, pages: [createPage()], assets: {}, fonts: [], collections: [] }
 }
 
 export function renameDocument(doc: DesignDocument, name: string): DesignDocument {

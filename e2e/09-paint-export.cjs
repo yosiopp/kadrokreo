@@ -269,7 +269,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const nodes = Object.values(json.document.pages[0].nodes)
-  check('kdr にグラデーションと収め方が入る', json.version === 16 && nodes.some((n) => n.fills && n.fills.some((p) => p.type === 'linear')) && nodes.some((n) => n.fit === 'contain'))
+  check('kdr にグラデーションと収め方が入る', json.version === 17 && nodes.some((n) => n.fills && n.fills.some((p) => p.type === 'linear')) && nodes.some((n) => n.fit === 'contain'))
 
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')

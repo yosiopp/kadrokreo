@@ -5,13 +5,14 @@ import { BOOLEAN_OPERATION_LABELS, booleanParts, drawnNode, isBooleanNode } from
 import { type MaskNode, clipsByOutline, isMaskNode, maskContours, maskFillRule, maskOf } from '../document/mask.ts'
 import { maskImageSvg } from '../document/svgExport.ts'
 import { type ColorFormat, formatColor } from './colors.ts'
+import { cssVariableName, variableIndex } from '../document/variables.ts'
 import { CONTRAST_AA, CONTRAST_AAA, CONTRAST_AAA_LARGE, CONTRAST_AA_LARGE, formatRatio, textContrast } from './contrast.ts'
 import type { CodeFormat } from './codeFormat.ts'
 import { type Distance, measureCorners } from './distances.ts'
 import { cssFontFamily } from './fontFamily.ts'
 import { followsConstraints, hugs, sizeLimited, stretchedAxes, wraps } from '../document/autoLayout.ts'
 import { isVariantSet, parseVariantName, variantProperties, variantSetOf, variantsIn } from '../document/variants.ts'
-import type { Asset, AssetId, AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow, TextNode } from '../document/types.ts'
+import type { Asset, AssetId, AutoLayout, ComponentProperty, CornerRadius, DesignDocument, Gradient, ImageNode, NodeId, Override, Paint, RadialGradient, Scene, SceneNode, Shadow, TextNode, VariableCollection, VariableId } from '../document/types.ts'
 import { isPassThroughFrame, passThroughFade } from '../document/passThrough.ts'
 import { angleLine, blurRadius, gradientLine, hasStroke, isAngleLine, isGradient, isRounded, isShadow, linearAngle, paintColor, splitEffects, withoutHidden } from '../document/paint.ts'
 import { capMarkerSize, contoursData, isLine, isMarkerCap, strokeLineCap } from '../document/path.ts'
@@ -35,7 +36,10 @@ const FLEX_JUSTIFY = { start: 'flex-start', center: 'center', end: 'flex-end', '
 export type Unit = 'px' | 'rem'
 
 /** CSS の書き方。remBase は 1rem が何 px か。format はコードの出力形式（markup.ts の nodeCode / nodeMarkup が使う） */
-export type CodeStyle = { unit: Unit; remBase: number; color: ColorFormat; format: CodeFormat }
+/**
+ * コードの書き方。variables を渡すと、変数につないだ色を var(--名前) で書く（渡さなければ値で書く）
+ */
+export type CodeStyle = { unit: Unit; remBase: number; color: ColorFormat; format: CodeFormat; variables?: readonly VariableCollection[] }
 export const DEFAULT_CODE_STYLE: CodeStyle = { unit: 'px', remBase: 16, color: 'hex', format: 'html' }
 
 /** 小数 2 桁まで。計算で出る細かい端数は見せない */
@@ -63,6 +67,12 @@ export function inspectNode(
   const original = scene.nodes[id]
   const node = withoutHidden(drawnNode(scene, original))
   const hex = (color: string) => formatColor(color, format, { upper: true })
+  // 変数につないだ色は、変数の名前を前に添える（color/primary · #5B4CF5）
+  const index = variableIndex(doc.collections)
+  const named = (text: string, variable: VariableId | undefined) => {
+    const entry = variable === undefined ? undefined : index.get(variable)
+    return entry ? `${entry.variable.name} · ${text}` : text
+  }
   const sections: InspectSection[] = []
   const add = (title: string, rows: (InspectRow | false | null)[]) => {
     const shown = rows.filter((row) => row !== false && row !== null)
@@ -153,7 +163,7 @@ export function inspectNode(
     ])
   const paintRowsOf = (paint: Paint): InspectRow[] =>
       paint.type === 'solid'
-        ? [{ label: '色', value: hex(paint.color), color: paint.color }]
+        ? [{ label: '色', value: named(hex(paint.color), paint.variable), color: paint.color }]
         : [
             paint.type === 'linear'
               ? {
@@ -175,7 +185,7 @@ export function inspectNode(
             paint.type === 'radial' && (paint.fx !== 0 || paint.fy !== 0) && { label: 'CSS', value: '焦点は表せないので、中心から始まるグラデーションで書いている' },
             ...paint.stops.map((stop) => ({
               label: percent(stop.offset),
-              value: stop.opacity < 1 ? `${hex(stop.color)}・不透明度 ${percent(stop.opacity)}` : hex(stop.color),
+              value: named(stop.opacity < 1 ? `${hex(stop.color)}・不透明度 ${percent(stop.opacity)}` : hex(stop.color), stop.variable),
               color: stop.color,
             })),
           ].filter((row) => row !== false)
@@ -248,10 +258,10 @@ export function inspectNode(
         {
           label: '色',
           // HEX のときは、色と濃さを分けて出す（濃さは別の値として持っている）
-          value:
-            format === 'hex'
-              ? `${hex(shadow.color)} ${percent(shadow.opacity)}`
-              : formatColor(shadow.color, format, { alpha: shadow.opacity }),
+          value: named(
+            format === 'hex' ? `${hex(shadow.color)} ${percent(shadow.opacity)}` : formatColor(shadow.color, format, { alpha: shadow.opacity }),
+            shadow.variable,
+          ),
           color: shadow.color,
         },
         shadow.blendMode !== 'normal' && { label: '描画モード', value: BLEND_MODE_LABELS[shadow.blendMode] },
@@ -653,7 +663,7 @@ export function nodeCss(scene: Scene, id: NodeId, options: Partial<CodeStyle> = 
  */
 function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
   const stopList = (offset: (value: number) => number) =>
-    gradient.stops.map((stop) => `${paintCssColor(stop.color, gradient.opacity * stop.opacity, style)} ${percent(offset(stop.offset))}`)
+    gradient.stops.map((stop) => `${paintCssColor(stop.color, gradient.opacity * stop.opacity, style, stop.variable)} ${percent(offset(stop.offset))}`)
   const stops = stopList((offset) => offset)
   if (gradient.type === 'conic') {
     // CSS の from は 0deg が真上。ドキュメントは 0° が右なので 90° ずれる
@@ -673,7 +683,7 @@ function gradientCss(gradient: Gradient, style: CodeStyle, size: Size): string {
   if (start.x === end.x && start.y === end.y) {
     // 始点と終点が重なると、色は最後の色だけになる（描画と同じ）
     const lastStop = gradient.stops[gradient.stops.length - 1]
-    const last = paintCssColor(lastStop.color, gradient.opacity * lastStop.opacity, style)
+    const last = paintCssColor(lastStop.color, gradient.opacity * lastStop.opacity, style, lastStop.variable)
     return `linear-gradient(${last}, ${last})`
   }
   const [from, to] = angleLine(angle, size)
@@ -698,14 +708,25 @@ function imageViewBox(node: ImageNode): string {
   return `inset(${[top, rest - left, rest - top, left].map(percent).join(' ')})`
 }
 
-/** 塗りの色の CSS。塗りの不透明度が 1 未満なら、色の alpha にする */
-function paintCssColor(color: string, opacity: number, style: CodeStyle): string {
+/**
+ * 塗りの色の CSS。塗りの不透明度が 1 未満なら、色の alpha にする。
+ * 変数につないだ色は（style.variables があれば）var(--名前) にし、不透明度は color-mix で透明と混ぜて表す
+ */
+function paintCssColor(color: string, opacity: number, style: CodeStyle, variable?: VariableId): string {
+  const name = variable === undefined || !style.variables ? undefined : variableCssName(style.variables, variable)
+  if (name !== undefined) return opacity < 1 ? `color-mix(in srgb, var(${name}) ${num(opacity * 100)}%, transparent)` : `var(${name})`
   return formatColor(color, style.color, opacity < 1 ? { alpha: opacity } : {})
+}
+
+/** あれば、変数の CSS の名前 */
+function variableCssName(collections: readonly VariableCollection[], id: VariableId): string | undefined {
+  return variableIndex(collections).has(id) ? cssVariableName(collections, id) : undefined
 }
 
 /** 塗りの代表の色（単色ならその色、グラデーションなら始まりの色）の CSS。不透明度も含める */
 function topColorCss(paint: Paint, style: CodeStyle): string {
-  return paintCssColor(paintColor(paint), paint.opacity * (paint.type === 'solid' ? 1 : paint.stops[0].opacity), style)
+  const variable = paint.type === 'solid' ? paint.variable : paint.stops[0].variable
+  return paintCssColor(paintColor(paint), paint.opacity * (paint.type === 'solid' ? 1 : paint.stops[0].opacity), style, variable)
 }
 
 /** 角丸の値。4 隅が同じなら 1 つ、違えば左上・右上・右下・左下 */
@@ -723,7 +744,7 @@ function backgroundCss(fills: readonly Paint[], style: CodeStyle, size: Size): s
     .toReversed()
     .map((paint, i, all) => {
       if (paint.type !== 'solid') return gradientCss(paint, style, size)
-      const color = paintCssColor(paint.color, paint.opacity, style)
+      const color = paintCssColor(paint.color, paint.opacity, style, paint.variable)
       return i === all.length - 1 ? color : `linear-gradient(${color}, ${color})`
     })
     .join(', ')
@@ -799,7 +820,9 @@ function inheritedFade(scene: Scene, node: SceneNode): number {
 
 /** CSS の box-shadow の値。内側の影は inset を付け、広がりは 0 でなければ書く */
 export function shadowCss(shadow: Shadow, style: CodeStyle = DEFAULT_CODE_STYLE): string {
-  const color = formatColor(shadow.color, style.color, { alpha: shadow.opacity })
+  // 影の色はいつも濃さ（alpha）を付けて書く。変数につないだ色は var(--名前)（濃さは color-mix）
+  const named = shadow.variable !== undefined && style.variables !== undefined && variableCssName(style.variables, shadow.variable) !== undefined
+  const color = named ? paintCssColor(shadow.color, shadow.opacity, style, shadow.variable) : formatColor(shadow.color, style.color, { alpha: shadow.opacity })
   const inset = shadow.type === 'inner-shadow' ? 'inset ' : ''
   const spread = shadow.spread !== 0 ? ` ${length(shadow.spread, style)}` : ''
   return `${inset}${length(shadow.x, style)} ${length(shadow.y, style)} ${length(shadow.blur, style)}${spread} ${color}`

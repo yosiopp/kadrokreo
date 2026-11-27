@@ -96,7 +96,7 @@ describe('assets', () => {
 describe('ページ', () => {
   function three() {
     const pages = ['A', 'B', 'C'].map((name) => createPage(name))
-    const doc: DesignDocument = { name: 'doc', pages, assets: {}, fonts: [] }
+    const doc: DesignDocument = { name: 'doc', pages, assets: {}, fonts: [], collections: [] }
     const names = (d: typeof doc) => d.pages.map((page) => page.name).join('')
     return { doc, ids: pages.map((page) => page.id), names }
   }

@@ -106,7 +106,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, pointer } = re
   const kdrPath = path.join(OUT, 'pages.kdr')
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
-  check('kdr に全ページが入る', json.version === 16 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
+  check('kdr に全ページが入る', json.version === 17 && json.document.pages.map((p) => p.name).join() === 'Page 2,ホーム', JSON.stringify(json.document.pages.map((p) => p.name)))
 
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')

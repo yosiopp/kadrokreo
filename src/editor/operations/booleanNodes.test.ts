@@ -47,7 +47,7 @@ describe('ブーリアン演算のノード', () => {
 
   it('子を変えると結果が変わる（ストアの後始末で枠が付いてくる）', () => {
     const { scene, id } = createBooleanNode(two(), ['a', 'b'], 'subtract')
-    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [] })
+    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [], collections: [] })
     store.apply((page) => updateNode(page, 'b', { x: 200 }))
     const page = store.getState().page
     const node = page.nodes[id!] as FrameNode
@@ -58,7 +58,7 @@ describe('ブーリアン演算のノード', () => {
 
   it('ストアで演算を変えても、子は拡大されない（枠だけが結果に合う）', () => {
     const { scene, id } = createBooleanNode(two(), ['a', 'b'], 'intersect')
-    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [] })
+    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [], collections: [] })
     store.apply((page) => setBooleanOperation(page, [id!], 'union'))
     const page = store.getState().page
     expect(page.nodes[id!]).toMatchObject({ x: 0, y: 0, width: 150, height: 150 })
@@ -67,7 +67,7 @@ describe('ブーリアン演算のノード', () => {
 
   it('ノードを拡大すると、子も一緒に拡大する', () => {
     const { scene, id } = createBooleanNode(two(), ['a', 'b'], 'union')
-    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [] })
+    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [], collections: [] })
     store.apply((page) => updateNode(page, id!, { width: 300, height: 300 }))
     const page = store.getState().page
     expect(page.nodes.b).toMatchObject({ x: 100, y: 100, width: 200, height: 200 })
@@ -202,7 +202,7 @@ describe('ブーリアン演算のノードを動かす・ドラッグする', (
 
   it('ドラッグ中（プレビュー）は重い演算を計算し直さず前の結果を見せ、離したときに計算して枠を合わせる', () => {
     const { scene, id } = createBooleanNode(sceneOf(jagged('a', 0), jagged('b', 80)), ['a', 'b'], 'union')
-    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [] })
+    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [], collections: [] })
     const before = store.getState().page
     const result = booleanResult(before, before.nodes[id!] as never)
     const width = before.nodes[id!].width
@@ -221,7 +221,7 @@ describe('ブーリアン演算のノードを動かす・ドラッグする', (
 
   it('軽い演算はドラッグ中も毎回計算し、取り消すと元に戻る', () => {
     const { scene, id } = createBooleanNode(two(), ['a', 'b'], 'union')
-    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [] })
+    const store = createEditorStore({ name: 'd', pages: [{ ...scene, id: 'p', name: 'P', guides: [] }], assets: {}, fonts: [], collections: [] })
     store.preview((base) => translateNodes(base, ['b'], 200, 0))
     const dragging = store.getState().page
     expect(contoursArea(booleanResult(dragging, dragging.nodes[id!] as never))).toBeCloseTo(20000, 3)

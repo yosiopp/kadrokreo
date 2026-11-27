@@ -4,7 +4,9 @@ import { drawnNode } from '../document/booleanNode.ts'
 import { withoutHidden } from '../document/paint.ts'
 import { dataUri, escapeXml as escapeHtml, pathSvg } from '../document/svgShapes.ts'
 import { embeddedFontFaces, fontFaceRule, fontFileName, usedFontFaces } from '../document/fontFace.ts'
-import type { Asset, AssetId, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode, TextPath } from '../document/types.ts'
+import type { Asset, AssetId, EmbeddedFont, NodeId, PathNode, Scene, SceneNode, TextNode, TextPath, VariableId } from '../document/types.ts'
+import { boundVariables } from '../document/variables.ts'
+import { variablesCss } from './tokens.ts'
 import { contoursData } from '../document/path.ts'
 import { isPathText, pathTextString, textPathVertices } from '../document/textPath.ts'
 import { formatColor } from './colors.ts'
@@ -72,6 +74,8 @@ export function nodeMarkup(
   const lines: string[] = []
   /** 書いたテキスト（@font-face を入れる書体を選ぶため） */
   const texts: TextNode[] = []
+  /** 色をつないだ変数（style.variables があるとき、その定義を CSS の先頭に書く） */
+  const variables = new Set<VariableId>()
 
   function className(node: SceneNode): string {
     const base = slug(node.name) || node.type
@@ -105,6 +109,7 @@ export function nodeMarkup(
   function visit(source: SceneNode, depth: number) {
     // ブーリアン演算のノードは、結果の形のパス（svg）として書く
     const node = drawnNode(tree, source)
+    if (style.variables) for (const variable of boundVariables(node)) variables.add(variable)
     const indent = '  '.repeat(depth)
     const name = className(node)
     let css = nodeCss(tree, node.id, style, assets)
@@ -167,7 +172,8 @@ export function nodeMarkup(
     images === 'embed'
       ? embeddedFontFaces(faces, assets)
       : faces.map((font) => fontFaceRule(font, assets[font.assetId].mime, fontFileName(font, assets[font.assetId].mime))).join('\n')
-  const css = [fontCss, ...rules].filter((rule) => rule !== '').join('\n\n')
+  const tokens = style.variables ? variablesCss(style.variables, variables, style.color) : ''
+  const css = [fontCss, tokens, ...rules].filter((rule) => rule !== '').join('\n\n')
   if (format === 'vue') {
     // <style> を閉じられないようにする（中身は信頼できない入力の kdr から作る）
     const scoped = css.replace(/</g, '\\3c ')
@@ -178,7 +184,7 @@ export function nodeMarkup(
   const component = componentName(slug(root.name))
   const head = format === 'css-modules' ? [`import styles from './${component}.module.css'`, ''] : []
   const code = [...head, `export function ${component}() {`, '  return (', ...lines, '  )', '}'].join('\n')
-  // React の style・Tailwind はクラスの CSS を持たないので、css は @font-face だけ（使わなければ空）
+  // React の style・Tailwind はクラスの CSS を持たないので、css は @font-face と変数の定義だけ（使わなければ空）
   return { html: code, css }
 }
 

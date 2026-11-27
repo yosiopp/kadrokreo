@@ -126,7 +126,7 @@ const { OUT, EDITOR, VIEWER, check, finish, watchErrors, pointer, fieldFinder } 
   check('ファイル名はドキュメント名.kdr', download.suggestedFilename() === 'テスト デザイン.kdr', download.suggestedFilename())
   check('gzip である', bytes[0] === 0x1f && bytes[1] === 0x8b)
   const json = await require('./kdr.cjs').parseKdrBytes(bytes)
-  check('中身は document.json', json.format === 'kadrokreo' && json.version === 16 && json.document.pages.length === 1 && Object.keys(json.document.pages[0].nodes).length === 4)
+  check('中身は document.json', json.format === 'kadrokreo' && json.version === 17 && json.document.pages.length === 1 && Object.keys(json.document.pages[0].nodes).length === 4)
   // tar.gz なので、tar コマンドでそのまま中を見られる
   const listed = require('child_process').execFileSync('tar', ['-tzf', kdrPath], { encoding: 'utf8' }).trim()
   check('tar で中を見られる（画像がなければ document.json だけ）', listed === 'document.json', listed)

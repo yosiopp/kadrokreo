@@ -17,9 +17,18 @@ type PaintType = Paint['type']
 export { MAX_PAINTS, MAX_STOPS }
 
 /** index 番目（負なら後ろから）の色を変えたグラデーション */
+/** 色を直接決めるので、変数へのつながりは外す */
 export function withStopColor<G extends Gradient>(gradient: G, index: number, color: string): G {
   const at = index < 0 ? gradient.stops.length + index : index
-  return { ...gradient, stops: gradient.stops.with(at, { ...gradient.stops[at], color }) }
+  const { variable: _variable, ...stop } = gradient.stops[at]
+  return { ...gradient, stops: gradient.stops.with(at, { ...stop, color }) }
+}
+
+/** index 番目の色を変数につなぐ（variable が null ならつながりを外し、色はそのまま）。color はつないだときの値 */
+export function withStopVariable<G extends Gradient>(gradient: G, index: number, variable: string | null, color: string): G {
+  const at = index < 0 ? gradient.stops.length + index : index
+  const { variable: _variable, ...stop } = gradient.stops[at]
+  return { ...gradient, stops: gradient.stops.with(at, variable === null ? stop : { ...stop, color, variable }) }
 }
 
 /**
@@ -272,6 +281,12 @@ export function patchEffectAt<T extends Scene>(
     const current = patch.type === undefined ? effects[index] : convertEffect(effects[index], patch.type)
     const next: Record<string, unknown> = { ...current }
     for (const [key, value] of Object.entries(patch)) if (key in current) next[key] = value
+    // 影の色を直接決めたら変数へのつながりを外す。variable を渡せばつなぐ（undefined なら外す）
+    if (Object.hasOwn(patch, 'variable') || Object.hasOwn(patch, 'color')) {
+      const variable = (patch as Partial<Shadow>).variable
+      if (variable === undefined || !('color' in next)) delete next.variable
+      else next.variable = variable
+    }
     return effects.with(index, next as Effect)
   })
 }

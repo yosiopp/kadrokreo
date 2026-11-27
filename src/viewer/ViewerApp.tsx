@@ -217,7 +217,7 @@ export default function ViewerApp() {
     const node = page.nodes[nodeId]
     // ファイルはブラウザで開いて見比べるためのものなので、出力形式によらず HTML + CSS にする
     const markup = nodeMarkup(page, nodeId, {
-      style: { ...style, format: 'html' },
+      style: { ...style, format: 'html', variables: doc.collections },
       assets: doc.assets,
       images: 'embed',
       fonts: doc.fonts,

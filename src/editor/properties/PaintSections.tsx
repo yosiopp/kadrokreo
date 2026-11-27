@@ -17,6 +17,7 @@ import {
   updatePaints,
   withStopAdded,
   withStopColor,
+  withStopVariable,
   withFocus,
   withStopOpacity,
   withStopOffset,
@@ -26,7 +27,9 @@ import {
 import type { EditorStore } from '../store.ts'
 import type { GradientEdit } from '../editorCanvas/gradientHandles.ts'
 import { type Mixed, MIXED, common, mapValue } from './context.ts'
-import { CheckField, ColorField, NumberField, Section, SelectField } from './fields.tsx'
+import { CheckField, ColorField, NumberField, Section, SelectField, VariableField } from './fields.tsx'
+import { resolveVariable, variableIndex } from '../../document/variables.ts'
+import { withoutVariable } from '../operations/variables.ts'
 
 // 塗り・線・効果（落ち影・内側の影・レイヤーのぼかし・背景のぼかし）を複数重ねる欄。行ごとに目のボタンで表示を切り替えられる。選んでいるノードで数と種類が揃っていれば、番目ごとに並べて、
 // 番目ごとの値は揃っていなければ「混在」で出す（色を選ぶと、全部のその番目に当たる）。
@@ -224,6 +227,18 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
           onSet={(color) => color !== null && patch(recolor(color))}
         />
       )}
+      {type === 'solid' && (
+        <VariableField
+          label={label}
+          collections={store.getState().document.collections}
+          value={common(paints.map((paint) => (paint.type === 'solid' ? paint.variable : undefined)))}
+          onChange={(id) =>
+            patch((paint) =>
+              paint.type !== 'solid' ? paint : id === null ? withoutVariable(paint) : { ...paint, variable: id, color: variableColor(store, id, paint.color) },
+            )
+          }
+        />
+      )}
 
       <NumberField
         label="不透明度 %"
@@ -361,6 +376,12 @@ function PaintRow({ store, selection, paintKey, paints, nodes, index, count, lab
                   onPreview={(color) => previewGradient((g) => withStopColor(g, j, color))}
                   onCommit={store.commitPreview}
                   onSet={(color) => color !== null && patchGradient((g) => withStopColor(g, j, color))}
+                />
+                <VariableField
+                  label={`${label}の${j + 1} 番目`}
+                  collections={store.getState().document.collections}
+                  value={common(gradients.map((gradient) => gradient.stops[j].variable))}
+                  onChange={(id) => patchGradient((g) => withStopVariable(g, j, id, id === null ? g.stops[j].color : variableColor(store, id, g.stops[j].color)))}
                 />
                 <NumberField
                   label="位置 %"
@@ -502,6 +523,14 @@ export function EffectListSection({ store, selection, nodes }: EffectListProps) 
                     onCommit={store.commitPreview}
                     onSet={(color) => color !== null && patch({ color })}
                   />
+                  <VariableField
+                    label={label}
+                    collections={store.getState().document.collections}
+                    value={common(shadowRows.map((shadow) => shadow.variable))}
+                    onChange={(id) =>
+                      patch(id === null ? { variable: undefined } : { variable: id, color: variableColor(store, id, shadowRows[0].color) })
+                    }
+                  />
                 </>
               ) : (
                 <NumberField
@@ -547,4 +576,11 @@ function VisibilityButton({ label, visible, onChange }: { label: string; visible
       <EyeIcon off={!shown} />
     </button>
   )
+}
+
+/** 色の変数の値（最初のモード）。置いた場所のモードでの値には、ストアの後始末が解決し直す */
+function variableColor(store: EditorStore, id: string, fallback: string): string {
+  const collections = store.getState().document.collections
+  const value = resolveVariable(variableIndex(collections), id, (collection) => collection.modes[0].id)
+  return typeof value === 'string' ? value : fallback
 }

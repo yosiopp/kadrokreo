@@ -139,7 +139,7 @@ cli(...(
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const written = JSON.stringify(json.raw)
-  check('kdr に候補が入る', json.version === 16 && written.includes('"preferred"'))
+  check('kdr に候補が入る', json.version === 17 && written.includes('"preferred"'))
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')
   await viewer.goto(VIEWER)

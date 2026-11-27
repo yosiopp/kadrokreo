@@ -1,0 +1,156 @@
+import { describe, expect, it } from 'vitest'
+import { decodeKdr } from '../src/document/kdr.ts'
+import { type IO, run } from './run.ts'
+
+// 変数のコマンド（vars・var-add / set / rename / rm・collection-*・mode-*・mode）と、set の var(名前)、css / html の var(--…)
+
+function harness() {
+  const fs = new Map<string, Uint8Array>()
+  let stdout = ''
+  let stderr = ''
+  const io: IO = {
+    readFile: async (path) => {
+      const data = fs.get(path)
+      if (!data) throw new Error(`ENOENT: ${path}`)
+      return new Uint8Array(data)
+    },
+    writeFile: async (path, data) => {
+      fs.set(path, data)
+    },
+    readStdin: async () => new Uint8Array(),
+    stdinIsTTY: true,
+    stdoutIsTTY: false,
+    stdout: (data) => {
+      if (typeof data === 'string') stdout += data
+    },
+    stderr: (text) => {
+      stderr += text
+    },
+  }
+  return {
+    async run(line: string) {
+      stdout = ''
+      stderr = ''
+      // 値に空白を含めない（split で分ける）
+      const code = await run(line.split(' '), io)
+      return { code, stdout, stderr }
+    },
+    async doc(path = 'd.kdr') {
+      return decodeKdr(new Blob([new Uint8Array(fs.get(path)!)]))
+    },
+  }
+}
+
+const BASE = 'new Demo + add frame --name Card --id card --width 320 --height 200 fill=#ffffff + add rect --parent card --name Box --id box fill=#000000'
+
+describe('変数のコマンド', () => {
+  it('色の変数を足して塗りからつなぎ、値を変えるとつないだ色も変わる', async () => {
+    const h = harness()
+    expect((await h.run(`${BASE} + var-add color/primary #5b4cf5 + set box fill=var(color/primary) -o d.kdr`)).code).toBe(0)
+    let doc = await h.doc()
+    expect(doc.collections).toMatchObject([{ name: 'Variables', modes: [{ name: 'Mode 1' }], variables: [{ name: 'color/primary', type: 'color' }] }])
+    const id = doc.collections[0].variables[0].id
+    expect(doc.pages[0].nodes.box).toMatchObject({ fills: [{ color: '#5b4cf5', variable: id }] })
+
+    expect((await h.run('-f d.kdr -w var-set color/primary #ff3366')).code).toBe(0)
+    doc = await h.doc()
+    expect(doc.pages[0].nodes.box).toMatchObject({ fills: [{ color: '#ff3366', variable: id }] })
+
+    // 色を直接書けば、つながりは外れる
+    expect((await h.run('-f d.kdr -w set box fills.0.color=#00ff00')).code).toBe(0)
+    doc = await h.doc()
+    expect(doc.pages[0].nodes.box).toMatchObject({ fills: [{ color: '#00ff00' }] })
+    expect((doc.pages[0].nodes.box as { fills: object[] }).fills[0]).not.toHaveProperty('variable')
+  })
+
+  it('モードを足し、フレームやページのモードで解決する', async () => {
+    const h = harness()
+    const line =
+      `${BASE} + collection-add Theme --mode Light + mode-add Theme Dark + var-add color/surface #ffffff Dark=#16161d` +
+      ' + set card fill=var(color/surface) + set box fill=var(color/surface) + mode card Theme=Dark -o d.kdr'
+    expect((await h.run(line)).code).toBe(0)
+    let doc = await h.doc()
+    const [light, dark] = doc.collections[0].modes
+    expect(doc.pages[0].nodes.card).toMatchObject({ modes: { [doc.collections[0].id]: dark.id }, fills: [{ color: '#16161d' }] })
+    expect(doc.pages[0].nodes.box).toMatchObject({ fills: [{ color: '#16161d' }] })
+    // フレームの指定を消してページで決める
+    expect((await h.run('-f d.kdr -w mode card Theme=null + mode Theme=Light')).code).toBe(0)
+    doc = await h.doc()
+    expect(doc.pages[0]).toMatchObject({ modes: { [doc.collections[0].id]: light.id } })
+    expect(doc.pages[0].nodes.card).not.toHaveProperty('modes')
+    expect(doc.pages[0].nodes.card).toMatchObject({ fills: [{ color: '#ffffff' }] })
+    // モードを消すと、そのモードの指定も消える
+    expect((await h.run('-f d.kdr -w mode Theme=Dark + mode-rm Theme Dark')).code).toBe(0)
+    doc = await h.doc()
+    expect(doc.pages[0]).not.toHaveProperty('modes')
+    expect(doc.collections[0].modes).toHaveLength(1)
+  })
+
+  it('別名・名前の変更・削除', async () => {
+    const h = harness()
+    expect((await h.run(`${BASE} + var-add color/primary #5b4cf5 + var-add color/link var(color/primary) + set box fill=var(color/link) -o d.kdr`)).code).toBe(0)
+    let doc = await h.doc()
+    const [primary, link] = doc.collections[0].variables
+    expect(link).toMatchObject({ type: 'color', values: { [doc.collections[0].modes[0].id]: { alias: primary.id } } })
+    expect(doc.pages[0].nodes.box).toMatchObject({ fills: [{ color: '#5b4cf5', variable: link.id }] })
+
+    expect((await h.run('-f d.kdr -w var-rename color/primary color/brand + var-set color/brand #222222')).code).toBe(0)
+    doc = await h.doc()
+    expect(doc.pages[0].nodes.box).toMatchObject({ fills: [{ color: '#222222' }] })
+
+    // 別名の先を消すと、別名は今の値になる。つないだ色は残る
+    expect((await h.run('-f d.kdr -w var-rm color/brand')).code).toBe(0)
+    doc = await h.doc()
+    expect(doc.collections[0].variables).toMatchObject([{ name: 'color/link', values: { [doc.collections[0].modes[0].id]: '#222222' } }])
+    expect(doc.pages[0].nodes.box).toMatchObject({ fills: [{ color: '#222222', variable: link.id }] })
+  })
+
+  it('インスタンスの写しは置いた場所のモードで解決し、上書きにはしない', async () => {
+    const h = harness()
+    const line =
+      'new Demo + collection-add Theme --mode Light + mode-add Theme Dark + var-add color/surface #ffffff Dark=#16161d' +
+      ' + add frame --name Btn --id btn --width 80 --height 40 fill=var(color/surface) + component btn' +
+      ' + add frame --name Dark --id dark --x 200 --width 200 --height 200 + mode dark Theme=Dark' +
+      ' + instance Btn --id inst --parent dark + set dark x=300 -o d.kdr'
+    expect((await h.run(line)).code).toBe(0)
+    const doc = await h.doc()
+    const nodes = doc.pages[0].nodes
+    expect(nodes.btn).toMatchObject({ fills: [{ color: '#ffffff' }] })
+    expect(nodes.inst).toMatchObject({ fills: [{ color: '#16161d' }], component: { role: 'instance', overrides: {} } })
+    // 値を変えても、元と写しがそれぞれのモードで変わる
+    expect((await h.run('-f d.kdr -w var-set color/surface Dark=#000000 + set btn x=10')).code).toBe(0)
+    const next = (await h.doc()).pages[0].nodes
+    expect(next.inst).toMatchObject({ fills: [{ color: '#000000' }], component: { overrides: {} } })
+    expect(next.btn).toMatchObject({ fills: [{ color: '#ffffff' }] })
+  })
+
+  it('誤りは使い方のエラーにする', async () => {
+    const h = harness()
+    expect((await h.run(`${BASE} + set box fill=var(nope) -o d.kdr`)).stderr).toContain('nope という変数がありません')
+    expect((await h.run(`${BASE} + var-add space 8 + set box fill=var(space) -o d.kdr`)).stderr).toContain('色の変数ではありません')
+    expect((await h.run(`${BASE} + var-add a #000000 + var-add a #ffffff -o d.kdr`)).stderr).toContain('同じ名前の変数があります')
+    expect((await h.run(`${BASE} + var-add a #000000 + var-set a var(a) -o d.kdr`)).stderr).toContain('循環')
+    expect((await h.run(`${BASE} + collection-add A + collection-add B + var-add a #000000 -o d.kdr`)).stderr).toContain('--collection')
+  })
+
+  it('vars で一覧し、css・html で var(--名前) と変数の定義を出す', async () => {
+    const h = harness()
+    const line =
+      `${BASE} + collection-add Theme --mode Light + mode-add Theme Dark + var-add color/primary #5b4cf5 Dark=#a99fff` +
+      ' + var-add color/link var(color/primary) + set box fill=var(color/link) -o d.kdr'
+    expect((await h.run(line)).code).toBe(0)
+    const list = await h.run('-f d.kdr vars')
+    expect(list.stdout.trim().split('\n')).toEqual([
+      'Theme\tcolor/primary\tcolor\t--color-primary\tLight=#5b4cf5\tDark=#a99fff',
+      'Theme\tcolor/link\tcolor\t--color-link\tLight=var(color/primary)\tDark=var(color/primary)',
+    ])
+    expect(JSON.parse((await h.run('-f d.kdr vars --json')).stdout)).toMatchObject([
+      { name: 'Theme', modes: ['Light', 'Dark'], variables: [{ name: 'color/primary', values: { Dark: '#a99fff' } }, { values: { Light: { alias: 'color/primary' } } }] },
+    ])
+    expect((await h.run('-f d.kdr css box')).stdout).toContain('background: var(--color-link);')
+    const html = (await h.run('-f d.kdr html card')).stdout
+    expect(html).toContain(':root {\n  --color-primary: #5b4cf5;\n  --color-link: var(--color-primary);\n}')
+    expect(html).toContain('[data-theme="dark"] {\n  --color-primary: #a99fff;')
+    expect(html).toContain('background: var(--color-link);')
+  })
+})

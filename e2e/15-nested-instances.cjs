@@ -109,7 +109,7 @@ const { OUT, EDITOR, VIEWER, check, finish, crashed, watchErrors, savedDocument,
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const exported = Object.values(json.document.pages[0].nodes).find((n) => n.id === instance.id)
-  check('kdr に差し替えが入る', json.version === 16 && exported.component.overrides[nestedKey].componentId === icon.component.id)
+  check('kdr に差し替えが入る', json.version === 17 && exported.component.overrides[nestedKey].componentId === icon.component.id)
 
   const viewer = await context.newPage()
   watchErrors(viewer, errors, 'viewer: ')

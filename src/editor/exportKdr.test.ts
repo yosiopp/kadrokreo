@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KDR_VERSION, KdrError, MAX_FONT_FAMILY_LENGTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
+import { KDR_MIN_VERSION, KDR_VERSION, KdrError, MAX_FONT_FAMILY_LENGTH, decodeKdr, kdrFile, parseKdr } from '../document/kdr.ts'
 import { solid } from '../document/paint.ts'
 import type { DesignDocument, Page } from '../document/types.ts'
 import { encodeKdr, kdrEntries } from './exportKdr.ts'
@@ -30,7 +30,7 @@ function samplePage(): Page {
 }
 
 function documentOf(...pages: Page[]): DesignDocument {
-  return { name: 'サンプル', pages, assets: {}, fonts: [] }
+  return { name: 'サンプル', pages, assets: {}, fonts: [], collections: [] }
 }
 
 // 1x1 の透明な PNG
@@ -114,7 +114,7 @@ describe('kdr', () => {
   })
 
   it('tar でない中身（v15 までの gzip した JSON など）は読めない', async () => {
-    const json = JSON.stringify(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', children: [] }], assets: {}, fonts: [] }))
+    const json = JSON.stringify(kdrJson({ name: 'x', pages: [{ id: 'p1', name: 'P', children: [] }], assets: {}, fonts: [], collections: [] }))
     await expect(decodeKdr(await gzipBlob(json))).rejects.toThrow(KdrError)
   })
 
@@ -290,12 +290,101 @@ describe('kdrFile（書き出す形）', () => {
   })
 })
 
+describe('変数', () => {
+  const collections = [
+    {
+      id: 'c1',
+      name: 'Theme',
+      modes: [
+        { id: 'm1', name: 'Light' },
+        { id: 'm2', name: 'Dark' },
+      ],
+      variables: [
+        { id: 'v1', name: 'color/primary', type: 'color', values: { m1: '#5b4cf5', m2: '#a99fff' } },
+        { id: 'v2', name: 'color/link', type: 'color', values: { m1: { alias: 'v1' }, m2: { alias: 'v1' } } },
+        { id: 'v3', name: 'space/md', type: 'number', values: { m1: 16, m2: 20 } },
+      ],
+    },
+  ]
+  const withVariables = (children: unknown[], extra: RawNode = {}) =>
+    kdrJson({ name: 'x', collections, pages: [{ id: 'p1', name: 'Page 1', children, ...extra }] })
+  const solidFill = (color: string, variable?: string) => ({ type: 'solid', color, ...(variable ? { variable } : {}) })
+
+  it('v16 のファイルは読み替えて読む', () => {
+    const doc = kdrFile(documentOf(samplePage())).document
+    expect(parseKdr(kdrJson(doc, KDR_MIN_VERSION))).toEqual(parseKdr(kdrJson(doc)))
+  })
+
+  it('コレクションが往復し、空なら書かない', () => {
+    const doc = parseKdr(withVariables([rawNode()]))
+    expect(doc.collections).toEqual(collections)
+    expect((kdrFile(doc).document as RawNode).collections).toEqual(collections)
+    expect((kdrFile(documentOf(samplePage())).document as RawNode).collections).toBeUndefined()
+  })
+
+  it('つながりのある色は、読み込みで変数の値に直す（別名・モードの指定をたどる）', () => {
+    const doc = parseKdr(
+      withVariables(
+        [
+          rawNode({ fills: [solidFill('#000000', 'v1')] }),
+          rawNode({
+            type: 'frame',
+            id: 'f1',
+            modes: { c1: 'm2' },
+            children: [
+              rawNode({ id: 'n2', fills: [solidFill('#000000', 'v2')], effects: [{ type: 'drop-shadow', x: 0, y: 0, blur: 1, color: '#000000', variable: 'v1', opacity: 1 }] }),
+            ],
+          }),
+          rawNode({ id: 'n3', fills: [{ type: 'linear', x1: 0, y1: 0, x2: 1, y2: 0, stops: [{ offset: 0, color: '#000000', variable: 'v1' }, { offset: 1, color: '#ffffff' }] }] }),
+        ],
+      ),
+    )
+    const nodes = doc.pages[0].nodes
+    expect(nodes.n1).toMatchObject({ fills: [{ color: '#5b4cf5', variable: 'v1' }] })
+    expect(nodes.n2).toMatchObject({ fills: [{ color: '#a99fff', variable: 'v2' }], effects: [{ color: '#a99fff', variable: 'v1' }] })
+    expect(nodes.n3).toMatchObject({ fills: [{ stops: [{ color: '#5b4cf5', variable: 'v1' }, { color: '#ffffff' }] }] })
+    expect(nodes.f1).toMatchObject({ modes: { c1: 'm2' } })
+    // ページの指定も効く
+    const dark = parseKdr(withVariables([rawNode({ fills: [solidFill('#000000', 'v1')] })], { modes: { c1: 'm2' } }))
+    expect(dark.pages[0]).toMatchObject({ modes: { c1: 'm2' }, nodes: { n1: { fills: [{ color: '#a99fff' }] } } })
+    // 書き出しにもつながりと解決済みの値が残る
+    expect(fileNode(dark.pages[0]).fills).toEqual([{ type: 'solid', color: '#a99fff', variable: 'v1' }])
+    expect((kdrFile(dark).document as { pages: RawNode[] }).pages[0].modes).toEqual({ c1: 'm2' })
+  })
+
+  it('無い変数・色でない変数へのつながりと、無いモードの指定は捨てる', () => {
+    const doc = parseKdr(
+      withVariables([rawNode({ fills: [solidFill('#123456', 'nope'), solidFill('#123456', 'v3')] }), rawNode({ type: 'frame', id: 'f1', modes: { c1: 'mx', c9: 'm1' } })]),
+    )
+    expect(doc.pages[0].nodes.n1).toMatchObject({ fills: [{ color: '#123456' }, { color: '#123456' }] })
+    expect((doc.pages[0].nodes.n1 as { fills: object[] }).fills.every((fill) => !('variable' in fill))).toBe(true)
+    expect(doc.pages[0].nodes.f1).not.toHaveProperty('modes')
+  })
+
+  it('コレクションの形を検証する', () => {
+    const variable = (patch: RawNode) => [{ ...collections[0], variables: [{ id: 'v1', name: 'a', type: 'color', values: { m1: '#000000', m2: '#000000' }, ...patch }] }]
+    const parse = (value: unknown) => parseKdr(kdrJson({ name: 'x', collections: value, pages: [{ id: 'p1', name: 'P', children: [] }] }))
+    expect(() => parse([{ ...collections[0], modes: [] }])).toThrow('モードの数')
+    expect(() => parse(variable({ values: { m1: '#000000' } }))).toThrow('モード Dark の値がありません')
+    expect(() => parse(variable({ values: { m1: 1, m2: '#000000' } }))).toThrow('values.m1')
+    expect(() => parse(variable({ type: 'size' }))).toThrow('type')
+    expect(() => parse(variable({ name: ' a' }))).toThrow('前後に空白')
+    expect(() => parse(variable({ id: 'm1' }))).toThrow('id が重複')
+    expect(() => parse(variable({ values: { m1: { alias: 'v9' }, m2: '#000000' } }))).toThrow('別名の先がありません')
+    expect(() => parse(variable({ values: { m1: { alias: 'v1' }, m2: '#000000' } }))).toThrow('循環')
+    expect(() =>
+      parse([{ ...collections[0], variables: [collections[0].variables[2], { id: 'v4', name: 'b', type: 'color', values: { m1: { alias: 'v3' }, m2: '#000000' } }] }]),
+    ).toThrow('種類が違います')
+    expect(() => parse([{ ...collections[0], variables: [collections[0].variables[0], { ...collections[0].variables[0], id: 'v9' }] }])).toThrow('同じ名前')
+  })
+})
+
 describe('parseKdr', () => {
-  it('別形式や、今の version 以外を拒否する', () => {
+  it('別形式や、読み替えられない version を拒否する', () => {
     const doc = kdrFile(documentOf(samplePage())).document
     expect(() => parseKdr({ format: 'other', version: KDR_VERSION, document: doc })).toThrow(KdrError)
     expect(() => parseKdr(kdrJson(doc, KDR_VERSION + 1))).toThrow('新しいバージョン')
-    expect(() => parseKdr(kdrJson(doc, KDR_VERSION - 1))).toThrow('古いバージョン')
+    expect(() => parseKdr(kdrJson(doc, KDR_MIN_VERSION - 1))).toThrow('古いバージョン')
     expect(() => parseKdr(kdrJson(doc, 1.5))).toThrow('未対応')
     expect(() => parseKdr(kdrJson(doc, 0))).toThrow('未対応')
     expect(() => parseKdr(null)).toThrow(KdrError)

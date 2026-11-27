@@ -152,7 +152,7 @@ export function imageSources(root: MarkupElement): { src: string; line: number }
 
 /** 読んだ画像をドキュメントのアセットに足す（同じ中身ならあるものを使う。id は中身のハッシュ）。assets は書き換える */
 export function addMarkupImage(assets: Record<AssetId, Asset>, src: string, asset: Asset): AssetId {
-  const added = addOrReuseAsset({ name: '', pages: [], assets, fonts: [] }, asset, () => hashId(`asset:${src}`))
+  const added = addOrReuseAsset({ name: '', pages: [], assets, fonts: [], collections: [] }, asset, () => hashId(`asset:${src}`))
   assets[added.assetId] = added.document.assets[added.assetId]
   return added.assetId
 }
@@ -910,6 +910,7 @@ export function buildMarkupDocument(
     pages: pages.map(({ scene }) => scene),
     assets,
     fonts: [],
+    collections: [],
   })
   checkCycles(scope, document)
   return { document, build: { pending: scope.pending, scope } }

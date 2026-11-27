@@ -23,24 +23,42 @@ import type {
   Constraint,
   TextNode,
   TextPath,
+  ModeSelection,
+  Variable,
+  VariableCollection,
+  VariableValue,
 } from './types.ts'
+import { applyVariables, isAlias } from './variables.ts'
 import { IMAGE_TOO_LARGE_MESSAGE, isImageTooLarge, readImageInfo } from './imageInfo.ts'
 import { EMBEDDED_FAMILY_FORBIDDEN, FONT_EXTENSIONS, FONT_MIME_TYPES, MAX_EMBEDDED_FAMILY_LENGTH, fontMime } from './fontFile.ts'
 import { TarError, readTar, type TarEntry } from './tar.ts'
 
 // kdr ファイルの実体は、次のファイルを tar にまとめて gzip で圧縮した 1 つのファイル（中身は `tar xzf` で取り出せる）:
-//   document.json              { format: 'kadrokreo', version: 16, document: { name, pages: [{ id, name, guides?: [{ axis, position }, …], children: [ノード, …] }], fonts?: [書体, …] } }
+//   document.json              { format: 'kadrokreo', version: 17, document: { name, collections?: [変数のコレクション, …], pages: [{ id, name, modes?, guides?: [{ axis, position }, …], children: [ノード, …] }], fonts?: [書体, …] } }
 //   assets/<id>.<png|jpg|webp|gif>   画像の元のファイルそのまま。id は中身の SHA-256（16 進 64 文字）
 //   assets/<id>.<ttf|otf|woff|woff2> 埋め込んだ書体の元のファイルそのまま（document.fonts の assetId が指す）
 // ノードは木のまま入れ子で持ち（フレームの children にノードそのものが入る）、親の id は書かない。
 // 既定値（DEFAULTS）と同じ項目は書かず、読むときに補う。だから、既定値を持つ項目を足すだけなら
-// 古いファイルもそのまま読める（version を上げなくてよい）。読み込みは今の version だけに対応する。
+// 古いファイルもそのまま読める（version を上げなくてよい）。KDR_MIN_VERSION 以上の古い version は、MIGRATIONS で今の形に読み替えて読む。
 //   15: 形を組み直した（入れ子の木、既定値の省略、塗り・線・効果の配列、大きさの決め方 sizing、直線をパスに）。
 //       14 までのファイルは読まない（後方互換は持たない）
 //   16: gzip した 1 つの JSON（画像は base64 で document.assets に入れていた）から、tar.gz に画像のファイルを切り出した形へ。
 //       15 までのファイルは読まない
+//   17: 変数（document.collections。コレクション・モード・変数）、塗り・線・グラデーションの色・影の variable、ページとフレームの modes。
+//       16 のファイルは読み替えて読む（形の変更はないので、version を書き換えるだけ）
 export const KDR_FORMAT = 'kadrokreo'
-export const KDR_VERSION = 16
+export const KDR_VERSION = 17
+/** 読み替えて読める、いちばん古い version */
+export const KDR_MIN_VERSION = 16
+
+/**
+ * 古い version の document.json の document を、次の version の形に直す関数（キーは直す前の version）。
+ * KDR_MIN_VERSION から KDR_VERSION - 1 までのすべてが要る。version を上げるときは、前の version の分をここに足す
+ */
+const MIGRATIONS: Record<number, (document: unknown) => unknown> = {
+  // 16 → 17: 変数の項目を足しただけ（どれも省略できる）なので、そのまま
+  16: (document) => document,
+}
 /** 埋め込める画像の種類。SVG はスクリプトを含められるので受け付けない */
 export const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const KDR_EXTENSION = '.kdr'
@@ -173,17 +191,20 @@ export function parseKdr(value: unknown, files: Record<AssetId, unknown> = {}): 
   if (!Number.isInteger(file.version) || file.version < 1) {
     throw new KdrError(`未対応のバージョンです: ${file.version}`)
   }
-  if (file.version < KDR_VERSION) {
+  if (file.version < KDR_MIN_VERSION) {
     throw new KdrError(`このファイルは古いバージョン（v${file.version}）で作られているため開けません`)
   }
+  let migrated = file.document
+  for (let version = file.version; version < KDR_VERSION; version++) migrated = MIGRATIONS[version](migrated)
 
-  const doc = record(file.document, 'document')
+  const doc = record(migrated, 'document')
   const assets: Record<AssetId, Asset> = {}
   for (const [id, raw] of Object.entries(record(files, 'assets'))) {
     assets[nodeId(id, `assets.${id}`)] = parseAsset(raw, `assets.${id}`)
   }
 
-  const context: AssetContext = { assets, used: new Set() }
+  const collections = doc.collections === undefined ? [] : parseCollections(doc.collections, 'document.collections')
+  const context: AssetContext = { assets, used: new Set(), variables: variableTypes(collections), collections }
   const pages = array(doc.pages, 'document.pages').map((raw, i) => parsePage(raw, `pages[${i}]`, context))
   if (pages.length === 0) throw new KdrError('document.pages: ページがありません')
   if (new Set(pages.map((page) => page.id)).size !== pages.length) {
@@ -194,7 +215,8 @@ export function parseKdr(value: unknown, files: Record<AssetId, unknown> = {}): 
 
   const used: Record<AssetId, Asset> = {}
   for (const id of context.used) used[id] = assets[id]
-  return { name: string(doc.name, 'document.name'), pages, assets: used, fonts }
+  // つながりのある値は、変数を解決し直す（ファイルの値と変数が食い違っていても、変数のほうを正にする）
+  return applyVariables({ name: string(doc.name, 'document.name'), pages, assets: used, fonts, collections })
 }
 
 /** 埋め込んだ書体の並び。書体のファイルがあること、同じ書体名・太さ・斜体の組が 2 つないことを確かめる */
@@ -223,6 +245,160 @@ function parseFonts(value: unknown, path: string, assets: AssetContext): Embedde
   })
 }
 
+/** コレクションの数の上限 */
+export const KDR_MAX_COLLECTIONS = 100
+/** 1 つのコレクションのモードの数の上限 */
+export const KDR_MAX_MODES = 32
+/** 変数の数の上限（全部のコレクションで） */
+export const KDR_MAX_VARIABLES = 10_000
+/** コレクション・モード・変数の名前の長さの上限 */
+export const MAX_VARIABLE_NAME_LENGTH = 200
+/** 文字の変数の値の長さの上限 */
+const MAX_VARIABLE_STRING_LENGTH = 10_000
+export const VARIABLE_TYPES = ['color', 'number', 'string', 'boolean'] as const satisfies readonly Variable['type'][]
+
+/**
+ * 変数のコレクション。コレクション・モード・変数の id はドキュメント全体で一意、変数の名前はコレクションの中で一意、
+ * どの変数もコレクションのすべてのモードに値を持つ。別名は同じ種類の変数だけを指せ、循環してはいけない
+ */
+function parseCollections(value: unknown, path: string): VariableCollection[] {
+  const list = array(value, path)
+  if (list.length > KDR_MAX_COLLECTIONS) throw new KdrError(`${path}: コレクションが多すぎます（${KDR_MAX_COLLECTIONS} 個まで）`)
+  const ids = new Set<string>()
+  const unique = (id: string, at: string) => {
+    if (ids.has(id)) throw new KdrError(`${at}: id が重複しています: ${id}`)
+    ids.add(id)
+    return id
+  }
+  let total = 0
+  const collections = list.map((rawCollection, i): VariableCollection => {
+    const at = `${path}[${i}]`
+    const raw = record(rawCollection, at)
+    const id = unique(nodeId(raw.id, `${at}.id`), `${at}.id`)
+    const modes = array(raw.modes, `${at}.modes`).map((rawMode, j) => {
+      const modeAt = `${at}.modes[${j}]`
+      const mode = record(rawMode, modeAt)
+      return { id: unique(nodeId(mode.id, `${modeAt}.id`), `${modeAt}.id`), name: variableName(mode.name, `${modeAt}.name`) }
+    })
+    if (modes.length === 0 || modes.length > KDR_MAX_MODES) throw new KdrError(`${at}.modes: モードの数が不正です（1〜${KDR_MAX_MODES} 個）`)
+    if (new Set(modes.map((mode) => mode.name)).size !== modes.length) throw new KdrError(`${at}.modes: モードの名前が重複しています`)
+    const names = new Set<string>()
+    const variables = array(raw.variables ?? [], `${at}.variables`).map((rawVariable, j): Variable => {
+      const varAt = `${at}.variables[${j}]`
+      if (++total > KDR_MAX_VARIABLES) throw new KdrError(`${path}: 変数が多すぎます（${KDR_MAX_VARIABLES} 個まで）`)
+      const variable = record(rawVariable, varAt)
+      const name = variableName(variable.name, `${varAt}.name`)
+      if (names.has(name)) throw new KdrError(`${varAt}.name: 同じコレクションに同じ名前の変数があります: ${name}`)
+      names.add(name)
+      const type = oneOf(variable.type, VARIABLE_TYPES, `${varAt}.type`)
+      const rawValues = record(variable.values, `${varAt}.values`)
+      const values: Record<string, VariableValue> = {}
+      // 知らないモードの値は捨てる
+      for (const mode of modes) {
+        if (!Object.hasOwn(rawValues, mode.id)) throw new KdrError(`${varAt}.values: モード ${mode.name} の値がありません`)
+        values[mode.id] = variableValue(rawValues[mode.id], type, `${varAt}.values.${mode.id}`)
+      }
+      return { id: unique(nodeId(variable.id, `${varAt}.id`), `${varAt}.id`), name, type, values }
+    })
+    return { id, name: variableName(raw.name, `${at}.name`), modes, variables }
+  })
+  checkAliases(collections, path)
+  return collections
+}
+
+/** 別名の先があり、同じ種類で、循環していないこと（モードによらず、別名のつながりを 1 つのグラフとして見る） */
+function checkAliases(collections: readonly VariableCollection[], path: string): void {
+  const types = variableTypes(collections)
+  const edges = new Map<string, string[]>()
+  for (const collection of collections) {
+    for (const variable of collection.variables) {
+      const targets: string[] = []
+      for (const value of Object.values(variable.values)) {
+        if (!isAlias(value)) continue
+        const type = types.get(value.alias)
+        if (type === undefined) throw new KdrError(`${path}: 変数 ${variable.name} の別名の先がありません: ${value.alias}`)
+        if (type !== variable.type) throw new KdrError(`${path}: 変数 ${variable.name} の別名の先の種類が違います`)
+        targets.push(value.alias)
+      }
+      edges.set(variable.id, targets)
+    }
+  }
+  // 0: 未訪問、1: たどっている途中、2: 済み。深い別名で再帰が尽きないよう、自前のスタックでたどる
+  const state = new Map<string, number>()
+  for (const start of edges.keys()) {
+    if (state.get(start) === 2) continue
+    const stack: { id: string; next: number }[] = [{ id: start, next: 0 }]
+    state.set(start, 1)
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1]
+      const targets = edges.get(top.id)!
+      if (top.next >= targets.length) {
+        state.set(top.id, 2)
+        stack.pop()
+        continue
+      }
+      const target = targets[top.next++]
+      const seen = state.get(target) ?? 0
+      if (seen === 1) throw new KdrError(`${path}: 変数の別名が循環しています`)
+      if (seen === 0) {
+        state.set(target, 1)
+        stack.push({ id: target, next: 0 })
+      }
+    }
+  }
+}
+
+function variableTypes(collections: readonly VariableCollection[]): Map<string, Variable['type']> {
+  const types = new Map<string, Variable['type']>()
+  for (const collection of collections) for (const variable of collection.variables) types.set(variable.id, variable.type)
+  return types
+}
+
+function variableValue(value: unknown, type: Variable['type'], path: string): VariableValue {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return { alias: nodeId((value as Record<string, unknown>).alias, `${path}.alias`) }
+  }
+  switch (type) {
+    case 'color':
+      return color(value, path)
+    case 'number':
+      return number(value, path)
+    case 'boolean':
+      return boolean(value, path)
+    case 'string': {
+      const text = string(value, path)
+      if (text.length > MAX_VARIABLE_STRING_LENGTH) throw new KdrError(`${path}: 文字が長すぎます`)
+      return text
+    }
+  }
+}
+
+/** コレクション・モード・変数の名前。空・前後の空白・制御文字は不可 */
+function variableName(value: unknown, path: string): string {
+  const text = string(value, path)
+  if (text.trim() === '' || text !== text.trim()) throw new KdrError(`${path}: 名前が空か、前後に空白があります`)
+  if (text.length > MAX_VARIABLE_NAME_LENGTH) throw new KdrError(`${path}: 名前が長すぎます（${MAX_VARIABLE_NAME_LENGTH} 文字まで）`)
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(text)) throw new KdrError(`${path}: 名前に制御文字があります`)
+  return text
+}
+
+/**
+ * ページ・フレームのモードの指定。無いコレクションや、コレクションに無いモードを指すものは捨てる（モードを消したあとと同じく、指定が無いものとして扱う）。
+ * 何も残らなければ undefined
+ */
+function parseModeSelection(value: unknown, path: string, collections: readonly VariableCollection[]): ModeSelection | undefined {
+  if (value === undefined) return undefined
+  const raw = record(value, path)
+  const selection: ModeSelection = {}
+  for (const [collectionId, modeId] of Object.entries(raw)) {
+    const mode = nodeId(modeId, `${path}.${collectionId}`)
+    const collection = collections.find((item) => item.id === collectionId)
+    if (collection?.modes.some((item) => item.id === mode)) selection[collectionId] = mode
+  }
+  return Object.keys(selection).length > 0 ? selection : undefined
+}
+
 function embeddedFamily(value: unknown, path: string): string {
   const text = string(value, path)
   if (text.trim() === '' || text !== text.trim()) throw new KdrError(`${path}: 書体名が空か、前後に空白があります`)
@@ -235,7 +411,13 @@ function embeddedFamily(value: unknown, path: string): string {
  * 読んでいる途中の画像。used には、ノード（画像）とインスタンスの上書き（画像の差し替え）から使われた id を読みながら入れる
  * （読み終えてからページの全部のノードを辿り直すと、large で約 2ms かかった）
  */
-type AssetContext = { assets: Record<AssetId, Asset>; used: Set<AssetId> }
+type AssetContext = {
+  assets: Record<AssetId, Asset>
+  used: Set<AssetId>
+  /** 変数の id → 種類（つながりを確かめる） */
+  variables: ReadonlyMap<string, Variable['type']>
+  collections: readonly VariableCollection[]
+}
 
 /** 画像のノードと上書きが指せるのは画像のファイルだけ（書体のファイルは指せない） */
 function isImageAsset(assets: AssetContext, id: AssetId): boolean {
@@ -247,7 +429,8 @@ function parsePage(value: unknown, path: string, assets: AssetContext): Page {
   const scene: Scene = { nodes: {}, rootIds: [] }
   scene.rootIds = parseChildren(raw.children, `${path}.children`, null, 1, scene, assets)
   const guides = raw.guides === undefined ? [] : parseGuides(raw.guides, `${path}.guides`)
-  return { id: nodeId(raw.id, `${path}.id`), name: string(raw.name, `${path}.name`), ...scene, guides }
+  const modes = parseModeSelection(raw.modes, `${path}.modes`, assets.collections)
+  return { id: nodeId(raw.id, `${path}.id`), name: string(raw.name, `${path}.name`), ...scene, guides, ...(modes ? { modes } : {}) }
 }
 
 /** ページのガイド線。省いたら空（ガイドなし） */
@@ -433,14 +616,16 @@ function parseNode(
     minHeight: optional('minHeight', optionalSize),
     maxHeight: optional('maxHeight', optionalSize),
   }
+  const paintList = (v: unknown, p: string) => paints(v, p, assets.variables)
+  const effectList = (v: unknown, p: string) => effects(v, p, assets.variables)
   const style = () => ({
-    fills: optional('fills', paints),
-    strokes: optional('strokes', paints),
+    fills: optional('fills', paintList),
+    strokes: optional('strokes', paintList),
     strokeWidth: optional('strokeWidth', size),
     strokeDashes: optional('strokeDashes', dashes),
     strokeDashOffset: optional('strokeDashOffset', number),
     strokeJoin: optional('strokeJoin', (v, p) => oneOf(v, STROKE_JOINS, p)),
-    effects: optional('effects', effects),
+    effects: optional('effects', effectList),
   })
   const cornerRadius = () => optional('cornerRadius', parseCornerRadius)
   const isMask = () => optional('isMask', boolean)
@@ -450,6 +635,10 @@ function parseNode(
     return op
   }
   const maskType = () => optional('maskType', (v, p) => oneOf(v, ['vector', 'alpha', 'luminance'] as const, p))
+  const modes = () => {
+    const selection = parseModeSelection(raw.modes, at('modes'), assets.collections)
+    return selection ? { modes: selection } : {}
+  }
 
   switch (type) {
     case 'rect':
@@ -483,8 +672,8 @@ function parseNode(
         text: string(raw.text, at('text')),
         fontSize: size(raw.fontSize, at('fontSize')),
         fontFamily: fontFamily(raw.fontFamily, at('fontFamily')),
-        fills: optional('fills', paints),
-        effects: optional('effects', effects),
+        fills: optional('fills', paintList),
+        effects: optional('effects', effectList),
         fontWeight: optional('fontWeight', fontWeight),
         textAlign: optional('textAlign', (v, p) => oneOf(v, ['left', 'center', 'right'] as const, p)),
         lineHeight: optional('lineHeight', size),
@@ -504,7 +693,7 @@ function parseNode(
         ...base,
         type,
         assetId,
-        effects: optional('effects', effects),
+        effects: optional('effects', effectList),
         cornerRadius: cornerRadius(),
         fit: optional('fit', (v, p) => oneOf(v, ['stretch', 'cover', 'contain'] as const, p)),
         positionX: optional('positionX', ratio),
@@ -533,6 +722,7 @@ function parseNode(
         booleanIncludeStrokes: optional('booleanIncludeStrokes', boolean),
         isMask: isMask(),
         maskType: maskType(),
+        ...modes(),
       }
   }
 }
@@ -663,8 +853,8 @@ function parseOverrides(value: unknown, path: string, assets: AssetContext): Rec
     const raw = record(rawOverride, `${path}.${id}`)
     const override: Override = {}
     if (Object.hasOwn(raw, 'text')) override.text = string(raw.text, at('text'))
-    if (Object.hasOwn(raw, 'fills')) override.fills = paints(raw.fills, at('fills'))
-    if (Object.hasOwn(raw, 'strokes')) override.strokes = paints(raw.strokes, at('strokes'))
+    if (Object.hasOwn(raw, 'fills')) override.fills = paints(raw.fills, at('fills'), assets.variables)
+    if (Object.hasOwn(raw, 'strokes')) override.strokes = paints(raw.strokes, at('strokes'), assets.variables)
     if (Object.hasOwn(raw, 'strokeDashes')) override.strokeDashes = dashes(raw.strokeDashes, at('strokeDashes'))
     if (Object.hasOwn(raw, 'strokeDashOffset')) override.strokeDashOffset = number(raw.strokeDashOffset, at('strokeDashOffset'))
     if (Object.hasOwn(raw, 'visible')) override.visible = boolean(raw.visible, at('visible'))
@@ -707,10 +897,23 @@ function parseLayout(value: unknown, path: string): AutoLayout {
   }
 }
 
-function paints(value: unknown, path: string): Paint[] {
+/** 変数の id → 種類 */
+type VariableTypes = ReadonlyMap<string, Variable['type']>
+
+/**
+ * 色をつないだ変数（variable）。null と省略はつながりなし。無い変数や色でない変数を指していたら、つながりだけ捨てる
+ * （色の値は残る。変数を消したときと同じ）
+ */
+function colorVariable(raw: Record<string, unknown>, path: string, variables: VariableTypes): { variable?: string } {
+  if (raw.variable === undefined || raw.variable === null) return {}
+  const id = nodeId(raw.variable, `${path}.variable`)
+  return variables.get(id) === 'color' ? { variable: id } : {}
+}
+
+function paints(value: unknown, path: string, variables: VariableTypes): Paint[] {
   const list = array(value, path)
   if (list.length > MAX_PAINTS) throw new KdrError(`${path}: 塗りが多すぎます`)
-  return list.map((item, i) => parsePaint(item, `${path}[${i}]`))
+  return list.map((item, i) => parsePaint(item, `${path}[${i}]`, variables))
 }
 
 /** 角丸。数値か、4 隅（左上・右上・右下・左下）の配列 */
@@ -738,7 +941,7 @@ function focus(raw: Record<string, unknown>, path: string): { fx: number; fy: nu
   return { fx, fy }
 }
 
-function parsePaint(value: unknown, path: string): Paint {
+function parsePaint(value: unknown, path: string, variables: VariableTypes): Paint {
   const raw = record(value, path)
   const type = oneOf(raw.type, ['solid', 'linear', 'radial', 'conic'] as const, `${path}.type`)
   // 塗りの不透明度は 1 なら、表示は true なら省く（paintFile）
@@ -747,12 +950,13 @@ function parsePaint(value: unknown, path: string): Paint {
   // 描画モードは normal なら省く
   const mode = raw.blendMode === undefined ? 'normal' : blendMode(raw.blendMode, `${path}.blendMode`)
   const common = { opacity, visible, blendMode: mode }
-  if (type === 'solid') return { type, color: color(raw.color, `${path}.color`), ...common }
+  if (type === 'solid') return { type, color: color(raw.color, `${path}.color`), ...colorVariable(raw, path, variables), ...common }
   const stops = array(raw.stops, `${path}.stops`).map((stop, i): ColorStop => {
     const rawStop = record(stop, `${path}.stops[${i}]`)
     return {
       offset: ratio(rawStop.offset, `${path}.stops[${i}].offset`),
       color: color(rawStop.color, `${path}.stops[${i}].color`),
+      ...colorVariable(rawStop, `${path}.stops[${i}]`, variables),
       // 色の不透明度は 1 なら省く（paintFile）
       opacity: rawStop.opacity === undefined ? 1 : ratio(rawStop.opacity, `${path}.stops[${i}].opacity`),
     }
@@ -797,7 +1001,7 @@ function parsePaint(value: unknown, path: string): Paint {
   }
 }
 
-function effects(value: unknown, path: string): Effect[] {
+function effects(value: unknown, path: string, variables: VariableTypes): Effect[] {
   const list = array(value, path)
   if (list.length > MAX_PAINTS) throw new KdrError(`${path}: 効果が多すぎます`)
   return list.map((item, i) => {
@@ -816,6 +1020,7 @@ function effects(value: unknown, path: string): Effect[] {
       // 広がりは 0 なら省く（effectFile）
       spread: raw.spread === undefined ? 0 : number(raw.spread, `${at}.spread`),
       color: color(raw.color, `${at}.color`),
+      ...colorVariable(raw, at, variables),
       opacity: ratio(raw.opacity, `${at}.opacity`),
       visible,
       // 描画モードは normal なら省く（effectFile）
@@ -866,19 +1071,22 @@ function fontWeight(value: unknown, path: string): number {
  * 埋め込んだ書体の並び（fonts）は、空なら書かない。太さ 400・斜体なしも書かない
  */
 export function kdrFile(
-  doc: Pick<DesignDocument, 'name' | 'pages'> & { fonts?: readonly EmbeddedFont[] },
+  doc: Pick<DesignDocument, 'name' | 'pages'> & { fonts?: readonly EmbeddedFont[]; collections?: readonly VariableCollection[] },
 ): { format: string; version: number; document: unknown } {
   const fonts = doc.fonts ?? []
+  const collections = doc.collections ?? []
   return {
     format: KDR_FORMAT,
     version: KDR_VERSION,
     document: {
       name: doc.name,
+      ...(collections.length === 0 ? {} : { collections }),
       // ガイド線は、無ければ書かない。ガイド線を足す前の自動保存（IndexedDB）から来たページには項目が無いので、無ければ空として扱う
       pages: doc.pages.map((page) => ({
         id: page.id,
         name: page.name,
         ...((page.guides ?? []).length === 0 ? {} : { guides: page.guides.map(({ axis, position }) => ({ axis, position })) }),
+        ...(page.modes && Object.keys(page.modes).length > 0 ? { modes: page.modes } : {}),
         children: page.rootIds.map((id) => nodeFile(page, id)),
       })),
       ...(fonts.length === 0
@@ -900,6 +1108,8 @@ function nodeFile(scene: Scene, id: NodeId): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(node)) {
     if (DERIVED_KEYS.has(key)) continue
+    // モードの指定は、空なら書かない
+    if (key === 'modes' && (value === undefined || Object.keys(value as object).length === 0)) continue
     if (Object.hasOwn(DEFAULTS, key) && sameValue(value, DEFAULTS[key as keyof typeof DEFAULTS])) continue
     out[key] =
       key === 'layout' && value !== null

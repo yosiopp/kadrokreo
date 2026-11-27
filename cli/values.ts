@@ -1,6 +1,7 @@
 import { LAYOUT_DEFAULTS } from '../src/document/kdr.ts'
 import { isShadow, solid } from '../src/document/paint.ts'
-import type { AutoLayout, Effect, PathContour, PathPoint, SceneNode } from '../src/document/types.ts'
+import type { AutoLayout, Effect, PathContour, PathPoint, SceneNode, VariableCollection, VariableId } from '../src/document/types.ts'
+import { resolveVariable, variableIndex } from '../src/document/variables.ts'
 import { parseDashes } from '../src/editor/dashes.ts'
 import { DEFAULT_SHADOW } from '../src/editor/operations/paints.ts'
 import type { NodePatch } from '../src/editor/operations/tree.ts'
@@ -17,15 +18,24 @@ import { UsageError } from './args.ts'
 // width=fill / height=hug（大きさの決め方 sizing。数値なら、その大きさで固定にする）、lineHeight=24px（px で書いた行の高さを fontSize に対する倍率に直す）、
 // letterSpacing=0.05em（em で書いた字間を px に直す。px は 2px でも 2 でも同じ）、
 // フレームの layout=row|column（自動で並べる。余白も間隔も 0 から始める）と、並べ方の項目（gap=8 padding="12 40" align=center など。layout.gap=8 と同じ）。
+// 色の値には var(変数の名前) で色の変数を指せる（fill=var(color/primary)、shadow.color=var(…)、fills.0.color=var(…)）。色を直接書けばつながりは外れる。
 // 同じ語彙を、マークアップ（kdr build / place。markup.ts）の属性にも使う。
 // どんな値を入れても、コマンドごとに kdr の検証を通すので、壊れたファイルは書き出さない。
 
 /** 略記を、本来の項目の「名前=値」に直す。直せないもの（そのノードにない項目）はそのまま返す */
-function expandShorthand(node: SceneNode, path: string, raw: string, draft: Record<string, unknown>): [string, unknown] | null {
+function expandShorthand(
+  node: SceneNode,
+  path: string,
+  raw: string,
+  draft: Record<string, unknown>,
+  collections: readonly VariableCollection[],
+): [string, unknown] | null {
   const [head, ...rest] = path.split('.')
   if ((head === 'fill' || head === 'stroke') && rest.length === 0) {
     const key = head === 'fill' ? 'fills' : 'strokes'
     if (!Object.hasOwn(node, key)) return null
+    const bound = colorVariableRef(collections, raw, path)
+    if (bound) return [key, [{ ...solid(bound.color)[0], variable: bound.id }]]
     const color = raw === 'null' ? null : raw
     return [key, solid(color)]
   }
@@ -55,7 +65,7 @@ function expandShorthand(node: SceneNode, path: string, raw: string, draft: Reco
       return ['effects', current.filter((effect) => !isShadow(effect))]
     }
     const first = structuredClone(at === -1 ? DEFAULT_SHADOW : current[at]) as unknown as Record<string, unknown>
-    const next = setIn(first, rest, raw, path) as unknown as Effect
+    const next = setIn(first, rest, raw, path, collections) as unknown as Effect
     return ['effects', at === -1 ? [next, ...current] : current.with(at, next)]
   }
   if ((head === 'blur' || head === 'backgroundBlur') && rest.length === 0) {
@@ -210,7 +220,11 @@ export function parseValue(raw: string, current: unknown, key: string): unknown 
 }
 
 /** assignments をまとめて 1 つの patch にする */
-export function buildPatch(node: SceneNode, assignments: readonly [string, string][]): NodePatch {
+export function buildPatch(
+  node: SceneNode,
+  assignments: readonly [string, string][],
+  collections: readonly VariableCollection[] = [],
+): NodePatch {
   const draft: Record<string, unknown> = {}
   const source = node as unknown as Record<string, unknown>
   for (const [written, raw] of orderAssignments(assignments)) {
@@ -226,7 +240,7 @@ export function buildPatch(node: SceneNode, assignments: readonly [string, strin
       Object.assign(draft, radius)
       continue
     }
-    const shorthand = expandShorthand(node, path, raw, draft)
+    const shorthand = expandShorthand(node, path, raw, draft, collections)
     if (shorthand) {
       draft[shorthand[0]] = shorthand[1]
       continue
@@ -245,13 +259,29 @@ export function buildPatch(node: SceneNode, assignments: readonly [string, strin
         head === 'layout' ? `${path}: 先に layout=row|column か auto-layout で自動で並べるようにしてください` : `${path}: ${head} が空です`,
       )
     }
-    draft[head] = setIn(structuredClone(base) as Record<string, unknown>, rest, raw, path)
+    draft[head] = setIn(structuredClone(base) as Record<string, unknown>, rest, raw, path, collections)
   }
   return draft as NodePatch
 }
 
-function setIn(target: Record<string, unknown>, keys: readonly string[], raw: string, path: string): Record<string, unknown> {
+function setIn(
+  target: Record<string, unknown>,
+  keys: readonly string[],
+  raw: string,
+  path: string,
+  collections: readonly VariableCollection[],
+): Record<string, unknown> {
   const [key, ...rest] = keys
+  // 塗り・グラデーションの色・影の色: var(名前) なら変数につなぎ、色を直接書けばつながりを外す
+  if (key === 'color' && rest.length === 0 && typeof target.color === 'string') {
+    const bound = colorVariableRef(collections, raw, path)
+    if (bound) Object.assign(target, { color: bound.color, variable: bound.id })
+    else {
+      target.color = raw
+      delete target.variable
+    }
+    return target
+  }
   // layout.padding は 4 辺まとめて。空白かカンマで区切れば、CSS と同じ順（上下 左右 / 上 左右 下 / 上 右 下 左）
   if (key === 'padding' && rest.length === 0 && Object.hasOwn(target, 'paddingTop')) {
     const values = raw.trim().split(/[\s,]+/).map((part) => parseValue(part, 0, path))
@@ -265,7 +295,40 @@ function setIn(target: Record<string, unknown>, keys: readonly string[], raw: st
   else {
     const child = target[key]
     if (child === null || typeof child !== 'object') throw new UsageError(`${path}: ${key} が空です`)
-    target[key] = setIn(child as Record<string, unknown>, rest, raw, path)
+    target[key] = setIn(child as Record<string, unknown>, rest, raw, path, collections)
   }
   return target
+}
+
+const VARIABLE_REF = /^var\((.+)\)$/
+
+/**
+ * var(名前) で指した色の変数と、その値（最初のモード。ノードの位置のモードでの値には、後始末が解決し直す）。var( で始まらなければ null。
+ * 名前は「変数の名前」か、同じ名前が複数のコレクションにあるときは「コレクションの名前:変数の名前」
+ */
+export function colorVariableRef(
+  collections: readonly VariableCollection[],
+  raw: string,
+  path: string,
+): { id: VariableId; color: string } | null {
+  const match = VARIABLE_REF.exec(raw.trim())
+  if (!match) return null
+  const variable = findVariableByRef(collections, match[1].trim(), path)
+  if (variable.type !== 'color') throw new UsageError(`${path}: ${variable.name} は色の変数ではありません`)
+  const color = resolveVariable(variableIndex(collections), variable.id, (collection) => collection.modes[0].id)
+  return { id: variable.id, color: typeof color === 'string' ? color : '#000000' }
+}
+
+/** 変数の名前（か「コレクションの名前:変数の名前」）で変数を探す。無い・どれか決まらないときは UsageError */
+export function findVariableByRef(collections: readonly VariableCollection[], ref: string, path = ref) {
+  const hits = collections.flatMap((collection) => collection.variables.filter((variable) => variable.name === ref))
+  if (hits.length === 1) return hits[0]
+  if (hits.length > 1) throw new UsageError(`${path}: ${ref} という変数が複数のコレクションにあります（コレクションの名前:変数の名前 で指定してください）`)
+  const colon = ref.indexOf(':')
+  if (colon > 0) {
+    const collection = collections.find((item) => item.name === ref.slice(0, colon))
+    const variable = collection?.variables.find((item) => item.name === ref.slice(colon + 1))
+    if (variable) return variable
+  }
+  throw new UsageError(`${path}: ${ref} という変数がありません（kdr vars で一覧できます）`)
 }

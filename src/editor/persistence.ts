@@ -1,4 +1,4 @@
-import { KDR_VERSION, kdrFile, parseKdr } from '../document/kdr.ts'
+import { KDR_MIN_VERSION, KDR_VERSION, kdrFile, parseKdr } from '../document/kdr.ts'
 import type { AssetId, DesignDocument, NodeId, SceneNode } from '../document/types.ts'
 import { pruneAssets } from './operations/document.ts'
 
@@ -54,11 +54,13 @@ export function revisionOf(file: unknown): string | null {
   return typeof revision === 'string' ? revision : null
 }
 
-/** 保存データの version を今の kdr の version と比べる。current なら読める */
+/** 保存データの version を今の kdr の version と比べる。current なら読める（読み替えて読める古い version を含む） */
 export function savedVersionKind(file: unknown): 'current' | UnreadableReason {
   const version = (file as { version?: unknown } | null | undefined)?.version
   if (typeof version !== 'number' || !Number.isFinite(version)) return 'broken'
-  if (version === KDR_VERSION) return 'current'
+  // 読み替えて読める古い version（KDR_MIN_VERSION 以上）も読める。保存データはメモリ上の形なので、kdrFile で今の version の形に直してから
+  // parseKdr に渡る。version を上げてメモリ上の形が変わったら、loadSavedDocument で前の形の保存データを直してから渡すこと
+  if (version >= KDR_MIN_VERSION && version <= KDR_VERSION) return 'current'
   return version < KDR_VERSION ? 'older' : 'newer'
 }
 
@@ -133,7 +135,7 @@ export async function loadSavedDocument(): Promise<SavedDocument> {
     known = revisionOf(file)
     const version = savedVersionKind(file)
     if (version !== 'current') {
-      // 別の版の保存データは読めない（古い形を読み替える処理は持たない）。その版の editor なら読めるので残す
+      // 読み替えられない版の保存データは読めない。その版の editor なら読めるので残す
       retained = true
       return { kind: 'unreadable', reason: version }
     }

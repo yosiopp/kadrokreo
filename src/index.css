@@ -603,6 +603,101 @@ input.document-name:focus {
   padding: 0;
 }
 
+/* 変数（コレクションごとの、行が変数・列がモードの表） */
+.variable-collection {
+  padding: 0 12px 8px;
+}
+
+.variable-collection .font-actions {
+  gap: 6px;
+  padding: 6px 0 0;
+}
+
+.variable-collection-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.variable-collection-head .variable-name {
+  font-weight: 600;
+}
+
+.variable-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.variable-table th,
+.variable-table td {
+  padding: 2px;
+  text-align: left;
+  font-weight: normal;
+  vertical-align: middle;
+}
+
+.variable-table thead th {
+  color: var(--text-muted);
+}
+
+.variable-table thead th:first-child {
+  width: 36%;
+}
+
+.variable-table thead th:last-child,
+.variable-table td:last-child {
+  width: 28px;
+}
+
+.variable-table thead th {
+  white-space: nowrap;
+}
+
+.variable-mode {
+  display: flex;
+  align-items: center;
+}
+
+.variable-mode .variable-name {
+  flex: 1;
+}
+
+.variable-mode-remove {
+  flex: none;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.variable-name {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.variable-value {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.variable-value input[type='color'] {
+  flex: none;
+  width: 28px;
+  height: 22px;
+  padding: 0;
+}
+
+.variable-value select {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ページ */
 
 .pages {

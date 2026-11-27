@@ -4,6 +4,7 @@ import { createHistory, pushHistory, redoHistory, undoHistory } from './history.
 import { type FitText, captureOverrides, syncComponents } from './components.ts'
 import { applyConstraints } from './constraints.ts'
 import { relayout } from './layout.ts'
+import { applyVariables } from '../document/variables.ts'
 import { fitMovedVariants } from './variants.ts'
 import { updatePage } from './operations/document.ts'
 import { fitBooleanNodes } from './operations/booleanNodes.ts'
@@ -161,7 +162,9 @@ export function createEditorStore(initial: DesignDocument, fitText?: FitText) {
       base = current
       current = synced
     }
-    return current
+    // 変数につないだ値を解決し直す（変数・モードの指定が変わったときと、写しが元の値を受け取ったとき）。
+    // 色だけなので並べ直しは要らない。写しが元と違う値になっても、上書きとしては覚えない（captureOverrides は利用者の変更だけを見る）
+    return applyVariables(current, before)
   }
 
   /**

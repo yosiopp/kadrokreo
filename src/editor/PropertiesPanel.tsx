@@ -12,6 +12,7 @@ import { ExportSection } from './properties/fields.tsx'
 import { FrameSections } from './properties/FrameSections.tsx'
 import { BooleanSection, MaskSection } from './properties/MaskSection.tsx'
 import { FontsSection } from './properties/FontsSection.tsx'
+import { VariablesSection } from './properties/VariablesSection.tsx'
 import { TextSection } from './properties/TextSection.tsx'
 import type { EmbeddedFont } from '../document/types.ts'
 import type { EditorState, EditorStore } from './store.ts'
@@ -65,6 +66,7 @@ export function PropertiesPanel({ store, state, onExportPng, onExportSvg, onCopy
             </div>
           ))}
         </dl>
+        <VariablesSection store={store} document={state.document} />
         <FontsSection fonts={state.document.fonts} onAddFonts={onAddFonts} onRemoveFont={onRemoveFont} />
         <ExportSection label="このページを PNG に書き出し" onExport={onExportPng} onExportSvg={onExportSvg} onCopySvg={onCopySvg} />
       </aside>

@@ -200,7 +200,7 @@ require('fs').mkdirSync(OUT, { recursive: true })
   await download.saveAs(kdrPath)
   const json = await require('./kdr.cjs').parseKdrBytes(fs.readFileSync(kdrPath))
   const used = new Set(Object.values(json.document.pages[0].nodes).filter((n) => n.type === 'image').map((n) => n.assetId))
-  check('kdr に画像が埋め込まれる', json.version === 16 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
+  check('kdr に画像が埋め込まれる', json.version === 17 && used.size >= 1 && Object.keys(json.document.assets).length === used.size, `assets=${Object.keys(json.document.assets).length}`)
   // 画像は assets/<中身の SHA-256>.<拡張子> のファイルとして入り、tar で取り出すと元のファイルと同じ
   const sha256 = (bytes) => require('crypto').createHash('sha256').update(bytes).digest('hex')
   const listed = require('child_process').execFileSync('tar', ['-tzf', kdrPath], { encoding: 'utf8' }).trim().split('\n')
